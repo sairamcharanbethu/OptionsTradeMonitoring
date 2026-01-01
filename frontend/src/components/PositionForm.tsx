@@ -38,29 +38,17 @@ import {
 import { CalendarIcon, Check, ChevronsUpDown } from "lucide-react";
 import { api, Position } from '@/lib/api';
 
-const STOCKS = [
-  { label: "SPY", value: "SPY" },
-  { label: "QQQ", value: "QQQ" },
-  { label: "IWM", value: "IWM" },
-  { label: "AAPL", value: "AAPL" },
-  { label: "NVDA", value: "NVDA" },
-  { label: "TSLA", value: "TSLA" },
-  { label: "AMD", value: "AMD" },
-  { label: "AMZN", value: "AMZN" },
-  { label: "MSFT", value: "MSFT" },
-  { label: "GOOGL", value: "GOOGL" },
-  { label: "META", value: "META" },
-  { label: "NFLX", value: "NFLX" },
-  { label: "BABA", value: "BABA" },
-  { label: "PLTR", value: "PLTR" },
-  { label: "COIN", value: "COIN" },
-  { label: "MSTR", value: "MSTR" },
-  { label: "INTC", value: "INTC" },
-  { label: "DIS", value: "DIS" },
-  { label: "JPM", value: "JPM" },
-  { label: "BA", value: "BA" },
-  // Add more as needed
-] as const;
+// Helper to debounce search
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = React.useState<T>(value);
+  React.useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+  return debouncedValue;
+}
 
 const formSchema = z.object({
   symbol: z.string().min(1, 'Symbol is required').toUpperCase(),
@@ -70,6 +58,7 @@ const formSchema = z.object({
   entry_price: z.coerce.number().positive(),
   quantity: z.coerce.number().int().positive(),
   trailing_stop_loss_pct: z.coerce.number().positive().optional(),
+  take_profit_trigger: z.coerce.number().positive().optional(),
 });
 
 type FormValues = z.infer<typeof formSchema>;
@@ -85,6 +74,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
       entry_price: position.entry_price,
       quantity: position.quantity,
       trailing_stop_loss_pct: position.trailing_stop_loss_pct || 10,
+      take_profit_trigger: position.take_profit_trigger,
     } : {
       symbol: '',
       option_type: 'CALL',
@@ -95,12 +85,28 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
 
   const [open, setOpen] = React.useState(false);
   const [inputValue, setInputValue] = React.useState("");
+  const [searchResults, setSearchResults] = React.useState<{ symbol: string, name: string }[]>([]);
+  const [loadingSearch, setLoadingSearch] = React.useState(false);
+
+  const debouncedSearchTerm = useDebounce(inputValue, 500);
+
+  React.useEffect(() => {
+    if (debouncedSearchTerm) {
+      setLoadingSearch(true);
+      api.searchSymbols(debouncedSearchTerm)
+        .then(setSearchResults)
+        .catch(console.error)
+        .finally(() => setLoadingSearch(false));
+    } else {
+      setSearchResults([]);
+    }
+  }, [debouncedSearchTerm]);
 
   const onSubmit: SubmitHandler<FormValues> = async (values) => {
     // Format date to YYYY-MM-DD for backend
     const payload = {
-        ...values,
-        expiration_date: format(values.expiration_date, "yyyy-MM-dd"), // Correct format for backend
+      ...values,
+      expiration_date: format(values.expiration_date, "yyyy-MM-dd"), // Correct format for backend
     };
 
     try {
@@ -124,8 +130,8 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
             control={form.control}
             name="symbol"
             render={({ field }) => (
-              <FormItem className="flex flex-col">
-                <FormLabel>Symbol</FormLabel>
+              <FormItem className="space-y-1.5">
+                <FormLabel className="whitespace-nowrap">Symbol</FormLabel>
                 <Popover open={open} onOpenChange={setOpen}>
                   <PopoverTrigger asChild>
                     <FormControl>
@@ -134,73 +140,67 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
                         role="combobox"
                         aria-expanded={open}
                         className={cn(
-                          "w-full justify-between h-10",
+                          "w-full justify-between h-10 px-3 py-2",
                           !field.value && "text-muted-foreground"
                         )}
                       >
                         {field.value
                           ? field.value
-                          : "Select stock"}
+                          : "Search ticker..."}
                         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                       </Button>
                     </FormControl>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[200px] p-0">
+                  <PopoverContent className="w-[300px] p-0" align="start">
                     <Command shouldFilter={false}>
-                      <CommandInput 
-                        placeholder="Search stock..." 
+                      <CommandInput
+                        placeholder="Type symbol or name..."
                         value={inputValue}
-                        onValueChange={(val: string) => setInputValue(val)}
+                        onValueChange={setInputValue}
                       />
-                      <CommandList>
-                         {STOCKS.filter(stock => !inputValue || stock.label.toLowerCase().includes(inputValue.toLowerCase())).length === 0 && !inputValue && (
-                             <CommandEmpty>No stock found.</CommandEmpty>
-                         )}
-                         <CommandGroup>
-                            {STOCKS.filter(stock => !inputValue || stock.label.toLowerCase().includes(inputValue.toLowerCase())).map((stock) => (
+                      <CommandList className="max-h-[300px]">
+                        {loadingSearch && <div className="p-4 text-sm text-muted-foreground text-center">Searching...</div>}
+                        {!loadingSearch && searchResults.length === 0 && debouncedSearchTerm && (
+                          <CommandEmpty>No results found.</CommandEmpty>
+                        )}
+                        <CommandGroup>
+                          {searchResults.map((stock) => (
                             <CommandItem
-                                value={stock.label} // Use label for value to match visual
-                                key={stock.value}
-                                onSelect={(currentValue: string) => {
-                                    // With manual filtering and value matching label, direct assignment is safer
-                                    // But keep robust find just in case
-                                    const selected = STOCKS.find((s) => s.label.toLowerCase() === currentValue.toLowerCase());
-                                    if (selected) {
-                                        form.setValue("symbol", selected.value);
-                                        setOpen(false);
-                                    } else {
-                                        // Fallback using the passed value directly if find fails
-                                        form.setValue("symbol", currentValue.toUpperCase());
-                                        setOpen(false);
-                                    }
-                                }}
+                              key={stock.symbol}
+                              value={stock.symbol}
+                              onSelect={() => {
+                                form.setValue("symbol", stock.symbol);
+                                setOpen(false);
+                              }}
                             >
-                                <Check
-                                className={cn(
-                                    "mr-2 h-4 w-4",
-                                    stock.value === field.value
-                                    ? "opacity-100"
-                                    : "opacity-0"
-                                )}
-                                />
-                                {stock.label}
+                              <div className="flex flex-col">
+                                <div className="flex items-center">
+                                  <Check
+                                    className={cn(
+                                      "mr-2 h-4 w-4",
+                                      stock.symbol === field.value ? "opacity-100" : "opacity-0"
+                                    )}
+                                  />
+                                  <span className="font-bold">{stock.symbol}</span>
+                                </div>
+                                <span className="ml-6 text-[10px] text-muted-foreground truncate">{stock.name}</span>
+                              </div>
                             </CommandItem>
-                            ))}
-                            {/* Dynamic "Create" Item */}
-                            {inputValue && !STOCKS.some(s => s.label.toLowerCase() === inputValue.toLowerCase()) && (
-                                <CommandItem
-                                    key="custom"
-                                    value={inputValue}
-                                    onSelect={() => {
-                                        form.setValue("symbol", inputValue.toUpperCase());
-                                        setOpen(false);
-                                    }}
-                                >
-                                    <Check className={cn("mr-2 h-4 w-4 opacity-0")} />
-                                    Create "{inputValue.toUpperCase()}"
-                                </CommandItem>
-                            )}
-                         </CommandGroup>
+                          ))}
+                          {/* Allow custom entry if not in results */}
+                          {debouncedSearchTerm && !searchResults.some(s => s.symbol.toUpperCase() === debouncedSearchTerm.toUpperCase()) && (
+                            <CommandItem
+                              value={debouncedSearchTerm}
+                              onSelect={() => {
+                                form.setValue("symbol", debouncedSearchTerm.toUpperCase());
+                                setOpen(false);
+                              }}
+                            >
+                              <Check className="mr-2 h-4 w-4 opacity-0" />
+                              Use custom: "{debouncedSearchTerm.toUpperCase()}"
+                            </CommandItem>
+                          )}
+                        </CommandGroup>
                       </CommandList>
                     </Command>
                   </PopoverContent>
@@ -213,11 +213,11 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
             control={form.control}
             name="option_type"
             render={({ field }: any) => (
-              <FormItem>
-                <FormLabel>Type</FormLabel>
+              <FormItem className="space-y-1.5">
+                <FormLabel className="whitespace-nowrap">Option Type</FormLabel>
                 <Select onValueChange={field.onChange} defaultValue={field.value}>
                   <FormControl>
-                    <SelectTrigger>
+                    <SelectTrigger className="h-10">
                       <SelectValue placeholder="Select type" />
                     </SelectTrigger>
                   </FormControl>
@@ -237,10 +237,10 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
             control={form.control}
             name="strike_price"
             render={({ field }: any) => (
-              <FormItem>
-                <FormLabel>Strike Price</FormLabel>
+              <FormItem className="space-y-1.5">
+                <FormLabel className="whitespace-nowrap">Strike Price</FormLabel>
                 <FormControl>
-                  <Input type="number" step="0.01" {...field} />
+                  <Input type="number" step="0.01" className="h-10" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -250,15 +250,15 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
             control={form.control}
             name="expiration_date"
             render={({ field }: any) => (
-              <FormItem className="flex flex-col">
-                <FormLabel>Expiration</FormLabel>
+              <FormItem className="flex flex-col space-y-1.5">
+                <FormLabel className="whitespace-nowrap">Expiration Date</FormLabel>
                 <Popover>
                   <PopoverTrigger asChild>
                     <FormControl>
                       <Button
                         variant={"outline"}
                         className={cn(
-                          "w-full pl-3 text-left font-normal",
+                          "w-full pl-3 text-left font-normal h-10",
                           !field.value && "text-muted-foreground"
                         )}
                       >
@@ -289,15 +289,15 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           />
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <FormField
             control={form.control}
             name="entry_price"
             render={({ field }: any) => (
-              <FormItem>
-                <FormLabel>Entry Premium</FormLabel>
+              <FormItem className="space-y-1.5">
+                <FormLabel className="whitespace-nowrap">Entry Price</FormLabel>
                 <FormControl>
-                  <Input type="number" step="0.01" {...field} />
+                  <Input type="number" step="0.01" className="h-10" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -307,10 +307,10 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
             control={form.control}
             name="quantity"
             render={({ field }: any) => (
-              <FormItem>
-                <FormLabel>Quantity</FormLabel>
+              <FormItem className="space-y-1.5">
+                <FormLabel className="whitespace-nowrap">Quantity</FormLabel>
                 <FormControl>
-                  <Input type="number" {...field} />
+                  <Input type="number" className="h-10" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -320,10 +320,23 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
             control={form.control}
             name="trailing_stop_loss_pct"
             render={({ field }: any) => (
-              <FormItem>
-                <FormLabel>Trailing Stop %</FormLabel>
+              <FormItem className="space-y-1.5">
+                <FormLabel className="whitespace-nowrap">Trailing SL %</FormLabel>
                 <FormControl>
-                  <Input type="number" step="0.5" {...field} />
+                  <Input type="number" step="0.5" className="h-10" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="take_profit_trigger"
+            render={({ field }: any) => (
+              <FormItem className="space-y-1.5">
+                <FormLabel className="whitespace-nowrap">Take Profit</FormLabel>
+                <FormControl>
+                  <Input type="number" step="0.01" placeholder="Optional" className="h-10" {...field} />
                 </FormControl>
                 <FormMessage />
               </FormItem>

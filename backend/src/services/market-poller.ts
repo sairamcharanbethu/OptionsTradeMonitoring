@@ -31,10 +31,10 @@ export class MarketPoller {
     const YY = date.getUTCFullYear().toString().slice(-2);
     const MM = (date.getUTCMonth() + 1).toString().padStart(2, '0');
     const DD = date.getUTCDate().toString().padStart(2, '0');
-    
+
     const side = type === 'CALL' ? 'C' : 'P';
     const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
-    
+
     return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
   }
 
@@ -44,13 +44,13 @@ export class MarketPoller {
 
     return new Promise((resolve) => {
       const pythonProcess = spawn('python3', ['/app/src/scripts/fetch_option_price.py', ticker]);
-      
+
       let dataString = '';
-      
+
       pythonProcess.stdout.on('data', (data: Buffer) => {
         dataString += data.toString();
       });
-      
+
       pythonProcess.stderr.on('data', (data: Buffer) => {
         console.error(`[MarketPoller] Python stderr: ${data}`);
       });
@@ -59,7 +59,7 @@ export class MarketPoller {
         try {
           // Log raw output for debugging if needed
           // console.log(`[MarketPoller] Raw Python output: ${dataString}`);
-          
+
           const result = JSON.parse(dataString);
           if (result.status === 'ok' && typeof result.price === 'number') {
             resolve(result.price);
@@ -68,8 +68,8 @@ export class MarketPoller {
             resolve(null);
           }
         } catch (e) {
-             console.error(`[MarketPoller] Failed to parse output for ${ticker}:`, e);
-             resolve(null);
+          console.error(`[MarketPoller] Failed to parse output for ${ticker}:`, e);
+          resolve(null);
         }
       });
 
@@ -92,9 +92,9 @@ export class MarketPoller {
 
     for (const position of positions) {
       const price = await this.getOptionPremium(
-        position.symbol, 
-        Number(position.strike_price), 
-        position.option_type, 
+        position.symbol,
+        Number(position.strike_price),
+        position.option_type,
         position.expiration_date
       );
 
@@ -121,7 +121,7 @@ export class MarketPoller {
     }
 
     const symbols = [...new Set(positions.map(p => p.symbol))];
-    
+
     for (const symbol of symbols) {
       await this.syncPrice(symbol);
       // Stay within limits, sequential delay
@@ -133,6 +133,7 @@ export class MarketPoller {
     const engineResult = StopLossEngine.evaluate(price, {
       entry_price: Number(position.entry_price),
       stop_loss_trigger: Number(position.stop_loss_trigger),
+      take_profit_trigger: position.take_profit_trigger ? Number(position.take_profit_trigger) : undefined,
       trailing_high_price: Number(position.trailing_high_price || position.entry_price),
       trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
     });
@@ -148,24 +149,27 @@ export class MarketPoller {
     );
 
     if (engineResult.triggered) {
-      // Logic Change: Do NOT close automatically. Just set status to STOP_TRIGGERED.
-      // Only notify if we haven't already set it to STOP_TRIGGERED (avoid spamming n8n every 15 mins)
-      
+      // Logic Change: Do NOT close automatically. Just set status to STOP_TRIGGERED or PROFIT_TRIGGERED.
+      // Only notify if we haven't already set it to STOP_TRIGGERED/PROFIT_TRIGGERED (avoid spamming n8n every 15 mins)
+
       if (position.status === 'OPEN') {
+        const triggerType = engineResult.triggerType || 'STOP_LOSS';
+        const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
+
         await this.fastify.pg.query(
           `UPDATE positions 
-           SET status = 'STOP_TRIGGERED', 
+           SET status = $1, 
                updated_at = CURRENT_TIMESTAMP 
-           WHERE id = $1`,
-          [position.id]
+           WHERE id = $2`,
+          [newStatus, position.id]
         );
 
         await this.fastify.pg.query(
           'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',
-          [position.id, 'STOP_LOSS', position.stop_loss_trigger, price]
+          [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]
         );
 
-        this.notifyN8n(position, price, 0, engineResult.lossAvoided); // PnL is 0 until realized
+        this.notifyN8n(position, price, 0, engineResult.lossAvoided, triggerType);
       }
     } else if (engineResult.newHigh || engineResult.newStopLoss) {
       await this.fastify.pg.query(
@@ -179,7 +183,7 @@ export class MarketPoller {
     }
   }
 
-  private async notifyN8n(position: any, price: number, pnl: number, lossAvoided?: number) {
+  private async notifyN8n(position: any, price: number, pnl: number, lossAvoided?: number, type: string = 'STOP_LOSS') {
     const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
     if (!N8N_WEBHOOK_URL) return;
 
@@ -188,7 +192,7 @@ export class MarketPoller {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          event: 'STOP_LOSS_TRIGGERED',
+          event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
           symbol: position.symbol,
           price: price,
           pnl: pnl,

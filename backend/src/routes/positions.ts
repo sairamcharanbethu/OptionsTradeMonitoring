@@ -20,6 +20,45 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     return rows;
   });
 
+  // GET symbol search
+  fastify.get('/search', async (request, reply) => {
+    const { q } = request.query as { q: string };
+    if (!q) return [];
+
+    const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
+    if (!apiKey) {
+      fastify.log.warn('ALPHA_VANTAGE_API_KEY not set, using mock/limited search');
+      return [
+        { symbol: 'AAPL', name: 'Apple Inc.' },
+        { symbol: 'MSFT', name: 'Microsoft Corporation' },
+        { symbol: 'GOOGL', name: 'Alphabet Inc.' },
+        { symbol: 'AMZN', name: 'Amazon.com Inc.' },
+        { symbol: 'TSLA', name: 'Tesla Inc.' },
+        { symbol: 'NVDA', name: 'NVIDIA Corporation' },
+        { symbol: 'META', name: 'Meta Platforms Inc.' },
+      ].filter(s => s.symbol.toLowerCase().includes(q.toLowerCase()));
+    }
+
+    try {
+      const url = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${q}&apikey=${apiKey}`;
+      const res = await fetch(url);
+      const data = await res.json();
+
+      if (data.bestMatches) {
+        return data.bestMatches.map((m: any) => ({
+          symbol: m['1. symbol'],
+          name: m['2. name'],
+          type: m['3. type'],
+          region: m['4. region']
+        })).filter((m: any) => m.type === 'Equity' || m.type === 'ETF');
+      }
+      return [];
+    } catch (err: any) {
+      fastify.log.error(err);
+      return [];
+    }
+  });
+
   // GET single position
   fastify.get('/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -30,10 +69,20 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     return rows[0];
   });
 
+  // GET price history
+  fastify.get('/:id/history', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { rows } = await fastify.pg.query(
+      'SELECT price, recorded_at FROM price_history WHERE position_id = $1 ORDER BY recorded_at ASC',
+      [id]
+    );
+    return rows;
+  });
+
   // CREATE position
   fastify.post('/', async (request, reply) => {
     const body = PositionSchema.parse(request.body);
-    
+
     // Default trailing peak to entry price
     const trailingHigh = body.entry_price;
     let stopLossTrigger = body.stop_loss_trigger;
@@ -56,7 +105,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       body.entry_price, body.quantity, stopLossTrigger, body.take_profit_trigger,
       trailingHigh, body.trailing_stop_loss_pct
     ];
-    
+
     const { rows } = await fastify.pg.query(query, values);
     const newPosition = rows[0];
 
@@ -75,7 +124,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
   fastify.post('/:id/close', async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as { price?: number } | undefined;
-    
+
     // 1. Fetch Position
     const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1', [id]);
     if (rows.length === 0) {
@@ -85,15 +134,15 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
     // 2. Determine Close Price (Manual override or current market price)
     const closePrice = body?.price !== undefined ? body.price : Number(position.current_price);
-    
+
     // 3. Calculate Analytics
     const entryPrice = Number(position.entry_price);
     const quantity = Number(position.quantity);
     const realizedPnl = (closePrice - entryPrice) * quantity * 100; // Standard option multiplier
-    
+
     // Calculate loss avoided if it was a stop loss scenario? 
     // For now, simpler is better. We just want realized PnL.
-    
+
     // 4. Update Position
     const updateQuery = `
       UPDATE positions 
@@ -103,7 +152,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       WHERE id = $2 
       RETURNING *
     `;
-    
+
     const { rows: updatedRows } = await fastify.pg.query(updateQuery, [realizedPnl, id]);
     return updatedRows[0];
   });
@@ -111,7 +160,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
   // REOPEN position (Manual)
   fastify.patch('/:id/reopen', async (request, reply) => {
     const { id } = request.params as { id: string };
-    
+
     const { rows } = await fastify.pg.query(
       `UPDATE positions 
        SET status = 'OPEN', 
@@ -136,26 +185,26 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     // 1. Fetch existing to get current trailing high
     const { rows: existingRows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1', [id]);
     if (existingRows.length === 0) {
-        return reply.code(404).send({ error: 'Position not found' });
+      return reply.code(404).send({ error: 'Position not found' });
     }
     const currentPos = existingRows[0];
 
     // 2. Logic to recalculate trigger if pct changed
     let newStopTrigger = body.stop_loss_trigger;
-    
+
     // If user sent a new PCT, we MUST recalculate the trigger based on the HIGH water mark
     if (body.trailing_stop_loss_pct !== undefined) {
-        const highPrice = Number(currentPos.trailing_high_price);
-        // Calculate new trigger: High * (1 - pct/100)
-        newStopTrigger = highPrice * (1 - body.trailing_stop_loss_pct / 100);
+      const highPrice = Number(currentPos.trailing_high_price);
+      // Calculate new trigger: High * (1 - pct/100)
+      newStopTrigger = highPrice * (1 - body.trailing_stop_loss_pct / 100);
     }
 
     // 3. Reset status to OPEN if previously STOP_TRIGGERED and user is updating trailing stop
     // This gives the position another chance after the user adjusts their stop loss
     let newStatus: string | null = null; // null means don't change
     if (currentPos.status === 'STOP_TRIGGERED' && body.trailing_stop_loss_pct !== undefined) {
-        newStatus = 'OPEN';
-        fastify.log.info({ id, newStopTrigger, oldPct: currentPos.trailing_stop_loss_pct, newPct: body.trailing_stop_loss_pct }, 'Resetting status to OPEN - trailing stop updated');
+      newStatus = 'OPEN';
+      fastify.log.info({ id, newStopTrigger, oldPct: currentPos.trailing_stop_loss_pct, newPct: body.trailing_stop_loss_pct }, 'Resetting status to OPEN - trailing stop updated');
     }
 
     const query = `
@@ -174,7 +223,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       WHERE id = $11
       RETURNING *
     `;
-    
+
     const values = [
       body.symbol, body.option_type, body.strike_price, body.expiration_date,
       body.entry_price, body.quantity, newStopTrigger, body.take_profit_trigger,
@@ -188,20 +237,20 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
   // DELETE position
   fastify.delete('/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    
+
     try {
       // Manually clean up dependencies just in case CASCADE isn't working/setup
       await fastify.pg.query('DELETE FROM alerts WHERE position_id = $1', [id]);
       await fastify.pg.query('DELETE FROM price_history WHERE position_id = $1', [id]);
-      
+
       const result = await fastify.pg.query('DELETE FROM positions WHERE id = $1', [id]);
       if (result.rowCount === 0) {
         return reply.code(404).send({ error: 'Position not found' });
       }
       return reply.code(204).send();
     } catch (err: any) {
-        fastify.log.error(err);
-        return reply.code(500).send({ error: 'Failed to delete position' });
+      fastify.log.error(err);
+      return reply.code(500).send({ error: 'Failed to delete position' });
     }
   });
 }

@@ -13,7 +13,7 @@ export interface Position {
   realized_pnl?: number;
   loss_avoided?: number;
   current_price?: number;
-  status: 'OPEN' | 'CLOSED' | 'STOP_TRIGGERED';
+  status: 'OPEN' | 'CLOSED' | 'STOP_TRIGGERED' | 'PROFIT_TRIGGERED';
   created_at: string;
   updated_at: string;
 }
@@ -25,7 +25,7 @@ export const api = {
     const res = await fetch(`${API_BASE}/positions`);
     if (!res.ok) throw new Error('Failed to fetch positions');
     const data = await res.json();
-    
+
     // PostgreSQL returns DECIMAL as strings. Convert to numbers.
     return data.map((pos: any) => ({
       ...pos,
@@ -39,7 +39,23 @@ export const api = {
       loss_avoided: pos.loss_avoided ? Number(pos.loss_avoided) : undefined,
     }));
   },
-  
+
+  async searchSymbols(q: string): Promise<{ symbol: string, name: string }[]> {
+    const res = await fetch(`${API_BASE}/positions/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) throw new Error('Failed to search symbols');
+    return res.json();
+  },
+
+  async getPositionHistory(id: number): Promise<{ price: number, recorded_at: string }[]> {
+    const res = await fetch(`${API_BASE}/positions/${id}/history`);
+    if (!res.ok) throw new Error('Failed to fetch position history');
+    const data = await res.json();
+    return data.map((d: any) => ({
+      price: Number(d.price),
+      recorded_at: d.recorded_at
+    }));
+  },
+
   async createPosition(data: Partial<Position>): Promise<Position> {
     const res = await fetch(`${API_BASE}/positions`, {
       method: 'POST',

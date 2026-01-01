@@ -1,24 +1,37 @@
 import React, { useEffect, useState } from 'react';
 import { api, Position } from '@/lib/api';
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
 } from '@/components/ui/table';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle, 
-  DialogTrigger 
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
 } from '@/components/ui/dialog';
-import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw } from 'lucide-react';
+import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw, BarChart3, PieChart as PieChartIcon, Activity } from 'lucide-react';
+import {
+  LineChart,
+  Line,
+  ResponsiveContainer,
+  YAxis,
+  XAxis,
+  Tooltip,
+  AreaChart,
+  Area,
+  PieChart,
+  Pie,
+  Cell
+} from 'recharts';
 import PositionForm from './PositionForm';
 
 export default function Dashboard() {
@@ -71,69 +84,269 @@ export default function Dashboard() {
   const getRoi = (pos: Position) => {
     const cost = Number(pos.entry_price) * 100 * Number(pos.quantity);
     if (cost === 0 || !pos.entry_price || !pos.quantity) return 0;
-    
+
     // For closed positions, use realized_pnl; for open positions, calculate from current price
     if (pos.status === 'CLOSED' && pos.realized_pnl !== undefined) {
       return (Number(pos.realized_pnl) / cost) * 100;
     }
-    
+
     // For open positions, calculate unrealized ROI
     if (!pos.current_price) return 0;
     const unrealizedPnl = (Number(pos.current_price) - Number(pos.entry_price)) * Number(pos.quantity) * 100;
     return (unrealizedPnl / cost) * 100;
   };
 
+  const [historyData, setHistoryData] = useState<Record<number, any[]>>({});
+
+  useEffect(() => {
+    positions.forEach(pos => {
+      if ((pos.status === 'OPEN' || pos.status === 'STOP_TRIGGERED' || pos.status === 'PROFIT_TRIGGERED') && !historyData[pos.id]) {
+        api.getPositionHistory(pos.id).then(data => {
+          setHistoryData(prev => ({ ...prev, [pos.id]: data }));
+        });
+      }
+    });
+  }, [positions]);
+
+  const totalRealizedPnL = positions.reduce((acc, p) => acc + (p.realized_pnl || 0), 0);
+
+  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+  const exposureData = Object.entries(
+    positions.filter(p => p.status !== 'CLOSED').reduce((acc, p) => {
+      acc[p.symbol] = (acc[p.symbol] || 0) + (p.entry_price * p.quantity * 100);
+      return acc;
+    }, {} as Record<string, number>)
+  ).map(([name, value]) => ({ name, value }));
+
   return (
     <div className="container mx-auto py-8 space-y-8">
       {/* ... keeping previous content same until History table ... */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold">Positions Monitor</h1>
-          <p className="text-muted-foreground mt-1">Track your option trades and alerts</p>
+          <h1 className="text-2xl sm:text-3xl font-bold transition-all">Positions Monitor</h1>
+          <p className="text-[10px] sm:text-sm text-muted-foreground mt-1">Track your option trades and alerts</p>
         </div>
         <div className="flex gap-2">
-            <Button variant="outline" size="icon" onClick={loadPositions}>
+          <Button variant="outline" size="icon" onClick={loadPositions}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            </Button>
-            <Dialog open={isDialogOpen} onOpenChange={handleDialogChange}>
+          </Button>
+          <Dialog open={isDialogOpen} onOpenChange={handleDialogChange}>
             <DialogTrigger asChild>
-                <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Track Position
-                </Button>
+              <Button className="rounded-full sm:rounded-md w-10 h-10 sm:w-auto sm:h-10 p-0 sm:px-4">
+                <Plus className="h-4 w-4 sm:mr-2" />
+                <span className="hidden sm:inline">Track Position</span>
+              </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
-                <DialogHeader>
+            <DialogContent className="sm:max-w-[600px]">
+              <DialogHeader>
                 <DialogTitle>{editingPosition ? 'Edit Position' : 'Track New Position'}</DialogTitle>
-                </DialogHeader>
-                <PositionForm 
+              </DialogHeader>
+              <PositionForm
                 position={editingPosition || undefined}
                 onSuccess={() => {
-                    loadPositions();
-                    handleDialogChange(false);
-                }} 
-                />
+                  loadPositions();
+                  handleDialogChange(false);
+                }}
+              />
             </DialogContent>
-            </Dialog>
+          </Dialog>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">Open Positions</CardTitle>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+        <Card className="hover:shadow-md transition-shadow">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex justify-between">
+              Active Positions
+              <Activity className="h-4 w-4" />
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{positions.filter(p => p.status === 'OPEN' || p.status === 'STOP_TRIGGERED').length}</div>
+            <div className="text-2xl font-bold">{positions.filter(p => p.status !== 'CLOSED').length}</div>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm font-medium">Realized PnL</CardTitle>
+        <Card className="hover:shadow-md transition-shadow">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex justify-between">
+              Realized PnL
+              <TrendingUp className="h-4 w-4" />
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${positions.reduce((acc, p) => acc + (p.realized_pnl || 0), 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-              ${positions.reduce((acc, p) => acc + (p.realized_pnl || 0), 0).toFixed(2)}
+            <div className={`text-2xl font-bold ${totalRealizedPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+              ${totalRealizedPnL.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="md:col-span-2 hover:shadow-md transition-shadow">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex justify-between">
+              Performance (Cumulative PnL)
+              <BarChart3 className="h-4 w-4" />
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="h-[60px] p-0 px-6">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={
+                positions
+                  .filter(p => p.status === 'CLOSED')
+                  .sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime())
+                  .reduce((acc: any[], p: any) => {
+                    const prev = acc.length > 0 ? acc[acc.length - 1].pnl : 0;
+                    acc.push({ pnl: prev + p.realized_pnl });
+                    return acc;
+                  }, [])
+              }>
+                <defs>
+                  <linearGradient id="pnlColor" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <Area type="monotone" dataKey="pnl" stroke="#10b981" fillOpacity={1} fill="url(#pnlColor)" isAnimationActive={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="text-lg sm:text-xl flex items-center gap-2">
+              <Activity className="h-5 w-5 text-blue-500" />
+              Active Tracker
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0 sm:p-6 overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Symbol</TableHead>
+                  <TableHead className="hidden md:table-cell">Entry/Current</TableHead>
+                  <TableHead>Alerts</TableHead>
+                  <TableHead>Trend</TableHead>
+                  <TableHead>PnL</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableRow><TableCell colSpan={7} className="text-center py-8">Loading...</TableCell></TableRow>
+                ) : positions.filter(p => p.status !== 'CLOSED').length === 0 ? (
+                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No active trades.</TableCell></TableRow>
+                ) : (
+                  positions.filter(p => p.status !== 'CLOSED').map((pos) => (
+                    <TableRow key={pos.id} className={pos.status !== 'OPEN' ? 'bg-orange-50/50 dark:bg-orange-900/5' : ''}>
+                      <TableCell>
+                        <div className="flex flex-col">
+                          <span className="font-bold">{pos.symbol}</span>
+                          <span className="text-[10px] text-muted-foreground uppercase">{pos.option_type} ${pos.strike_price}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell">
+                        <div className="text-xs">
+                          <div>In: ${pos.entry_price}</div>
+                          <div className="font-bold">Now: ${pos.current_price || '-'}</div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-[10px] space-y-1">
+                          <div className="text-red-500 font-medium whitespace-nowrap">SL: ${pos.stop_loss_trigger?.toFixed(2)}</div>
+                          {pos.take_profit_trigger && (
+                            <div className="text-green-600 font-medium whitespace-nowrap">TP: ${pos.take_profit_trigger.toFixed(2)}</div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="w-[100px] min-w-[100px]">
+                        <div className="h-[30px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={historyData[pos.id] || []}>
+                              <YAxis hide domain={['auto', 'auto']} />
+                              <Line type="monotone" dataKey="price" stroke={getPnL(pos) >= 0 ? '#10b981' : '#ef4444'} strokeWidth={2} dot={false} isAnimationActive={false} />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className={`font-bold ${getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {getPnL(pos) >= 0 ? '+' : ''}{getPnL(pos).toFixed(2)}
+                          <div className="text-[10px] opacity-70">
+                            ({getRoi(pos) > 0 ? '+' : ''}{getRoi(pos).toFixed(2)}%)
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {pos.status === 'STOP_TRIGGERED' ? (
+                          <Badge variant="destructive" className="text-[10px] px-1 py-0 animate-pulse">STOP</Badge>
+                        ) : pos.status === 'PROFIT_TRIGGERED' ? (
+                          <Badge className="bg-green-500 text-[10px] px-1 py-0 animate-pulse">PROFIT</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] px-1 py-0">OPEN</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          {(pos.status === 'STOP_TRIGGERED' || pos.status === 'PROFIT_TRIGGERED') && (
+                            <Button size="icon" variant="ghost" className="h-8 w-8 text-green-500" onClick={() => api.closePosition(pos.id).then(loadPositions)}>
+                              <RefreshCw className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(pos)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-red-400 hover:text-red-600" onClick={() => handleDelete(pos.id)}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <PieChartIcon className="h-4 w-4 text-orange-500" />
+              Capital Exposure
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="h-[250px] flex items-center justify-center relative">
+            {exposureData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={exposureData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={80}
+                    paddingAngle={5}
+                    dataKey="value"
+                  >
+                    {exposureData.map((_entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px' }}
+                    itemStyle={{ color: 'hsl(var(--foreground))' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="text-muted-foreground text-sm">No active allocation</div>
+            )}
+            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+              <div className="text-xs text-muted-foreground">Total At Risk</div>
+              <div className="text-lg font-bold">
+                ${exposureData.reduce((acc, d) => acc + d.value, 0).toLocaleString()}
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -141,140 +354,51 @@ export default function Dashboard() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Active Tracker</CardTitle>
+          <CardTitle className="text-lg sm:text-xl flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-green-500" />
+            History & Analytics
+          </CardTitle>
         </CardHeader>
-        {/* ... Active Tracker table same ... */}
-        <CardContent>
+        <CardContent className="p-0 sm:p-6 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Symbol</TableHead>
-                <TableHead>Entry</TableHead>
-                <TableHead>Current</TableHead>
-                <TableHead>Peak</TableHead>
-                <TableHead>Stop Loss</TableHead>
-                <TableHead>PnL</TableHead>
+                <TableHead className="hidden md:table-cell">Duration</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-4">Loading...</TableCell>
-                </TableRow>
-              ) : positions.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-4 text-muted-foreground">No positions tracked yet.</TableCell>
-                </TableRow>
-              ) : (
-                positions.filter(p => p.status === 'OPEN' || p.status === 'STOP_TRIGGERED').map((pos) => (
-                  <TableRow key={pos.id} className={pos.status === 'STOP_TRIGGERED' ? 'bg-red-50 dark:bg-red-900/10' : ''}>
-                    <TableCell className="font-medium">
-                      <div className="flex flex-col">
-                        <span>{pos.symbol}</span>
-                        <span className="text-xs text-muted-foreground">{pos.option_type} ${pos.strike_price}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>${pos.entry_price} (Premium)</TableCell>
-                    <TableCell>${pos.current_price || '-'} (Premium)</TableCell>
-                    <TableCell>${pos.trailing_high_price || '-'} (Peak)</TableCell>
-                    <TableCell className="text-orange-500 font-medium">
-                      ${pos.stop_loss_trigger ? Number(pos.stop_loss_trigger).toFixed(2) : '-'} (Stop)
-                    </TableCell>
-                    <TableCell className={getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500'}>
-                      ${getPnL(pos).toFixed(2)}
-                      <span className="ml-2 text-xs opacity-75">
-                         ({getRoi(pos) > 0 ? '+' : ''}{getRoi(pos).toFixed(2)}%)
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      {pos.status === 'STOP_TRIGGERED' ? (
-                         <Badge variant="destructive" className="animate-pulse">SUGGEST CLOSE</Badge>
-                      ) : (
-                         <Badge variant="outline">OPEN</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        {pos.status === 'STOP_TRIGGERED' && (
-                            <Button size="sm" variant="destructive" onClick={async () => {
-                                if(confirm(`Confirm closing ${pos.symbol} at current price?`)) {
-                                    await api.closePosition(pos.id);
-                                    loadPositions();
-                                }
-                            }}>
-                                Close Now
-                            </Button>
-                        )}
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(pos)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="text-red-500 hover:text-red-700" onClick={() => handleDelete(pos.id)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>History & Analytics</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Symbol</TableHead>
-                <TableHead>Result</TableHead>
                 <TableHead>Realized PnL</TableHead>
-                <TableHead>Loss Avoided</TableHead>
-                <TableHead>Date</TableHead>
+                <TableHead className="hidden md:table-cell">Loss Avoided</TableHead>
+                <TableHead>Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {positions.filter(p => p.status === 'CLOSED').length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center py-4 text-muted-foreground">No closed positions yet.</TableCell>
-                </TableRow>
+                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No history available.</TableCell></TableRow>
               ) : (
                 positions.filter(p => p.status === 'CLOSED').map((pos) => (
-                  <TableRow key={pos.id}>
-                    <TableCell className="font-medium">{pos.symbol}</TableCell>
+                  <TableRow key={pos.id} className="group">
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="destructive">CLOSED</Badge>
-                        <Button 
-                            variant="ghost" 
-                            size="sm" 
-                            className="h-6 text-xs text-muted-foreground hover:text-primary"
-                            onClick={async () => {
-                                if(confirm('Reopen this position? It will track from current market price.')) {
-                                    await api.reopenPosition(pos.id);
-                                    loadPositions();
-                                }
-                            }}
-                        >
-                            <RefreshCw className="h-3 w-3 mr-1" /> Reopen
-                        </Button>
+                      <div className="font-bold">{pos.symbol}</div>
+                      <div className="text-[10px] text-muted-foreground uppercase">{pos.option_type} ${pos.strike_price}</div>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
+                      {Math.floor((new Date(pos.updated_at).getTime() - new Date(pos.created_at).getTime()) / (1000 * 60 * 60 * 24))} days
+                    </TableCell>
+                    <TableCell><Badge variant="outline" className="text-[10px]">CLOSED</Badge></TableCell>
+                    <TableCell>
+                      <div className={`font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        ${Number(pos.realized_pnl).toFixed(2)}
+                        <span className="ml-1 text-[10px] opacity-70">({getRoi(pos).toFixed(2)}%)</span>
                       </div>
                     </TableCell>
-                    <TableCell className={Number(pos.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}>
-                      ${Number(pos.realized_pnl).toFixed(2)}
-                      <span className="ml-2 text-xs opacity-75">
-                         ({getRoi(pos) > 0 ? '+' : ''}{getRoi(pos).toFixed(2)}%)
-                      </span>
+                    <TableCell className="hidden md:table-cell">
+                      <span className="text-blue-500 font-medium text-xs">${Number(pos.loss_avoided || 0).toFixed(2)}</span>
                     </TableCell>
-                    <TableCell className="text-blue-500 font-medium">
-                      ${Number(pos.loss_avoided || 0).toFixed(2)}
+                    <TableCell>
+                      <Button variant="ghost" size="sm" className="h-7 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => api.reopenPosition(pos.id).then(loadPositions)}>
+                        <RefreshCw className="h-3 w-3 mr-1" /> Reopen
+                      </Button>
                     </TableCell>
-                    <TableCell>{new Date(pos.updated_at).toLocaleDateString()}</TableCell>
                   </TableRow>
                 ))
               )}
