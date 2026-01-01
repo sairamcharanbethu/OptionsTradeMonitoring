@@ -286,7 +286,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
             render={({ field }) => (
               <FormItem className="flex flex-col space-y-1.5">
                 <FormLabel className="whitespace-nowrap">Expiration Date</FormLabel>
-                <Popover>
+                <Popover modal={true}>
                   <PopoverTrigger asChild>
                     <FormControl>
                       <Button
@@ -307,6 +307,41 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
                     </FormControl>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
+                    <div className="p-2 grid grid-cols-2 gap-2 border-b">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-7"
+                        onClick={() => {
+                          const d = new Date();
+                          // Calculate next Friday
+                          const day = d.getDay();
+                          const diff = 5 - day; // 5 is Friday
+                          // If today is Friday (0 diff) or after (negative), add 7 days for NEXT week, 
+                          // unless user wants "This Friday" and it's currently Monday-Thursday.
+                          // Let's assume "Next Friday" logic:
+                          // If Mon(1) -> Fri(5) = +4 days
+                          // If Fri(5) -> Next Fri = +7 days
+                          const daysToAdd = diff <= 0 ? diff + 7 : diff;
+                          d.setDate(d.getDate() + daysToAdd);
+                          field.onChange(d);
+                        }}
+                      >
+                        Next Friday
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-7"
+                        onClick={() => {
+                          const d = new Date();
+                          d.setDate(d.getDate() + 30);
+                          field.onChange(d);
+                        }}
+                      >
+                        +30 Days
+                      </Button>
+                    </div>
                     <Calendar
                       mode="single"
                       selected={field.value}
@@ -314,6 +349,12 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
                       disabled={(date: Date) =>
                         date < new Date(new Date().setHours(0, 0, 0, 0))
                       }
+                      modifiers={{
+                        friday: (date) => date.getDay() === 5
+                      }}
+                      modifiersClassNames={{
+                        friday: "text-orange-500 font-bold bg-orange-100 dark:bg-orange-900/30 rounded-full"
+                      }}
                       initialFocus
                     />
                   </PopoverContent>
