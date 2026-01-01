@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: options_monitoring
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgres://user:password@db:5432/options_monitoring
+      PORT: 3001
+      N8N_ALERT_WEBHOOK_URL: http://host.docker.internal:5678/webhook-test/options-alert
+      MARKET_DATA_POLL_INTERVAL: "*/15 * * * *" # Every 15 mins for free tier
+      ALPHA_VANTAGE_API_KEY: "J56HKP7VR259LW68"
+      POLYGON_API_KEY: "NwSOh6YWMgwfAg1I2xpsTfuA1Q3IM38a"
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  db-data:
