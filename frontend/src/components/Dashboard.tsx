@@ -69,10 +69,18 @@ export default function Dashboard() {
   };
 
   const getRoi = (pos: Position) => {
-    if (!pos.realized_pnl || !pos.entry_price || !pos.quantity) return 0;
-    const cost = pos.entry_price * 100 * pos.quantity;
-    if (cost === 0) return 0;
-    return (pos.realized_pnl / cost) * 100;
+    const cost = Number(pos.entry_price) * 100 * Number(pos.quantity);
+    if (cost === 0 || !pos.entry_price || !pos.quantity) return 0;
+    
+    // For closed positions, use realized_pnl; for open positions, calculate from current price
+    if (pos.status === 'CLOSED' && pos.realized_pnl !== undefined) {
+      return (Number(pos.realized_pnl) / cost) * 100;
+    }
+    
+    // For open positions, calculate unrealized ROI
+    if (!pos.current_price) return 0;
+    const unrealizedPnl = (Number(pos.current_price) - Number(pos.entry_price)) * Number(pos.quantity) * 100;
+    return (unrealizedPnl / cost) * 100;
   };
 
   return (
@@ -116,7 +124,7 @@ export default function Dashboard() {
             <CardTitle className="text-sm font-medium">Open Positions</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{positions.filter(p => p.status === 'OPEN').length}</div>
+            <div className="text-2xl font-bold">{positions.filter(p => p.status === 'OPEN' || p.status === 'STOP_TRIGGERED').length}</div>
           </CardContent>
         </Card>
         <Card>

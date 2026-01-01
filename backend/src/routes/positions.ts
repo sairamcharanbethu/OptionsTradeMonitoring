@@ -150,14 +150,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
         newStopTrigger = highPrice * (1 - body.trailing_stop_loss_pct / 100);
     }
 
-    // 3. Reset status to OPEN if previously STOP_TRIGGERED but new trigger is no longer breached
-    let newStatus = currentPos.status;
-    if (currentPos.status === 'STOP_TRIGGERED' && newStopTrigger !== undefined) {
-        const currentPrice = Number(currentPos.current_price);
-        // If current price is now ABOVE the new stop trigger, reset to OPEN
-        if (currentPrice > newStopTrigger) {
-            newStatus = 'OPEN';
-        }
+    // 3. Reset status to OPEN if previously STOP_TRIGGERED and user is updating trailing stop
+    // This gives the position another chance after the user adjusts their stop loss
+    let newStatus: string | null = null; // null means don't change
+    if (currentPos.status === 'STOP_TRIGGERED' && body.trailing_stop_loss_pct !== undefined) {
+        newStatus = 'OPEN';
+        fastify.log.info({ id, newStopTrigger, oldPct: currentPos.trailing_stop_loss_pct, newPct: body.trailing_stop_loss_pct }, 'Resetting status to OPEN - trailing stop updated');
     }
 
     const query = `
@@ -171,7 +169,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
           stop_loss_trigger = COALESCE($7, stop_loss_trigger), 
           take_profit_trigger = COALESCE($8, take_profit_trigger),
           trailing_stop_loss_pct = COALESCE($9, trailing_stop_loss_pct), 
-          status = COALESCE($10, status),
+          status = CASE WHEN $10::text IS NOT NULL THEN $10::text ELSE status END,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = $11
       RETURNING *
