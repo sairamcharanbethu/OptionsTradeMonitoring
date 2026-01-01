@@ -35,8 +35,9 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { CalendarIcon, Check, ChevronsUpDown } from "lucide-react";
+import { CalendarIcon, Check, ChevronsUpDown, Loader2 } from "lucide-react";
 import { api, Position } from '@/lib/api';
+import { useToast } from "@/hooks/use-toast";
 
 // Helper to debounce search
 function useDebounce<T>(value: T, delay: number): T {
@@ -53,17 +54,23 @@ function useDebounce<T>(value: T, delay: number): T {
 const formSchema = z.object({
   symbol: z.string().min(1, 'Symbol is required').toUpperCase(),
   option_type: z.enum(['CALL', 'PUT']),
-  strike_price: z.coerce.number().positive(),
-  expiration_date: z.date(),
-  entry_price: z.coerce.number().positive(),
-  quantity: z.coerce.number().int().positive(),
-  trailing_stop_loss_pct: z.coerce.number().positive().optional(),
-  take_profit_trigger: z.coerce.number().positive().optional(),
+  strike_price: z.coerce.number().positive('Strike price must be positive'),
+  expiration_date: z.date().refine(
+    (date) => date >= new Date(new Date().setHours(0, 0, 0, 0)),
+    'Expiration date must be in the future'
+  ),
+  entry_price: z.coerce.number().positive('Entry price must be positive'),
+  quantity: z.coerce.number().int().positive('Quantity must be a positive integer'),
+  trailing_stop_loss_pct: z.coerce.number().positive('Trailing stop loss must be positive').default(10),
+  take_profit_trigger: z.coerce.number().positive('Take profit must be positive').optional().or(z.literal('')),
 });
 
 type FormValues = z.infer<typeof formSchema>;
 
 export default function PositionForm({ onSuccess, position }: { onSuccess: () => void, position?: Position }) {
+  const { toast } = useToast();
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema) as any,
     defaultValues: position ? {
@@ -77,9 +84,10 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
       take_profit_trigger: position.take_profit_trigger,
     } : {
       symbol: '',
-      option_type: 'CALL',
+      option_type: 'CALL' as const,
       quantity: 1,
       trailing_stop_loss_pct: 10,
+      take_profit_trigger: '' as any,
     },
   });
 
@@ -95,30 +103,56 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
       setLoadingSearch(true);
       api.searchSymbols(debouncedSearchTerm)
         .then(setSearchResults)
-        .catch(console.error)
+        .catch((err) => {
+          console.error('Search error:', err);
+          setSearchResults([]);
+        })
         .finally(() => setLoadingSearch(false));
     } else {
       setSearchResults([]);
     }
   }, [debouncedSearchTerm]);
 
+  const handleSelect = (val: string) => {
+    form.setValue("symbol", val.toUpperCase());
+    setOpen(false);
+    setInputValue("");
+  };
+
   const onSubmit: SubmitHandler<FormValues> = async (values) => {
-    // Format date to YYYY-MM-DD for backend
+    setIsSubmitting(true);
+
     const payload = {
       ...values,
-      expiration_date: format(values.expiration_date, "yyyy-MM-dd"), // Correct format for backend
+      expiration_date: format(values.expiration_date, "yyyy-MM-dd"),
+      take_profit_trigger: values.take_profit_trigger || undefined,
     };
 
     try {
       if (position) {
         await api.updatePosition(position.id, payload);
+        toast({
+          title: "Success",
+          description: "Position updated successfully",
+        });
       } else {
         await api.createPosition(payload);
+        toast({
+          title: "Success",
+          description: "Position created successfully",
+        });
       }
       form.reset();
       onSuccess();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Submission error:', err);
+      toast({
+        title: "Error",
+        description: err?.message || "Failed to save position. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -139,6 +173,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
                         variant="outline"
                         role="combobox"
                         aria-expanded={open}
+                        type="button"
                         className={cn(
                           "w-full justify-between h-10 px-3 py-2",
                           !field.value && "text-muted-foreground"
@@ -152,57 +187,56 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
                     </FormControl>
                   </PopoverTrigger>
                   <PopoverContent className="w-[300px] p-0" align="start">
-                    <Command shouldFilter={false}>
-                      <CommandInput
+                    <div className="flex items-center border-b px-3">
+                      <input
+                        type="text"
                         placeholder="Type symbol or name..."
                         value={inputValue}
-                        onValueChange={setInputValue}
+                        onChange={(e) => setInputValue(e.target.value)}
+                        className="flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground"
+                        autoFocus
                       />
-                      <CommandList className="max-h-[300px]">
-                        {loadingSearch && <div className="p-4 text-sm text-muted-foreground text-center">Searching...</div>}
-                        {!loadingSearch && searchResults.length === 0 && debouncedSearchTerm && (
-                          <CommandEmpty>No results found.</CommandEmpty>
-                        )}
-                        <CommandGroup>
-                          {searchResults.map((stock) => (
-                            <CommandItem
-                              key={stock.symbol}
-                              value={stock.symbol}
-                              onSelect={() => {
-                                form.setValue("symbol", stock.symbol);
-                                setOpen(false);
-                              }}
-                            >
-                              <div className="flex flex-col">
-                                <div className="flex items-center">
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      stock.symbol === field.value ? "opacity-100" : "opacity-0"
-                                    )}
-                                  />
-                                  <span className="font-bold">{stock.symbol}</span>
-                                </div>
-                                <span className="ml-6 text-[10px] text-muted-foreground truncate">{stock.name}</span>
-                              </div>
-                            </CommandItem>
-                          ))}
-                          {/* Allow custom entry if not in results */}
-                          {debouncedSearchTerm && !searchResults.some(s => s.symbol.toUpperCase() === debouncedSearchTerm.toUpperCase()) && (
-                            <CommandItem
-                              value={debouncedSearchTerm}
-                              onSelect={() => {
-                                form.setValue("symbol", debouncedSearchTerm.toUpperCase());
-                                setOpen(false);
-                              }}
-                            >
-                              <Check className="mr-2 h-4 w-4 opacity-0" />
-                              Use custom: "{debouncedSearchTerm.toUpperCase()}"
-                            </CommandItem>
-                          )}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
+                    </div>
+                    <div className="max-h-[300px] overflow-y-auto overflow-x-hidden p-1">
+                      {loadingSearch && (
+                        <div className="p-4 text-sm text-muted-foreground text-center flex items-center justify-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Searching...
+                        </div>
+                      )}
+                      {!loadingSearch && searchResults.length === 0 && debouncedSearchTerm && (
+                        <div className="py-6 text-center text-sm">No results found.</div>
+                      )}
+                      {searchResults.map((stock) => (
+                        <button
+                          key={stock.symbol}
+                          type="button"
+                          onClick={() => handleSelect(stock.symbol)}
+                          className="relative flex w-full cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              stock.symbol === field.value ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          <div className="flex flex-col text-left">
+                            <span className="font-bold">{stock.symbol}</span>
+                            <span className="text-xs text-muted-foreground truncate">{stock.name}</span>
+                          </div>
+                        </button>
+                      ))}
+                      {debouncedSearchTerm && !searchResults.some(s => s.symbol.toUpperCase() === debouncedSearchTerm.toUpperCase()) && (
+                        <button
+                          type="button"
+                          onClick={() => handleSelect(debouncedSearchTerm)}
+                          className="relative flex w-full cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground"
+                        >
+                          <Check className="mr-2 h-4 w-4 opacity-0" />
+                          Use custom: "{debouncedSearchTerm.toUpperCase()}"
+                        </button>
+                      )}
+                    </div>
                   </PopoverContent>
                 </Popover>
                 <FormMessage />
@@ -212,7 +246,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           <FormField
             control={form.control}
             name="option_type"
-            render={({ field }: any) => (
+            render={({ field }) => (
               <FormItem className="space-y-1.5">
                 <FormLabel className="whitespace-nowrap">Option Type</FormLabel>
                 <Select onValueChange={field.onChange} defaultValue={field.value}>
@@ -236,7 +270,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           <FormField
             control={form.control}
             name="strike_price"
-            render={({ field }: any) => (
+            render={({ field }) => (
               <FormItem className="space-y-1.5">
                 <FormLabel className="whitespace-nowrap">Strike Price</FormLabel>
                 <FormControl>
@@ -249,7 +283,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           <FormField
             control={form.control}
             name="expiration_date"
-            render={({ field }: any) => (
+            render={({ field }) => (
               <FormItem className="flex flex-col space-y-1.5">
                 <FormLabel className="whitespace-nowrap">Expiration Date</FormLabel>
                 <Popover>
@@ -257,6 +291,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
                     <FormControl>
                       <Button
                         variant={"outline"}
+                        type="button"
                         className={cn(
                           "w-full pl-3 text-left font-normal h-10",
                           !field.value && "text-muted-foreground"
@@ -293,7 +328,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           <FormField
             control={form.control}
             name="entry_price"
-            render={({ field }: any) => (
+            render={({ field }) => (
               <FormItem className="space-y-1.5">
                 <FormLabel className="whitespace-nowrap">Entry Price</FormLabel>
                 <FormControl>
@@ -306,7 +341,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           <FormField
             control={form.control}
             name="quantity"
-            render={({ field }: any) => (
+            render={({ field }) => (
               <FormItem className="space-y-1.5">
                 <FormLabel className="whitespace-nowrap">Quantity</FormLabel>
                 <FormControl>
@@ -319,7 +354,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           <FormField
             control={form.control}
             name="trailing_stop_loss_pct"
-            render={({ field }: any) => (
+            render={({ field }) => (
               <FormItem className="space-y-1.5">
                 <FormLabel className="whitespace-nowrap">Trailing SL %</FormLabel>
                 <FormControl>
@@ -332,7 +367,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           <FormField
             control={form.control}
             name="take_profit_trigger"
-            render={({ field }: any) => (
+            render={({ field }) => (
               <FormItem className="space-y-1.5">
                 <FormLabel className="whitespace-nowrap">Take Profit</FormLabel>
                 <FormControl>
@@ -344,8 +379,15 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
           />
         </div>
 
-        <Button type="submit" className="w-full">
-          {position ? 'Update Position' : 'Track Position'}
+        <Button type="submit" className="w-full" disabled={isSubmitting}>
+          {isSubmitting ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              {position ? 'Updating...' : 'Creating...'}
+            </>
+          ) : (
+            position ? 'Update Position' : 'Track Position'
+          )}
         </Button>
       </form>
     </Form>

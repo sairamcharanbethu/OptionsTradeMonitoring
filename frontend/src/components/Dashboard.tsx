@@ -11,6 +11,14 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -18,7 +26,7 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
-import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw, BarChart3, PieChart as PieChartIcon, Activity } from 'lucide-react';
+import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw, BarChart3, PieChart as PieChartIcon, Activity, Search, X } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -39,6 +47,12 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
+  const [marketStatus, setMarketStatus] = useState<{ open: boolean; marketHours: string } | null>(null);
+
+  // Filter States
+  const [tickerFilter, setTickerFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [dteFilter, setDteFilter] = useState('');
 
   const handleEdit = (pos: Position) => {
     setEditingPosition(pos);
@@ -61,8 +75,20 @@ export default function Dashboard() {
     if (!open) setEditingPosition(null);
   };
 
+  async function loadMarketStatus() {
+    try {
+      const status = await api.getMarketStatus();
+      setMarketStatus(status);
+    } catch (error) {
+      console.error('Failed to load market status:', error);
+    }
+  }
+
   useEffect(() => {
     loadPositions();
+    loadMarketStatus();
+    const interval = setInterval(loadMarketStatus, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   async function loadPositions() {
@@ -96,7 +122,46 @@ export default function Dashboard() {
     return (unrealizedPnl / cost) * 100;
   };
 
+  const getDte = (expirationDate: string) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const exp = new Date(expirationDate);
+    exp.setHours(0, 0, 0, 0);
+    const diffTime = exp.getTime() - today.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  };
+
   const [historyData, setHistoryData] = useState<Record<number, any[]>>({});
+
+  const filteredPositions = positions.filter(pos => {
+    // Symbol Filter
+    if (tickerFilter && !pos.symbol.toLowerCase().includes(tickerFilter.toLowerCase())) {
+      return false;
+    }
+
+    // Status Filter
+    if (statusFilter !== 'ALL') {
+      if (statusFilter === 'OPEN_ONLY' && pos.status !== 'OPEN') return false;
+      if (statusFilter === 'STOPPED' && pos.status !== 'STOP_TRIGGERED') return false;
+      if (statusFilter === 'PROFIT' && pos.status !== 'PROFIT_TRIGGERED') return false;
+      if (statusFilter === 'CLOSED' && pos.status !== 'CLOSED') return false;
+      // Handle direct matches if needed
+      if (['OPEN', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED', 'CLOSED'].includes(statusFilter) && pos.status !== statusFilter) {
+        return false;
+      }
+    } else {
+      // Default view: exclude CLOSED if "ALL" is not literally selected but we just want active ones?
+      // Actually, user said "filters", lets keep it simple: ALL shows everything.
+    }
+
+    // DTE Filter
+    if (dteFilter) {
+      const dte = getDte(pos.expiration_date);
+      if (dte > parseInt(dteFilter)) return false;
+    }
+
+    return true;
+  });
 
   useEffect(() => {
     positions.forEach(pos => {
@@ -121,10 +186,26 @@ export default function Dashboard() {
   return (
     <div className="container mx-auto py-8 space-y-8">
       {/* ... keeping previous content same until History table ... */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold transition-all">Positions Monitor</h1>
-          <p className="text-[10px] sm:text-sm text-muted-foreground mt-1">Track your option trades and alerts</p>
+      <div className="flex justify-between items-center bg-card p-4 rounded-lg border shadow-sm">
+        <div className="flex flex-col">
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl sm:text-3xl font-bold transition-all">Positions Monitor</h1>
+            <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">v1.1.0</span>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-[10px] sm:text-sm text-muted-foreground">Track your option trades and alerts</p>
+            {marketStatus && (
+              <>
+                <span className="text-[10px] text-muted-foreground mr-1">|</span>
+                <div className="flex items-center gap-1.5">
+                  <div className={`w-2 h-2 rounded-full ${marketStatus.open ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
+                  <span className={`text-[10px] font-medium uppercase tracking-wider ${marketStatus.open ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                    Market {marketStatus.open ? 'Open' : 'Closed'}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="icon" onClick={loadPositions}>
@@ -213,10 +294,76 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle className="text-lg sm:text-xl flex items-center gap-2">
-              <Activity className="h-5 w-5 text-blue-500" />
-              Active Tracker
-            </CardTitle>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <CardTitle className="text-lg sm:text-xl flex items-center gap-2">
+                <Activity className="h-5 w-5 text-blue-500" />
+                Active Tracker
+              </CardTitle>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Ticker Search */}
+                <div className="relative group min-w-[120px]">
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground group-focus-within:text-primary transition-colors" />
+                  <Input
+                    placeholder="Ticker..."
+                    value={tickerFilter}
+                    onChange={(e) => setTickerFilter(e.target.value)}
+                    className="pl-8 h-9 text-xs w-full sm:w-[120px]"
+                  />
+                  {tickerFilter && (
+                    <button
+                      onClick={() => setTickerFilter('')}
+                      className="absolute right-2 top-2.5 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Status Filter */}
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="h-9 text-xs w-[130px]">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">All Status</SelectItem>
+                    <SelectItem value="OPEN">Open</SelectItem>
+                    <SelectItem value="STOP_TRIGGERED">Stopped</SelectItem>
+                    <SelectItem value="PROFIT_TRIGGERED">Profit Hit</SelectItem>
+                    <SelectItem value="CLOSED">Closed</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {/* DTE Filter */}
+                <div className="relative min-w-[100px]">
+                  <Input
+                    type="number"
+                    placeholder="Max DTE"
+                    value={dteFilter}
+                    onChange={(e) => setDteFilter(e.target.value)}
+                    className="h-9 text-xs w-full sm:w-[100px]"
+                  />
+                  <div className="absolute right-2 top-2.5 pointer-events-none text-[10px] text-muted-foreground">
+                    DTE
+                  </div>
+                </div>
+
+                {(tickerFilter || statusFilter !== 'ALL' || dteFilter) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setTickerFilter('');
+                      setStatusFilter('ALL');
+                      setDteFilter('');
+                    }}
+                    className="h-8 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="p-0 sm:p-6 overflow-x-auto">
             <Table>
@@ -234,21 +381,22 @@ export default function Dashboard() {
               <TableBody>
                 {loading ? (
                   <TableRow><TableCell colSpan={7} className="text-center py-8">Loading...</TableCell></TableRow>
-                ) : positions.filter(p => p.status !== 'CLOSED').length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No active trades.</TableCell></TableRow>
+                ) : filteredPositions.length === 0 ? (
+                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No matching trades.</TableCell></TableRow>
                 ) : (
-                  positions.filter(p => p.status !== 'CLOSED').map((pos) => (
+                  filteredPositions.map((pos) => (
                     <TableRow key={pos.id} className={pos.status !== 'OPEN' ? 'bg-orange-50/50 dark:bg-orange-900/5' : ''}>
                       <TableCell>
                         <div className="flex flex-col">
                           <span className="font-bold">{pos.symbol}</span>
-                          <span className="text-[10px] text-muted-foreground uppercase">{pos.option_type} ${pos.strike_price}</span>
+                          <span className="text-[10px] text-muted-foreground uppercase">{pos.option_type} ${Number(pos.strike_price).toFixed(2)}</span>
+                          <span className="text-[10px] text-muted-foreground">Exp: {new Date(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
                         </div>
                       </TableCell>
                       <TableCell className="hidden md:table-cell">
                         <div className="text-xs">
-                          <div>In: ${pos.entry_price}</div>
-                          <div className="font-bold">Now: ${pos.current_price || '-'}</div>
+                          <div>In: ${Number(pos.entry_price).toFixed(2)}</div>
+                          <div className="font-bold">Now: ${pos.current_price ? Number(pos.current_price).toFixed(2) : '-'}</div>
                         </div>
                       </TableCell>
                       <TableCell>

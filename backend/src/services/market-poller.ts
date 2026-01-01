@@ -107,8 +107,42 @@ export class MarketPoller {
     return lastFetchedPrice;
   }
 
+  public isMarketOpen(): boolean {
+    const now = new Date();
+    // Use Intl to get ET time
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour12: false,
+      weekday: 'short',
+      hour: 'numeric',
+      minute: 'numeric',
+    });
+
+    const parts = formatter.formatToParts(now);
+    const getPart = (type: string) => parts.find(p => p.type === type)?.value;
+
+    const weekday = getPart('weekday');
+    const hour = parseInt(getPart('hour') || '0', 10);
+    const minute = parseInt(getPart('minute') || '0', 10);
+
+    // Weekend check
+    if (weekday === 'Sat' || weekday === 'Sun') return false;
+
+    // Market hours: 9:30 AM - 4:15 PM (16:15) ET
+    const currentTimeMinutes = hour * 60 + minute;
+    const marketOpenMinutes = 9 * 60 + 30;
+    const marketCloseMinutes = 16 * 60 + 15;
+
+    return currentTimeMinutes >= marketOpenMinutes && currentTimeMinutes <= marketCloseMinutes;
+  }
+
   private async poll() {
-    console.log(`[MarketPoller] Polling option premiums via MarketData.app at ${new Date().toISOString()}...`);
+    if (!this.isMarketOpen()) {
+      console.log(`[MarketPoller] Skipping scheduled poll at ${new Date().toISOString()}: Market is closed.`);
+      return;
+    }
+
+    console.log(`[MarketPoller] Polling option premiums via yfinance at ${new Date().toISOString()}...`);
 
     // Poll both OPEN and STOP_TRIGGERED positions so user sees up-to-date price before engaging manual close
     const { rows: positions } = await this.fastify.pg.query(

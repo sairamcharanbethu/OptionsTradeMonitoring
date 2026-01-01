@@ -161,19 +161,43 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
   fastify.patch('/:id/reopen', async (request, reply) => {
     const { id } = request.params as { id: string };
 
+    // 1. Fetch current position to get entry price and trailing pct
+    const { rows: existing } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1', [id]);
+    if (existing.length === 0) {
+      return reply.code(404).send({ error: 'Position not found' });
+    }
+    const pos = existing[0];
+
+    // 2. Reset high water mark to entry price (or current price?)
+    // Entry price is safer to prevent immediate re-trigger if current price is low
+    const newHigh = Number(pos.entry_price);
+    let newStopTrigger = pos.stop_loss_trigger;
+
+    // 3. Recalculate stop loss if trailing % exists
+    if (pos.trailing_stop_loss_pct) {
+      newStopTrigger = newHigh * (1 - Number(pos.trailing_stop_loss_pct) / 100);
+    }
+
     const { rows } = await fastify.pg.query(
       `UPDATE positions 
        SET status = 'OPEN', 
            realized_pnl = NULL, 
            loss_avoided = NULL,
+           trailing_high_price = $1,
+           stop_loss_trigger = $2,
            updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $1 
+       WHERE id = $3 
        RETURNING *`,
-      [id]
+      [newHigh, newStopTrigger, id]
     );
-    if (rows.length === 0) {
-      return reply.code(404).send({ error: 'Position not found' });
+
+    // 4. Trigger immediate sync
+    try {
+      (fastify as any).poller.syncPrice(pos.symbol);
+    } catch (err: any) {
+      fastify.log.error({ err }, 'Failed to trigger immediate sync on reopen');
     }
+
     return rows[0];
   });
 

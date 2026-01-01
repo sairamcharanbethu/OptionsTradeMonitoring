@@ -99,5 +99,11 @@ export const api = {
       method: 'DELETE',
     });
     if (!res.ok) throw new Error('Failed to delete position');
+  },
+
+  async getMarketStatus(): Promise<{ open: boolean; marketHours: string; timezone: string }> {
+    const response = await fetch(`${API_BASE}/market/status`);
+    if (!response.ok) throw new Error('Failed to fetch market status');
+    return response.json();
   }
 };

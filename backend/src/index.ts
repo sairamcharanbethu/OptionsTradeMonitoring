@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import postgres from '@fastify/postgres';
 import { positionRoutes } from './routes/positions';
 import { marketDataRoutes } from './routes/market-data';
+import { marketRoutes } from './routes/market';
 
 const fastify = Fastify({
   logger: true
@@ -20,6 +21,7 @@ const start = async () => {
 
     fastify.register(positionRoutes, { prefix: '/api/positions' });
     fastify.register(marketDataRoutes, { prefix: '/api/market-data' });
+    fastify.register(marketRoutes, { prefix: '/api/market' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
@@ -37,7 +39,7 @@ const start = async () => {
 
     const port = Number(process.env.PORT) || 3001;
     await fastify.listen({ port, host: '0.0.0.0' });
-    
+
     // Start the background cycle
     poller.start();
 
