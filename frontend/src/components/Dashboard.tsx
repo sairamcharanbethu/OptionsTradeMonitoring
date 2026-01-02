@@ -42,6 +42,7 @@ import {
 } from 'recharts';
 import PositionForm from './PositionForm';
 import PositionDetailsDialog from './PositionDetailsDialog';
+import SettingsDialog from './SettingsDialog';
 
 export default function Dashboard() {
   const [positions, setPositions] = useState<Position[]>([]);
@@ -221,6 +222,7 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex gap-2">
+          <SettingsDialog />
           <Button variant="outline" size="sm" className="hidden sm:flex gap-1 text-xs" onClick={handleForceSync} disabled={loading}>
             <Zap className={`h-3 w-3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
             Force Sync

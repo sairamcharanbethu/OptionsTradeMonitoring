@@ -5,6 +5,7 @@ import { positionRoutes } from './routes/positions';
 import { marketDataRoutes } from './routes/market-data';
 import { marketRoutes } from './routes/market';
 import { aiRoutes } from './routes/ai';
+import { settingsRoutes } from './routes/settings';
 
 const fastify = Fastify({
   logger: true
@@ -24,6 +25,7 @@ const start = async () => {
     fastify.register(marketDataRoutes, { prefix: '/api/market-data' });
     fastify.register(marketRoutes, { prefix: '/api/market' });
     fastify.register(aiRoutes, { prefix: '/api/ai' });
+    fastify.register(settingsRoutes, { prefix: '/api/settings' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
