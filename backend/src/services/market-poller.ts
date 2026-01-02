@@ -124,6 +124,12 @@ export class MarketPoller {
         lastFetchedPrice = data.price;
       }
     }
+    if (lastFetchedPrice !== null) {
+      console.log(`[MarketPoller] TARGETED Sync for ${symbol} completed successfully.`);
+    } else {
+      console.warn(`[MarketPoller] TARGETED Sync for ${symbol} failed or no positions were updated.`);
+    }
+
     return lastFetchedPrice;
   }
 
