@@ -8,6 +8,7 @@ import {
   TableHeader,
   TableRow
 } from '@/components/ui/table';
+import { cn, parseLocalDate } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -127,7 +128,7 @@ export default function Dashboard() {
   const getDte = (expirationDate: string) => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const exp = new Date(expirationDate);
+    const exp = parseLocalDate(expirationDate);
     exp.setHours(0, 0, 0, 0);
     const diffTime = exp.getTime() - today.getTime();
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -413,7 +414,7 @@ export default function Dashboard() {
                         <div className="flex flex-col">
                           <span className="font-bold">{pos.symbol}</span>
                           <span className="text-[10px] text-muted-foreground uppercase">{pos.option_type} ${Number(pos.strike_price).toFixed(2)}</span>
-                          <span className="text-[10px] text-muted-foreground">Exp: {new Date(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                          <span className="text-[10px] text-muted-foreground">Exp: {parseLocalDate(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
                         </div>
                       </TableCell>
                       <TableCell className="hidden md:table-cell">

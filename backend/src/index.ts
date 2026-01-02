@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import postgres from '@fastify/postgres';
+import { Client } from 'pg';
 import { positionRoutes } from './routes/positions';
 import { marketDataRoutes } from './routes/market-data';
 import { marketRoutes } from './routes/market';
@@ -11,10 +12,55 @@ const fastify = Fastify({
   logger: true
 });
 
+const testConnection = async (connectionString: string, label: string): Promise<boolean> => {
+  const isCloud = connectionString.includes('aivencloud');
+  const client = new Client({
+    connectionString,
+    connectionTimeoutMillis: 5000,
+    ssl: isCloud ? { rejectUnauthorized: false } : undefined
+  });
+  try {
+    console.log(`[Database] Testing connection to ${label}...`);
+    await client.connect();
+    await client.query('SELECT 1');
+    await client.end();
+    console.log(`[Database] Success: Connected to ${label}`);
+    return true;
+  } catch (err: any) {
+    console.error(`[Database] Failed to connect to ${label}: ${err.message}`);
+    return false;
+  }
+};
+
 const start = async () => {
   try {
+    let activeDbUrl = process.env.DATABASE_URL || 'postgres://user:password@localhost:5432/options_monitoring';
+    const backupDbUrl = process.env.BACKUP_DATABASE_URL;
+
+    // 1. Try Primary
+    const primarySuccess = await testConnection(activeDbUrl, 'Primary');
+
+    if (!primarySuccess) {
+      if (backupDbUrl) {
+        console.warn('[Database] Primary failed. Attempting Backup...');
+        const backupSuccess = await testConnection(backupDbUrl, 'Backup');
+        if (backupSuccess) {
+          activeDbUrl = backupDbUrl;
+          console.warn('[Database] SWITCHED TO BACKUP DATABASE.');
+        } else {
+          throw new Error('Both Primary and Backup databases failed.');
+        }
+      } else {
+        throw new Error('Primary database failed and no backup configured.');
+      }
+    }
+
+    // Log final choice (masking creds)
+    console.log(`[System] Active Database Host: ${activeDbUrl.includes('@') ? activeDbUrl.split('@')[1] : 'localhost'}`);
+
     await fastify.register(postgres, {
-      connectionString: process.env.DATABASE_URL || 'postgres://user:password@localhost:5432/options_monitoring'
+      connectionString: activeDbUrl,
+      ssl: activeDbUrl.includes('aivencloud') ? { rejectUnauthorized: false } : undefined
     });
 
     await fastify.register(cors, {

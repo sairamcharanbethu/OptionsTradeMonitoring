@@ -3,9 +3,9 @@ services:
     image: postgres:15-alpine
     restart: always
     environment:
-      POSTGRES_DB: options_monitoring
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -19,13 +19,16 @@ services:
     restart: always
     ports:
       - "3001:3001"
+    dns:
+      - 8.8.8.8
     environment:
-      DATABASE_URL: postgres://user:password@db:5432/options_monitoring
-      PORT: 3001
-      N8N_ALERT_WEBHOOK_URL: http://host.docker.internal:5678/webhook-test/options-alert
-      MARKET_DATA_POLL_INTERVAL: "*/15 * * * *" # Every 15 mins for free tier
-      ALPHA_VANTAGE_API_KEY: "J56HKP7VR259LW68"
-      POLYGON_API_KEY: "NwSOh6YWMgwfAg1I2xpsTfuA1Q3IM38a"
+      DATABASE_URL: ${DATABASE_URL}
+      BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL}
+      PORT: ${PORT}
+      N8N_ALERT_WEBHOOK_URL: ${N8N_ALERT_WEBHOOK_URL}
+      MARKET_DATA_POLL_INTERVAL: ${MARKET_DATA_POLL_INTERVAL}
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
+      POLYGON_API_KEY: ${POLYGON_API_KEY}
     depends_on:
       - db
 

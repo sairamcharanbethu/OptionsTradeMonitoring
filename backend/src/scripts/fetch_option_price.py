@@ -126,10 +126,15 @@ def fetch_option_data(os_ticker):
         print(json.dumps(output))
 
     except Exception as e:
+        # Check if it's a 404/Quote not found specifically if possible or just log message
+        msg = str(e)
+        if "Quote not found" in msg or "404" in msg:
+             msg = f"Ticker {os_ticker} not found on Yahoo Finance. Check if symbol/strike/expiry are correct."
+        
         print(json.dumps({
             "status": "error",
             "symbol": os_ticker,
-            "message": str(e)
+            "message": msg
         }))
 
 if __name__ == "__main__":

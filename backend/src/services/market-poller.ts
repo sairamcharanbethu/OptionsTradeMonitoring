@@ -25,12 +25,30 @@ export class MarketPoller {
     this.poll().catch(err => console.error('[MarketPoller] Initial poll failed:', err));
   }
 
-  private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string): string {
+  private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
     // Format: AAPL230616C00150000
-    const date = new Date(expiration);
-    const YY = date.getUTCFullYear().toString().slice(-2);
-    const MM = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-    const DD = date.getUTCDate().toString().padStart(2, '0');
+    // Use string parsing for expiration to avoid timezone shifts
+    // Expecting YYYY-MM-DD (Date object or string)
+    let dateStr = '';
+    if (expiration instanceof Date) {
+      // Format to YYYY-MM-DD manually to avoid timezone shift from .toISOString()
+      const year = expiration.getFullYear();
+      const month = (expiration.getMonth() + 1).toString().padStart(2, '0');
+      const day = expiration.getDate().toString().padStart(2, '0');
+      dateStr = `${year}-${month}-${day}`;
+    } else {
+      dateStr = expiration.split('T')[0];
+    }
+
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) {
+      console.warn(`[MarketPoller] Invalid expiration date format: ${expiration}`);
+      return `${symbol.toUpperCase()}XXXXXX${type === 'CALL' ? 'C' : 'P'}${Math.round(strike * 1000).toString().padStart(8, '0')}`;
+    }
+
+    const YY = parts[0].slice(-2);
+    const MM = parts[1].padStart(2, '0');
+    const DD = parts[2].padStart(2, '0');
 
     const side = type === 'CALL' ? 'C' : 'P';
     const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
@@ -81,8 +99,9 @@ export class MarketPoller {
   }
 
   public async syncPrice(symbol: string) {
+    console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
     const { rows: positions } = await this.fastify.pg.query(
-      "SELECT * FROM positions WHERE symbol = $1 AND status = 'OPEN'",
+      "SELECT * FROM positions WHERE symbol = $1 AND status IN ('OPEN', 'STOP_TRIGGERED')",
       [symbol]
     );
 

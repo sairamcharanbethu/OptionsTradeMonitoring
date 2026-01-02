@@ -117,6 +117,13 @@ export const api = {
     return response.json();
   },
 
+  async syncPosition(id: number): Promise<void> {
+    const res = await fetch(`${API_BASE}/positions/${id}/sync`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to sync position data');
+  },
+
   async forcePoll(): Promise<void> {
     const res = await fetch(`${API_BASE}/market/force-poll`, {
       method: 'POST'

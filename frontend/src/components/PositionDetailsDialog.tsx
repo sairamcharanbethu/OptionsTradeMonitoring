@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw } from 'lucide-react';
 import { Position, api } from '@/lib/api';
+import { parseLocalDate } from '@/lib/utils';
 
 interface PositionDetailsDialogProps {
     position: Position;
@@ -23,7 +24,7 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
     const handleRefresh = async () => {
         setRefreshing(true);
         try {
-            await api.forcePoll();
+            await api.syncPosition(position.id);
             const allPositions = await api.getPositions();
             const updated = allPositions.find(p => p.id === position.id);
             if (updated) {
@@ -62,7 +63,7 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
     const isProfit = unrealizedPnl >= 0;
 
     // Advanced Stats
-    const dte = Math.ceil((new Date(position.expiration_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    const dte = Math.ceil((parseLocalDate(position.expiration_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
     const breakEven = position.option_type === 'CALL'
         ? position.strike_price + entryPrice
         : position.strike_price - entryPrice;
@@ -99,7 +100,7 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
                     </div>
                     <div className="flex items-center justify-between">
                         <DialogDescription className="text-xs text-muted-foreground mt-1">
-                            Exp: {new Date(position.expiration_date).toLocaleDateString()} • Break Even: ${breakEven.toFixed(2)} • Updated: {new Date(position.updated_at).toLocaleString()}
+                            Exp: {parseLocalDate(position.expiration_date).toLocaleDateString()} • Break Even: ${breakEven.toFixed(2)} • Updated: {new Date(position.updated_at).toLocaleString()}
                         </DialogDescription>
                         <span className={`text-xs font-normal ${dte <= 7 ? 'text-orange-600 font-bold' : 'text-muted-foreground'}`}>
                             {dte}d left

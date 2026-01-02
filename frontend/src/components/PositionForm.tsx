@@ -3,7 +3,7 @@ import { useForm, SubmitHandler } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { format } from "date-fns";
-import { cn } from "@/lib/utils";
+import { cn, parseLocalDate } from "@/lib/utils";
 import {
   Form,
   FormControl,
@@ -77,7 +77,7 @@ export default function PositionForm({ onSuccess, position }: { onSuccess: () =>
       symbol: position.symbol,
       option_type: position.option_type,
       strike_price: position.strike_price,
-      expiration_date: new Date(position.expiration_date),
+      expiration_date: parseLocalDate(position.expiration_date),
       entry_price: position.entry_price,
       quantity: position.quantity,
       trailing_stop_loss_pct: position.trailing_stop_loss_pct || 10,

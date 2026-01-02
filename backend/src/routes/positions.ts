@@ -258,6 +258,24 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     return rows[0];
   });
 
+  // SYNC single position
+  fastify.post('/:id/sync', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { rows } = await fastify.pg.query('SELECT symbol FROM positions WHERE id = $1', [id]);
+
+    if (rows.length === 0) {
+      return reply.code(404).send({ error: 'Position not found' });
+    }
+
+    const symbol = rows[0].symbol;
+    const poller = (fastify as any).poller;
+    if (poller) {
+      await poller.syncPrice(symbol);
+    }
+
+    return { status: 'ok', symbol };
+  });
+
   // DELETE position
   fastify.delete('/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
