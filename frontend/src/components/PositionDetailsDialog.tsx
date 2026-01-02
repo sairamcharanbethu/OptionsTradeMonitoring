@@ -1,10 +1,9 @@
-
 import React, { useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BrainCircuit, Info, Loader2 } from 'lucide-react';
+import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar } from 'lucide-react';
 import { Position, api } from '@/lib/api';
 
 interface PositionDetailsDialogProps {
@@ -28,6 +27,19 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
         }
     };
 
+    const formatCurrency = (val: number | undefined) => val ? `$${val.toFixed(2)}` : '-';
+    const formatPercent = (val: number | undefined) => val ? `${val.toFixed(2)}%` : '-';
+
+    // Calculations
+    const currentPrice = position.current_price || 0;
+    const entryPrice = position.entry_price || 0;
+    const quantity = position.quantity || 1;
+    const marketValue = currentPrice * quantity * 100; // Standard option multiplier
+    const costBasis = entryPrice * quantity * 100;
+    const unrealizedPnl = marketValue - costBasis;
+    const unrealizedPnlPct = entryPrice ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
+    const isProfit = unrealizedPnl >= 0;
+
     return (
         <Dialog>
             <DialogTrigger asChild>
@@ -35,55 +47,131 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                     <Info className="h-4 w-4" />
                 </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+            <DialogContent className="sm:max-w-[650px] max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                     <DialogTitle className="flex items-center gap-2">
                         <span className="font-bold">{position.symbol}</span>
-                        <Badge variant="outline">{position.option_type} ${position.strike_price}</Badge>
+                        <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="uppercase">
+                            {position.option_type} ${position.strike_price}
+                        </Badge>
+                        <Badge variant="outline" className={isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50'}>
+                            {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
+                        </Badge>
                         <span className="text-xs text-muted-foreground font-normal ml-auto">
                             Exp: {new Date(position.expiration_date).toLocaleDateString()}
                         </span>
                     </DialogTitle>
                     <DialogDescription className="text-xs text-muted-foreground">
-                        Position details, Greeks analytics, and AI-powered insights.
+                        Comprehensive position analytics, risk metrics, and AI insights.
                     </DialogDescription>
                 </DialogHeader>
 
-                <Tabs defaultValue="greeks" className="w-full">
+                <Tabs defaultValue="details" className="w-full">
                     <TabsList className="grid w-full grid-cols-2">
-                        <TabsTrigger value="greeks">Greeks & Stats</TabsTrigger>
+                        <TabsTrigger value="details">Details & Greeks</TabsTrigger>
                         <TabsTrigger value="ai">AI Analysis</TabsTrigger>
                     </TabsList>
 
-                    <TabsContent value="greeks" className="space-y-4 py-4">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="p-4 rounded-lg bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/30">
-                                <div className="text-sm font-medium text-blue-600 dark:text-blue-400 mb-1">Delta (Δ)</div>
-                                <div className="text-2xl font-bold">{position.delta ? position.delta.toFixed(3) : '-'}</div>
-                                <div className="text-[10px] text-muted-foreground">Prob. In-The-Money</div>
+                    <TabsContent value="details" className="space-y-6 py-4">
+                        {/* PERFORMANCE SECTION */}
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                                <TrendingUp className="h-4 w-4" /> Position Performance
                             </div>
-                            <div className="p-4 rounded-lg bg-purple-50/50 dark:bg-purple-900/10 border border-purple-100 dark:border-purple-900/30">
-                                <div className="text-sm font-medium text-purple-600 dark:text-purple-400 mb-1">Theta (Θ)</div>
-                                <div className="text-2xl font-bold">{position.theta ? position.theta.toFixed(3) : '-'}</div>
-                                <div className="text-[10px] text-muted-foreground">$ Decay per Day</div>
-                            </div>
-                            <div className="p-4 rounded-lg bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/30">
-                                <div className="text-sm font-medium text-emerald-600 dark:text-emerald-400 mb-1">Gamma (Γ)</div>
-                                <div className="text-2xl font-bold">{position.gamma ? position.gamma.toFixed(4) : '-'}</div>
-                                <div className="text-[10px] text-muted-foreground">Delta Sensitivity</div>
-                            </div>
-                            <div className="p-4 rounded-lg bg-orange-50/50 dark:bg-orange-900/10 border border-orange-100 dark:border-orange-900/30">
-                                <div className="text-sm font-medium text-orange-600 dark:text-orange-400 mb-1">Vega (ν)</div>
-                                <div className="text-2xl font-bold">{position.vega ? position.vega.toFixed(3) : '-'}</div>
-                                <div className="text-[10px] text-muted-foreground">Volatility Sensitivity</div>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                <div className="p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-xs text-muted-foreground">Entry Price</div>
+                                    <div className="text-lg font-mono font-medium">{formatCurrency(position.entry_price)}</div>
+                                </div>
+                                <div className="p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-xs text-muted-foreground">Current Price</div>
+                                    <div className={`text-lg font-mono font-medium ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
+                                        {formatCurrency(position.current_price)}
+                                    </div>
+                                </div>
+                                <div className="p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-xs text-muted-foreground">Contracts</div>
+                                    <div className="text-lg font-mono font-medium">{position.quantity}</div>
+                                </div>
+                                <div className="p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-xs text-muted-foreground">Unrealized P&L</div>
+                                    <div className={`text-lg font-mono font-bold ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
+                                        {unrealizedPnl > 0 ? '+' : ''}{formatCurrency(unrealizedPnl)}
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
-                        <div className="p-4 rounded-lg bg-muted/50">
-                            <div className="flex justify-between items-center">
-                                <span className="font-medium">Implied Volatility (IV)</span>
-                                <span className="font-mono font-bold text-lg">{position.iv ? position.iv.toFixed(2) + '%' : 'N/A'}</span>
+                        {/* GREEKS SECTION */}
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                                <BrainCircuit className="h-4 w-4" /> Greeks & Volatility
                             </div>
+                            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                                <div className="p-2 text-center rounded bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100">
+                                    <div className="text-[10px] uppercase text-blue-600 font-bold">Delta</div>
+                                    <div className="font-mono text-sm">{position.delta?.toFixed(3) ?? '-'}</div>
+                                </div>
+                                <div className="p-2 text-center rounded bg-purple-50/50 dark:bg-purple-900/10 border border-purple-100">
+                                    <div className="text-[10px] uppercase text-purple-600 font-bold">Theta</div>
+                                    <div className="font-mono text-sm">{position.theta?.toFixed(3) ?? '-'}</div>
+                                </div>
+                                <div className="p-2 text-center rounded bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100">
+                                    <div className="text-[10px] uppercase text-emerald-600 font-bold">Gamma</div>
+                                    <div className="font-mono text-sm">{position.gamma?.toFixed(3) ?? '-'}</div>
+                                </div>
+                                <div className="p-2 text-center rounded bg-orange-50/50 dark:bg-orange-900/10 border border-orange-100">
+                                    <div className="text-[10px] uppercase text-orange-600 font-bold">Vega</div>
+                                    <div className="font-mono text-sm">{position.vega?.toFixed(3) ?? '-'}</div>
+                                </div>
+                                <div className="p-2 text-center rounded bg-slate-100 dark:bg-slate-800 border">
+                                    <div className="text-[10px] uppercase text-slate-600 font-bold">IV</div>
+                                    <div className="font-mono text-sm">{position.iv ? position.iv.toFixed(1) + '%' : '-'}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* RISK MANAGEMENT SECTION */}
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                                <ShieldAlert className="h-4 w-4" /> Risk Management
+                            </div>
+                            <div className="grid grid-cols-3 gap-4">
+                                <div className="p-3 rounded-lg border bg-background">
+                                    <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                                        <TrendingDown className="h-3 w-3" /> Stop Loss
+                                    </div>
+                                    <div className="font-mono font-medium">{formatCurrency(position.stop_loss_trigger)}</div>
+                                </div>
+                                <div className="p-3 rounded-lg border bg-background">
+                                    <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                                        <Target className="h-3 w-3" /> Take Profit
+                                    </div>
+                                    <div className="font-mono font-medium">{formatCurrency(position.take_profit_trigger)}</div>
+                                </div>
+                                <div className="p-3 rounded-lg border bg-background">
+                                    <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                                        <TrendingUp className="h-3 w-3" /> Trailing Stop
+                                    </div>
+                                    <div className="font-mono font-medium">
+                                        {position.trailing_stop_loss_pct ? `${position.trailing_stop_loss_pct}%` : '-'}
+                                    </div>
+                                    {position.trailing_high_price && (
+                                        <div className="text-[10px] text-muted-foreground mt-1">High: {formatCurrency(position.trailing_high_price)}</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* META SECTION */}
+                        <div className="pt-4 border-t flex flex-col gap-1 text-[10px] text-muted-foreground">
+                            <div className="flex items-center gap-2">
+                                <Clock className="h-3 w-3" /> Last Updated: {new Date(position.updated_at).toLocaleString()}
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <Calendar className="h-3 w-3" /> Opened: {new Date(position.created_at).toLocaleString()}
+                            </div>
+                            <div>Internal ID: #{position.id}</div>
                         </div>
                     </TabsContent>
 
@@ -111,8 +199,8 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                         {analysis && (
                             <div className="space-y-4">
                                 <div className={`p-4 rounded-lg border flex items-center justify-between ${analysis.verdict === 'CLOSE' ? 'bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-900/50 dark:text-red-400' :
-                                    analysis.verdict === 'HOLD' ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-900/50 dark:text-green-400' :
-                                        'bg-yellow-50 border-yellow-200 text-yellow-700 dark:bg-yellow-900/20 dark:border-yellow-900/50 dark:text-yellow-400'
+                                        analysis.verdict === 'HOLD' ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-900/50 dark:text-green-400' :
+                                            'bg-yellow-50 border-yellow-200 text-yellow-700 dark:bg-yellow-900/20 dark:border-yellow-900/50 dark:text-yellow-400'
                                     }`}>
                                     <div>
                                         <div className="text-xs font-semibold uppercase tracking-wider opacity-70">Verdict</div>

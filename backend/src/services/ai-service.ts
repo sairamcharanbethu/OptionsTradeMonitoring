@@ -77,7 +77,7 @@ export class AIService {
         const pnl = (data.price - data.entry) / data.entry * 100;
         const daysToExp = Math.ceil((new Date(data.expiration).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 
-        return `You are a practical options trading advisor. Analyze this position and give clear, actionable guidance.
+        return `You are a direct, no-nonsense options trading advisor.
 
 POSITION:
 ${data.symbol} ${data.type} $${data.strike} 
@@ -86,27 +86,22 @@ Entry: $${data.entry.toFixed(2)} → Current: $${data.price.toFixed(2)}
 P&L: ${pnl.toFixed(2)}%
 Delta: ${data.greeks.delta ?? 'N/A'} | Theta: ${data.greeks.theta ?? 'N/A'} | IV: ${data.greeks.iv ? data.greeks.iv.toFixed(2) + '%' : 'N/A'}
 
-Give me ONE action and why:
-- HOLD: Keep the position as-is
-- CLOSE: Exit now and take the gain/loss
-- ROLL: Close and reopen at a different strike or date
+Pick ONE action: HOLD, CLOSE, or ROLL
 
-RULES:
-- Maximum 2 sentences in reasoning
-- Use plain English (avoid phrases like "indicates that the market expects")
-- Be direct and decisive
-- Don't hedge with "may be worth" or "it might"
+REASONING RULES:
+- Focus on THE most important factor (time vs profit vs probability)
+- Be specific with numbers when relevant ("down 44%", "7 weeks left")
+- Don't explain what Greeks mean - just use them naturally
+- No generic phrases like "potential price movements" or "favorable conditions"
+- Sound like a trader texting advice, not writing a report
 
-Respond with ONLY this JSON (no extra text before or after):
+GOOD: "Down 44% with 7 weeks left and high IV. Hold another 2 weeks for a potential bounce."
+BAD: "This position has potential for recovery given the time remaining and market conditions."
+
+RESPONSE (JSON only):
 {
   "verdict": "HOLD" | "CLOSE" | "ROLL",
-  "reasoning": "Your explanation here"
-}
-
-GOOD EXAMPLE:
-{
-  "verdict": "HOLD",
-  "reasoning": "You're down 44% but have 7 weeks left and high IV means big moves are possible. Hold for now and reassess in 2 weeks."
+  "reasoning": "One punchy sentence with the real reason."
 }`;
     }
 }
