@@ -38,7 +38,7 @@ export class MarketPoller {
     return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
   }
 
-  private async getOptionPremium(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string): Promise<number | null> {
+  private async getOptionPremium(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string): Promise<any | null> {
     const ticker = this.constructOSITicker(symbol, strike, type, expiration);
     // console.log(`[MarketPoller] Fetching premium for: ${ticker}`);
 
@@ -62,7 +62,7 @@ export class MarketPoller {
 
           const result = JSON.parse(dataString);
           if (result.status === 'ok' && typeof result.price === 'number') {
-            resolve(result.price);
+            resolve(result); // Return full object { price, greeks, iv ... }
           } else {
             console.warn(`[MarketPoller] Retrieval failed for ${ticker}: ${result.message}`);
             resolve(null);
@@ -91,17 +91,18 @@ export class MarketPoller {
     let lastFetchedPrice = null;
 
     for (const position of positions) {
-      const price = await this.getOptionPremium(
+      const data = await this.getOptionPremium(
         position.symbol,
         Number(position.strike_price),
         position.option_type,
         position.expiration_date
       );
 
-      if (price !== null) {
-        console.log(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${price}`);
-        await this.processUpdate(position, price);
-        lastFetchedPrice = price;
+      if (data && data.price !== null) {
+        // console.log(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
+        console.log(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Greeks:`, data.greeks);
+        await this.processUpdate(position, data.price, data.greeks, data.iv);
+        lastFetchedPrice = data.price;
       }
     }
     return lastFetchedPrice;
@@ -136,13 +137,13 @@ export class MarketPoller {
     return currentTimeMinutes >= marketOpenMinutes && currentTimeMinutes <= marketCloseMinutes;
   }
 
-  private async poll() {
-    if (!this.isMarketOpen()) {
+  public async poll(force: boolean = false) {
+    if (!force && !this.isMarketOpen()) {
       console.log(`[MarketPoller] Skipping scheduled poll at ${new Date().toISOString()}: Market is closed.`);
       return;
     }
 
-    console.log(`[MarketPoller] Polling option premiums via yfinance at ${new Date().toISOString()}...`);
+    console.log(`[MarketPoller] ${force ? 'FORCED ' : ''}Polling option premiums via yfinance at ${new Date().toISOString()}...`);
 
     // Poll both OPEN and STOP_TRIGGERED positions so user sees up-to-date price before engaging manual close
     const { rows: positions } = await this.fastify.pg.query(
@@ -163,7 +164,7 @@ export class MarketPoller {
     }
   }
 
-  private async processUpdate(position: any, price: number) {
+  private async processUpdate(position: any, price: number, greeks?: any, iv?: number) {
     const engineResult = StopLossEngine.evaluate(price, {
       entry_price: Number(position.entry_price),
       stop_loss_trigger: Number(position.stop_loss_trigger),
@@ -172,9 +173,26 @@ export class MarketPoller {
       trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
     });
 
+    // Update Price AND Greeks
     await this.fastify.pg.query(
-      'UPDATE positions SET current_price = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [price, position.id]
+      `UPDATE positions 
+       SET current_price = $1, 
+           updated_at = CURRENT_TIMESTAMP,
+           delta = $2,
+           theta = $3,
+           gamma = $4,
+           vega = $5,
+           iv = $6
+       WHERE id = $7`,
+      [
+        price,
+        greeks?.delta || null,
+        greeks?.theta || null,
+        greeks?.gamma || null,
+        greeks?.vega || null,
+        iv || null,
+        position.id
+      ]
     );
 
     await this.fastify.pg.query(

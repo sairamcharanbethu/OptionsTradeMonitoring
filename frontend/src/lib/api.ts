@@ -16,6 +16,11 @@ export interface Position {
   status: 'OPEN' | 'CLOSED' | 'STOP_TRIGGERED' | 'PROFIT_TRIGGERED';
   created_at: string;
   updated_at: string;
+  delta?: number;
+  theta?: number;
+  gamma?: number;
+  vega?: number;
+  iv?: number;
 }
 
 const API_BASE = '/api';
@@ -37,6 +42,11 @@ export const api = {
       current_price: pos.current_price ? Number(pos.current_price) : undefined,
       realized_pnl: pos.realized_pnl ? Number(pos.realized_pnl) : undefined,
       loss_avoided: pos.loss_avoided ? Number(pos.loss_avoided) : undefined,
+      delta: pos.delta ? Number(pos.delta) : undefined,
+      theta: pos.theta ? Number(pos.theta) : undefined,
+      gamma: pos.gamma ? Number(pos.gamma) : undefined,
+      vega: pos.vega ? Number(pos.vega) : undefined,
+      iv: pos.iv ? Number(pos.iv) : undefined,
     }));
   },
 
@@ -105,5 +115,22 @@ export const api = {
     const response = await fetch(`${API_BASE}/market/status`);
     if (!response.ok) throw new Error('Failed to fetch market status');
     return response.json();
+  },
+
+  async forcePoll(): Promise<void> {
+    const res = await fetch(`${API_BASE}/market/force-poll`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to force sync market data');
+  },
+
+  async analyzePosition(positionId: number): Promise<{ analysis: string; verdict: string }> {
+    const res = await fetch(`${API_BASE}/ai/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ positionId })
+    });
+    if (!res.ok) throw new Error('Failed to analyze position');
+    return res.json();
   }
 };

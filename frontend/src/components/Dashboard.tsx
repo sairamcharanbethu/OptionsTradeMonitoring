@@ -26,7 +26,7 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
-import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw, BarChart3, PieChart as PieChartIcon, Activity, Search, X } from 'lucide-react';
+import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw, BarChart3, PieChart as PieChartIcon, Activity, Search, X, Zap } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -41,6 +41,7 @@ import {
   Cell
 } from 'recharts';
 import PositionForm from './PositionForm';
+import PositionDetailsDialog from './PositionDetailsDialog';
 
 export default function Dashboard() {
   const [positions, setPositions] = useState<Position[]>([]);
@@ -183,6 +184,18 @@ export default function Dashboard() {
     }, {} as Record<string, number>)
   ).map(([name, value]) => ({ name, value }));
 
+  async function handleForceSync() {
+    try {
+      setLoading(true);
+      await api.forcePoll();
+      await loadPositions();
+    } catch (err) {
+      console.error('Force sync failed:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div className="container mx-auto py-8 space-y-8">
       {/* ... keeping previous content same until History table ... */}
@@ -190,7 +203,7 @@ export default function Dashboard() {
         <div className="flex flex-col">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl sm:text-3xl font-bold transition-all">Positions Monitor</h1>
-            <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">v1.1.0</span>
+            <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">v1.2.0</span>
           </div>
           <div className="flex items-center gap-2 mt-1">
             <p className="text-[10px] sm:text-sm text-muted-foreground">Track your option trades and alerts</p>
@@ -208,6 +221,14 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" className="hidden sm:flex gap-1 text-xs" onClick={handleForceSync} disabled={loading}>
+            <Zap className={`h-3 w-3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
+            Force Sync
+          </Button>
+          <Button variant="outline" size="icon" className="sm:hidden" onClick={handleForceSync} disabled={loading}>
+            <Zap className={`h-4 w-4 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
+          </Button>
+
           <Button variant="outline" size="icon" onClick={loadPositions}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
@@ -436,6 +457,7 @@ export default function Dashboard() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
+                          <PositionDetailsDialog position={pos} />
                           {(pos.status === 'STOP_TRIGGERED' || pos.status === 'PROFIT_TRIGGERED') && (
                             <Button size="icon" variant="ghost" className="h-8 w-8 text-green-500" onClick={() => api.closePosition(pos.id).then(loadPositions)}>
                               <RefreshCw className="h-4 w-4" />
