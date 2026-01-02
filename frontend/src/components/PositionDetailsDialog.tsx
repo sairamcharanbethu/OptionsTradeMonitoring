@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -44,6 +44,9 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                             Exp: {new Date(position.expiration_date).toLocaleDateString()}
                         </span>
                     </DialogTitle>
+                    <DialogDescription className="text-xs text-muted-foreground">
+                        Position details, Greeks analytics, and AI-powered insights.
+                    </DialogDescription>
                 </DialogHeader>
 
                 <Tabs defaultValue="greeks" className="w-full">
@@ -108,8 +111,8 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                         {analysis && (
                             <div className="space-y-4">
                                 <div className={`p-4 rounded-lg border flex items-center justify-between ${analysis.verdict === 'CLOSE' ? 'bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-900/50 dark:text-red-400' :
-                                        analysis.verdict === 'HOLD' ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-900/50 dark:text-green-400' :
-                                            'bg-yellow-50 border-yellow-200 text-yellow-700 dark:bg-yellow-900/20 dark:border-yellow-900/50 dark:text-yellow-400'
+                                    analysis.verdict === 'HOLD' ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-900/50 dark:text-green-400' :
+                                        'bg-yellow-50 border-yellow-200 text-yellow-700 dark:bg-yellow-900/20 dark:border-yellow-900/50 dark:text-yellow-400'
                                     }`}>
                                     <div>
                                         <div className="text-xs font-semibold uppercase tracking-wider opacity-70">Verdict</div>
@@ -119,7 +122,7 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                                 </div>
 
                                 <div className="p-4 rounded-md bg-muted/50 text-sm leading-relaxed whitespace-pre-wrap font-sans">
-                                    {analysis.text}
+                                    {typeof analysis.text === 'object' ? JSON.stringify(analysis.text, null, 2) : analysis.text}
                                 </div>
                                 <div className="flex justify-end">
                                     <Button variant="outline" size="sm" onClick={handleAnalyze} disabled={loading}>
