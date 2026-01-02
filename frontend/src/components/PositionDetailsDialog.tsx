@@ -231,7 +231,7 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
                             <div className="flex flex-col items-center justify-center h-[200px] text-center space-y-4">
                                 <BrainCircuit className="h-12 w-12 text-muted-foreground opacity-30" />
                                 <div className="max-w-[80%] text-sm text-muted-foreground">
-                                    Generate an AI analysis of this position using your local Mistral model. It will consider the Greeks, Price Action, and Time Decay.
+                                    Generate an AI analysis of this position using your configured AI model. It will consider the Greeks, Price Action, and Time Decay.
                                 </div>
                                 <Button onClick={handleAnalyze} className="gap-2">
                                     <BrainCircuit className="h-4 w-4" />
@@ -243,7 +243,7 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
                         {loading && (
                             <div className="flex flex-col items-center justify-center h-[200px] space-y-2">
                                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                                <span className="text-sm text-muted-foreground animate-pulse">Consulting Mistral...</span>
+                                <span className="text-sm text-muted-foreground animate-pulse">Consulting AI...</span>
                             </div>
                         )}
 

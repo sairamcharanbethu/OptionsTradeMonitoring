@@ -53,7 +53,7 @@ class MarketPoller {
                     // console.log(`[MarketPoller] Raw Python output: ${dataString}`);
                     const result = JSON.parse(dataString);
                     if (result.status === 'ok' && typeof result.price === 'number') {
-                        resolve(result.price);
+                        resolve(result); // Return full object { price, greeks, iv ... }
                     }
                     else {
                         console.warn(`[MarketPoller] Retrieval failed for ${ticker}: ${result.message}`);
@@ -77,20 +77,50 @@ class MarketPoller {
             return null;
         let lastFetchedPrice = null;
         for (const position of positions) {
-            const price = await this.getOptionPremium(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
-            if (price !== null) {
-                console.log(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${price}`);
-                await this.processUpdate(position, price);
-                lastFetchedPrice = price;
+            const data = await this.getOptionPremium(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+            if (data && data.price !== null) {
+                // console.log(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
+                console.log(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Greeks:`, data.greeks);
+                await this.processUpdate(position, data.price, data.greeks, data.iv);
+                lastFetchedPrice = data.price;
             }
         }
         return lastFetchedPrice;
     }
-    async poll() {
-        console.log(`[MarketPoller] Polling option premiums via MarketData.app at ${new Date().toISOString()}...`);
-        const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE status = 'OPEN'");
+    isMarketOpen() {
+        const now = new Date();
+        // Use Intl to get ET time
+        const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            hour12: false,
+            weekday: 'short',
+            hour: 'numeric',
+            minute: 'numeric',
+        });
+        const parts = formatter.formatToParts(now);
+        const getPart = (type) => parts.find(p => p.type === type)?.value;
+        const weekday = getPart('weekday');
+        const hour = parseInt(getPart('hour') || '0', 10);
+        const minute = parseInt(getPart('minute') || '0', 10);
+        // Weekend check
+        if (weekday === 'Sat' || weekday === 'Sun')
+            return false;
+        // Market hours: 9:30 AM - 4:15 PM (16:15) ET
+        const currentTimeMinutes = hour * 60 + minute;
+        const marketOpenMinutes = 9 * 60 + 30;
+        const marketCloseMinutes = 16 * 60 + 15;
+        return currentTimeMinutes >= marketOpenMinutes && currentTimeMinutes <= marketCloseMinutes;
+    }
+    async poll(force = false) {
+        if (!force && !this.isMarketOpen()) {
+            console.log(`[MarketPoller] Skipping scheduled poll at ${new Date().toISOString()}: Market is closed.`);
+            return;
+        }
+        console.log(`[MarketPoller] ${force ? 'FORCED ' : ''}Polling option premiums via yfinance at ${new Date().toISOString()}...`);
+        // Poll both OPEN and STOP_TRIGGERED positions so user sees up-to-date price before engaging manual close
+        const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE status IN ('OPEN', 'STOP_TRIGGERED')");
         if (positions.length === 0) {
-            console.log('[MarketPoller] No open positions to poll.');
+            console.log('[MarketPoller] No active positions to poll.');
             return;
         }
         const symbols = [...new Set(positions.map(p => p.symbol))];
@@ -100,25 +130,46 @@ class MarketPoller {
             await new Promise(resolve => setTimeout(resolve, 5000));
         }
     }
-    async processUpdate(position, price) {
+    async processUpdate(position, price, greeks, iv) {
         const engineResult = stop_loss_engine_1.StopLossEngine.evaluate(price, {
             entry_price: Number(position.entry_price),
             stop_loss_trigger: Number(position.stop_loss_trigger),
+            take_profit_trigger: position.take_profit_trigger ? Number(position.take_profit_trigger) : undefined,
             trailing_high_price: Number(position.trailing_high_price || position.entry_price),
             trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
         });
-        await this.fastify.pg.query('UPDATE positions SET current_price = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [price, position.id]);
+        // Update Price AND Greeks
+        await this.fastify.pg.query(`UPDATE positions 
+       SET current_price = $1, 
+           updated_at = CURRENT_TIMESTAMP,
+           delta = $2,
+           theta = $3,
+           gamma = $4,
+           vega = $5,
+           iv = $6
+       WHERE id = $7`, [
+            price,
+            greeks?.delta || null,
+            greeks?.theta || null,
+            greeks?.gamma || null,
+            greeks?.vega || null,
+            iv || null,
+            position.id
+        ]);
         await this.fastify.pg.query('INSERT INTO price_history (position_id, price) VALUES ($1, $2)', [position.id, price]);
         if (engineResult.triggered) {
-            const pnl = (price - Number(position.entry_price)) * position.quantity * 100;
-            await this.fastify.pg.query(`UPDATE positions 
-         SET status = 'CLOSED', 
-             realized_pnl = $1, 
-             loss_avoided = $2,
-             updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $3`, [pnl, engineResult.lossAvoided, position.id]);
-            await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, 'STOP_LOSS', position.stop_loss_trigger, price]);
-            this.notifyN8n(position, price, pnl, engineResult.lossAvoided);
+            // Logic Change: Do NOT close automatically. Just set status to STOP_TRIGGERED or PROFIT_TRIGGERED.
+            // Only notify if we haven't already set it to STOP_TRIGGERED/PROFIT_TRIGGERED (avoid spamming n8n every 15 mins)
+            if (position.status === 'OPEN') {
+                const triggerType = engineResult.triggerType || 'STOP_LOSS';
+                const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
+                await this.fastify.pg.query(`UPDATE positions 
+           SET status = $1, 
+               updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $2`, [newStatus, position.id]);
+                await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]);
+                this.notifyN8n(position, price, 0, engineResult.lossAvoided, triggerType);
+            }
         }
         else if (engineResult.newHigh || engineResult.newStopLoss) {
             await this.fastify.pg.query(`UPDATE positions 
@@ -128,7 +179,7 @@ class MarketPoller {
          WHERE id = $3`, [engineResult.newHigh, engineResult.newStopLoss, position.id]);
         }
     }
-    async notifyN8n(position, price, pnl, lossAvoided) {
+    async notifyN8n(position, price, pnl, lossAvoided, type = 'STOP_LOSS') {
         const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
         if (!N8N_WEBHOOK_URL)
             return;
@@ -137,7 +188,7 @@ class MarketPoller {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    event: 'STOP_LOSS_TRIGGERED',
+                    event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
                     symbol: position.symbol,
                     price: price,
                     pnl: pnl,

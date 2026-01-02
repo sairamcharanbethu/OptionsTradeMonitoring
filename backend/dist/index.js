@@ -41,6 +41,9 @@ const cors_1 = __importDefault(require("@fastify/cors"));
 const postgres_1 = __importDefault(require("@fastify/postgres"));
 const positions_1 = require("./routes/positions");
 const market_data_1 = require("./routes/market-data");
+const market_1 = require("./routes/market");
+const ai_1 = require("./routes/ai");
+const settings_1 = require("./routes/settings");
 const fastify = (0, fastify_1.default)({
     logger: true
 });
@@ -54,6 +57,9 @@ const start = async () => {
         });
         fastify.register(positions_1.positionRoutes, { prefix: '/api/positions' });
         fastify.register(market_data_1.marketDataRoutes, { prefix: '/api/market-data' });
+        fastify.register(market_1.marketRoutes, { prefix: '/api/market' });
+        fastify.register(ai_1.aiRoutes, { prefix: '/api/ai' });
+        fastify.register(settings_1.settingsRoutes, { prefix: '/api/settings' });
         fastify.get('/health', async () => {
             return { status: 'ok' };
         });
