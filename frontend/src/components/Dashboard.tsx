@@ -26,7 +26,7 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
-import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw, BarChart3, PieChart as PieChartIcon, Activity, Search, X, Zap } from 'lucide-react';
+import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw, BarChart3, PieChart as PieChartIcon, Activity, Search, X, Zap, CheckCircle } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -459,8 +459,8 @@ export default function Dashboard() {
                         <div className="flex justify-end gap-1">
                           <PositionDetailsDialog position={pos} />
                           {(pos.status === 'STOP_TRIGGERED' || pos.status === 'PROFIT_TRIGGERED') && (
-                            <Button size="icon" variant="ghost" className="h-8 w-8 text-green-500" onClick={() => api.closePosition(pos.id).then(loadPositions)}>
-                              <RefreshCw className="h-4 w-4" />
+                            <Button size="icon" variant="ghost" className="h-8 w-8 text-green-500 hover:text-green-600 hover:bg-green-50" onClick={() => api.closePosition(pos.id).then(loadPositions)}>
+                              <CheckCircle className="h-4 w-4" />
                             </Button>
                           )}
                           <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(pos)}>

@@ -1,18 +1,40 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar } from 'lucide-react';
+import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw } from 'lucide-react';
 import { Position, api } from '@/lib/api';
 
 interface PositionDetailsDialogProps {
     position: Position;
 }
 
-export default function PositionDetailsDialog({ position }: PositionDetailsDialogProps) {
+export default function PositionDetailsDialog({ position: initialPosition }: PositionDetailsDialogProps) {
+    const [position, setPosition] = useState<Position>(initialPosition);
     const [analysis, setAnalysis] = useState<{ verdict: string, text: string } | null>(null);
     const [loading, setLoading] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
+
+    useEffect(() => {
+        setPosition(initialPosition);
+    }, [initialPosition]);
+
+    const handleRefresh = async () => {
+        setRefreshing(true);
+        try {
+            await api.forcePoll();
+            const allPositions = await api.getPositions();
+            const updated = allPositions.find(p => p.id === position.id);
+            if (updated) {
+                setPosition(updated);
+            }
+        } catch (err) {
+            console.error('Failed to refresh position:', err);
+        } finally {
+            setRefreshing(false);
+        }
+    };
 
     const handleAnalyze = async () => {
         setLoading(true);
@@ -28,7 +50,6 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
     };
 
     const formatCurrency = (val: number | undefined) => val ? `$${val.toFixed(2)}` : '-';
-    const formatPercent = (val: number | undefined) => val ? `${val.toFixed(2)}%` : '-';
 
     // Calculations
     const currentPrice = position.current_price || 0;
@@ -55,21 +76,35 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
             </DialogTrigger>
             <DialogContent className="sm:max-w-[650px] max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2">
-                        <span className="font-bold">{position.symbol}</span>
-                        <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="uppercase">
-                            {position.option_type} ${position.strike_price}
-                        </Badge>
-                        <Badge variant="outline" className={isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50'}>
-                            {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
-                        </Badge>
-                        <span className={`text-xs font-normal ml-auto ${dte <= 7 ? 'text-orange-600 font-bold' : 'text-muted-foreground'}`}>
+                    <div className="flex items-center justify-between pr-8">
+                        <DialogTitle className="flex items-center gap-2">
+                            <span className="font-bold">{position.symbol}</span>
+                            <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="uppercase">
+                                {position.option_type} ${position.strike_price}
+                            </Badge>
+                            <Badge variant="outline" className={isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50'}>
+                                {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
+                            </Badge>
+                        </DialogTitle>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={handleRefresh}
+                            disabled={refreshing}
+                            title="Force Refresh Data"
+                        >
+                            <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} />
+                        </Button>
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <DialogDescription className="text-xs text-muted-foreground mt-1">
+                            Exp: {new Date(position.expiration_date).toLocaleDateString()} • Break Even: ${breakEven.toFixed(2)} • Updated: {new Date(position.updated_at).toLocaleString()}
+                        </DialogDescription>
+                        <span className={`text-xs font-normal ${dte <= 7 ? 'text-orange-600 font-bold' : 'text-muted-foreground'}`}>
                             {dte}d left
                         </span>
-                    </DialogTitle>
-                    <DialogDescription className="text-xs text-muted-foreground">
-                        Exp: {new Date(position.expiration_date).toLocaleDateString()} • Break Even: ${breakEven.toFixed(2)}
-                    </DialogDescription>
+                    </div>
                 </DialogHeader>
 
                 <Tabs defaultValue="details" className="w-full">

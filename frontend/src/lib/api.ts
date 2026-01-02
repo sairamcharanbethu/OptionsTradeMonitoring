@@ -27,7 +27,7 @@ const API_BASE = '/api';
 
 export const api = {
   async getPositions(): Promise<Position[]> {
-    const res = await fetch(`${API_BASE}/positions`);
+    const res = await fetch(`${API_BASE}/positions?t=${Date.now()}`);
     if (!res.ok) throw new Error('Failed to fetch positions');
     const data = await res.json();
 
