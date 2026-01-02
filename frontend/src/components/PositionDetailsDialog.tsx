@@ -40,6 +40,12 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
     const unrealizedPnlPct = entryPrice ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
     const isProfit = unrealizedPnl >= 0;
 
+    // Advanced Stats
+    const dte = Math.ceil((new Date(position.expiration_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    const breakEven = position.option_type === 'CALL'
+        ? position.strike_price + entryPrice
+        : position.strike_price - entryPrice;
+
     return (
         <Dialog>
             <DialogTrigger asChild>
@@ -57,12 +63,12 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                         <Badge variant="outline" className={isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50'}>
                             {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
                         </Badge>
-                        <span className="text-xs text-muted-foreground font-normal ml-auto">
-                            Exp: {new Date(position.expiration_date).toLocaleDateString()}
+                        <span className={`text-xs font-normal ml-auto ${dte <= 7 ? 'text-orange-600 font-bold' : 'text-muted-foreground'}`}>
+                            {dte}d left
                         </span>
                     </DialogTitle>
                     <DialogDescription className="text-xs text-muted-foreground">
-                        Comprehensive position analytics, risk metrics, and AI insights.
+                        Exp: {new Date(position.expiration_date).toLocaleDateString()} • Break Even: ${breakEven.toFixed(2)}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -78,7 +84,7 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                             <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                                 <TrendingUp className="h-4 w-4" /> Position Performance
                             </div>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                 <div className="p-3 bg-muted/30 rounded-lg border">
                                     <div className="text-xs text-muted-foreground">Entry Price</div>
                                     <div className="text-lg font-mono font-medium">{formatCurrency(position.entry_price)}</div>
@@ -90,11 +96,21 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                                     </div>
                                 </div>
                                 <div className="p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-xs text-muted-foreground">Break Even</div>
+                                    <div className="text-lg font-mono font-medium underline decoration-dotted underline-offset-4">
+                                        {formatCurrency(breakEven)}
+                                    </div>
+                                </div>
+                                <div className="p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-xs text-muted-foreground">Market Value</div>
+                                    <div className="text-lg font-mono font-medium">{formatCurrency(marketValue / 100)}</div>
+                                </div>
+                                <div className="p-3 bg-muted/30 rounded-lg border">
                                     <div className="text-xs text-muted-foreground">Contracts</div>
                                     <div className="text-lg font-mono font-medium">{position.quantity}</div>
                                 </div>
                                 <div className="p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-xs text-muted-foreground">Unrealized P&L</div>
+                                    <div className="text-xs text-muted-foreground">Total Open P&L</div>
                                     <div className={`text-lg font-mono font-bold ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
                                         {unrealizedPnl > 0 ? '+' : ''}{formatCurrency(unrealizedPnl)}
                                     </div>
@@ -199,8 +215,8 @@ export default function PositionDetailsDialog({ position }: PositionDetailsDialo
                         {analysis && (
                             <div className="space-y-4">
                                 <div className={`p-4 rounded-lg border flex items-center justify-between ${analysis.verdict === 'CLOSE' ? 'bg-red-50 border-red-200 text-red-700 dark:bg-red-900/20 dark:border-red-900/50 dark:text-red-400' :
-                                        analysis.verdict === 'HOLD' ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-900/50 dark:text-green-400' :
-                                            'bg-yellow-50 border-yellow-200 text-yellow-700 dark:bg-yellow-900/20 dark:border-yellow-900/50 dark:text-yellow-400'
+                                    analysis.verdict === 'HOLD' ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-900/50 dark:text-green-400' :
+                                        'bg-yellow-50 border-yellow-200 text-yellow-700 dark:bg-yellow-900/20 dark:border-yellow-900/50 dark:text-yellow-400'
                                     }`}>
                                     <div>
                                         <div className="text-xs font-semibold uppercase tracking-wider opacity-70">Verdict</div>
