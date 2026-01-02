@@ -77,45 +77,26 @@ export class AIService {
         const pnl = (data.price - data.entry) / data.entry * 100;
         const daysToExp = Math.ceil((new Date(data.expiration).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 
-        return `You are an options trading analyst. Analyze this position and provide a trading recommendation.
+        return `You are a practical options trading advisor. Analyze this position and give clear, actionable guidance.
 
-POSITION DATA:
-- Symbol: ${data.symbol}
-- Type: ${data.type}
-- Strike: $${data.strike}
-- Expiration: ${data.expiration} (${daysToExp} days to expiration)
-- Entry Price: $${data.entry.toFixed(2)}
-- Current Price: $${data.price.toFixed(2)}
-- P&L: ${pnl.toFixed(2)}%
+POSITION:
+${data.symbol} ${data.type} $${data.strike} 
+Expires: ${data.expiration} (${daysToExp} days left)
+Entry: $${data.entry.toFixed(2)} → Current: $${data.price.toFixed(2)}
+P&L: ${pnl.toFixed(2)}%
+Delta: ${data.greeks.delta ?? 'N/A'} | Theta: ${data.greeks.theta ?? 'N/A'} | IV: ${data.greeks.iv ? data.greeks.iv.toFixed(2) + '%' : 'N/A'}
 
-GREEKS:
-- Delta: ${data.greeks.delta ?? 'N/A'} (directional exposure)
-- Theta: ${data.greeks.theta ?? 'N/A'} (daily time decay in $)
-- Vega: ${data.greeks.vega ?? 'N/A'} (IV sensitivity)
-- Implied Volatility: ${data.greeks.iv ? data.greeks.iv.toFixed(2) + '%' : 'N/A'}
+Give me ONE action and why:
+- HOLD: Keep the position as-is
+- CLOSE: Exit now and take the gain/loss
+- ROLL: Close and reopen at a different strike or date
 
-ANALYSIS REQUIREMENTS:
-1. **Verdict**: Choose ONE action:
-   - "HOLD": Keep the position unchanged
-   - "CLOSE": Exit the position entirely
-   - "ROLL": Close and reopen with different strike/expiration
+Keep it conversational but precise. Focus on what matters: time left, profit/loss, and realistic odds of recovery or further gains.
 
-2. **Reasoning**: Provide 2-3 sentences referencing:
-   - Time decay risk (Theta) if DTE < 30 days
-   - Directional probability (Delta) if position is near ITM/OTM boundary
-   - P&L and risk/reward given time remaining
-
-CRITICAL: Respond with ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON.
-
+Respond ONLY with valid JSON:
 {
   "verdict": "HOLD" | "CLOSE" | "ROLL",
-  "reasoning": "Your analysis here"
-}
-
-EXAMPLE:
-{
-  "verdict": "CLOSE",
-  "reasoning": "With only 5 days to expiration, theta decay of -$12/day is eroding value rapidly. Delta of 0.23 suggests only 23% probability of profit. Lock in current 15% gain before time decay accelerates."
+  "reasoning": "Your explanation here (1-2 sentences max)"
 }`;
     }
 }
