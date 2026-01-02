@@ -77,30 +77,45 @@ export class AIService {
         const pnl = (data.price - data.entry) / data.entry * 100;
         const daysToExp = Math.ceil((new Date(data.expiration).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 
-        return `You are an expert options trading assistant. Analyze this position and provide a recommendation.
+        return `You are an options trading analyst. Analyze this position and provide a trading recommendation.
 
-Position: ${data.symbol} ${data.type} $${data.strike}
-Expiration: ${data.expiration} (${daysToExp} days left)
-Entry Price: $${data.entry.toFixed(2)}
-Current Price: $${data.price.toFixed(2)}
-PnL: ${pnl.toFixed(2)}%
+POSITION DATA:
+- Symbol: ${data.symbol}
+- Type: ${data.type}
+- Strike: $${data.strike}
+- Expiration: ${data.expiration} (${daysToExp} days to expiration)
+- Entry Price: $${data.entry.toFixed(2)}
+- Current Price: $${data.price.toFixed(2)}
+- P&L: ${pnl.toFixed(2)}%
 
-Greeks (CRITICAL FACTORS):
-- Delta: ${data.greeks.delta ?? 'N/A'} (Probability ITM)
-- Theta: ${data.greeks.theta ?? 'N/A'} (Time Decay risk)
-- Vega: ${data.greeks.vega ?? 'N/A'} (Volatility risk)
-- IV: ${data.greeks.iv ? data.greeks.iv.toFixed(2) + '%' : 'N/A'}
+GREEKS:
+- Delta: ${data.greeks.delta ?? 'N/A'} (directional exposure)
+- Theta: ${data.greeks.theta ?? 'N/A'} (daily time decay in $)
+- Vega: ${data.greeks.vega ?? 'N/A'} (IV sensitivity)
+- Implied Volatility: ${data.greeks.iv ? data.greeks.iv.toFixed(2) + '%' : 'N/A'}
 
-INSTRUCTIONS:
-1. Analyze the Greeks specifically (mention Theta decay or Delta probability if relevant).
-2. Determine a VERDICT: "HOLD", "CLOSE", or "ADJUST".
-3. Provide a concise "reasoning" (max 2 sentences).
+ANALYSIS REQUIREMENTS:
+1. **Verdict**: Choose ONE action:
+   - "HOLD": Keep the position unchanged
+   - "CLOSE": Exit the position entirely
+   - "ROLL": Close and reopen with different strike/expiration
 
-RESPONSE FORMAT:
-Return ONLY a JSON object:
+2. **Reasoning**: Provide 2-3 sentences referencing:
+   - Time decay risk (Theta) if DTE < 30 days
+   - Directional probability (Delta) if position is near ITM/OTM boundary
+   - P&L and risk/reward given time remaining
+
+CRITICAL: Respond with ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON.
+
 {
-  "verdict": "HOLD" | "CLOSE" | "ADJUST",
-  "reasoning": "Your concise analysis here referencing specific Greeks."
+  "verdict": "HOLD" | "CLOSE" | "ROLL",
+  "reasoning": "Your analysis here"
+}
+
+EXAMPLE:
+{
+  "verdict": "CLOSE",
+  "reasoning": "With only 5 days to expiration, theta decay of -$12/day is eroding value rapidly. Delta of 0.23 suggests only 23% probability of profit. Lock in current 15% gain before time decay accelerates."
 }`;
     }
 }
