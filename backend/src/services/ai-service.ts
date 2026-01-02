@@ -91,12 +91,22 @@ Give me ONE action and why:
 - CLOSE: Exit now and take the gain/loss
 - ROLL: Close and reopen at a different strike or date
 
-Keep it conversational but precise. Focus on what matters: time left, profit/loss, and realistic odds of recovery or further gains.
+RULES:
+- Maximum 2 sentences in reasoning
+- Use plain English (avoid phrases like "indicates that the market expects")
+- Be direct and decisive
+- Don't hedge with "may be worth" or "it might"
 
-Respond ONLY with valid JSON:
+Respond with ONLY this JSON (no extra text before or after):
 {
   "verdict": "HOLD" | "CLOSE" | "ROLL",
-  "reasoning": "Your explanation here (1-2 sentences max)"
+  "reasoning": "Your explanation here"
+}
+
+GOOD EXAMPLE:
+{
+  "verdict": "HOLD",
+  "reasoning": "You're down 44% but have 7 weeks left and high IV means big moves are possible. Hold for now and reassess in 2 weeks."
 }`;
     }
 }
