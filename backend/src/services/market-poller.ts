@@ -101,11 +101,14 @@ export class MarketPoller {
   public async syncPrice(symbol: string) {
     console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
     const { rows: positions } = await this.fastify.pg.query(
-      "SELECT * FROM positions WHERE symbol = $1 AND status IN ('OPEN', 'STOP_TRIGGERED')",
+      "SELECT * FROM positions WHERE symbol = $1 AND status != 'CLOSED'",
       [symbol]
     );
 
-    if (positions.length === 0) return null;
+    if (positions.length === 0) {
+      console.log(`[MarketPoller] No active or triggered positions found for ${symbol}.`);
+      return null;
+    }
 
     let lastFetchedPrice = null;
 
@@ -170,9 +173,9 @@ export class MarketPoller {
 
     console.log(`[MarketPoller] ${force ? 'FORCED ' : ''}Polling option premiums via yfinance at ${new Date().toISOString()}...`);
 
-    // Poll both OPEN and STOP_TRIGGERED positions so user sees up-to-date price before engaging manual close
+    // Poll all non-CLOSED positions so user sees up-to-date price until they manually close
     const { rows: positions } = await this.fastify.pg.query(
-      "SELECT * FROM positions WHERE status IN ('OPEN', 'STOP_TRIGGERED')"
+      "SELECT * FROM positions WHERE status != 'CLOSED'"
     );
 
     if (positions.length === 0) {

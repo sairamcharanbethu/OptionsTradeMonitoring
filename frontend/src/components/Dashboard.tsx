@@ -90,8 +90,12 @@ export default function Dashboard() {
   useEffect(() => {
     loadPositions();
     loadMarketStatus();
-    const interval = setInterval(loadMarketStatus, 60000);
-    return () => clearInterval(interval);
+    const statusInterval = setInterval(loadMarketStatus, 60000);
+    const positionsInterval = setInterval(loadPositions, 5000);
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(positionsInterval);
+    };
   }, []);
 
   async function loadPositions() {
