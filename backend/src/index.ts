@@ -19,7 +19,10 @@ declare module 'fastify' {
 }
 
 const fastify = Fastify({
-  logger: true
+  logger: {
+    level: 'warn'
+  },
+  disableRequestLogging: true
 });
 
 const testConnection = async (connectionString: string, label: string): Promise<boolean> => {
