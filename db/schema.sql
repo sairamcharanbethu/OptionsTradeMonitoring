@@ -1,6 +1,15 @@
+-- Users Table
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Positions Table
 CREATE TABLE IF NOT EXISTS positions (
     id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     symbol VARCHAR(20) NOT NULL,
     option_type VARCHAR(10) NOT NULL, -- CALL, PUT
     strike_price DECIMAL(10, 2) NOT NULL,
@@ -44,7 +53,9 @@ CREATE TABLE IF NOT EXISTS alerts (
 
 -- Settings Table
 CREATE TABLE IF NOT EXISTS settings (
-    key VARCHAR(50) PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    key VARCHAR(50) NOT NULL,
     value TEXT,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, key)
 );

@@ -1,11 +1,12 @@
-
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { AIService } from '../services/ai-service';
 
 export async function aiRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
+    fastify.addHook('onRequest', fastify.authenticate);
     const aiService = new AIService(fastify);
 
     fastify.post('/analyze', async (request, reply) => {
+        const { id: userId } = (request as any).user;
         const { positionId } = request.body as { positionId: number };
 
         if (!positionId) {
@@ -13,10 +14,10 @@ export async function aiRoutes(fastify: FastifyInstance, options: FastifyPluginO
         }
 
         try {
-            // Fetch clean position data
+            // Fetch clean position data and verify ownership
             const res = await fastify.pg.query(
-                `SELECT * FROM positions WHERE id = $1`,
-                [positionId]
+                `SELECT * FROM positions WHERE id = $1 AND user_id = $2`,
+                [positionId, userId]
             );
 
             if (res.rows.length === 0) {

@@ -1,3 +1,8 @@
+export interface User {
+  id: number;
+  username: string;
+}
+
 export interface Position {
   id: number;
   symbol: string;
@@ -25,13 +30,76 @@ export interface Position {
 
 const API_BASE = '/api';
 
+const getToken = () => localStorage.getItem('token');
+
+const authFetch = async (url: string, options: any = {}) => {
+  const token = getToken();
+  const headers = {
+    ...options.headers,
+    'Authorization': token ? `Bearer ${token}` : '',
+    'Content-Type': 'application/json',
+  };
+  const res = await fetch(url, { ...options, headers });
+  if (res.status === 401 && !url.includes('/auth/me')) {
+    localStorage.removeItem('token');
+    window.location.href = '/'; // Or trigger auth state change
+  }
+  return res;
+};
+
 export const api = {
+  // Auth
+  async signup(data: any): Promise<{ token: string, user: User }> {
+    const res = await fetch(`${API_BASE}/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Signup failed');
+    }
+    const result = await res.json();
+    localStorage.setItem('token', result.token);
+    return result;
+  },
+
+  async signin(data: any): Promise<{ token: string, user: User }> {
+    const res = await fetch(`${API_BASE}/auth/signin`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Signin failed');
+    }
+    const result = await res.json();
+    localStorage.setItem('token', result.token);
+    return result;
+  },
+
+  async getMe(): Promise<User> {
+    const res = await authFetch(`${API_BASE}/auth/me`);
+    if (!res.ok) throw new Error('Not authenticated');
+    return res.json();
+  },
+
+  logout() {
+    localStorage.removeItem('token');
+    window.location.reload();
+  },
+
+  isAuthenticated(): boolean {
+    return !!getToken();
+  },
+
+  // Positions
   async getPositions(): Promise<Position[]> {
-    const res = await fetch(`${API_BASE}/positions?t=${Date.now()}`);
+    const res = await authFetch(`${API_BASE}/positions?t=${Date.now()}`);
     if (!res.ok) throw new Error('Failed to fetch positions');
     const data = await res.json();
 
-    // PostgreSQL returns DECIMAL as strings. Convert to numbers.
     return data.map((pos: any) => ({
       ...pos,
       strike_price: Number(pos.strike_price),
@@ -51,13 +119,13 @@ export const api = {
   },
 
   async searchSymbols(q: string): Promise<{ symbol: string, name: string }[]> {
-    const res = await fetch(`${API_BASE}/positions/search?q=${encodeURIComponent(q)}`);
+    const res = await authFetch(`${API_BASE}/positions/search?q=${encodeURIComponent(q)}`);
     if (!res.ok) throw new Error('Failed to search symbols');
     return res.json();
   },
 
   async getPositionHistory(id: number): Promise<{ price: number, recorded_at: string }[]> {
-    const res = await fetch(`${API_BASE}/positions/${id}/history`);
+    const res = await authFetch(`${API_BASE}/positions/${id}/history`);
     if (!res.ok) throw new Error('Failed to fetch position history');
     const data = await res.json();
     return data.map((d: any) => ({
@@ -67,9 +135,8 @@ export const api = {
   },
 
   async createPosition(data: Partial<Position>): Promise<Position> {
-    const res = await fetch(`${API_BASE}/positions`, {
+    const res = await authFetch(`${API_BASE}/positions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error('Failed to create position');
@@ -77,9 +144,8 @@ export const api = {
   },
 
   async closePosition(id: number, price?: number): Promise<Position> {
-    const res = await fetch(`${API_BASE}/positions/${id}/close`, {
+    const res = await authFetch(`${API_BASE}/positions/${id}/close`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ price }),
     });
     if (!res.ok) throw new Error('Failed to close position');
@@ -87,7 +153,7 @@ export const api = {
   },
 
   async reopenPosition(id: number): Promise<Position> {
-    const res = await fetch(`${API_BASE}/positions/${id}/reopen`, {
+    const res = await authFetch(`${API_BASE}/positions/${id}/reopen`, {
       method: 'PATCH',
     });
     if (!res.ok) throw new Error('Failed to reopen position');
@@ -95,9 +161,8 @@ export const api = {
   },
 
   async updatePosition(id: number, data: Partial<Position>): Promise<Position> {
-    const res = await fetch(`${API_BASE}/positions/${id}`, {
+    const res = await authFetch(`${API_BASE}/positions/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     });
     if (!res.ok) throw new Error('Failed to update position');
@@ -105,36 +170,35 @@ export const api = {
   },
 
   async deletePosition(id: number): Promise<void> {
-    const res = await fetch(`${API_BASE}/positions/${id}`, {
+    const res = await authFetch(`${API_BASE}/positions/${id}`, {
       method: 'DELETE',
     });
     if (!res.ok) throw new Error('Failed to delete position');
   },
 
   async getMarketStatus(): Promise<{ open: boolean; marketHours: string; timezone: string }> {
-    const response = await fetch(`${API_BASE}/market/status`);
+    const response = await authFetch(`${API_BASE}/market/status`);
     if (!response.ok) throw new Error('Failed to fetch market status');
     return response.json();
   },
 
   async syncPosition(id: number): Promise<void> {
-    const res = await fetch(`${API_BASE}/positions/${id}/sync`, {
+    const res = await authFetch(`${API_BASE}/positions/${id}/sync`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to sync position data');
   },
 
   async forcePoll(): Promise<void> {
-    const res = await fetch(`${API_BASE}/market/force-poll`, {
+    const res = await authFetch(`${API_BASE}/market/force-poll`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Failed to force sync market data');
   },
 
   async analyzePosition(positionId: number): Promise<{ analysis: string; verdict: string }> {
-    const res = await fetch(`${API_BASE}/ai/analyze`, {
+    const res = await authFetch(`${API_BASE}/ai/analyze`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ positionId })
     });
     if (!res.ok) throw new Error('Failed to analyze position');
@@ -142,17 +206,17 @@ export const api = {
   },
 
   async getSettings(): Promise<Record<string, string>> {
-    const res = await fetch(`${API_BASE}/settings`);
+    const res = await authFetch(`${API_BASE}/settings`);
     if (!res.ok) throw new Error('Failed to fetch settings');
     return res.json();
   },
 
   async updateSettings(settings: Record<string, string>): Promise<void> {
-    const res = await fetch(`${API_BASE}/settings`, {
+    const res = await authFetch(`${API_BASE}/settings`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings)
     });
     if (!res.ok) throw new Error('Failed to update settings');
   }
 };
+

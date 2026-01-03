@@ -7,6 +7,15 @@ import { marketDataRoutes } from './routes/market-data';
 import { marketRoutes } from './routes/market';
 import { aiRoutes } from './routes/ai';
 import { settingsRoutes } from './routes/settings';
+import jwt from '@fastify/jwt';
+import authRoutes from './routes/auth';
+import { FastifyRequest, FastifyReply } from 'fastify';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    authenticate: any;
+  }
+}
 
 const fastify = Fastify({
   logger: true
@@ -67,6 +76,19 @@ const start = async () => {
       origin: true
     });
 
+    await fastify.register(jwt, {
+      secret: process.env.JWT_SECRET || 'supersecret_options_monitor_2024'
+    });
+
+    fastify.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        await request.jwtVerify();
+      } catch (err) {
+        reply.send(err);
+      }
+    });
+
+    fastify.register(authRoutes, { prefix: '/api/auth' });
     fastify.register(positionRoutes, { prefix: '/api/positions' });
     fastify.register(marketDataRoutes, { prefix: '/api/market-data' });
     fastify.register(marketRoutes, { prefix: '/api/market' });

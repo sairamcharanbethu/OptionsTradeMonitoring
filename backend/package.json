@@ -14,9 +14,11 @@
   "description": "",
   "dependencies": {
     "@fastify/cors": "^11.2.0",
+    "@fastify/jwt": "^9.0.4",
     "@fastify/postgres": "^6.0.2",
     "alphavantage": "^2.5.0",
     "axios": "^1.13.2",
+    "bcrypt": "^5.1.1",
     "fastify": "^5.6.2",
     "node-cron": "^4.2.1",
     "pg": "^8.16.3",
@@ -27,6 +29,8 @@
   },
   "devDependencies": {
     "@types/axios": "^0.9.36",
+    "@types/bcrypt": "^5.0.2",
+    "@types/jsonwebtoken": "^9.0.8",
     "@types/node": "^25.0.3",
     "@types/node-cron": "^3.0.11",
     "@types/node-fetch": "^2.6.13",

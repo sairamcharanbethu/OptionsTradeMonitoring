@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 
 export async function marketRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
+    fastify.addHook('onRequest', fastify.authenticate);
     fastify.get('/status', async (request, reply) => {
         try {
             const poller = (fastify as any).poller;

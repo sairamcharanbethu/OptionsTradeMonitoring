@@ -1,11 +1,13 @@
 import { FastifyInstance } from 'fastify';
 
 export async function settingsRoutes(fastify: FastifyInstance) {
+    fastify.addHook('onRequest', fastify.authenticate);
 
     // GET all settings
     fastify.get('/', async (request, reply) => {
+        const { id: userId } = (request as any).user;
         try {
-            const { rows } = await (fastify as any).pg.query('SELECT key, value FROM settings');
+            const { rows } = await (fastify as any).pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
             const settings = rows.reduce((acc: any, row: any) => {
                 acc[row.key] = row.value;
                 return acc;
@@ -21,6 +23,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // UPDATE settings (Batch)
     fastify.post('/', async (request, reply) => {
+        const { id: userId } = (request as any).user;
         const updates = request.body as Record<string, string>;
 
         try {
@@ -30,11 +33,11 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
                 for (const [key, value] of Object.entries(updates)) {
                     await client.query(
-                        `INSERT INTO settings (key, value, updated_at) 
-                         VALUES ($1, $2, CURRENT_TIMESTAMP) 
-                         ON CONFLICT (key) DO UPDATE 
+                        `INSERT INTO settings (user_id, key, value, updated_at) 
+                         VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
+                         ON CONFLICT (user_id, key) DO UPDATE 
                          SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                        [key, value]
+                        [userId, key, value]
                     );
                 }
 

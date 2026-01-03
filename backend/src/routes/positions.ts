@@ -14,9 +14,12 @@ const PositionSchema = z.object({
 });
 
 export async function positionRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
+  fastify.addHook('onRequest', fastify.authenticate);
+
   // GET all positions (including analytics if closed)
   fastify.get('/', async (request, reply) => {
-    const { rows } = await fastify.pg.query('SELECT * FROM positions ORDER BY created_at DESC');
+    const { id: userId } = (request as any).user;
+    const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
     return rows;
   });
 
@@ -61,8 +64,9 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
   // GET single position
   fastify.get('/:id', async (request, reply) => {
+    const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1', [id]);
+    const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
     if (rows.length === 0) {
       return reply.code(404).send({ error: 'Position not found' });
     }
@@ -71,7 +75,13 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
   // GET price history
   fastify.get('/:id/history', async (request, reply) => {
+    const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
+
+    // Verify ownership first
+    const { rows: check } = await fastify.pg.query('SELECT id FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
+    if (check.length === 0) return reply.code(404).send({ error: 'Position not found' });
+
     const { rows } = await fastify.pg.query(
       'SELECT price, recorded_at FROM price_history WHERE position_id = $1 ORDER BY recorded_at ASC',
       [id]
@@ -92,16 +102,18 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       stopLossTrigger = body.entry_price * (1 - body.trailing_stop_loss_pct / 100);
     }
 
+    const { id: userId } = (request as any).user;
+
     const query = `
       INSERT INTO positions (
-        symbol, option_type, strike_price, expiration_date, 
+        user_id, symbol, option_type, strike_price, expiration_date, 
         entry_price, quantity, stop_loss_trigger, take_profit_trigger,
         trailing_high_price, trailing_stop_loss_pct
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `;
     const values = [
-      body.symbol, body.option_type, body.strike_price, body.expiration_date,
+      userId, body.symbol, body.option_type, body.strike_price, body.expiration_date,
       body.entry_price, body.quantity, stopLossTrigger, body.take_profit_trigger,
       trailingHigh, body.trailing_stop_loss_pct
     ];
@@ -122,11 +134,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
   // UPDATE position status (CLOSE)
   // CLOSE position (Manual)
   fastify.post('/:id/close', async (request, reply) => {
+    const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
     const body = request.body as { price?: number } | undefined;
 
-    // 1. Fetch Position
-    const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1', [id]);
+    // 1. Fetch Position and Verify Ownership
+    const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
     if (rows.length === 0) {
       return reply.code(404).send({ error: 'Position not found' });
     }
@@ -159,10 +172,11 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
   // REOPEN position (Manual)
   fastify.patch('/:id/reopen', async (request, reply) => {
+    const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
     // 1. Fetch current position to get entry price and trailing pct
-    const { rows: existing } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1', [id]);
+    const { rows: existing } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
     if (existing.length === 0) {
       return reply.code(404).send({ error: 'Position not found' });
     }
@@ -203,11 +217,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
   // UPDATE position full
   fastify.put('/:id', async (request, reply) => {
+    const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
     const body = PositionSchema.partial().parse(request.body); // Allow partial updates
 
-    // 1. Fetch existing to get current trailing high
-    const { rows: existingRows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1', [id]);
+    // 1. Fetch existing to get current trailing high and verify ownership
+    const { rows: existingRows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
     if (existingRows.length === 0) {
       return reply.code(404).send({ error: 'Position not found' });
     }
@@ -260,8 +275,9 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
   // SYNC single position
   fastify.post('/:id/sync', async (request, reply) => {
+    const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const { rows } = await fastify.pg.query('SELECT symbol FROM positions WHERE id = $1', [id]);
+    const { rows } = await fastify.pg.query('SELECT symbol FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
 
     if (rows.length === 0) {
       return reply.code(404).send({ error: 'Position not found' });
@@ -278,14 +294,19 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
   // DELETE position
   fastify.delete('/:id', async (request, reply) => {
+    const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
 
     try {
+      // Verify ownership
+      const { rows: check } = await fastify.pg.query('SELECT id FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
+      if (check.length === 0) return reply.code(404).send({ error: 'Position not found' });
+
       // Manually clean up dependencies just in case CASCADE isn't working/setup
       await fastify.pg.query('DELETE FROM alerts WHERE position_id = $1', [id]);
       await fastify.pg.query('DELETE FROM price_history WHERE position_id = $1', [id]);
 
-      const result = await fastify.pg.query('DELETE FROM positions WHERE id = $1', [id]);
+      const result = await fastify.pg.query('DELETE FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
       if (result.rowCount === 0) {
         return reply.code(404).send({ error: 'Position not found' });
       }
