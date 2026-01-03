@@ -73,15 +73,21 @@ const start = async () => {
 
     await fastify.register(postgres, {
       connectionString: activeDbUrl,
-      ssl: activeDbUrl.includes('aivencloud') ? { rejectUnauthorized: false } : undefined
+      ssl: activeDbUrl.includes('aivencloud') ? { rejectUnauthorized: false } : undefined,
+      max: 20,
+      idleTimeoutMillis: 30000
     });
 
     await fastify.register(cors, {
       origin: true
     });
 
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET environment variable is required');
+    }
+
     await fastify.register(jwt, {
-      secret: process.env.JWT_SECRET || 'supersecret_options_monitor_2024'
+      secret: process.env.JWT_SECRET
     });
 
     fastify.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
