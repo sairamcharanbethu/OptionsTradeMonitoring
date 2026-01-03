@@ -24,6 +24,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL}
+      REDIS_URL: redis://redis:6379
       PORT: ${PORT}
       N8N_ALERT_WEBHOOK_URL: ${N8N_ALERT_WEBHOOK_URL}
       MARKET_DATA_POLL_INTERVAL: ${MARKET_DATA_POLL_INTERVAL}
@@ -31,6 +32,13 @@ services:
       POLYGON_API_KEY: ${POLYGON_API_KEY}
     depends_on:
       - db
+      - redis
+
+  redis:
+    image: redis:alpine
+    restart: always
+    ports:
+      - "6379:6379"
 
   frontend:
     build:

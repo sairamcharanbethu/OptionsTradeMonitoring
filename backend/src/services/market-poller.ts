@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { FastifyInstance } from 'fastify';
 import { spawn } from 'child_process';
 import { StopLossEngine } from './stop-loss-engine';
+import { redis } from '../lib/redis';
 
 export class MarketPoller {
   private fastify: FastifyInstance;
@@ -58,6 +59,17 @@ export class MarketPoller {
 
   private async getOptionPremium(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string): Promise<any | null> {
     const ticker = this.constructOSITicker(symbol, strike, type, expiration);
+
+    // Redis Cache Check
+    const CACHE_KEY = `PRICE:${ticker}`;
+    const CACHE_TTL = 300; // 5 minutes
+
+    const cached = await redis.get(CACHE_KEY);
+    if (cached) {
+      // console.log(`[MarketPoller] Cache hit for ${ticker}`);
+      return JSON.parse(cached);
+    }
+
     // console.log(`[MarketPoller] Fetching premium for: ${ticker}`);
 
     return new Promise((resolve) => {
@@ -80,6 +92,7 @@ export class MarketPoller {
 
           const result = JSON.parse(dataString);
           if (result.status === 'ok' && typeof result.price === 'number') {
+            redis.set(CACHE_KEY, JSON.stringify(result), CACHE_TTL).catch(err => console.error('[MarketPoller] Redis set failed:', err));
             resolve(result); // Return full object { price, greeks, iv ... }
           } else {
             console.warn(`[MarketPoller] Retrieval failed for ${ticker}: ${result.message}`);
