@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS positions (
     realized_pnl DECIMAL(10, 2),
     loss_avoided DECIMAL(10, 2),
     current_price DECIMAL(10, 2),
+    underlying_price DECIMAL(10, 2),
     status VARCHAR(20) DEFAULT 'OPEN', -- OPEN, CLOSED
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

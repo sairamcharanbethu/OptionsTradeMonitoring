@@ -232,8 +232,8 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
         return false;
       }
     } else {
-      // Default view: exclude CLOSED if "ALL" is not literally selected but we just want active ones?
-      // Actually, user said "filters", lets keep it simple: ALL shows everything.
+      // Default view: exclude CLOSED if "ALL" is selected (Active Tracker only)
+      if (pos.status === 'CLOSED') return false;
     }
 
     // DTE Filter
@@ -569,6 +569,8 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                               <Badge variant="destructive" className="text-[10px] px-1 py-0 animate-pulse">STOP</Badge>
                             ) : pos.status === 'PROFIT_TRIGGERED' ? (
                               <Badge className="bg-green-500 text-[10px] px-1 py-0 animate-pulse">PROFIT</Badge>
+                            ) : pos.status === 'CLOSED' ? (
+                              <Badge variant="secondary" className="text-[10px] px-1 py-0">CLOSED</Badge>
                             ) : (
                               <Badge variant="outline" className="text-[10px] px-1 py-0">OPEN</Badge>
                             )}

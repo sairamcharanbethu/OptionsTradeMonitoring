@@ -240,9 +240,9 @@ export class MarketPoller {
 
         await this.fastify.pg.query(
           `UPDATE positions 
-           SET status = $1, 
-               updated_at = CURRENT_TIMESTAMP 
-           WHERE id = $2`,
+             SET status = $1, 
+                 updated_at = CURRENT_TIMESTAMP 
+             WHERE id = $2 AND status = 'OPEN'`,
           [newStatus, position.id]
         );
 
