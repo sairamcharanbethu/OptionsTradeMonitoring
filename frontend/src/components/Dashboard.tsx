@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { api, Position } from '@/lib/api';
 import {
@@ -27,20 +28,50 @@ import {
   DialogTitle,
   DialogTrigger
 } from '@/components/ui/dialog';
-import { TrendingDown, TrendingUp, AlertTriangle, Plus, Pencil, Trash2, RefreshCw, BarChart3, PieChart as PieChartIcon, Activity, Search, X, Zap, CheckCircle } from 'lucide-react';
 import {
   LineChart,
   Line,
-  ResponsiveContainer,
-  YAxis,
   XAxis,
-  Tooltip,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
   AreaChart,
   Area,
   PieChart,
   Pie,
   Cell
 } from 'recharts';
+import {
+  LayoutDashboard,
+  History,
+  TrendingUp,
+  TrendingDown,
+  AlertCircle,
+  Clock,
+  Settings,
+  Plus,
+  ArrowUpRight,
+  ArrowDownRight,
+  Info,
+  RefreshCw,
+  MoreVertical,
+  CheckCircle,
+  HelpCircle,
+  LogOut,
+  Pencil,
+  Trash2,
+  Table as TableIcon,
+  PieChart as PieChartIcon,
+  Trophy,
+  Percent,
+  BarChart3,
+  Activity,
+  AlertTriangle,
+  Zap,
+  Search,
+  X
+} from 'lucide-react';
 import {
   Tabs,
   TabsContent,
@@ -58,17 +89,33 @@ interface DashboardProps {
   onUserUpdate: (user: User) => void;
 }
 
+interface PortfolioStats {
+  totalTrades: number;
+  closedTrades: number;
+  winRate: number;
+  profitFactor: number;
+  totalRealizedPnl: number;
+  equityCurve: Array<{ date: string, pnl: number }>;
+}
+
 export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [stats, setStats] = useState<PortfolioStats | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [marketStatus, setMarketStatus] = useState<{ open: boolean; marketHours: string; timezone: string } | null>(null);
+  const [isAddingPosition, setIsAddingPosition] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
-  const [marketStatus, setMarketStatus] = useState<{ open: boolean; marketHours: string } | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('active');
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [historyData, setHistoryData] = useState<Record<number, any[]>>({});
 
   // Filter States
   const [tickerFilter, setTickerFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [dteFilter, setDteFilter] = useState('');
 
@@ -102,30 +149,40 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     }
   }
 
-  useEffect(() => {
-    loadPositions();
-    loadMarketStatus();
-    const statusInterval = setInterval(loadMarketStatus, 60000);
-    const positionsInterval = setInterval(loadPositions, 5000);
-    return () => {
-      clearInterval(statusInterval);
-      clearInterval(positionsInterval);
-    };
-  }, []);
+  async function loadPortfolioStats() {
+    try {
+      const data = await api.getPortfolioStats();
+      setStats(data);
+    } catch (error) {
+      console.error('Failed to load portfolio stats:', error);
+    }
+  }
 
-  async function loadPositions() {
+  const loadPositions = async () => {
+    setLoading(true);
     try {
       const data = await api.getPositions();
       setPositions(data);
       setLastRefreshed(new Date());
       setRefreshError(null);
+      loadPortfolioStats();
     } catch (err) {
       console.error('Failed to load positions:', err);
       setRefreshError('Connection error');
     } finally {
       setLoading(false);
     }
-  }
+  };
+
+  useEffect(() => {
+    loadPositions();
+    loadMarketStatus();
+    const interval = setInterval(() => {
+      loadPositions();
+      loadMarketStatus();
+    }, 60000); // refresh every min
+    return () => clearInterval(interval);
+  }, []);
 
   const getPnL = (pos: Position) => {
     if (!pos.current_price) return 0;
@@ -156,7 +213,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
 
-  const [historyData, setHistoryData] = useState<Record<number, any[]>>({});
+
 
   const filteredPositions = positions.filter(pos => {
     // Symbol Filter
@@ -273,22 +330,23 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
           <div className="flex items-center gap-2">
             <TabsList>
               <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
               {user.role === 'ADMIN' && (
                 <TabsTrigger value="users">Users</TabsTrigger>
               )}
             </TabsList>
             <SettingsDialog user={user} onUpdate={onUserUpdate} />
             <Button variant="outline" size="sm" className="hidden sm:flex gap-1 text-xs" onClick={handleForceSync} disabled={loading}>
-              <Zap className={`h-3 w-3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
+              <Zap className={`h - 3 w - 3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'} `} />
               Force Sync
             </Button>
             <Button variant="outline" size="icon" className="sm:hidden" onClick={handleForceSync} disabled={loading}>
-              <Zap className={`h-4 w-4 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
+              <Zap className={`h - 4 w - 4 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'} `} />
             </Button>
 
 
             <Button variant="outline" size="icon" onClick={loadPositions}>
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h - 4 w - 4 ${loading ? 'animate-spin' : ''} `} />
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={handleDialogChange}>
               <DialogTrigger asChild>
@@ -335,7 +393,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className={`text-2xl font-bold ${totalRealizedPnL >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                <div className={`text - 2xl font - bold ${totalRealizedPnL >= 0 ? 'text-green-500' : 'text-red-500'} `}>
                   ${totalRealizedPnL.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
               </CardContent>
@@ -499,7 +557,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             </div>
                           </TableCell>
                           <TableCell>
-                            <div className={`font-bold ${getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            <div className={`font - bold ${getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500'} `}>
                               {getPnL(pos) >= 0 ? '+' : ''}{getPnL(pos).toFixed(2)}
                               <div className="text-[10px] opacity-70">
                                 ({getRoi(pos) > 0 ? '+' : ''}{getRoi(pos).toFixed(2)}%)
@@ -560,10 +618,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                         dataKey="value"
                       >
                         {exposureData.map((_entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          <Cell key={`cell - ${index} `} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip
+                      <RechartsTooltip
                         contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px' }}
                         itemStyle={{ color: 'hsl(var(--foreground))' }}
                       />
@@ -634,6 +692,125 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   )}
                 </TableBody>
               </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="portfolio" className="space-y-8 mt-0">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+            <Card className="hover:shadow-md transition-shadow">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex justify-between">
+                  Win Rate
+                  <Trophy className="h-4 w-4 text-yellow-500" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{stats?.winRate ?? 0}%</div>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  {stats?.closedTrades} closed trades
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="hover:shadow-md transition-shadow">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex justify-between">
+                  Profit Factor
+                  <Percent className="h-4 w-4 text-blue-500" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{stats?.profitFactor ?? 0}</div>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Gross Profit / Gross Loss
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="hover:shadow-md transition-shadow">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex justify-between">
+                  Total Realized PnL
+                  <TrendingUp className="h-4 w-4 text-green-500" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className={`text-2xl font-bold ${(stats?.totalRealizedPnl ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  ${stats?.totalRealizedPnl.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Net profit across all time
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card className="hover:shadow-md transition-shadow">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex justify-between">
+                  Avg Profit per Trade
+                  <Activity className="h-4 w-4 text-purple-500" />
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">
+                  ${stats?.closedTrades ? (stats.totalRealizedPnl / stats.closedTrades).toLocaleString(undefined, { minimumFractionDigits: 2 }) : '0.00'}
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Realized PnL / Closed Trades
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="w-full">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <BarChart3 className="h-5 w-5 text-primary" />
+                Equity Curve (Cumulative Realized PnL)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="h-[400px]">
+              {stats?.equityCurve && stats.equityCurve.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={stats.equityCurve}>
+                    <defs>
+                      <linearGradient id="equityColor" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.2} />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(d) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      tick={{ fontSize: 10 }}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 10 }}
+                      tickFormatter={(value) => `$${value}`}
+                    />
+                    <RechartsTooltip
+                      labelFormatter={(label) => new Date(label).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                      formatter={(value: any) => [`$${Number(value || 0).toLocaleString()}`, 'Total PnL']}
+                      contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px' }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="pnl"
+                      stroke="hsl(var(--primary))"
+                      fillOpacity={1}
+                      fill="url(#equityColor)"
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-2">
+                  <BarChart3 className="h-12 w-12 opacity-10" />
+                  <p>Close some positions to see your equity curve.</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

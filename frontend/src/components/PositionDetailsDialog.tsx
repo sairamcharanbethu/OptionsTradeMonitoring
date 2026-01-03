@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw, Activity, CheckCircle2, DollarSign, Hash, XCircle } from 'lucide-react';
+import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw, Activity, CheckCircle2, DollarSign, Hash, XCircle, LayoutGrid, List } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -24,6 +24,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
     const [salePrice, setSalePrice] = useState<string>('');
     const [saleQty, setSaleQty] = useState<string>('');
     const [closeError, setCloseError] = useState<string | null>(null);
+    const [viewMode, setViewMode] = useState<'table' | 'heatmap'>('table');
 
     useEffect(() => {
         if (position) {
@@ -257,20 +258,44 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                     </TabsContent>
 
                     <TabsContent value="sims" className="space-y-4 py-4">
-                        <div className="p-4 bg-muted/30 rounded-lg border space-y-3">
+                        <div className="p-4 bg-muted/30 rounded-lg border space-y-4">
                             <div className="flex items-center justify-between">
                                 <h3 className="text-sm font-semibold flex items-center gap-2">
                                     <Activity className="h-4 w-4 text-blue-500" />
                                     PnL Simulation (What-If)
                                 </h3>
-                                {position.underlying_price && (
-                                    <Badge variant="outline" className="text-[10px]">
-                                        Ref Price: ${position.underlying_price.toFixed(2)}
-                                    </Badge>
-                                )}
+                                <div className="flex items-center gap-2">
+                                    <div className="flex border rounded-md overflow-hidden bg-background">
+                                        <Button
+                                            variant={viewMode === 'table' ? 'default' : 'ghost'}
+                                            size="sm"
+                                            className="h-8 rounded-none px-3"
+                                            onClick={() => setViewMode('table')}
+                                        >
+                                            <List className="h-4 w-4 mr-2" />
+                                            Table
+                                        </Button>
+                                        <Button
+                                            variant={viewMode === 'heatmap' ? 'default' : 'ghost'}
+                                            size="sm"
+                                            className="h-8 rounded-none px-3"
+                                            onClick={() => setViewMode('heatmap')}
+                                        >
+                                            <LayoutGrid className="h-4 w-4 mr-2" />
+                                            Heatmap
+                                        </Button>
+                                    </div>
+                                    {position.underlying_price && (
+                                        <Badge variant="outline" className="text-[10px]">
+                                            Ref Price: ${position.underlying_price.toFixed(2)}
+                                        </Badge>
+                                    )}
+                                </div>
                             </div>
                             <p className="text-[11px] text-muted-foreground leading-snug">
-                                Estimates potential returns based on stock price movements using Delta, Gamma, and Theta.
+                                {viewMode === 'table'
+                                    ? "Estimates potential returns based on stock price movements using Delta, Gamma, and Theta."
+                                    : "Profit Zone visualization. X-axis is stock move, Y-axis is days to expiration (Top=Now, Bottom=Exp)."}
                             </p>
 
                             {!position.delta && (
@@ -286,49 +311,105 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             )}
 
                             {position.delta && position.underlying_price && (
-                                <div className="rounded-md border overflow-hidden">
-                                    <table className="w-full text-xs text-left border-collapse">
-                                        <thead className="bg-muted/50">
-                                            <tr>
-                                                <th className="p-2 border-b">Stock Move</th>
-                                                <th className="p-2 border-b">New Option Price</th>
-                                                <th className="p-2 border-b text-right">Estimated PnL</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {[-15, -10, -5, -2, 0, 2, 5, 10, 15].map((pct) => {
-                                                const stockPrice = position.underlying_price!;
-                                                const dS = stockPrice * (pct / 100);
-                                                const deltaEffect = (position.delta || 0) * dS;
-                                                const gammaEffect = 0.5 * (position.gamma || 0) * Math.pow(dS, 2);
-                                                const estOptionPrice = Math.max(0.01, (position.current_price || 0) + deltaEffect + gammaEffect);
-                                                const estMarketValue = estOptionPrice * (position.quantity || 1) * 100;
-                                                const estPnl = estMarketValue - (position.entry_price * (position.quantity || 1) * 100);
-                                                const estPnlPct = (estOptionPrice - position.entry_price) / position.entry_price * 100;
-
-                                                return (
-                                                    <tr key={pct} className={pct === 0 ? 'bg-primary/10 font-medium' : 'hover:bg-muted/20'}>
-                                                        <td className="p-2 border-b">
-                                                            <div className="flex items-center gap-1">
-                                                                {pct > 0 ? <TrendingUp className="h-3 w-3 text-green-500" /> : pct < 0 ? <TrendingDown className="h-3 w-3 text-red-500" /> : null}
-                                                                {pct === 0 ? 'Current Price' : `${pct > 0 ? '+' : ''}${pct}% ($${(stockPrice + dS).toFixed(2)})`}
-                                                            </div>
-                                                        </td>
-                                                        <td className="p-2 border-b font-mono">
-                                                            ${estOptionPrice.toFixed(2)}
-                                                        </td>
-                                                        <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                                            {estPnl >= 0 ? '+' : ''}${estPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                                            <span className="text-[10px] ml-1 opacity-70">
-                                                                ({estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(1)}%)
-                                                            </span>
-                                                        </td>
+                                <>
+                                    {viewMode === 'table' ? (
+                                        <div className="rounded-md border overflow-hidden">
+                                            <table className="w-full text-xs text-left border-collapse">
+                                                <thead className="bg-muted/50">
+                                                    <tr>
+                                                        <th className="p-2 border-b">Stock Move</th>
+                                                        <th className="p-2 border-b">New Option Price</th>
+                                                        <th className="p-2 border-b text-right">Estimated PnL</th>
                                                     </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                                </thead>
+                                                <tbody>
+                                                    {[-15, -10, -5, -2, 0, 2, 5, 10, 15].map((pct) => {
+                                                        const stockPrice = position.underlying_price!;
+                                                        const dS = stockPrice * (pct / 100);
+                                                        const deltaEffect = (position.delta || 0) * dS;
+                                                        const gammaEffect = 0.5 * (position.gamma || 0) * Math.pow(dS, 2);
+                                                        const estOptionPrice = Math.max(0.01, (position.current_price || 0) + deltaEffect + gammaEffect);
+                                                        const estMarketValue = estOptionPrice * (position.quantity || 1) * 100;
+                                                        const estPnl = estMarketValue - (position.entry_price * (position.quantity || 1) * 100);
+                                                        const estPnlPct = (estOptionPrice - position.entry_price) / position.entry_price * 100;
+
+                                                        return (
+                                                            <tr key={pct} className={pct === 0 ? 'bg-primary/10 font-medium' : 'hover:bg-muted/20'}>
+                                                                <td className="p-2 border-b">
+                                                                    <div className="flex items-center gap-1">
+                                                                        {pct > 0 ? <TrendingUp className="h-3 w-3 text-green-500" /> : pct < 0 ? <TrendingDown className="h-3 w-3 text-red-500" /> : null}
+                                                                        {pct === 0 ? 'Current Price' : `${pct > 0 ? '+' : ''}${pct}% ($${(stockPrice + dS).toFixed(2)})`}
+                                                                    </div>
+                                                                </td>
+                                                                <td className="p-2 border-b font-mono">
+                                                                    ${estOptionPrice.toFixed(2)}
+                                                                </td>
+                                                                <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                    {estPnl >= 0 ? '+' : ''}${estPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                                                    <span className="text-[10px] ml-1 opacity-70">
+                                                                        ({estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(1)}%)
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-2">
+                                            <div className="grid grid-cols-8 gap-1 text-[9px] font-bold text-center text-muted-foreground mb-1">
+                                                <div>DTE</div>
+                                                {[-10, -5, -2, 0, 2, 5, 10].map(p => <div key={p}>{p}%</div>)}
+                                            </div>
+                                            {[dte, Math.floor(dte * 0.75), Math.floor(dte * 0.5), Math.floor(dte * 0.25), 0].map((d) => (
+                                                <div key={d} className="grid grid-cols-8 gap-1">
+                                                    <div className="flex items-center justify-center text-[10px] font-mono text-muted-foreground border-r">{d}d</div>
+                                                    {[-10, -5, -2, 0, 2, 5, 10].map((pct) => {
+                                                        const stockPrice = position.underlying_price!;
+                                                        const dS = stockPrice * (pct / 100);
+                                                        const deltaEffect = (position.delta || 0) * dS;
+                                                        const gammaEffect = 0.5 * (position.gamma || 0) * Math.pow(dS, 2);
+
+                                                        // Time decay effect: (total_dte - current_dte) * daily_theta
+                                                        // position.theta is usually negative. 
+                                                        // If we are at d=dte, time_passed = 0.
+                                                        // If we are at d=0, time_passed = dte.
+                                                        const timePassed = dte - d;
+                                                        const thetaEffect = (position.theta || 0) * timePassed;
+
+                                                        const estOptionPrice = Math.max(0.01, (position.current_price || 0) + deltaEffect + gammaEffect + thetaEffect);
+                                                        const estPnlPct = (estOptionPrice - position.entry_price) / position.entry_price * 100;
+
+                                                        // Color scale: -50% (red) to +50% (green)
+                                                        const intensity = Math.min(Math.abs(estPnlPct) / 50, 1);
+                                                        const colorClass = estPnlPct >= 0
+                                                            ? `bg-green-500`
+                                                            : `bg-red-500`;
+                                                        const opacity = 0.1 + (intensity * 0.8);
+
+                                                        return (
+                                                            <div
+                                                                key={pct}
+                                                                className={`h-10 flex flex-col items-center justify-center rounded text-[9px] font-mono border border-black/5 transition-opacity hover:ring-1 hover:ring-primary`}
+                                                                style={{
+                                                                    backgroundColor: estPnlPct >= 0 ? `rgba(34, 197, 94, ${opacity})` : `rgba(239, 68, 68, ${opacity})`,
+                                                                    color: opacity > 0.6 ? 'white' : 'inherit'
+                                                                }}
+                                                                title={`Price: $${estOptionPrice.toFixed(2)} | PnL: ${estPnlPct.toFixed(1)}%`}
+                                                            >
+                                                                <div>{estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(0)}%</div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ))}
+                                            <div className="text-[9px] text-center text-muted-foreground pt-1 italic">
+                                                Heatmap shows estimated PnL% relative to entry price.
+                                            </div>
+                                        </div>
+                                    )}
+                                </>
                             )}
                         </div>
                     </TabsContent>

@@ -23,6 +23,65 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     return rows;
   });
 
+  // GET portfolio stats
+  fastify.get('/stats', async (request, reply) => {
+    const { id: userId } = (request as any).user;
+
+    // 1. Basic counts and PnL
+    const statsQuery = `
+      SELECT 
+        COUNT(*) as total_trades,
+        COUNT(*) FILTER (WHERE status = 'CLOSED') as closed_trades,
+        COUNT(*) FILTER (WHERE status = 'CLOSED' AND realized_pnl > 0) as win_count,
+        SUM(realized_pnl) FILTER (WHERE status = 'CLOSED') as total_realized_pnl,
+        SUM(realized_pnl) FILTER (WHERE status = 'CLOSED' AND realized_pnl > 0) as gross_profit,
+        SUM(realized_pnl) FILTER (WHERE status = 'CLOSED' AND realized_pnl < 0) as gross_loss
+      FROM positions 
+      WHERE user_id = $1
+    `;
+
+    const { rows: statsRows } = await fastify.pg.query(statsQuery, [userId]);
+    const mainStats = statsRows[0];
+
+    // 2. Win Rate
+    const closedCount = parseInt(mainStats.closed_trades || '0');
+    const winRate = closedCount > 0 ? (parseInt(mainStats.win_count || '0') / closedCount) * 100 : 0;
+
+    // 3. Profit Factor
+    const grossProfit = parseFloat(mainStats.gross_profit || '0');
+    const grossLoss = Math.abs(parseFloat(mainStats.gross_loss || '0'));
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 99.9 : 0);
+
+    // 4. Equity Curve (Daily realized PnL)
+    const curveQuery = `
+      SELECT 
+        date, 
+        SUM(daily_pnl) OVER (ORDER BY date) as total_pnl
+      FROM (
+        SELECT 
+          date_trunc('day', updated_at) as date, 
+          SUM(realized_pnl) as daily_pnl 
+        FROM positions 
+        WHERE status = 'CLOSED' AND user_id = $1 
+        GROUP BY 1
+      ) subquery
+      ORDER BY date
+    `;
+    const { rows: curveRows } = await fastify.pg.query(curveQuery, [userId]);
+
+    return {
+      totalTrades: parseInt(mainStats.total_trades || '0'),
+      closedTrades: closedCount,
+      winRate: parseFloat(winRate.toFixed(1)),
+      profitFactor: parseFloat(profitFactor.toFixed(2)),
+      totalRealizedPnl: parseFloat(mainStats.total_realized_pnl || '0'),
+      equityCurve: curveRows.map(r => ({
+        date: r.date,
+        pnl: parseFloat(r.total_pnl)
+      }))
+    };
+  });
+
   // GET symbol search
   fastify.get('/search', async (request, reply) => {
     const { q } = request.query as { q: string };

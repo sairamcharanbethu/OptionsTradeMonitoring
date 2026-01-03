@@ -217,6 +217,19 @@ export const api = {
     return res.json();
   },
 
+  async getPortfolioStats(): Promise<{
+    totalTrades: number;
+    closedTrades: number;
+    winRate: number;
+    profitFactor: number;
+    totalRealizedPnl: number;
+    equityCurve: Array<{ date: string, pnl: number }>;
+  }> {
+    const res = await authFetch(`${API_BASE}/positions/stats`);
+    if (!res.ok) throw new Error('Failed to fetch portfolio stats');
+    return res.json();
+  },
+
   async reopenPosition(id: number): Promise<Position> {
     const res = await authFetch(`${API_BASE}/positions/${id}/reopen`, {
       method: 'PATCH',
