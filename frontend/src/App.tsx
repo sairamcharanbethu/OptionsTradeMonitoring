@@ -68,7 +68,7 @@ function App() {
           </div>
         </header>
         <main>
-          <Dashboard />
+          <Dashboard user={user} onUserUpdate={setUser} />
         </main>
       </div>
     </ThemeProvider>

@@ -9,6 +9,7 @@ import { aiRoutes } from './routes/ai';
 import { settingsRoutes } from './routes/settings';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
+import { adminRoutes } from './routes/admin';
 import { FastifyRequest, FastifyReply } from 'fastify';
 
 declare module 'fastify' {
@@ -89,6 +90,7 @@ const start = async () => {
     });
 
     fastify.register(authRoutes, { prefix: '/api/auth' });
+    fastify.register(adminRoutes, { prefix: '/api/admin' });
     fastify.register(positionRoutes, { prefix: '/api/positions' });
     fastify.register(marketDataRoutes, { prefix: '/api/market-data' });
     fastify.register(marketRoutes, { prefix: '/api/market' });

@@ -1,6 +1,7 @@
 export interface User {
   id: number;
   username: string;
+  role: 'USER' | 'ADMIN';
 }
 
 export interface Position {
@@ -34,11 +35,16 @@ const getToken = () => localStorage.getItem('token');
 
 const authFetch = async (url: string, options: any = {}) => {
   const token = getToken();
-  const headers = {
+  const headers: any = {
     ...options.headers,
     'Authorization': token ? `Bearer ${token}` : '',
-    'Content-Type': 'application/json',
   };
+
+  // Only set Content-Type if there's a body
+  if (options.body) {
+    headers['Content-Type'] = 'application/json';
+  }
+
   const res = await fetch(url, { ...options, headers });
   if (res.status === 401 && !url.includes('/auth/me')) {
     localStorage.removeItem('token');
@@ -92,6 +98,63 @@ export const api = {
 
   isAuthenticated(): boolean {
     return !!getToken();
+  },
+
+  // Admin
+  async getAllUsers(): Promise<User[]> {
+    const res = await authFetch(`${API_BASE}/admin/users`);
+    if (!res.ok) throw new Error('Failed to fetch users');
+    return res.json();
+  },
+
+  async updateUserRole(id: number, role: 'USER' | 'ADMIN'): Promise<void> {
+    const res = await authFetch(`${API_BASE}/admin/users/${id}/role`, {
+      method: 'POST',
+      body: JSON.stringify({ role })
+    });
+    if (!res.ok) throw new Error('Failed to update user role');
+  },
+
+  async deleteUser(id: number): Promise<void> {
+    const res = await authFetch(`${API_BASE}/admin/users/${id}`, {
+      method: 'DELETE'
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to delete user');
+    }
+  },
+
+  async resetUserPassword(id: number): Promise<void> {
+    const res = await authFetch(`${API_BASE}/admin/users/${id}/reset-password`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to reset password');
+  },
+
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/auth/change-password`, {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to change password');
+    }
+  },
+
+  async updateUsername(username: string): Promise<{ token: string, user: User }> {
+    const res = await authFetch(`${API_BASE}/auth/update-profile`, {
+      method: 'POST',
+      body: JSON.stringify({ username })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to update username');
+    }
+    const result = await res.json();
+    localStorage.setItem('token', result.token);
+    return result;
   },
 
   // Positions
