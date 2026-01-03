@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { redis } from '../lib/redis';
 
 export async function settingsRoutes(fastify: FastifyInstance) {
     fastify.addHook('onRequest', fastify.authenticate);
@@ -6,6 +7,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     // GET all settings
     fastify.get('/', async (request, reply) => {
         const { id: userId } = (request as any).user;
+        const CACHE_KEY = `USER_SETTINGS:${userId}`;
+
+        // Try cache
+        const cached = await redis.get(CACHE_KEY);
+        if (cached) return JSON.parse(cached);
+
         try {
             const { rows } = await (fastify as any).pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
             const settings = rows.reduce((acc: any, row: any) => {
@@ -13,7 +20,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 return acc;
             }, {});
 
-            // Mask keys for security if needed (simpler to just return for now as it's local)
+            // Cache for 5 minutes
+            await redis.set(CACHE_KEY, JSON.stringify(settings), 300);
+
             return settings;
         } catch (err) {
             fastify.log.error(err);
@@ -42,6 +51,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 }
 
                 await client.query('COMMIT');
+
+                // Invalidate cache
+                await redis.set(`USER_SETTINGS:${userId}`, '', 1);
+
                 return { status: 'ok', message: 'Settings updated' };
             } catch (err) {
                 await client.query('ROLLBACK');

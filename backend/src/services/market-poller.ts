@@ -92,6 +92,13 @@ export class MarketPoller {
 
           const result = JSON.parse(dataString);
           if (result.status === 'ok' && typeof result.price === 'number') {
+            // Enrich with metadata for easier Redis inspection
+            result.metadata = {
+              symbol: symbol,
+              strike: strike,
+              type: type,
+              expiration: expiration,
+            };
             redis.set(CACHE_KEY, JSON.stringify(result), CACHE_TTL).catch(err => console.error('[MarketPoller] Redis set failed:', err));
             resolve(result); // Return full object { price, greeks, iv ... }
           } else {

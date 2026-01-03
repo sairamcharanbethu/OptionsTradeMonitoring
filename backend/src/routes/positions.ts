@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
+import { redis } from '../lib/redis';
 
 const PositionSchema = z.object({
   symbol: z.string(),
@@ -19,13 +20,28 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
   // GET all positions (including analytics if closed)
   fastify.get('/', async (request, reply) => {
     const { id: userId } = (request as any).user;
+    const CACHE_KEY = `USER_POSITIONS:${userId}`;
+
+    // Try cache
+    const cached = await redis.get(CACHE_KEY);
+    if (cached) return JSON.parse(cached);
+
     const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
+
+    // Set cache (60 seconds)
+    await redis.set(CACHE_KEY, JSON.stringify(rows), 60);
+
     return rows;
   });
 
   // GET portfolio stats
   fastify.get('/stats', async (request, reply) => {
     const { id: userId } = (request as any).user;
+    const CACHE_KEY = `USER_STATS:${userId}`;
+
+    // Try cache
+    const cached = await redis.get(CACHE_KEY);
+    if (cached) return JSON.parse(cached);
 
     // 1. Basic counts and PnL
     const statsQuery = `
@@ -69,7 +85,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     `;
     const { rows: curveRows } = await fastify.pg.query(curveQuery, [userId]);
 
-    return {
+    const result = {
       totalTrades: parseInt(mainStats.total_trades || '0'),
       closedTrades: closedCount,
       winRate: parseFloat(winRate.toFixed(1)),
@@ -80,6 +96,11 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
         pnl: parseFloat(r.total_pnl)
       }))
     };
+
+    // Cache for 2 minutes
+    await redis.set(CACHE_KEY, JSON.stringify(result), 120);
+
+    return result;
   });
 
   // GET symbol search
@@ -187,6 +208,10 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       fastify.log.error({ err }, 'Failed to trigger immediate sync');
     }
 
+    // Invalidate cache
+    await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+    await redis.set(`USER_STATS:${userId}`, '', 1);
+
     return reply.code(201).send(newPosition);
   });
 
@@ -256,6 +281,11 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       `;
 
       const { rows: updatedRows } = await fastify.pg.query(updateQuery, [realizedPnl, closePrice, id]);
+
+      // Invalidate cache
+      const userId = (request as any).user.id;
+      await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+
       return updatedRows[0];
     }
   });
@@ -301,6 +331,9 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     } catch (err: any) {
       fastify.log.error({ err }, 'Failed to trigger immediate sync on reopen');
     }
+
+    // Invalidate cache
+    await redis.set(`USER_POSITIONS:${userId}`, '', 1);
 
     return rows[0];
   });
@@ -360,6 +393,10 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     ];
 
     const { rows } = await fastify.pg.query(query, values);
+
+    // Invalidate cache
+    await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+
     return rows[0];
   });
 
@@ -400,6 +437,11 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       if (result.rowCount === 0) {
         return reply.code(404).send({ error: 'Position not found' });
       }
+
+      // Invalidate cache
+      await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+      await redis.set(`USER_STATS:${userId}`, '', 1);
+
       return reply.code(204).send();
     } catch (err: any) {
       fastify.log.error(err);
