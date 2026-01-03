@@ -51,6 +51,8 @@ export default function Dashboard() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
   const [marketStatus, setMarketStatus] = useState<{ open: boolean; marketHours: string } | null>(null);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   // Filter States
   const [tickerFilter, setTickerFilter] = useState('');
@@ -102,8 +104,11 @@ export default function Dashboard() {
     try {
       const data = await api.getPositions();
       setPositions(data);
+      setLastRefreshed(new Date());
+      setRefreshError(null);
     } catch (err) {
-      console.error(err);
+      console.error('Failed to load positions:', err);
+      setRefreshError('Connection error');
     } finally {
       setLoading(false);
     }
@@ -193,10 +198,13 @@ export default function Dashboard() {
   async function handleForceSync() {
     try {
       setLoading(true);
+      setRefreshError(null);
       await api.forcePoll();
       await loadPositions();
+      setLastRefreshed(new Date());
     } catch (err) {
       console.error('Force sync failed:', err);
+      setRefreshError('Sync failed');
     } finally {
       setLoading(false);
     }
@@ -220,6 +228,28 @@ export default function Dashboard() {
                   <div className={`w-2 h-2 rounded-full ${marketStatus.open ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
                   <span className={`text-[10px] font-medium uppercase tracking-wider ${marketStatus.open ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                     Market {marketStatus.open ? 'Open' : 'Closed'}
+                  </span>
+                </div>
+              </>
+            )}
+            {lastRefreshed && (
+              <>
+                <span className="text-[10px] text-muted-foreground mr-1">|</span>
+                <div className="flex items-center gap-1.5">
+                  <Activity className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-[10px] text-muted-foreground">
+                    Refreshed at {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                </div>
+              </>
+            )}
+            {refreshError && (
+              <>
+                <span className="text-[10px] text-muted-foreground mr-1">|</span>
+                <div className="flex items-center gap-1.5 text-red-500 animate-pulse">
+                  <AlertTriangle className="h-3 w-3" />
+                  <span className="text-[10px] font-bold uppercase tracking-tighter">
+                    {refreshError}
                   </span>
                 </div>
               </>
