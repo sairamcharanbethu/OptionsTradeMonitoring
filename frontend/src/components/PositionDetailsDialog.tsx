@@ -3,19 +3,35 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw } from 'lucide-react';
+import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw, Activity, CheckCircle2, DollarSign, Hash } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Position, api } from '@/lib/api';
 import { parseLocalDate } from '@/lib/utils';
 
 interface PositionDetailsDialogProps {
     position: Position;
+    onCloseUpdate?: () => void;
 }
 
-export default function PositionDetailsDialog({ position: initialPosition }: PositionDetailsDialogProps) {
+export default function PositionDetailsDialog({ position: initialPosition, onCloseUpdate }: PositionDetailsDialogProps) {
     const [position, setPosition] = useState<Position>(initialPosition);
     const [analysis, setAnalysis] = useState<{ verdict: string, text: string } | null>(null);
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
+    const [isClosing, setIsClosing] = useState(false);
+    const [showCloseForm, setShowCloseForm] = useState(false);
+    const [salePrice, setSalePrice] = useState<string>('');
+    const [saleQty, setSaleQty] = useState<string>('');
+    const [closeError, setCloseError] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (position) {
+            setSalePrice(position.current_price?.toString() || '');
+            setSaleQty(position.quantity?.toString() || '');
+        }
+    }, [position, showCloseForm]);
 
     useEffect(() => {
         setPosition(initialPosition);
@@ -47,6 +63,33 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
             setAnalysis({ verdict: 'Error', text: 'Failed to generate analysis. Please try again.' });
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleClosePosition = async () => {
+        const price = parseFloat(salePrice);
+        const qty = parseInt(saleQty);
+
+        if (isNaN(price) || price <= 0) {
+            setCloseError('Please enter a valid sale price.');
+            return;
+        }
+        if (isNaN(qty) || qty <= 0 || qty > (position.quantity || 0)) {
+            setCloseError(`Please enter a quantity between 1 and ${position.quantity}.`);
+            return;
+        }
+
+        setIsClosing(true);
+        setCloseError(null);
+        try {
+            await api.closePosition(position.id, price, qty);
+            setShowCloseForm(false);
+            if (onCloseUpdate) onCloseUpdate();
+            handleRefresh();
+        } catch (err: any) {
+            setCloseError(err.message || 'Failed to close position');
+        } finally {
+            setIsClosing(false);
         }
     };
 
@@ -109,13 +152,13 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
                 </DialogHeader>
 
                 <Tabs defaultValue="details" className="w-full">
-                    <TabsList className="grid w-full grid-cols-2">
+                    <TabsList className="grid w-full grid-cols-3">
                         <TabsTrigger value="details">Details & Greeks</TabsTrigger>
+                        <TabsTrigger value="sims">Simulations</TabsTrigger>
                         <TabsTrigger value="ai">AI Analysis</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="details" className="space-y-6 py-4">
-                        {/* PERFORMANCE SECTION */}
                         <div className="space-y-3">
                             <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                                 <TrendingUp className="h-4 w-4" /> Position Performance
@@ -154,7 +197,6 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
                             </div>
                         </div>
 
-                        {/* GREEKS SECTION */}
                         <div className="space-y-3">
                             <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                                 <BrainCircuit className="h-4 w-4" /> Greeks & Volatility
@@ -183,7 +225,6 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
                             </div>
                         </div>
 
-                        {/* RISK MANAGEMENT SECTION */}
                         <div className="space-y-3">
                             <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                                 <ShieldAlert className="h-4 w-4" /> Risk Management
@@ -214,16 +255,82 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
                                 </div>
                             </div>
                         </div>
+                    </TabsContent>
 
-                        {/* META SECTION */}
-                        <div className="pt-4 border-t flex flex-col gap-1 text-[10px] text-muted-foreground">
-                            <div className="flex items-center gap-2">
-                                <Clock className="h-3 w-3" /> Last Updated: {new Date(position.updated_at).toLocaleString()}
+                    <TabsContent value="sims" className="space-y-4 py-4">
+                        <div className="p-4 bg-muted/30 rounded-lg border space-y-3">
+                            <div className="flex items-center justify-between">
+                                <h3 className="text-sm font-semibold flex items-center gap-2">
+                                    <Activity className="h-4 w-4 text-blue-500" />
+                                    PnL Simulation (What-If)
+                                </h3>
+                                {position.underlying_price && (
+                                    <Badge variant="outline" className="text-[10px]">
+                                        Ref Price: ${position.underlying_price.toFixed(2)}
+                                    </Badge>
+                                )}
                             </div>
-                            <div className="flex items-center gap-2">
-                                <Calendar className="h-3 w-3" /> Opened: {new Date(position.created_at).toLocaleString()}
-                            </div>
-                            <div>Internal ID: #{position.id}</div>
+                            <p className="text-[11px] text-muted-foreground leading-snug">
+                                Estimates potential returns based on stock price movements using Delta, Gamma, and Theta.
+                            </p>
+
+                            {!position.delta && (
+                                <div className="py-8 text-center text-sm text-muted-foreground">
+                                    Greeks are required for simulation. Please refresh the position.
+                                </div>
+                            )}
+
+                            {position.delta && !position.underlying_price && (
+                                <div className="py-8 text-center text-sm text-muted-foreground">
+                                    Underlying price is required for simulation. Please refresh the position to fetch market data.
+                                </div>
+                            )}
+
+                            {position.delta && position.underlying_price && (
+                                <div className="rounded-md border overflow-hidden">
+                                    <table className="w-full text-xs text-left border-collapse">
+                                        <thead className="bg-muted/50">
+                                            <tr>
+                                                <th className="p-2 border-b">Stock Move</th>
+                                                <th className="p-2 border-b">New Option Price</th>
+                                                <th className="p-2 border-b text-right">Estimated PnL</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {[-15, -10, -5, -2, 0, 2, 5, 10, 15].map((pct) => {
+                                                const stockPrice = position.underlying_price!;
+                                                const dS = stockPrice * (pct / 100);
+                                                const deltaEffect = (position.delta || 0) * dS;
+                                                const gammaEffect = 0.5 * (position.gamma || 0) * Math.pow(dS, 2);
+                                                const estOptionPrice = Math.max(0.01, (position.current_price || 0) + deltaEffect + gammaEffect);
+                                                const estMarketValue = estOptionPrice * (position.quantity || 1) * 100;
+                                                const estPnl = estMarketValue - (position.entry_price * (position.quantity || 1) * 100);
+                                                const estPnlPct = (estOptionPrice - position.entry_price) / position.entry_price * 100;
+
+                                                return (
+                                                    <tr key={pct} className={pct === 0 ? 'bg-primary/10 font-medium' : 'hover:bg-muted/20'}>
+                                                        <td className="p-2 border-b">
+                                                            <div className="flex items-center gap-1">
+                                                                {pct > 0 ? <TrendingUp className="h-3 w-3 text-green-500" /> : pct < 0 ? <TrendingDown className="h-3 w-3 text-red-500" /> : null}
+                                                                {pct === 0 ? 'Current Price' : `${pct > 0 ? '+' : ''}${pct}% ($${(stockPrice + dS).toFixed(2)})`}
+                                                            </div>
+                                                        </td>
+                                                        <td className="p-2 border-b font-mono">
+                                                            ${estOptionPrice.toFixed(2)}
+                                                        </td>
+                                                        <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                            {estPnl >= 0 ? '+' : ''}${estPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                                            <span className="text-[10px] ml-1 opacity-70">
+                                                                ({estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(1)}%)
+                                                            </span>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
                         </div>
                     </TabsContent>
 
@@ -273,6 +380,81 @@ export default function PositionDetailsDialog({ position: initialPosition }: Pos
                         )}
                     </TabsContent>
                 </Tabs>
+
+                {position.status !== 'CLOSED' && (
+                    <div className="mt-6 border-t pt-4">
+                        {!showCloseForm ? (
+                            <div className="flex justify-end">
+                                <Button
+                                    variant="outline"
+                                    className="gap-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                                    onClick={() => setShowCloseForm(true)}
+                                >
+                                    <CheckCircle2 className="h-4 w-4" />
+                                    Close Position Manual
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="space-y-4 bg-red-50/30 p-4 rounded-lg border border-red-100 dark:bg-red-900/10 dark:border-red-900/30">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="text-sm font-bold text-red-700 dark:text-red-400">Manual Position Close</h4>
+                                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setShowCloseForm(false)}>
+                                        <Activity className="h-3 w-3 rotate-45" />
+                                    </Button>
+                                </div>
+
+                                {closeError && (
+                                    <Alert variant="destructive" className="py-2 px-3">
+                                        <AlertDescription className="text-xs">{closeError}</AlertDescription>
+                                    </Alert>
+                                )}
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-1.5">
+                                        <Label htmlFor="salePrice" className="text-xs">Sale Price per Contract</Label>
+                                        <div className="relative">
+                                            <DollarSign className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
+                                            <Input
+                                                id="salePrice"
+                                                type="number"
+                                                step="0.01"
+                                                className="pl-7 h-9 text-sm"
+                                                value={salePrice}
+                                                onChange={(e) => setSalePrice(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label htmlFor="saleQty" className="text-xs">Quantity to Sell</Label>
+                                        <div className="relative">
+                                            <Hash className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
+                                            <Input
+                                                id="saleQty"
+                                                type="number"
+                                                className="pl-7 h-9 text-sm"
+                                                value={saleQty}
+                                                onChange={(e) => setSaleQty(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-end gap-2">
+                                    <Button variant="ghost" size="sm" onClick={() => setShowCloseForm(false)}>Cancel</Button>
+                                    <Button
+                                        size="sm"
+                                        className="bg-red-600 hover:bg-red-700 text-white gap-2"
+                                        onClick={handleClosePosition}
+                                        disabled={isClosing}
+                                    >
+                                        {isClosing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                                        Confirm Sale
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
             </DialogContent>
         </Dialog>
     );

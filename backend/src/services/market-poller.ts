@@ -122,8 +122,8 @@ export class MarketPoller {
 
       if (data && data.price !== null) {
         // console.log(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
-        console.log(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Greeks:`, data.greeks);
-        await this.processUpdate(position, data.price, data.greeks, data.iv);
+        console.log(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${data.underlying_price} Greeks:`, data.greeks);
+        await this.processUpdate(position, data.price, data.greeks, data.iv, data.underlying_price);
         lastFetchedPrice = data.price;
       }
     }
@@ -192,7 +192,7 @@ export class MarketPoller {
     }
   }
 
-  private async processUpdate(position: any, price: number, greeks?: any, iv?: number) {
+  private async processUpdate(position: any, price: number, greeks?: any, iv?: number, underlyingPrice?: number) {
     const engineResult = StopLossEngine.evaluate(price, {
       entry_price: Number(position.entry_price),
       stop_loss_trigger: Number(position.stop_loss_trigger),
@@ -210,8 +210,9 @@ export class MarketPoller {
            theta = $3,
            gamma = $4,
            vega = $5,
-           iv = $6
-       WHERE id = $7`,
+           iv = $6,
+           underlying_price = $7
+       WHERE id = $8`,
       [
         price,
         greeks?.delta || null,
@@ -219,6 +220,7 @@ export class MarketPoller {
         greeks?.gamma || null,
         greeks?.vega || null,
         iv || null,
+        underlyingPrice || null,
         position.id
       ]
     );

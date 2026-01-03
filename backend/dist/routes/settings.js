@@ -2,10 +2,12 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.settingsRoutes = settingsRoutes;
 async function settingsRoutes(fastify) {
+    fastify.addHook('onRequest', fastify.authenticate);
     // GET all settings
     fastify.get('/', async (request, reply) => {
+        const { id: userId } = request.user;
         try {
-            const { rows } = await fastify.pg.query('SELECT key, value FROM settings');
+            const { rows } = await fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
             const settings = rows.reduce((acc, row) => {
                 acc[row.key] = row.value;
                 return acc;
@@ -20,16 +22,17 @@ async function settingsRoutes(fastify) {
     });
     // UPDATE settings (Batch)
     fastify.post('/', async (request, reply) => {
+        const { id: userId } = request.user;
         const updates = request.body;
         try {
             const client = await fastify.pg.connect();
             try {
                 await client.query('BEGIN');
                 for (const [key, value] of Object.entries(updates)) {
-                    await client.query(`INSERT INTO settings (key, value, updated_at) 
-                         VALUES ($1, $2, CURRENT_TIMESTAMP) 
-                         ON CONFLICT (key) DO UPDATE 
-                         SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`, [key, value]);
+                    await client.query(`INSERT INTO settings (user_id, key, value, updated_at) 
+                         VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
+                         ON CONFLICT (user_id, key) DO UPDATE 
+                         SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`, [userId, key, value]);
                 }
                 await client.query('COMMIT');
                 return { status: 'ok', message: 'Settings updated' };
@@ -38,7 +41,7 @@ async function settingsRoutes(fastify) {
                 await client.query('ROLLBACK');
                 throw err;
             }
-            {
+            finally {
                 client.release();
             }
         }

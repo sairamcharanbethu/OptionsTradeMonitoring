@@ -27,6 +27,7 @@ export interface Position {
   gamma?: number;
   vega?: number;
   iv?: number;
+  underlying_price?: number;
 }
 
 const API_BASE = '/api';
@@ -178,6 +179,7 @@ export const api = {
       gamma: pos.gamma ? Number(pos.gamma) : undefined,
       vega: pos.vega ? Number(pos.vega) : undefined,
       iv: pos.iv ? Number(pos.iv) : undefined,
+      underlying_price: pos.underlying_price ? Number(pos.underlying_price) : undefined,
     }));
   },
 
@@ -206,10 +208,10 @@ export const api = {
     return res.json();
   },
 
-  async closePosition(id: number, price?: number): Promise<Position> {
+  async closePosition(id: number, price?: number, quantity?: number): Promise<Position> {
     const res = await authFetch(`${API_BASE}/positions/${id}/close`, {
       method: 'POST',
-      body: JSON.stringify({ price }),
+      body: JSON.stringify({ price, quantity }),
     });
     if (!res.ok) throw new Error('Failed to close position');
     return res.json();

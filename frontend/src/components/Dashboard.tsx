@@ -517,7 +517,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
-                              <PositionDetailsDialog position={pos} />
+                              <PositionDetailsDialog position={pos} onCloseUpdate={loadPositions} />
                               {(pos.status === 'STOP_TRIGGERED' || pos.status === 'PROFIT_TRIGGERED') && (
                                 <Button size="icon" variant="ghost" className="h-8 w-8 text-green-500 hover:text-green-600 hover:bg-green-50" onClick={() => api.closePosition(pos.id).then(loadPositions)}>
                                   <CheckCircle className="h-4 w-4" />

@@ -15,6 +15,7 @@ interface AIAnalysisRequest {
         vega: number | null;
         iv: number | null;
     };
+    underlying_price: number | null;
 }
 
 export class AIService {
@@ -161,6 +162,10 @@ Expires: ${data.expiration} (${daysToExp} days left)
 Entry: $${data.entry.toFixed(2)} → Current: $${data.price.toFixed(2)}
 P&L: ${pnl.toFixed(2)}%
 Delta: ${data.greeks.delta ?? 'N/A'} | Theta: ${data.greeks.theta ?? 'N/A'} | IV: ${data.greeks.iv ? data.greeks.iv.toFixed(2) + '%' : 'N/A'}
+Stock Reference Price: ${data.underlying_price ? '$' + data.underlying_price.toFixed(2) : 'N/A'}
+
+RISK SCENARIOS (Estimated PnL change):
+${this.buildScenarios(data)}
 
 ACTIONS:
 - HOLD: Keep position unchanged
@@ -204,6 +209,26 @@ YOUR RESPONSE (valid JSON only, no other text):
 {
   "verdict": "HOLD" | "CLOSE" | "ROLL",
   "reasoning": "Your detailed analysis here (2-3 sentences)"
+}
 }`;
+    }
+
+    private buildScenarios(data: AIAnalysisRequest): string {
+        if (!data.underlying_price || !data.greeks.delta) return 'Scenarios not available (missing Greeks or underlying price).';
+
+        const scenarios = [-10, -5, 5, 10];
+        return scenarios.map(pct => {
+            const underlying_price = data.underlying_price!;
+            const dS = underlying_price * (pct / 100);
+            const deltaEffect = (data.greeks.delta || 0) * dS;
+            const gammaEffect = 0.5 * (data.greeks.gamma || 0) * Math.pow(dS, 2);
+            const estNewPrice = Math.max(0.01, data.price + deltaEffect + gammaEffect);
+            const pnlChange = ((estNewPrice - data.price) / data.price) * 100;
+
+            const sign = pct > 0 ? '+' : '';
+            const pnlSign = pnlChange > 0 ? '+' : '';
+
+            return "- If stock moves " + sign + pct + "%: Option price becomes ~$" + estNewPrice.toFixed(2) + " (" + pnlSign + pnlChange.toFixed(1) + "% change from current)";
+        }).join('\n');
     }
 }

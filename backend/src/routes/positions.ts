@@ -136,7 +136,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
   fastify.post('/:id/close', async (request, reply) => {
     const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
-    const body = request.body as { price?: number } | undefined;
+    const body = request.body as { price?: number, quantity?: number } | undefined;
 
     // 1. Fetch Position and Verify Ownership
     const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
@@ -145,29 +145,60 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     }
     const position = rows[0];
 
-    // 2. Determine Close Price (Manual override or current market price)
+    // 2. Determine Close Price and Quantity
     const closePrice = body?.price !== undefined ? body.price : Number(position.current_price);
+    const closeQty = body?.quantity !== undefined ? body.quantity : Number(position.quantity);
+    const currentQty = Number(position.quantity);
 
-    // 3. Calculate Analytics
+    if (closeQty <= 0 || closeQty > currentQty) {
+      return reply.code(400).send({ error: 'Invalid quantity' });
+    }
+
+    // 3. Calculate Analytics for the closed portion
     const entryPrice = Number(position.entry_price);
-    const quantity = Number(position.quantity);
-    const realizedPnl = (closePrice - entryPrice) * quantity * 100; // Standard option multiplier
+    const realizedPnl = (closePrice - entryPrice) * closeQty * 100;
 
-    // Calculate loss avoided if it was a stop loss scenario? 
-    // For now, simpler is better. We just want realized PnL.
+    if (closeQty < currentQty) {
+      // PARTIAL CLOSE
+      // Update existing position to reflect remaining quantity
+      await fastify.pg.query(
+        'UPDATE positions SET quantity = quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [closeQty, id]
+      );
 
-    // 4. Update Position
-    const updateQuery = `
-      UPDATE positions 
-      SET status = 'CLOSED', 
-          realized_pnl = $1, 
-          updated_at = CURRENT_TIMESTAMP 
-      WHERE id = $2 
-      RETURNING *
-    `;
+      // Create a NEW closed position record for the sold portion
+      const insertQuery = `
+        INSERT INTO positions (
+          user_id, symbol, option_type, strike_price, expiration_date, 
+          entry_price, quantity, stop_loss_trigger, take_profit_trigger,
+          trailing_high_price, trailing_stop_loss_pct, current_price,
+          status, realized_pnl, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'CLOSED', $13, $14, CURRENT_TIMESTAMP)
+        RETURNING *
+      `;
+      const values = [
+        userId, position.symbol, position.option_type, position.strike_price, position.expiration_date,
+        position.entry_price, closeQty, position.stop_loss_trigger, position.take_profit_trigger,
+        position.trailing_high_price, position.trailing_stop_loss_pct, closePrice, realizedPnl, position.created_at
+      ];
 
-    const { rows: updatedRows } = await fastify.pg.query(updateQuery, [realizedPnl, id]);
-    return updatedRows[0];
+      const { rows: newRows } = await fastify.pg.query(insertQuery, values);
+      return newRows[0];
+    } else {
+      // FULL CLOSE
+      const updateQuery = `
+        UPDATE positions 
+        SET status = 'CLOSED', 
+            realized_pnl = $1, 
+            current_price = $2,
+            updated_at = CURRENT_TIMESTAMP 
+        WHERE id = $3 
+        RETURNING *
+      `;
+
+      const { rows: updatedRows } = await fastify.pg.query(updateQuery, [realizedPnl, closePrice, id]);
+      return updatedRows[0];
+    }
   });
 
   // REOPEN position (Manual)

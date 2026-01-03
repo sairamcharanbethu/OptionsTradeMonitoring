@@ -27,10 +27,27 @@ class MarketPoller {
     }
     constructOSITicker(symbol, strike, type, expiration) {
         // Format: AAPL230616C00150000
-        const date = new Date(expiration);
-        const YY = date.getUTCFullYear().toString().slice(-2);
-        const MM = (date.getUTCMonth() + 1).toString().padStart(2, '0');
-        const DD = date.getUTCDate().toString().padStart(2, '0');
+        // Use string parsing for expiration to avoid timezone shifts
+        // Expecting YYYY-MM-DD (Date object or string)
+        let dateStr = '';
+        if (expiration instanceof Date) {
+            // Format to YYYY-MM-DD manually to avoid timezone shift from .toISOString()
+            const year = expiration.getFullYear();
+            const month = (expiration.getMonth() + 1).toString().padStart(2, '0');
+            const day = expiration.getDate().toString().padStart(2, '0');
+            dateStr = `${year}-${month}-${day}`;
+        }
+        else {
+            dateStr = expiration.split('T')[0];
+        }
+        const parts = dateStr.split('-');
+        if (parts.length !== 3) {
+            console.warn(`[MarketPoller] Invalid expiration date format: ${expiration}`);
+            return `${symbol.toUpperCase()}XXXXXX${type === 'CALL' ? 'C' : 'P'}${Math.round(strike * 1000).toString().padStart(8, '0')}`;
+        }
+        const YY = parts[0].slice(-2);
+        const MM = parts[1].padStart(2, '0');
+        const DD = parts[2].padStart(2, '0');
         const side = type === 'CALL' ? 'C' : 'P';
         const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
         return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
@@ -72,18 +89,27 @@ class MarketPoller {
         });
     }
     async syncPrice(symbol) {
-        const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE symbol = $1 AND status = 'OPEN'", [symbol]);
-        if (positions.length === 0)
+        console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
+        const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE symbol = $1 AND status != 'CLOSED'", [symbol]);
+        if (positions.length === 0) {
+            console.log(`[MarketPoller] No active or triggered positions found for ${symbol}.`);
             return null;
+        }
         let lastFetchedPrice = null;
         for (const position of positions) {
             const data = await this.getOptionPremium(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
             if (data && data.price !== null) {
                 // console.log(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
-                console.log(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Greeks:`, data.greeks);
-                await this.processUpdate(position, data.price, data.greeks, data.iv);
+                console.log(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${data.underlying_price} Greeks:`, data.greeks);
+                await this.processUpdate(position, data.price, data.greeks, data.iv, data.underlying_price);
                 lastFetchedPrice = data.price;
             }
+        }
+        if (lastFetchedPrice !== null) {
+            console.log(`[MarketPoller] TARGETED Sync for ${symbol} completed successfully.`);
+        }
+        else {
+            console.warn(`[MarketPoller] TARGETED Sync for ${symbol} failed or no positions were updated.`);
         }
         return lastFetchedPrice;
     }
@@ -117,8 +143,8 @@ class MarketPoller {
             return;
         }
         console.log(`[MarketPoller] ${force ? 'FORCED ' : ''}Polling option premiums via yfinance at ${new Date().toISOString()}...`);
-        // Poll both OPEN and STOP_TRIGGERED positions so user sees up-to-date price before engaging manual close
-        const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE status IN ('OPEN', 'STOP_TRIGGERED')");
+        // Poll all non-CLOSED positions so user sees up-to-date price until they manually close
+        const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE status != 'CLOSED'");
         if (positions.length === 0) {
             console.log('[MarketPoller] No active positions to poll.');
             return;
@@ -130,7 +156,7 @@ class MarketPoller {
             await new Promise(resolve => setTimeout(resolve, 5000));
         }
     }
-    async processUpdate(position, price, greeks, iv) {
+    async processUpdate(position, price, greeks, iv, underlyingPrice) {
         const engineResult = stop_loss_engine_1.StopLossEngine.evaluate(price, {
             entry_price: Number(position.entry_price),
             stop_loss_trigger: Number(position.stop_loss_trigger),
@@ -146,14 +172,16 @@ class MarketPoller {
            theta = $3,
            gamma = $4,
            vega = $5,
-           iv = $6
-       WHERE id = $7`, [
+           iv = $6,
+           underlying_price = $7
+       WHERE id = $8`, [
             price,
             greeks?.delta || null,
             greeks?.theta || null,
             greeks?.gamma || null,
             greeks?.vega || null,
             iv || null,
+            underlyingPrice || null,
             position.id
         ]);
         await this.fastify.pg.query('INSERT INTO price_history (position_id, price) VALUES ($1, $2)', [position.id, price]);

@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.marketRoutes = marketRoutes;
 async function marketRoutes(fastify, options) {
+    fastify.addHook('onRequest', fastify.authenticate);
     fastify.get('/status', async (request, reply) => {
         try {
             const poller = fastify.poller;
