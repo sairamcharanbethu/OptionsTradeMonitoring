@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw, Activity, CheckCircle2, DollarSign, Hash } from 'lucide-react';
+import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw, Activity, CheckCircle2, DollarSign, Hash, XCircle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -21,7 +21,6 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
     const [loading, setLoading] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
     const [isClosing, setIsClosing] = useState(false);
-    const [showCloseForm, setShowCloseForm] = useState(false);
     const [salePrice, setSalePrice] = useState<string>('');
     const [saleQty, setSaleQty] = useState<string>('');
     const [closeError, setCloseError] = useState<string | null>(null);
@@ -31,7 +30,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
             setSalePrice(position.current_price?.toString() || '');
             setSaleQty(position.quantity?.toString() || '');
         }
-    }, [position, showCloseForm]);
+    }, [position]);
 
     useEffect(() => {
         setPosition(initialPosition);
@@ -83,7 +82,6 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
         setCloseError(null);
         try {
             await api.closePosition(position.id, price, qty);
-            setShowCloseForm(false);
             if (onCloseUpdate) onCloseUpdate();
             handleRefresh();
         } catch (err: any) {
@@ -152,10 +150,11 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                 </DialogHeader>
 
                 <Tabs defaultValue="details" className="w-full">
-                    <TabsList className="grid w-full grid-cols-3">
+                    <TabsList className="grid w-full grid-cols-4">
                         <TabsTrigger value="details">Details & Greeks</TabsTrigger>
                         <TabsTrigger value="sims">Simulations</TabsTrigger>
                         <TabsTrigger value="ai">AI Analysis</TabsTrigger>
+                        <TabsTrigger value="close" className="text-red-600 dark:text-red-400 font-bold">Close Trade</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="details" className="space-y-6 py-4">
@@ -379,82 +378,78 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             </div>
                         )}
                     </TabsContent>
-                </Tabs>
 
-                {position.status !== 'CLOSED' && (
-                    <div className="mt-6 border-t pt-4">
-                        {!showCloseForm ? (
-                            <div className="flex justify-end">
-                                <Button
-                                    variant="outline"
-                                    className="gap-2 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-                                    onClick={() => setShowCloseForm(true)}
-                                >
-                                    <CheckCircle2 className="h-4 w-4" />
-                                    Close Position Manual
-                                </Button>
+                    <TabsContent value="close" className="space-y-4 py-4">
+                        {position.status === 'CLOSED' ? (
+                            <div className="flex flex-col items-center justify-center h-[200px] text-center space-y-4">
+                                <CheckCircle2 className="h-12 w-12 text-green-500 opacity-30" />
+                                <div className="text-sm text-muted-foreground">This position is already closed.</div>
                             </div>
                         ) : (
-                            <div className="space-y-4 bg-red-50/30 p-4 rounded-lg border border-red-100 dark:bg-red-900/10 dark:border-red-900/30">
-                                <div className="flex items-center justify-between">
-                                    <h4 className="text-sm font-bold text-red-700 dark:text-red-400">Manual Position Close</h4>
-                                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setShowCloseForm(false)}>
-                                        <Activity className="h-3 w-3 rotate-45" />
-                                    </Button>
-                                </div>
+                            <div className="space-y-6">
+                                <div className="p-4 bg-red-50/30 rounded-lg border border-red-100 dark:bg-red-900/10 dark:border-red-900/30">
+                                    <div className="flex items-center gap-2 mb-4">
+                                        <XCircle className="h-5 w-5 text-red-600" />
+                                        <h4 className="text-sm font-bold text-red-700 dark:text-red-400">Manual Position Close</h4>
+                                    </div>
 
-                                {closeError && (
-                                    <Alert variant="destructive" className="py-2 px-3">
-                                        <AlertDescription className="text-xs">{closeError}</AlertDescription>
-                                    </Alert>
-                                )}
+                                    {closeError && (
+                                        <Alert variant="destructive" className="mb-4 py-2 px-3">
+                                            <AlertDescription className="text-xs">{closeError}</AlertDescription>
+                                        </Alert>
+                                    )}
 
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-1.5">
-                                        <Label htmlFor="salePrice" className="text-xs">Sale Price per Contract</Label>
-                                        <div className="relative">
-                                            <DollarSign className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
-                                            <Input
-                                                id="salePrice"
-                                                type="number"
-                                                step="0.01"
-                                                className="pl-7 h-9 text-sm"
-                                                value={salePrice}
-                                                onChange={(e) => setSalePrice(e.target.value)}
-                                            />
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="salePrice" className="text-xs font-semibold">Sale Price (per contract)</Label>
+                                            <div className="relative">
+                                                <DollarSign className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                                <Input
+                                                    id="salePrice"
+                                                    type="number"
+                                                    step="0.01"
+                                                    className="pl-9 h-10"
+                                                    value={salePrice}
+                                                    onChange={(e) => setSalePrice(e.target.value)}
+                                                    placeholder="0.00"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="saleQty" className="text-xs font-semibold">Quantity to Sell (Max: {position.quantity})</Label>
+                                            <div className="relative">
+                                                <Hash className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                                                <Input
+                                                    id="saleQty"
+                                                    type="number"
+                                                    className="pl-9 h-10"
+                                                    value={saleQty}
+                                                    onChange={(e) => setSaleQty(e.target.value)}
+                                                    placeholder="1"
+                                                />
+                                            </div>
                                         </div>
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <Label htmlFor="saleQty" className="text-xs">Quantity to Sell</Label>
-                                        <div className="relative">
-                                            <Hash className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
-                                            <Input
-                                                id="saleQty"
-                                                type="number"
-                                                className="pl-7 h-9 text-sm"
-                                                value={saleQty}
-                                                onChange={(e) => setSaleQty(e.target.value)}
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
 
-                                <div className="flex justify-end gap-2">
-                                    <Button variant="ghost" size="sm" onClick={() => setShowCloseForm(false)}>Cancel</Button>
-                                    <Button
-                                        size="sm"
-                                        className="bg-red-600 hover:bg-red-700 text-white gap-2"
-                                        onClick={handleClosePosition}
-                                        disabled={isClosing}
-                                    >
-                                        {isClosing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                                        Confirm Sale
-                                    </Button>
+                                    <div className="mt-6 flex flex-col gap-3">
+                                        <div className="text-[10px] text-muted-foreground bg-muted/50 p-2 rounded">
+                                            Selling <strong>{saleQty}</strong> contracts at <strong>${salePrice}</strong> will result in a realized PnL of
+                                            <strong> ${((parseFloat(salePrice) - position.entry_price) * parseInt(saleQty || '0') * 100).toFixed(2)}</strong>.
+                                        </div>
+                                        <Button
+                                            className="w-full bg-red-600 hover:bg-red-700 text-white h-11 gap-2 text-base font-bold"
+                                            onClick={handleClosePosition}
+                                            disabled={isClosing}
+                                        >
+                                            {isClosing ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
+                                            Execute Close Order
+                                        </Button>
+                                    </div>
                                 </div>
                             </div>
                         )}
-                    </div>
-                )}
+                    </TabsContent>
+                </Tabs>
             </DialogContent>
         </Dialog>
     );
