@@ -271,12 +271,23 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     return result;
   }, [positions, debouncedTicker, statusFilter, sortConfig]);
 
-  const toggleSort = (key: 'symbol' | 'dte' | 'pnl') => {
+  const toggleSort = (key: 'symbol' | 'dte' | 'pnl' | 'pnl_desc' | 'dte_asc') => {
     setSortConfig(current => {
-      if (current?.key === key) {
-        return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+      // If using the dropdown keys (with direction suffix)
+      if (key === 'pnl_desc') return { key: 'pnl', direction: 'desc' };
+      if (key === 'dte_asc') return { key: 'dte', direction: 'asc' };
+      if (key === 'symbol') {
+        if (current?.key === 'symbol') {
+          return { key: 'symbol', direction: current.direction === 'asc' ? 'desc' : 'asc' };
+        }
+        return { key: 'symbol', direction: 'asc' };
       }
-      return { key, direction: 'asc' };
+
+      // Default table header toggle logic
+      if (current?.key === key) {
+        return { key: key as any, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key: key as any, direction: 'asc' };
     });
   };
 
@@ -518,6 +529,28 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                       </SelectContent>
                     </Select>
 
+
+                    {/* Sort Select */}
+                    <Select
+                      value={sortConfig ? `${sortConfig.key}_${sortConfig.direction}` : ''}
+                      onValueChange={(val) => {
+                        if (val === 'symbol_asc') setSortConfig({ key: 'symbol', direction: 'asc' });
+                        if (val === 'dte_asc') setSortConfig({ key: 'dte', direction: 'asc' });
+                        if (val === 'pnl_desc') setSortConfig({ key: 'pnl', direction: 'desc' });
+                      }}
+                    >
+                      <SelectTrigger className="h-9 text-xs w-[140px]">
+                        <div className="flex items-center gap-2">
+                          <ArrowUpDown className="h-3 w-3 text-muted-foreground" />
+                          <SelectValue placeholder="Sort By" />
+                        </div>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="dte_asc">Nearest Expiry</SelectItem>
+                        <SelectItem value="symbol_asc">Symbol (A-Z)</SelectItem>
+                        <SelectItem value="pnl_desc">Highest PnL</SelectItem>
+                      </SelectContent>
+                    </Select>
 
                     {(tickerFilter || statusFilter !== 'ALL') && (
                       <Button
