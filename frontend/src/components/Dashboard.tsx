@@ -791,7 +791,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                           <span className="text-blue-500 font-medium text-xs">${Number(pos.loss_avoided || 0).toFixed(2)}</span>
                         </TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="sm" className="h-7 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity" onClick={() => api.reopenPosition(pos.id).then(loadPositions)}>
+                          <Button variant="ghost" size="sm" className="h-7 text-[10px] transition-opacity hover:bg-primary/10 hover:text-primary" onClick={() => api.reopenPosition(pos.id).then(loadPositions)}>
                             <RefreshCw className="h-3 w-3 mr-1" /> Reopen
                           </Button>
                         </TableCell>

@@ -119,25 +119,27 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
             </DialogTrigger>
             <DialogContent className="sm:max-w-[650px] max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                    <div className="flex items-center justify-between pr-8">
-                        <DialogTitle className="flex items-center gap-2">
-                            <span className="font-bold">{position.symbol}</span>
-                            <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="uppercase">
-                                {position.option_type} ${position.strike_price}
-                            </Badge>
-                            <Badge variant="outline" className={cn("pnl-pulse", isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50')}>
-                                {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
-                            </Badge>
+                    <div className="flex items-start justify-between gap-4">
+                        <DialogTitle className="flex flex-wrap items-center gap-2 pr-4">
+                            <span className="font-bold text-lg sm:text-xl">{position.symbol}</span>
+                            <div className="flex gap-1.5 flex-wrap">
+                                <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="uppercase text-[10px] h-5">
+                                    {position.option_type} ${position.strike_price}
+                                </Badge>
+                                <Badge variant="outline" className={cn("pnl-pulse text-[10px] h-5", isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50')}>
+                                    {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
+                                </Badge>
+                            </div>
                         </DialogTitle>
                         <Button
                             variant="outline"
                             size="sm"
-                            className="h-7 w-7 p-0"
+                            className="h-8 w-8 p-0 shrink-0"
                             onClick={handleRefresh}
                             disabled={refreshing}
                             title="Force Refresh Data"
                         >
-                            <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} />
+                            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
                         </Button>
                     </div>
                     <div className="flex items-center justify-between">
@@ -151,11 +153,11 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                 </DialogHeader>
 
                 <Tabs defaultValue="details" className="w-full">
-                    <TabsList className="grid w-full grid-cols-4">
-                        <TabsTrigger value="details">Details & Greeks</TabsTrigger>
-                        <TabsTrigger value="sims">Simulations</TabsTrigger>
-                        <TabsTrigger value="ai">AI Analysis</TabsTrigger>
-                        <TabsTrigger value="close" className="text-red-600 dark:text-red-400 font-bold">Close Trade</TabsTrigger>
+                    <TabsList className="flex flex-wrap h-auto p-1 bg-muted/50 rounded-lg gap-1">
+                        <TabsTrigger value="details" className="flex-1 min-w-[120px] text-xs py-2">Details & Greeks</TabsTrigger>
+                        <TabsTrigger value="sims" className="flex-1 min-w-[100px] text-xs py-2">Simulations</TabsTrigger>
+                        <TabsTrigger value="ai" className="flex-1 min-w-[100px] text-xs py-2">AI Analysis</TabsTrigger>
+                        <TabsTrigger value="close" className="flex-1 min-w-[100px] text-xs py-2 text-red-600 dark:text-red-400 font-bold">Close Trade</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="details" className="space-y-6 py-4">
@@ -163,34 +165,34 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                                 <TrendingUp className="h-4 w-4" /> Position Performance
                             </div>
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                                <div className="p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-xs text-muted-foreground">Entry Price</div>
-                                    <div className="text-lg font-mono font-medium">{formatCurrency(position.entry_price)}</div>
+                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+                                <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Entry Price</div>
+                                    <div className="text-base sm:text-lg font-mono font-bold tracking-tight">{formatCurrency(position.entry_price)}</div>
                                 </div>
-                                <div className="p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-xs text-muted-foreground">Current Price</div>
-                                    <div className={`text-lg font-mono font-medium ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
+                                <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Current Price</div>
+                                    <div className={cn("text-base sm:text-lg font-mono font-bold tracking-tight", isProfit ? 'text-green-600' : 'text-red-600')}>
                                         {formatCurrency(position.current_price)}
                                     </div>
                                 </div>
-                                <div className="p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-xs text-muted-foreground">Break Even</div>
-                                    <div className="text-lg font-mono font-medium underline decoration-dotted underline-offset-4">
+                                <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Break Even</div>
+                                    <div className="text-base sm:text-lg font-mono font-bold tracking-tight underline decoration-dotted underline-offset-4">
                                         {formatCurrency(breakEven)}
                                     </div>
                                 </div>
-                                <div className="p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-xs text-muted-foreground">Market Value</div>
-                                    <div className="text-lg font-mono font-medium">{formatCurrency(marketValue / 100)}</div>
+                                <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Market Value</div>
+                                    <div className="text-base sm:text-lg font-mono font-bold tracking-tight">{formatCurrency(marketValue / 100)}</div>
                                 </div>
-                                <div className="p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-xs text-muted-foreground">Contracts</div>
-                                    <div className="text-lg font-mono font-medium">{position.quantity}</div>
+                                <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Contracts</div>
+                                    <div className="text-base sm:text-lg font-mono font-bold tracking-tight">{position.quantity}</div>
                                 </div>
-                                <div className="p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-xs text-muted-foreground">Total Open P&L</div>
-                                    <div className={cn("text-lg font-mono font-bold pnl-pulse", isProfit ? 'text-green-600' : 'text-red-600')}>
+                                <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
+                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Total Open P&L</div>
+                                    <div className={cn("text-base sm:text-lg font-mono font-bold pnl-pulse tracking-tight", isProfit ? 'text-green-600' : 'text-red-600')}>
                                         {unrealizedPnl > 0 ? '+' : ''}{formatCurrency(unrealizedPnl)}
                                     </div>
                                 </div>
@@ -229,24 +231,24 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                                 <ShieldAlert className="h-4 w-4" /> Risk Management
                             </div>
-                            <div className="grid grid-cols-3 gap-4">
-                                <div className="p-3 rounded-lg border bg-background">
-                                    <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <div className="p-2 sm:p-3 rounded-lg border bg-background">
+                                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
                                         <TrendingDown className="h-3 w-3" /> Stop Loss
                                     </div>
-                                    <div className="font-mono font-medium">{formatCurrency(position.stop_loss_trigger)}</div>
+                                    <div className="font-mono font-bold">{formatCurrency(position.stop_loss_trigger)}</div>
                                 </div>
-                                <div className="p-3 rounded-lg border bg-background">
-                                    <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                                <div className="p-2 sm:p-3 rounded-lg border bg-background">
+                                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
                                         <Target className="h-3 w-3" /> Take Profit
                                     </div>
-                                    <div className="font-mono font-medium">{formatCurrency(position.take_profit_trigger)}</div>
+                                    <div className="font-mono font-bold">{formatCurrency(position.take_profit_trigger)}</div>
                                 </div>
-                                <div className="p-3 rounded-lg border bg-background">
-                                    <div className="flex items-center gap-1 text-xs text-muted-foreground mb-1">
+                                <div className="p-2 sm:p-3 rounded-lg border bg-background">
+                                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
                                         <TrendingUp className="h-3 w-3" /> Trailing Stop
                                     </div>
-                                    <div className="font-mono font-medium">
+                                    <div className="font-mono font-bold text-blue-500">
                                         {position.trailing_stop_loss_pct ? `${position.trailing_stop_loss_pct}%` : '-'}
                                     </div>
                                     {position.trailing_high_price && (
