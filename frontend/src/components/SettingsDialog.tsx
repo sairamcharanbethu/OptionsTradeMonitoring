@@ -24,6 +24,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [provider, setProvider] = useState('ollama');
     const [openRouterKey, setOpenRouterKey] = useState('');
     const [model, setModel] = useState('mistral:7b-instruct-q4_K_M');
+    const [briefingFrequency, setBriefingFrequency] = useState('disabled');
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -56,6 +57,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setProvider(data.ai_provider || 'ollama');
             setOpenRouterKey(data.openrouter_key || '');
             setModel(data.ai_model || 'mistral:7b-instruct-q4_K_M');
+            setBriefingFrequency(data.briefing_frequency || 'disabled');
         } catch (err) {
             console.error(err);
         } finally {
@@ -114,7 +116,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             await api.updateSettings({
                 ai_provider: provider,
                 openrouter_key: openRouterKey,
-                ai_model: model
+                ai_model: model,
+                briefing_frequency: briefingFrequency
             });
             setOpen(false);
         } catch (err) {
@@ -188,6 +191,26 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 onChange={(e) => setModel(e.target.value)}
                                                 placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3-haiku'}
                                             />
+                                        </div>
+
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="frequency">Morning Briefing Frequency</Label>
+                                            <Select value={briefingFrequency} onValueChange={setBriefingFrequency}>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Select Frequency" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="disabled">Disabled</SelectItem>
+                                                    <SelectItem value="daily">Daily (Mon-Sun)</SelectItem>
+                                                    <SelectItem value="every_2_days">Every 2 Days</SelectItem>
+                                                    <SelectItem value="monday">Every Monday</SelectItem>
+                                                    <SelectItem value="friday">Every Friday</SelectItem>
+                                                    <SelectItem value="weekly">Weekly (Monday)</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            <p className="text-[10px] text-muted-foreground">
+                                                AI-generated portfolio summary sent to Discord at 8:30 AM ET.
+                                            </p>
                                         </div>
                                     </div>
                                     <Button className="w-full mt-2" onClick={handleSaveSettings} disabled={saving || loading}>
