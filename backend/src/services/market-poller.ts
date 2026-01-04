@@ -44,8 +44,8 @@ export class MarketPoller {
     });
   }
 
-  public async sendMorningBriefings() {
-    console.log('[MarketPoller] Executing morning briefings...');
+  public async sendMorningBriefings(ignoreFrequency: boolean = false) {
+    console.log(`[MarketPoller] Executing morning briefings (ignoreFrequency: ${ignoreFrequency})...`);
     const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT user_id FROM positions');
 
     for (const { user_id: userId } of users) {
@@ -61,10 +61,10 @@ export class MarketPoller {
         }, {});
 
         const frequency = settings.briefing_frequency || 'disabled';
-        if (frequency === 'disabled') continue;
+        if (!ignoreFrequency && frequency === 'disabled') continue;
 
         // 2. Decide if we should send it today
-        if (!this.shouldSendBriefingToday(frequency)) continue;
+        if (!ignoreFrequency && !this.shouldSendBriefingToday(frequency)) continue;
 
         // 3. Fetch open positions
         const { rows: positions } = await this.fastify.pg.query(
