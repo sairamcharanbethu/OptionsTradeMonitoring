@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Position, api } from '@/lib/api';
-import { parseLocalDate } from '@/lib/utils';
+import { cn, parseLocalDate } from '@/lib/utils';
 
 interface PositionDetailsDialogProps {
     position: Position;
@@ -125,7 +125,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="uppercase">
                                 {position.option_type} ${position.strike_price}
                             </Badge>
-                            <Badge variant="outline" className={isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50'}>
+                            <Badge variant="outline" className={cn("pnl-pulse", isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50')}>
                                 {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
                             </Badge>
                         </DialogTitle>
@@ -190,7 +190,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                 </div>
                                 <div className="p-3 bg-muted/30 rounded-lg border">
                                     <div className="text-xs text-muted-foreground">Total Open P&L</div>
-                                    <div className={`text-lg font-mono font-bold ${isProfit ? 'text-green-600' : 'text-red-600'}`}>
+                                    <div className={cn("text-lg font-mono font-bold pnl-pulse", isProfit ? 'text-green-600' : 'text-red-600')}>
                                         {unrealizedPnl > 0 ? '+' : ''}{formatCurrency(unrealizedPnl)}
                                     </div>
                                 </div>
@@ -391,14 +391,14 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                                         return (
                                                             <div
                                                                 key={pct}
-                                                                className={`h-10 flex flex-col items-center justify-center rounded text-[9px] font-mono border border-black/5 transition-opacity hover:ring-1 hover:ring-primary`}
+                                                                className={`h-9 flex flex-col items-center justify-center rounded text-[8px] sm:text-[9px] font-mono border border-black/5 transition-premium hover:ring-1 hover:ring-primary`}
                                                                 style={{
                                                                     backgroundColor: estPnlPct >= 0 ? `rgba(34, 197, 94, ${opacity})` : `rgba(239, 68, 68, ${opacity})`,
                                                                     color: opacity > 0.6 ? 'white' : 'inherit'
                                                                 }}
                                                                 title={`Price: $${estOptionPrice.toFixed(2)} | PnL: ${estPnlPct.toFixed(1)}%`}
                                                             >
-                                                                <div>{estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(0)}%</div>
+                                                                <div className="font-bold">{estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(0)}%</div>
                                                             </div>
                                                         );
                                                     })}
