@@ -328,13 +328,28 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <TabsList className="order-2 sm:order-1">
+            <TabsList className="hidden sm:flex order-2 sm:order-1">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
               {user.role === 'ADMIN' && (
                 <TabsTrigger value="users">Users</TabsTrigger>
               )}
             </TabsList>
+            {/* Mobile Dropdown */}
+            <div className="sm:hidden order-2">
+              <Select value={activeTab} onValueChange={setActiveTab}>
+                <SelectTrigger className="h-9 w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="overview">Overview</SelectItem>
+                  <SelectItem value="portfolio">Portfolio</SelectItem>
+                  {user.role === 'ADMIN' && (
+                    <SelectItem value="users">Users</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
             <SettingsDialog user={user} onUpdate={onUserUpdate} />
             <Button variant="outline" size="sm" className="hidden sm:flex gap-1 text-xs" onClick={handleForceSync} disabled={loading}>
               <Zap className={`h - 3 w - 3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'} `} />
