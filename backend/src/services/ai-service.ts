@@ -30,14 +30,36 @@ export class AIService {
         this.model = process.env.AI_MODEL || 'mistral:7b-instruct-q4_K_M';
     }
 
-    async generateAnalysis(data: AIAnalysisRequest): Promise<{ verdict: string; analysis: string }> {
-        try {
-            const prompt = this.buildPrompt(data);
+    async generateAlertSummary(data: any): Promise<{ summary: string; discord_message: string }> {
+        const prompt = `Option Alert: ${data.symbol} ${data.type} ${data.strike} Exp: ${data.expiration}
+Event: ${data.event}
+Price: $${data.price} (PnL: ${data.pnl}%)
+Greeks: ${JSON.stringify(data.greeks)}
 
+Task: Concise summary (20 words) + Discord message (markdown, emoji).
+Format: JSON { "verdict": "...", "analysis": "...", "discord": "..." }`;
+
+        const response = await this.generateAnalysisInternal(prompt);
+        return {
+            summary: response.analysis,
+            discord_message: response.discord || response.analysis
+        };
+    }
+
+    async generateAnalysis(data: AIAnalysisRequest): Promise<{ verdict: string; analysis: string }> {
+        const prompt = this.buildPrompt(data);
+        const response = await this.generateAnalysisInternal(prompt);
+        return {
+            verdict: response.verdict,
+            analysis: response.analysis
+        };
+    }
+
+    private async generateAnalysisInternal(prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
+        try {
             // 1. Fetch settings from DB
             let currentProvider = 'ollama';
             let openRouterKey = '';
-            // Default model is already set in constructor but can be overridden by DB
             let currentModel = this.model;
 
             try {
@@ -57,9 +79,7 @@ export class AIService {
 
             // 2. Route based on provider
             if (currentProvider === 'openrouter') {
-                if (!openRouterKey) {
-                    throw new Error('OpenRouter selected but no API Key found in settings.');
-                }
+                if (!openRouterKey) throw new Error('OpenRouter selected but no API Key found.');
                 return this.callOpenRouter(currentModel, openRouterKey, prompt);
             } else {
                 return this.callOllama(currentModel, prompt);
@@ -71,31 +91,32 @@ export class AIService {
         }
     }
 
-    private async callOpenRouter(model: string, apiKey: string, prompt: string): Promise<{ verdict: string; analysis: string }> {
-        console.log(`[AIService] Using OpenRouter with model: ${model}`);
+    private async callOpenRouter(model: string, apiKey: string, prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
+        console.log(`[AIService] Using OpenRouter (${model}) [Token Efficient]`);
 
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${apiKey}`,
-                'HTTP-Referer': 'http://localhost:3000', // Client ID for OpenRouter rankings
+                'HTTP-Referer': 'http://localhost:3000',
                 'X-Title': 'OptionsTradeMonitor',
                 'Content-Type': 'application/json'
             },
             body: JSON.stringify({
                 model: model,
                 messages: [
-                    { role: 'system', content: 'You are a concise options trading advisor. Respond ONLY with valid JSON. Be direct and specific with numbers. Sound like a trader texting advice, not writing a report.' },
+                    { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON. Keep messages short.' },
                     { role: 'user', content: prompt }
                 ],
-                response_format: { type: 'json_object' }, // OpenRouter/OpenAI standard for JSON
-                temperature: 0
+                response_format: { type: 'json_object' },
+                temperature: 0,
+                max_tokens: 300 // Token efficiency
             })
         });
 
         if (!response.ok) {
             const errText = await response.text();
-            throw new Error(`OpenRouter API Error: ${response.status} - ${errText}`);
+            throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
         }
 
         const data = await response.json();
@@ -105,32 +126,34 @@ export class AIService {
             const parsed = JSON.parse(text);
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.reasoning || parsed.analysis || text
+                analysis: parsed.reasoning || parsed.analysis || parsed.summary || text,
+                discord: parsed.discord
             };
         } catch (e) {
             return { verdict: 'Review', analysis: text };
         }
     }
 
-    private async callOllama(model: string, prompt: string): Promise<{ verdict: string; analysis: string }> {
-        console.log(`[AIService] Using Ollama (${this.ollamaUrl}) with model: ${model}`);
+    private async callOllama(model: string, prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
+        console.log(`[AIService] Using Ollama (${model}) [Token Efficient]`);
 
         const response = await fetch(`${this.ollamaUrl}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: model,
-                prompt: prompt,
+                prompt: `You are a concise trading bot. Respond ONLY with valid JSON. Keep messages short.\n\n${prompt}`,
                 stream: false,
                 format: 'json',
                 options: {
-                    temperature: 0
+                    temperature: 0,
+                    num_predict: 300 // Token efficiency
                 }
             })
         });
 
         if (!response.ok) {
-            throw new Error(`Ollama API Error: ${response.status} ${response.statusText}`);
+            throw new Error(`Ollama Error: ${response.status} ${response.statusText}`);
         }
 
         const result = await response.json();
@@ -140,7 +163,8 @@ export class AIService {
             const parsed = JSON.parse(text);
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.reasoning || parsed.analysis || text
+                analysis: parsed.reasoning || parsed.analysis || parsed.summary || text,
+                discord: parsed.discord
             };
         } catch (e) {
             return {

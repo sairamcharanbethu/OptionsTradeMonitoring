@@ -3,12 +3,15 @@ import { FastifyInstance } from 'fastify';
 import { spawn } from 'child_process';
 import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
+import { AIService } from './ai-service';
 
 export class MarketPoller {
   private fastify: FastifyInstance;
+  private aiService: AIService;
 
   constructor(fastify: FastifyInstance) {
     this.fastify = fastify;
+    this.aiService = new AIService(fastify);
   }
 
   public start() {
@@ -271,7 +274,31 @@ export class MarketPoller {
           [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]
         );
 
-        this.notifyN8n(position, price, 0, engineResult.lossAvoided, triggerType);
+        // Generate AI Summary for the alert (Discord Message)
+        let aiData = { summary: '', discord_message: '' };
+        try {
+          aiData = await this.aiService.generateAlertSummary({
+            symbol: position.symbol,
+            type: position.option_type,
+            strike: position.strike_price,
+            expiration: position.expiration_date,
+            event: triggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+            price: price,
+            pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
+            greeks: {
+              delta: position.delta,
+              theta: position.theta,
+              iv: position.iv
+            }
+          });
+        } catch (err) {
+          console.error('[MarketPoller] AI Summary generation failed:', err);
+        }
+
+        // Calculate realized PnL
+        const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
+
+        this.notifyN8n(position, price, realizedPnl, engineResult.lossAvoided, triggerType, aiData.summary, aiData.discord_message);
       }
     } else if (engineResult.newHigh || engineResult.newStopLoss) {
       await this.fastify.pg.query(
@@ -285,7 +312,7 @@ export class MarketPoller {
     }
   }
 
-  private async notifyN8n(position: any, price: number, pnl: number, lossAvoided?: number, type: string = 'STOP_LOSS') {
+  private async notifyN8n(position: any, price: number, pnl: number, lossAvoided?: number, type: string = 'STOP_LOSS', aiSummary?: string, discordMessage?: string) {
     const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
     if (!N8N_WEBHOOK_URL) return;
 
@@ -296,10 +323,17 @@ export class MarketPoller {
         body: JSON.stringify({
           event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
           symbol: position.symbol,
+          ticker: position.symbol,
+          option_type: position.option_type,
+          strike_price: position.strike_price,
+          expiration_date: position.expiration_date,
           price: price,
           pnl: pnl,
           loss_avoided: lossAvoided,
-          position_id: position.id
+          position_id: position.id,
+          ai_summary: aiSummary,
+          discord_message: discordMessage,
+          timestamp: new Date().toISOString()
         })
       });
     } catch (err: any) {

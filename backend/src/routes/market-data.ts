@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 import { StopLossEngine } from '../services/stop-loss-engine';
+import { AIService } from '../services/ai-service';
 
 const PriceUpdateSchema = z.object({
   symbol: z.string(),
@@ -8,6 +9,8 @@ const PriceUpdateSchema = z.object({
 });
 
 export async function marketDataRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
+  const aiService = new AIService(fastify);
+
   // POST price update from n8n
   fastify.post('/update-price', async (request, reply) => {
     const { symbol, price } = PriceUpdateSchema.parse(request.body);
@@ -47,11 +50,11 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
       // 4. Handle Results (Updates or Triggers)
       if (engineResult.triggered) {
         results.alerts_triggered++;
-        
+
         // Calculate realized PnL and Loss Avoided
         // Assuming 100 contracts per position for options
         const pnl = (price - Number(position.entry_price)) * position.quantity * 100;
-        
+
         // Close the position
         await fastify.pg.query(
           `UPDATE positions 
@@ -69,6 +72,27 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
           [position.id, 'STOP_LOSS', position.stop_loss_trigger, price]
         );
 
+        // Generate AI Summary for the alert (Discord Message)
+        let aiData = { summary: '', discord_message: '' };
+        try {
+          aiData = await aiService.generateAlertSummary({
+            symbol: position.symbol,
+            type: position.option_type,
+            strike: position.strike_price,
+            expiration: position.expiration_date,
+            event: 'STOP_LOSS_TRIGGERED',
+            price: price,
+            pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
+            greeks: {
+              delta: position.delta,
+              theta: position.theta,
+              iv: position.iv
+            }
+          });
+        } catch (err) {
+          fastify.log.error(err, 'AI Summary generation failed');
+        }
+
         // 6. Alert Fan-out (Call n8n)
         const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
         if (N8N_WEBHOOK_URL) {
@@ -79,10 +103,17 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
               body: JSON.stringify({
                 event: 'STOP_LOSS_TRIGGERED',
                 symbol: position.symbol,
+                ticker: position.symbol,
+                option_type: position.option_type,
+                strike_price: position.strike_price,
+                expiration_date: position.expiration_date,
                 price: price,
                 pnl: pnl,
                 loss_avoided: engineResult.lossAvoided,
-                position_id: position.id
+                position_id: position.id,
+                ai_summary: aiData.summary,
+                discord_message: aiData.discord_message,
+                timestamp: new Date().toISOString()
               })
             });
           } catch (err: any) {
@@ -91,7 +122,7 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
         }
       } else if (engineResult.newHigh || engineResult.newStopLoss) {
         results.updates++;
-        
+
         // Update the peak/stop-loss triggers
         await fastify.pg.query(
           `UPDATE positions 
