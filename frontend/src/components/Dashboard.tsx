@@ -107,7 +107,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const [isAddingPosition, setIsAddingPosition] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState('active');
+  const [activeTab, setActiveTab] = useState('overview');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
@@ -282,8 +282,8 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
   return (
     <div className="container mx-auto py-8 space-y-8">
-      <Tabs defaultValue="overview" className="space-y-8">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
           <div className="flex flex-col">
             {/* ... title and status stuff ... */}
             <div className="flex items-center gap-2">
@@ -328,7 +328,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <TabsList className="hidden sm:flex order-2 sm:order-1">
+            <TabsList className="hidden md:flex order-2 md:order-1">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
               {user.role === 'ADMIN' && (
@@ -336,9 +336,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               )}
             </TabsList>
             {/* Mobile Dropdown */}
-            <div className="sm:hidden order-2">
+            <div className="md:hidden order-2">
               <Select value={activeTab} onValueChange={setActiveTab}>
-                <SelectTrigger className="h-9 w-[140px]">
+                <SelectTrigger className="h-9 w-[130px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -351,23 +351,23 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               </Select>
             </div>
             <SettingsDialog user={user} onUpdate={onUserUpdate} />
-            <Button variant="outline" size="sm" className="hidden sm:flex gap-1 text-xs" onClick={handleForceSync} disabled={loading}>
-              <Zap className={`h - 3 w - 3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'} `} />
+            <Button variant="outline" size="sm" className="hidden md:flex gap-1 text-xs" onClick={handleForceSync} disabled={loading}>
+              <Zap className={`h-3 w-3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
               Force Sync
             </Button>
-            <Button variant="outline" size="icon" className="sm:hidden" onClick={handleForceSync} disabled={loading}>
-              <Zap className={`h - 4 w - 4 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'} `} />
+            <Button variant="outline" size="icon" className="md:hidden" onClick={handleForceSync} disabled={loading}>
+              <Zap className={`h-4 w-4 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
             </Button>
 
 
             <Button variant="outline" size="icon" onClick={loadPositions}>
-              <RefreshCw className={`h - 4 w - 4 ${loading ? 'animate-spin' : ''} `} />
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={handleDialogChange}>
               <DialogTrigger asChild>
-                <Button className="rounded-full sm:rounded-md w-9 h-9 sm:w-auto sm:h-10 p-0 sm:px-4 text-xs sm:text-sm">
-                  <Plus className="h-4 w-4 sm:mr-2" />
-                  <span className="hidden sm:inline">Track Position</span>
+                <Button className="rounded-full md:rounded-md w-9 h-9 md:w-auto md:h-10 p-0 md:px-4 text-xs md:text-sm">
+                  <Plus className="h-4 w-4 md:mr-2" />
+                  <span className="hidden md:inline">Track Position</span>
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-[600px]">
