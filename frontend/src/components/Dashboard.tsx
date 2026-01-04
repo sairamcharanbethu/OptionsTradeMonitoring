@@ -70,7 +70,8 @@ import {
   AlertTriangle,
   Zap,
   Search,
-  X
+  X,
+  ArrowUpDown
 } from 'lucide-react';
 import {
   Tabs,
@@ -118,7 +119,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const [debouncedTicker, setDebouncedTicker] = useState('');
   const [typeFilter, setTypeFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
-  const [dteFilter, setDteFilter] = useState('');
+
+  // Sorting State
+  const [sortConfig, setSortConfig] = useState<{ key: 'symbol' | 'dte' | 'pnl', direction: 'asc' | 'desc' } | null>({ key: 'dte', direction: 'asc' });
 
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -220,11 +223,8 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     const diffTime = exp.getTime() - today.getTime();
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
-
-
-
   const filteredPositions = useMemo(() => {
-    return positions.filter(pos => {
+    let result = positions.filter(pos => {
       // Symbol Filter
       if (debouncedTicker && !pos.symbol.toLowerCase().includes(debouncedTicker.toLowerCase())) {
         return false;
@@ -243,15 +243,42 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
         return false;
       }
 
-      // DTE Filter
-      if (dteFilter) {
-        const dte = getDte(pos.expiration_date);
-        if (dte > parseInt(dteFilter)) return false;
-      }
-
       return true;
     });
-  }, [positions, debouncedTicker, statusFilter, dteFilter]);
+
+    // Sorting Logic
+    if (sortConfig) {
+      result = [...result].sort((a, b) => {
+        let valA: any, valB: any;
+
+        if (sortConfig.key === 'symbol') {
+          valA = a.symbol;
+          valB = b.symbol;
+        } else if (sortConfig.key === 'dte') {
+          valA = getDte(a.expiration_date);
+          valB = getDte(b.expiration_date);
+        } else if (sortConfig.key === 'pnl') {
+          valA = getPnL(a);
+          valB = b.realized_pnl || getPnL(b); // use realized pnl if available
+        }
+
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return result;
+  }, [positions, debouncedTicker, statusFilter, sortConfig]);
+
+  const toggleSort = (key: 'symbol' | 'dte' | 'pnl') => {
+    setSortConfig(current => {
+      if (current?.key === key) {
+        return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'asc' };
+    });
+  };
 
   const totalRealizedPnL = useMemo(() =>
     positions.reduce((acc, p) => acc + (p.realized_pnl || 0), 0)
@@ -491,21 +518,8 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                       </SelectContent>
                     </Select>
 
-                    {/* DTE Filter */}
-                    <div className="relative min-w-[100px]">
-                      <Input
-                        type="number"
-                        placeholder="Max DTE"
-                        value={dteFilter}
-                        onChange={(e) => setDteFilter(e.target.value)}
-                        className="h-9 text-xs w-full sm:w-[100px]"
-                      />
-                      <div className="absolute right-2 top-2.5 pointer-events-none text-[10px] text-muted-foreground">
-                        DTE
-                      </div>
-                    </div>
 
-                    {(tickerFilter || statusFilter !== 'ALL' || dteFilter) && (
+                    {(tickerFilter || statusFilter !== 'ALL') && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -513,7 +527,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                           setTickerFilter('');
                           setDebouncedTicker('');
                           setStatusFilter('ALL');
-                          setDteFilter('');
                         }}
                         className="h-8 px-2 text-[10px] text-muted-foreground hover:text-foreground"
                       >
@@ -529,11 +542,23 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Symbol</TableHead>
-                        <TableHead>Entry/Current</TableHead>
+                        <TableHead className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleSort('symbol')}>
+                          <div className="flex items-center gap-1">
+                            Symbol {sortConfig?.key === 'symbol' && <ArrowUpDown className="h-3 w-3" />}
+                          </div>
+                        </TableHead>
+                        <TableHead className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleSort('dte')}>
+                          <div className="flex items-center gap-1">
+                            DTE {sortConfig?.key === 'dte' && <ArrowUpDown className="h-3 w-3" />}
+                          </div>
+                        </TableHead>
                         <TableHead>Alerts</TableHead>
                         <TableHead>Trend</TableHead>
-                        <TableHead>PnL</TableHead>
+                        <TableHead className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleSort('pnl')}>
+                          <div className="flex items-center gap-1">
+                            PnL {sortConfig?.key === 'pnl' && <ArrowUpDown className="h-3 w-3" />}
+                          </div>
+                        </TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
@@ -547,13 +572,13 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             <div className="flex flex-col items-center justify-center text-muted-foreground gap-2">
                               <Search className="h-8 w-8 opacity-20" />
                               <p>No matching trades found.</p>
-                              {(tickerFilter || statusFilter !== 'ALL' || dteFilter) && (
+                              {(tickerFilter || statusFilter !== 'ALL') && (
                                 <Button
                                   variant="link"
                                   onClick={() => {
                                     setTickerFilter('');
+                                    setDebouncedTicker('');
                                     setStatusFilter('ALL');
-                                    setDteFilter('');
                                   }}
                                   className="text-primary hover:no-underline"
                                 >
@@ -570,13 +595,14 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                               <div className="flex flex-col">
                                 <span className="font-bold">{pos.symbol}</span>
                                 <span className="text-[10px] text-muted-foreground uppercase">{pos.option_type} ${Number(pos.strike_price).toFixed(2)}</span>
-                                <span className="text-[10px] text-muted-foreground">Exp: {parseLocalDate(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                                <span className="text-[10px] text-muted-foreground font-medium">Exp: {parseLocalDate(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
                               </div>
                             </TableCell>
                             <TableCell>
                               <div className="text-xs">
-                                <div>In: ${Number(pos.entry_price).toFixed(2)}</div>
-                                <div className="font-bold">Now: ${pos.current_price ? Number(pos.current_price).toFixed(2) : '-'}</div>
+                                <div className="font-bold text-blue-600 dark:text-blue-400">{getDte(pos.expiration_date)}d</div>
+                                <div className="opacity-70">In: ${Number(pos.entry_price).toFixed(2)}</div>
+                                <div className="opacity-70">Now: ${pos.current_price ? Number(pos.current_price).toFixed(2) : '-'}</div>
                               </div>
                             </TableCell>
                             <TableCell>
@@ -642,7 +668,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                     <div className="text-center py-12 text-muted-foreground">
                       <Search className="h-8 w-8 mx-auto opacity-20 mb-2" />
                       <p>No matching trades.</p>
-                      <Button variant="link" size="sm" onClick={() => { setTickerFilter(''); setStatusFilter('ALL'); setDteFilter(''); }} className="mt-2">Clear filters</Button>
+                      <Button variant="link" size="sm" onClick={() => { setTickerFilter(''); setDebouncedTicker(''); setStatusFilter('ALL'); }} className="mt-2">Clear filters</Button>
                     </div>
                   ) : (
                     filteredPositions.map((pos) => (
