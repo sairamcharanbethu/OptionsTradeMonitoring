@@ -71,8 +71,17 @@ import {
   Zap,
   Search,
   X,
-  ArrowUpDown
+  ArrowUpDown,
+  MoreHorizontal
 } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Tabs,
   TabsContent,
@@ -678,12 +687,29 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-1">
                                 <PositionDetailsDialog position={pos} onCloseUpdate={loadPositions} />
-                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleEdit(pos)}>
-                                  <Pencil className="h-4 w-4" />
-                                </Button>
-                                <Button variant="ghost" size="icon" className="h-8 w-8 text-red-400 hover:text-red-600" onClick={() => handleDelete(pos.id)}>
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" className="h-8 w-8 p-0">
+                                      <span className="sr-only">Open menu</span>
+                                      <MoreHorizontal className="h-4 w-4" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                    <DropdownMenuItem onClick={() => handleEdit(pos)}>
+                                      <Pencil className="mr-2 h-4 w-4" />
+                                      Edit Position
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      onClick={() => handleDelete(pos.id)}
+                                      className="text-red-500 focus:text-red-500"
+                                    >
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                      Delete Position
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
                               </div>
                             </TableCell>
                           </TableRow>
@@ -748,12 +774,29 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             )}
                             <div className="flex gap-2">
                               <PositionDetailsDialog position={pos} onCloseUpdate={loadPositions} />
-                              <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleEdit(pos)}>
-                                <Pencil className="h-3 w-3" />
-                              </Button>
-                              <Button variant="outline" size="icon" className="h-8 w-8 text-red-500" onClick={() => handleDelete(pos.id)}>
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                                    <span className="sr-only">Open menu</span>
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                  <DropdownMenuItem onClick={() => handleEdit(pos)}>
+                                    <Pencil className="mr-2 h-4 w-4" />
+                                    Edit
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => handleDelete(pos.id)}
+                                    className="text-red-500 focus:text-red-500"
+                                  >
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    Delete
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
                           </div>
                         </CardContent>
@@ -764,47 +807,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <PieChartIcon className="h-4 w-4 text-orange-500" />
-                  Capital Exposure
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="h-[250px] flex items-center justify-center relative">
-                {exposureData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={exposureData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={80}
-                        paddingAngle={5}
-                        dataKey="value"
-                      >
-                        {exposureData.map((_entry, index) => (
-                          <Cell key={`cell - ${index} `} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <RechartsTooltip
-                        contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px' }}
-                        itemStyle={{ color: 'hsl(var(--foreground))' }}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="text-muted-foreground text-sm">No active allocation</div>
-                )}
-                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                  <div className="text-xs text-muted-foreground">Total At Risk</div>
-                  <div className="text-lg font-bold">
-                    ${exposureData.reduce((acc, d) => acc + d.value, 0).toLocaleString()}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+
           </div>
 
           <Card>
@@ -929,6 +932,48 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <PieChartIcon className="h-4 w-4 text-orange-500" />
+                Capital Exposure
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="h-[250px] flex items-center justify-center relative">
+              {exposureData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={exposureData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                    >
+                      {exposureData.map((_entry, index) => (
+                        <Cell key={`cell - ${index} `} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip
+                      contentStyle={{ backgroundColor: 'hsl(var(--card))', border: '1px solid hsl(var(--border))', borderRadius: '8px' }}
+                      itemStyle={{ color: 'hsl(var(--foreground))' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-muted-foreground text-sm">No active allocation</div>
+              )}
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <div className="text-xs text-muted-foreground">Total At Risk</div>
+                <div className="text-lg font-bold">
+                  ${exposureData.reduce((acc, d) => acc + d.value, 0).toLocaleString()}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <Card className="w-full">
             <CardHeader>
