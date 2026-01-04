@@ -495,8 +495,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <Card className="lg:col-span-2">
+
+          <div className="space-y-6">
+            <Card>
               <CardHeader>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <CardTitle className="text-lg sm:text-xl flex items-center gap-2">
