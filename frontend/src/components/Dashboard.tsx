@@ -287,17 +287,17 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
           <div className="flex flex-col">
             {/* ... title and status stuff ... */}
             <div className="flex items-center gap-2">
-              <h1 className="text-2xl sm:text-3xl font-bold transition-all">Positions Monitor</h1>
+              <h2 className="text-xl sm:text-2xl font-bold transition-all">Positions Monitor</h2>
               <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">v1.2.0</span>
             </div>
             <div className="flex items-center gap-2 mt-1">
-              <p className="text-[10px] sm:text-sm text-muted-foreground">Track your option trades and alerts</p>
+              <p className="text-[8px] sm:text-xs text-muted-foreground">Track your option trades and alerts</p>
               {marketStatus && (
                 <>
                   <span className="text-[10px] text-muted-foreground mr-1">|</span>
                   <div className="flex items-center gap-1.5">
                     <div className={`w-2 h-2 rounded-full ${marketStatus.open ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
-                    <span className={`text-[10px] font-medium uppercase tracking-wider ${marketStatus.open ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                    <span className={`text-[8px] sm:text-xs font-medium uppercase tracking-wider ${marketStatus.open ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                       Market {marketStatus.open ? 'Open' : 'Closed'}
                     </span>
                   </div>
@@ -309,7 +309,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   <div className="flex items-center gap-1.5">
                     <Activity className="h-3 w-3 text-muted-foreground" />
                     <span className="text-[10px] text-muted-foreground">
-                      Refreshed at {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      Last updated {lastRefreshed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     </span>
                   </div>
                 </>
@@ -328,7 +328,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <TabsList>
+            <TabsList className="order-2 sm:order-1">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
               {user.role === 'ADMIN' && (
@@ -350,7 +350,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={handleDialogChange}>
               <DialogTrigger asChild>
-                <Button className="rounded-full sm:rounded-md w-10 h-10 sm:w-auto sm:h-10 p-0 sm:px-4">
+                <Button className="rounded-full sm:rounded-md w-9 h-9 sm:w-auto sm:h-10 p-0 sm:px-4 text-xs sm:text-sm">
                   <Plus className="h-4 w-4 sm:mr-2" />
                   <span className="hidden sm:inline">Track Position</span>
                 </Button>
