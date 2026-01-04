@@ -3,11 +3,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.marketDataRoutes = marketDataRoutes;
 const zod_1 = require("zod");
 const stop_loss_engine_1 = require("../services/stop-loss-engine");
+const ai_service_1 = require("../services/ai-service");
 const PriceUpdateSchema = zod_1.z.object({
     symbol: zod_1.z.string(),
     price: zod_1.z.number(),
 });
 async function marketDataRoutes(fastify, options) {
+    const aiService = new ai_service_1.AIService(fastify);
     // POST price update from n8n
     fastify.post('/update-price', async (request, reply) => {
         const { symbol, price } = PriceUpdateSchema.parse(request.body);
@@ -44,6 +46,27 @@ async function marketDataRoutes(fastify, options) {
            WHERE id = $3`, [pnl, engineResult.lossAvoided, position.id]);
                 // Record the Alert
                 await fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, 'STOP_LOSS', position.stop_loss_trigger, price]);
+                // Generate AI Summary for the alert (Discord Message)
+                let aiData = { summary: '', discord_message: '' };
+                try {
+                    aiData = await aiService.generateAlertSummary({
+                        symbol: position.symbol,
+                        type: position.option_type,
+                        strike: position.strike_price,
+                        expiration: position.expiration_date,
+                        event: 'STOP_LOSS_TRIGGERED',
+                        price: price,
+                        pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
+                        greeks: {
+                            delta: position.delta,
+                            theta: position.theta,
+                            iv: position.iv
+                        }
+                    });
+                }
+                catch (err) {
+                    fastify.log.error(err, 'AI Summary generation failed');
+                }
                 // 6. Alert Fan-out (Call n8n)
                 const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
                 if (N8N_WEBHOOK_URL) {
@@ -54,10 +77,17 @@ async function marketDataRoutes(fastify, options) {
                             body: JSON.stringify({
                                 event: 'STOP_LOSS_TRIGGERED',
                                 symbol: position.symbol,
+                                ticker: position.symbol,
+                                option_type: position.option_type,
+                                strike_price: position.strike_price,
+                                expiration_date: position.expiration_date,
                                 price: price,
                                 pnl: pnl,
                                 loss_avoided: engineResult.lossAvoided,
-                                position_id: position.id
+                                position_id: position.id,
+                                ai_summary: aiData.summary,
+                                discord_message: aiData.discord_message,
+                                timestamp: new Date().toISOString()
                             })
                         });
                     }

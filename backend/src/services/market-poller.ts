@@ -27,6 +27,108 @@ export class MarketPoller {
     });
 
     this.poll().catch(err => console.error('[MarketPoller] Initial poll failed:', err));
+    this.startBriefingJob();
+  }
+
+  private startBriefingJob() {
+    // Default to 8:30 AM ET
+    const schedule = process.env.MORNING_BRIEFING_SCHEDULE || '30 8 * * *';
+    console.log(`[MarketPoller] Starting morning briefing job with schedule: ${schedule}`);
+
+    cron.schedule(schedule, async () => {
+      try {
+        await this.sendMorningBriefings();
+      } catch (err) {
+        console.error('[MarketPoller] Error during morning briefing execution:', err);
+      }
+    });
+  }
+
+  public async sendMorningBriefings() {
+    console.log('[MarketPoller] Executing morning briefings...');
+    const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT user_id FROM positions');
+
+    for (const { user_id: userId } of users) {
+      try {
+        // 1. Check user settings for briefing frequency
+        const { rows: settingsRows } = await this.fastify.pg.query(
+          'SELECT key, value FROM settings WHERE user_id = $1',
+          [userId]
+        );
+        const settings = settingsRows.reduce((acc: any, row: any) => {
+          acc[row.key] = row.value;
+          return acc;
+        }, {});
+
+        const frequency = settings.briefing_frequency || 'disabled';
+        if (frequency === 'disabled') continue;
+
+        // 2. Decide if we should send it today
+        if (!this.shouldSendBriefingToday(frequency)) continue;
+
+        // 3. Fetch open positions
+        const { rows: positions } = await this.fastify.pg.query(
+          "SELECT * FROM positions WHERE user_id = $1 AND status != 'CLOSED'",
+          [userId]
+        );
+
+        if (positions.length === 0) continue;
+
+        // 4. Generate AI briefing
+        console.log(`[MarketPoller] Generating briefing for user ${userId}...`);
+        const briefingData = await this.aiService.generateBriefing(positions);
+
+        // 5. Notify N8n
+        await this.notifyN8nBriefing(userId, briefingData.briefing, briefingData.discord_message);
+
+      } catch (err) {
+        console.error(`[MarketPoller] Failed to send briefing for user ${userId}:`, err);
+      }
+    }
+  }
+
+  private shouldSendBriefingToday(frequency: string): boolean {
+    const now = new Date();
+    // Use ET for consistency
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      weekday: 'long',
+    });
+    const weekday = formatter.format(now);
+
+    switch (frequency) {
+      case 'daily': return true;
+      case 'every_2_days':
+        // Simple parity check on day of year/month for demo purposes
+        // In production, we might store "last_briefing_sent" in DB
+        return now.getDate() % 2 === 0;
+      case 'monday': return weekday === 'Monday';
+      case 'friday': return weekday === 'Friday';
+      case 'weekly': return weekday === 'Monday'; // Default weekly to Monday
+      default: return false;
+    }
+  }
+
+  private async notifyN8nBriefing(userId: string, briefing: string, discordMessage: string) {
+    const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
+    if (!N8N_WEBHOOK_URL) return;
+
+    try {
+      await fetch(N8N_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'MORNING_BRIEFING',
+          user_id: userId,
+          briefing: briefing,
+          discord_message: discordMessage,
+          timestamp: new Date().toISOString()
+        })
+      });
+      console.log(`[MarketPoller] Briefing sent to n8n for user ${userId}`);
+    } catch (err: any) {
+      console.error(`[MarketPoller] Failed to notify n8n for briefing (user ${userId}):`, err.message);
+    }
   }
 
   private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
@@ -286,10 +388,11 @@ export class MarketPoller {
             price: price,
             pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
             greeks: {
-              delta: position.delta,
-              theta: position.theta,
-              iv: position.iv
-            }
+              delta: greeks?.delta ?? position.delta,
+              theta: greeks?.theta ?? position.theta,
+              iv: iv ?? position.iv
+            },
+            underlying_price: underlyingPrice ?? position.underlying_price
           });
         } catch (err) {
           console.error('[MarketPoller] AI Summary generation failed:', err);
@@ -298,7 +401,7 @@ export class MarketPoller {
         // Calculate realized PnL
         const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
 
-        this.notifyN8n(position, price, realizedPnl, engineResult.lossAvoided, triggerType, aiData.summary, aiData.discord_message);
+        this.notifyN8n(position, price, realizedPnl, engineResult.lossAvoided, triggerType, aiData.summary, aiData.discord_message, greeks, iv);
       }
     } else if (engineResult.newHigh || engineResult.newStopLoss) {
       await this.fastify.pg.query(
@@ -312,7 +415,7 @@ export class MarketPoller {
     }
   }
 
-  private async notifyN8n(position: any, price: number, pnl: number, lossAvoided?: number, type: string = 'STOP_LOSS', aiSummary?: string, discordMessage?: string) {
+  private async notifyN8n(position: any, price: number, pnl: number, lossAvoided?: number, type: string = 'STOP_LOSS', aiSummary?: string, discordMessage?: string, greeks?: any, iv?: number) {
     const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
     if (!N8N_WEBHOOK_URL) return;
 
@@ -333,6 +436,8 @@ export class MarketPoller {
           position_id: position.id,
           ai_summary: aiSummary,
           discord_message: discordMessage,
+          greeks: greeks,
+          iv: iv,
           timestamp: new Date().toISOString()
         })
       });

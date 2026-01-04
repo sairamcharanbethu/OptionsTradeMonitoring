@@ -1,18 +1,25 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.settingsRoutes = settingsRoutes;
+const redis_1 = require("../lib/redis");
 async function settingsRoutes(fastify) {
     fastify.addHook('onRequest', fastify.authenticate);
     // GET all settings
     fastify.get('/', async (request, reply) => {
         const { id: userId } = request.user;
+        const CACHE_KEY = `USER_SETTINGS:${userId}`;
+        // Try cache
+        const cached = await redis_1.redis.get(CACHE_KEY);
+        if (cached)
+            return JSON.parse(cached);
         try {
             const { rows } = await fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
             const settings = rows.reduce((acc, row) => {
                 acc[row.key] = row.value;
                 return acc;
             }, {});
-            // Mask keys for security if needed (simpler to just return for now as it's local)
+            // Cache for 5 minutes
+            await redis_1.redis.set(CACHE_KEY, JSON.stringify(settings), 300);
             return settings;
         }
         catch (err) {
@@ -35,6 +42,8 @@ async function settingsRoutes(fastify) {
                          SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`, [userId, key, value]);
                 }
                 await client.query('COMMIT');
+                // Invalidate cache
+                await redis_1.redis.set(`USER_SETTINGS:${userId}`, '', 1);
                 return { status: 'ok', message: 'Settings updated' };
             }
             catch (err) {

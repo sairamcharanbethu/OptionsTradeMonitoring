@@ -7,10 +7,14 @@ exports.MarketPoller = void 0;
 const node_cron_1 = __importDefault(require("node-cron"));
 const child_process_1 = require("child_process");
 const stop_loss_engine_1 = require("./stop-loss-engine");
+const redis_1 = require("../lib/redis");
+const ai_service_1 = require("./ai-service");
 class MarketPoller {
     fastify;
+    aiService;
     constructor(fastify) {
         this.fastify = fastify;
+        this.aiService = new ai_service_1.AIService(fastify);
     }
     start() {
         const interval = process.env.MARKET_DATA_POLL_INTERVAL || '*/15 * * * *';
@@ -24,6 +28,94 @@ class MarketPoller {
             }
         });
         this.poll().catch(err => console.error('[MarketPoller] Initial poll failed:', err));
+        this.startBriefingJob();
+    }
+    startBriefingJob() {
+        // Default to 8:30 AM ET
+        const schedule = process.env.MORNING_BRIEFING_SCHEDULE || '30 8 * * *';
+        console.log(`[MarketPoller] Starting morning briefing job with schedule: ${schedule}`);
+        node_cron_1.default.schedule(schedule, async () => {
+            try {
+                await this.sendMorningBriefings();
+            }
+            catch (err) {
+                console.error('[MarketPoller] Error during morning briefing execution:', err);
+            }
+        });
+    }
+    async sendMorningBriefings() {
+        console.log('[MarketPoller] Executing morning briefings...');
+        const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT user_id FROM positions');
+        for (const { user_id: userId } of users) {
+            try {
+                // 1. Check user settings for briefing frequency
+                const { rows: settingsRows } = await this.fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
+                const settings = settingsRows.reduce((acc, row) => {
+                    acc[row.key] = row.value;
+                    return acc;
+                }, {});
+                const frequency = settings.briefing_frequency || 'disabled';
+                if (frequency === 'disabled')
+                    continue;
+                // 2. Decide if we should send it today
+                if (!this.shouldSendBriefingToday(frequency))
+                    continue;
+                // 3. Fetch open positions
+                const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE user_id = $1 AND status != 'CLOSED'", [userId]);
+                if (positions.length === 0)
+                    continue;
+                // 4. Generate AI briefing
+                console.log(`[MarketPoller] Generating briefing for user ${userId}...`);
+                const briefingData = await this.aiService.generateBriefing(positions);
+                // 5. Notify N8n
+                await this.notifyN8nBriefing(userId, briefingData.briefing, briefingData.discord_message);
+            }
+            catch (err) {
+                console.error(`[MarketPoller] Failed to send briefing for user ${userId}:`, err);
+            }
+        }
+    }
+    shouldSendBriefingToday(frequency) {
+        const now = new Date();
+        // Use ET for consistency
+        const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            weekday: 'long',
+        });
+        const weekday = formatter.format(now);
+        switch (frequency) {
+            case 'daily': return true;
+            case 'every_2_days':
+                // Simple parity check on day of year/month for demo purposes
+                // In production, we might store "last_briefing_sent" in DB
+                return now.getDate() % 2 === 0;
+            case 'monday': return weekday === 'Monday';
+            case 'friday': return weekday === 'Friday';
+            case 'weekly': return weekday === 'Monday'; // Default weekly to Monday
+            default: return false;
+        }
+    }
+    async notifyN8nBriefing(userId, briefing, discordMessage) {
+        const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
+        if (!N8N_WEBHOOK_URL)
+            return;
+        try {
+            await fetch(N8N_WEBHOOK_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    event: 'MORNING_BRIEFING',
+                    user_id: userId,
+                    briefing: briefing,
+                    discord_message: discordMessage,
+                    timestamp: new Date().toISOString()
+                })
+            });
+            console.log(`[MarketPoller] Briefing sent to n8n for user ${userId}`);
+        }
+        catch (err) {
+            console.error(`[MarketPoller] Failed to notify n8n for briefing (user ${userId}):`, err.message);
+        }
     }
     constructOSITicker(symbol, strike, type, expiration) {
         // Format: AAPL230616C00150000
@@ -54,6 +146,14 @@ class MarketPoller {
     }
     async getOptionPremium(symbol, strike, type, expiration) {
         const ticker = this.constructOSITicker(symbol, strike, type, expiration);
+        // Redis Cache Check
+        const CACHE_KEY = `PRICE:${ticker}`;
+        const CACHE_TTL = 300; // 5 minutes
+        const cached = await redis_1.redis.get(CACHE_KEY);
+        if (cached) {
+            // console.log(`[MarketPoller] Cache hit for ${ticker}`);
+            return JSON.parse(cached);
+        }
         // console.log(`[MarketPoller] Fetching premium for: ${ticker}`);
         return new Promise((resolve) => {
             const pythonProcess = (0, child_process_1.spawn)('python3', ['/app/src/scripts/fetch_option_price.py', ticker]);
@@ -70,6 +170,14 @@ class MarketPoller {
                     // console.log(`[MarketPoller] Raw Python output: ${dataString}`);
                     const result = JSON.parse(dataString);
                     if (result.status === 'ok' && typeof result.price === 'number') {
+                        // Enrich with metadata for easier Redis inspection
+                        result.metadata = {
+                            symbol: symbol,
+                            strike: strike,
+                            type: type,
+                            expiration: expiration,
+                        };
+                        redis_1.redis.set(CACHE_KEY, JSON.stringify(result), CACHE_TTL).catch(err => console.error('[MarketPoller] Redis set failed:', err));
                         resolve(result); // Return full object { price, greeks, iv ... }
                     }
                     else {
@@ -192,11 +300,35 @@ class MarketPoller {
                 const triggerType = engineResult.triggerType || 'STOP_LOSS';
                 const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
                 await this.fastify.pg.query(`UPDATE positions 
-           SET status = $1, 
-               updated_at = CURRENT_TIMESTAMP 
-           WHERE id = $2`, [newStatus, position.id]);
+             SET status = $1, 
+                 updated_at = CURRENT_TIMESTAMP 
+             WHERE id = $2 AND status = 'OPEN'`, [newStatus, position.id]);
                 await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]);
-                this.notifyN8n(position, price, 0, engineResult.lossAvoided, triggerType);
+                // Generate AI Summary for the alert (Discord Message)
+                let aiData = { summary: '', discord_message: '' };
+                try {
+                    aiData = await this.aiService.generateAlertSummary({
+                        symbol: position.symbol,
+                        type: position.option_type,
+                        strike: position.strike_price,
+                        expiration: position.expiration_date,
+                        event: triggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+                        price: price,
+                        pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
+                        greeks: {
+                            delta: greeks?.delta ?? position.delta,
+                            theta: greeks?.theta ?? position.theta,
+                            iv: iv ?? position.iv
+                        },
+                        underlying_price: underlyingPrice ?? position.underlying_price
+                    });
+                }
+                catch (err) {
+                    console.error('[MarketPoller] AI Summary generation failed:', err);
+                }
+                // Calculate realized PnL
+                const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
+                this.notifyN8n(position, price, realizedPnl, engineResult.lossAvoided, triggerType, aiData.summary, aiData.discord_message, greeks, iv);
             }
         }
         else if (engineResult.newHigh || engineResult.newStopLoss) {
@@ -207,7 +339,7 @@ class MarketPoller {
          WHERE id = $3`, [engineResult.newHigh, engineResult.newStopLoss, position.id]);
         }
     }
-    async notifyN8n(position, price, pnl, lossAvoided, type = 'STOP_LOSS') {
+    async notifyN8n(position, price, pnl, lossAvoided, type = 'STOP_LOSS', aiSummary, discordMessage, greeks, iv) {
         const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
         if (!N8N_WEBHOOK_URL)
             return;
@@ -218,10 +350,19 @@ class MarketPoller {
                 body: JSON.stringify({
                     event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
                     symbol: position.symbol,
+                    ticker: position.symbol,
+                    option_type: position.option_type,
+                    strike_price: position.strike_price,
+                    expiration_date: position.expiration_date,
                     price: price,
                     pnl: pnl,
                     loss_avoided: lossAvoided,
-                    position_id: position.id
+                    position_id: position.id,
+                    ai_summary: aiSummary,
+                    discord_message: discordMessage,
+                    greeks: greeks,
+                    iv: iv,
+                    timestamp: new Date().toISOString()
                 })
             });
         }

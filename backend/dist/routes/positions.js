@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.positionRoutes = positionRoutes;
 const zod_1 = require("zod");
+const redis_1 = require("../lib/redis");
 const PositionSchema = zod_1.z.object({
     symbol: zod_1.z.string(),
     option_type: zod_1.z.enum(['CALL', 'PUT']),
@@ -18,8 +19,75 @@ async function positionRoutes(fastify, options) {
     // GET all positions (including analytics if closed)
     fastify.get('/', async (request, reply) => {
         const { id: userId } = request.user;
+        const CACHE_KEY = `USER_POSITIONS:${userId}`;
+        // Try cache
+        const cached = await redis_1.redis.get(CACHE_KEY);
+        if (cached)
+            return JSON.parse(cached);
         const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
+        // Set cache (60 seconds)
+        await redis_1.redis.set(CACHE_KEY, JSON.stringify(rows), 60);
         return rows;
+    });
+    // GET portfolio stats
+    fastify.get('/stats', async (request, reply) => {
+        const { id: userId } = request.user;
+        const CACHE_KEY = `USER_STATS:${userId}`;
+        // Try cache
+        const cached = await redis_1.redis.get(CACHE_KEY);
+        if (cached)
+            return JSON.parse(cached);
+        // 1. Basic counts and PnL
+        const statsQuery = `
+      SELECT 
+        COUNT(*) as total_trades,
+        COUNT(*) FILTER (WHERE status = 'CLOSED') as closed_trades,
+        COUNT(*) FILTER (WHERE status = 'CLOSED' AND realized_pnl > 0) as win_count,
+        SUM(realized_pnl) FILTER (WHERE status = 'CLOSED') as total_realized_pnl,
+        SUM(realized_pnl) FILTER (WHERE status = 'CLOSED' AND realized_pnl > 0) as gross_profit,
+        SUM(realized_pnl) FILTER (WHERE status = 'CLOSED' AND realized_pnl < 0) as gross_loss
+      FROM positions 
+      WHERE user_id = $1
+    `;
+        const { rows: statsRows } = await fastify.pg.query(statsQuery, [userId]);
+        const mainStats = statsRows[0];
+        // 2. Win Rate
+        const closedCount = parseInt(mainStats.closed_trades || '0');
+        const winRate = closedCount > 0 ? (parseInt(mainStats.win_count || '0') / closedCount) * 100 : 0;
+        // 3. Profit Factor
+        const grossProfit = parseFloat(mainStats.gross_profit || '0');
+        const grossLoss = Math.abs(parseFloat(mainStats.gross_loss || '0'));
+        const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 99.9 : 0);
+        // 4. Equity Curve (Daily realized PnL)
+        const curveQuery = `
+      SELECT 
+        date, 
+        SUM(daily_pnl) OVER (ORDER BY date) as total_pnl
+      FROM (
+        SELECT 
+          date_trunc('day', updated_at) as date, 
+          SUM(realized_pnl) as daily_pnl 
+        FROM positions 
+        WHERE status = 'CLOSED' AND user_id = $1 
+        GROUP BY 1
+      ) subquery
+      ORDER BY date
+    `;
+        const { rows: curveRows } = await fastify.pg.query(curveQuery, [userId]);
+        const result = {
+            totalTrades: parseInt(mainStats.total_trades || '0'),
+            closedTrades: closedCount,
+            winRate: parseFloat(winRate.toFixed(1)),
+            profitFactor: parseFloat(profitFactor.toFixed(2)),
+            totalRealizedPnl: parseFloat(mainStats.total_realized_pnl || '0'),
+            equityCurve: curveRows.map(r => ({
+                date: r.date,
+                pnl: parseFloat(r.total_pnl)
+            }))
+        };
+        // Cache for 2 minutes
+        await redis_1.redis.set(CACHE_KEY, JSON.stringify(result), 120);
+        return result;
     });
     // GET symbol search
     fastify.get('/search', async (request, reply) => {
@@ -112,6 +180,9 @@ async function positionRoutes(fastify, options) {
         catch (err) {
             fastify.log.error({ err }, 'Failed to trigger immediate sync');
         }
+        // Invalidate cache
+        await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
+        await redis_1.redis.set(`USER_STATS:${userId}`, '', 1);
         return reply.code(201).send(newPosition);
     });
     // UPDATE position status (CLOSE)
@@ -126,25 +197,55 @@ async function positionRoutes(fastify, options) {
             return reply.code(404).send({ error: 'Position not found' });
         }
         const position = rows[0];
-        // 2. Determine Close Price (Manual override or current market price)
+        // 2. Determine Close Price and Quantity
         const closePrice = body?.price !== undefined ? body.price : Number(position.current_price);
-        // 3. Calculate Analytics
+        const closeQty = body?.quantity !== undefined ? body.quantity : Number(position.quantity);
+        const currentQty = Number(position.quantity);
+        if (closeQty <= 0 || closeQty > currentQty) {
+            return reply.code(400).send({ error: 'Invalid quantity' });
+        }
+        // 3. Calculate Analytics for the closed portion
         const entryPrice = Number(position.entry_price);
-        const quantity = Number(position.quantity);
-        const realizedPnl = (closePrice - entryPrice) * quantity * 100; // Standard option multiplier
-        // Calculate loss avoided if it was a stop loss scenario? 
-        // For now, simpler is better. We just want realized PnL.
-        // 4. Update Position
-        const updateQuery = `
-      UPDATE positions 
-      SET status = 'CLOSED', 
-          realized_pnl = $1, 
-          updated_at = CURRENT_TIMESTAMP 
-      WHERE id = $2 
-      RETURNING *
-    `;
-        const { rows: updatedRows } = await fastify.pg.query(updateQuery, [realizedPnl, id]);
-        return updatedRows[0];
+        const realizedPnl = (closePrice - entryPrice) * closeQty * 100;
+        if (closeQty < currentQty) {
+            // PARTIAL CLOSE
+            // Update existing position to reflect remaining quantity
+            await fastify.pg.query('UPDATE positions SET quantity = quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [closeQty, id]);
+            // Create a NEW closed position record for the sold portion
+            const insertQuery = `
+        INSERT INTO positions (
+          user_id, symbol, option_type, strike_price, expiration_date, 
+          entry_price, quantity, stop_loss_trigger, take_profit_trigger,
+          trailing_high_price, trailing_stop_loss_pct, current_price,
+          status, realized_pnl, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'CLOSED', $13, $14, CURRENT_TIMESTAMP)
+        RETURNING *
+      `;
+            const values = [
+                userId, position.symbol, position.option_type, position.strike_price, position.expiration_date,
+                position.entry_price, closeQty, position.stop_loss_trigger, position.take_profit_trigger,
+                position.trailing_high_price, position.trailing_stop_loss_pct, closePrice, realizedPnl, position.created_at
+            ];
+            const { rows: newRows } = await fastify.pg.query(insertQuery, values);
+            return newRows[0];
+        }
+        else {
+            // FULL CLOSE
+            const updateQuery = `
+        UPDATE positions 
+        SET status = 'CLOSED', 
+            realized_pnl = $1, 
+            current_price = $2,
+            updated_at = CURRENT_TIMESTAMP 
+        WHERE id = $3 
+        RETURNING *
+      `;
+            const { rows: updatedRows } = await fastify.pg.query(updateQuery, [realizedPnl, closePrice, id]);
+            // Invalidate cache
+            const userId = request.user.id;
+            await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
+            return updatedRows[0];
+        }
     });
     // REOPEN position (Manual)
     fastify.patch('/:id/reopen', async (request, reply) => {
@@ -180,6 +281,8 @@ async function positionRoutes(fastify, options) {
         catch (err) {
             fastify.log.error({ err }, 'Failed to trigger immediate sync on reopen');
         }
+        // Invalidate cache
+        await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
         return rows[0];
     });
     // UPDATE position full
@@ -230,6 +333,8 @@ async function positionRoutes(fastify, options) {
             body.trailing_stop_loss_pct, newStatus, id
         ];
         const { rows } = await fastify.pg.query(query, values);
+        // Invalidate cache
+        await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
         return rows[0];
     });
     // SYNC single position
@@ -263,6 +368,9 @@ async function positionRoutes(fastify, options) {
             if (result.rowCount === 0) {
                 return reply.code(404).send({ error: 'Position not found' });
             }
+            // Invalidate cache
+            await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
+            await redis_1.redis.set(`USER_STATS:${userId}`, '', 1);
             return reply.code(204).send();
         }
         catch (err) {

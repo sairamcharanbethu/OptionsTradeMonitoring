@@ -34,6 +34,7 @@ export class AIService {
         const prompt = `Option Alert: ${data.symbol} ${data.type} ${data.strike} Exp: ${data.expiration}
 Event: ${data.event}
 Price: $${data.price} (PnL: ${data.pnl}%)
+Underlying: $${data.underlying_price || 'N/A'}
 Greeks: ${JSON.stringify(data.greeks)}
 
 Task: Concise summary (20 words) + Discord message (markdown, emoji).
@@ -42,6 +43,29 @@ Format: JSON { "verdict": "...", "analysis": "...", "discord": "..." }`;
         const response = await this.generateAnalysisInternal(prompt);
         return {
             summary: response.analysis,
+            discord_message: response.discord || response.analysis
+        };
+    }
+
+    async generateBriefing(positions: any[]): Promise<{ briefing: string; discord_message: string }> {
+        if (positions.length === 0) return { briefing: "No active positions.", discord_message: "No active positions." };
+
+        const posSummary = positions.map(p => {
+            const pnl = ((Number(p.current_price) - Number(p.entry_price)) / Number(p.entry_price) * 100).toFixed(1);
+            return `- ${p.symbol} ${p.option_type} $${p.strike_price} Exp: ${p.expiration_date}: Price $${p.current_price} (${pnl}%) | Delta: ${p.delta}`;
+        }).join('\n');
+
+        const prompt = `Morning Briefing for ${positions[0].user_id}
+Positions:
+${posSummary}
+
+Task: Provide a high-level summary of the portfolio's health, highlight positions needing immediate attention (due to PnL or Greek shifts), and suggest next steps.
+Style: Professional trader tone, concise but insightful.
+Format: JSON { "briefing": "Full analysis here...", "discord": "Formatted Discord message with emojis..." }`;
+
+        const response = await this.generateAnalysisInternal(prompt);
+        return {
+            briefing: response.analysis,
             discord_message: response.discord || response.analysis
         };
     }

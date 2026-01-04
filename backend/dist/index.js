@@ -49,7 +49,10 @@ const jwt_1 = __importDefault(require("@fastify/jwt"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = require("./routes/admin");
 const fastify = (0, fastify_1.default)({
-    logger: true
+    logger: {
+        level: 'warn'
+    },
+    disableRequestLogging: true
 });
 const testConnection = async (connectionString, label) => {
     const isCloud = connectionString.includes('aivencloud');
@@ -97,13 +100,18 @@ const start = async () => {
         console.log(`[System] Active Database Host: ${activeDbUrl.includes('@') ? activeDbUrl.split('@')[1] : 'localhost'}`);
         await fastify.register(postgres_1.default, {
             connectionString: activeDbUrl,
-            ssl: activeDbUrl.includes('aivencloud') ? { rejectUnauthorized: false } : undefined
+            ssl: activeDbUrl.includes('aivencloud') ? { rejectUnauthorized: false } : undefined,
+            max: 20,
+            idleTimeoutMillis: 30000
         });
         await fastify.register(cors_1.default, {
             origin: true
         });
+        if (!process.env.JWT_SECRET) {
+            throw new Error('JWT_SECRET environment variable is required');
+        }
         await fastify.register(jwt_1.default, {
-            secret: process.env.JWT_SECRET || 'supersecret_options_monitor_2024'
+            secret: process.env.JWT_SECRET
         });
         fastify.decorate('authenticate', async (request, reply) => {
             try {
