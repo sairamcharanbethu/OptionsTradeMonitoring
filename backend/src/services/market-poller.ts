@@ -46,9 +46,9 @@ export class MarketPoller {
 
   public async sendMorningBriefings(ignoreFrequency: boolean = false) {
     console.log(`[MarketPoller] Executing morning briefings (ignoreFrequency: ${ignoreFrequency})...`);
-    const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT user_id FROM positions');
+    const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT p.user_id, u.username FROM positions p JOIN users u ON p.user_id = u.id');
 
-    for (const { user_id: userId } of users) {
+    for (const { user_id: userId, username } of users) {
       try {
         // 1. Check user settings for briefing frequency
         const { rows: settingsRows } = await this.fastify.pg.query(
@@ -68,7 +68,7 @@ export class MarketPoller {
 
         // 3. Fetch open positions
         const { rows: positions } = await this.fastify.pg.query(
-          "SELECT * FROM positions WHERE user_id = $1 AND status != 'CLOSED'",
+          "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.user_id = $1 AND p.status != 'CLOSED'",
           [userId]
         );
 
@@ -79,7 +79,7 @@ export class MarketPoller {
         const briefingData = await this.aiService.generateBriefing(positions);
 
         // 5. Notify N8n
-        await this.notifyN8nBriefing(userId, briefingData.briefing, briefingData.discord_message);
+        await this.notifyN8nBriefing(userId, username, briefingData.briefing, briefingData.discord_message);
 
       } catch (err) {
         console.error(`[MarketPoller] Failed to send briefing for user ${userId}:`, err);
@@ -109,7 +109,7 @@ export class MarketPoller {
     }
   }
 
-  private async notifyN8nBriefing(userId: string, briefing: string, discordMessage: string) {
+  private async notifyN8nBriefing(userId: string, username: string, briefing: string, discordMessage: string) {
     const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
     if (!N8N_WEBHOOK_URL) return;
 
@@ -119,9 +119,11 @@ export class MarketPoller {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event: 'MORNING_BRIEFING',
+          notification_type: 'briefing',
           user_id: userId,
+          username: username,
           briefing: briefing,
-          discord_message: discordMessage,
+          discord_message: `**[User: ${username}]**\n${discordMessage}`,
           timestamp: new Date().toISOString()
         })
       });
@@ -226,7 +228,7 @@ export class MarketPoller {
   public async syncPrice(symbol: string) {
     console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
     const { rows: positions } = await this.fastify.pg.query(
-      "SELECT * FROM positions WHERE symbol = $1 AND status != 'CLOSED'",
+      "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'",
       [symbol]
     );
 
@@ -300,7 +302,7 @@ export class MarketPoller {
 
     // Poll all non-CLOSED positions so user sees up-to-date price until they manually close
     const { rows: positions } = await this.fastify.pg.query(
-      "SELECT * FROM positions WHERE status != 'CLOSED'"
+      "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'"
     );
 
     if (positions.length === 0) {
@@ -416,6 +418,7 @@ export class MarketPoller {
   }
 
   private async notifyN8n(position: any, price: number, pnl: number, lossAvoided?: number, type: string = 'STOP_LOSS', aiSummary?: string, discordMessage?: string, greeks?: any, iv?: number) {
+    const username = position.username || 'Unknown';
     const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
     if (!N8N_WEBHOOK_URL) return;
 
@@ -425,6 +428,8 @@ export class MarketPoller {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+          notification_type: 'alert',
+          username: username,
           symbol: position.symbol,
           ticker: position.symbol,
           option_type: position.option_type,
@@ -435,7 +440,7 @@ export class MarketPoller {
           loss_avoided: lossAvoided,
           position_id: position.id,
           ai_summary: aiSummary,
-          discord_message: discordMessage,
+          discord_message: `**[User: ${username}]**\n${discordMessage}`,
           greeks: greeks,
           iv: iv,
           timestamp: new Date().toISOString()
