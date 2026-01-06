@@ -14,5 +14,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+    - name: Build the Docker image for backend
+      run: docker build . --file backend/Dockerfile --tag optionsmonitoring-frontend:$(date +%s)
+    - uses: actions/checkout@v4
+    - name: Build the Docker image for frontend
+      run: docker build . --file frontend/Dockerfile --tag optionsmonitoring-backend:$(date +%s)
