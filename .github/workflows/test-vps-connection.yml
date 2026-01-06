@@ -1,0 +1,39 @@
+name: Test VPS Connection
+
+on:
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  test-connection:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Test SSH Connection
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        key: ${{ secrets.VPS_SSH_KEY }}
+        script: |
+          echo "=========================================="
+          echo "SSH Connection Successful!"
+          echo "=========================================="
+          echo "Hostname: $(hostname)"
+          echo "Current User: $(whoami)"
+          echo "Current Directory: $(pwd)"
+          echo "=========================================="
+          echo "Docker Version:"
+          docker --version
+          echo "=========================================="
+          echo "Docker Compose Version:"
+          docker-compose --version
+          echo "=========================================="
+          echo "Checking /opt directory:"
+          ls -la /opt/
+          echo "=========================================="
+          echo "System Info:"
+          uname -a
+          echo "=========================================="
+          echo "Disk Space:"
+          df -h
+          echo "=========================================="
