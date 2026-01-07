@@ -12,7 +12,7 @@ jobs:
         run: |
           if [ -z "${{ secrets.VPS_HOST }}" ]; then echo "VPS_HOST missing" && exit 1; fi
           if [ -z "${{ secrets.VPS_USERNAME }}" ]; then echo "VPS_USERNAME missing" && exit 1; fi
-          if [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then echo "VPS_SSH_KEY missing" && exit 1; fi
+          if [ -z "${{ vars.VPS_SSH_KEY }}" ]; then echo "VPS_SSH_KEY missing" && exit 1; fi
           echo "Secrets present."
 
       - name: Test SSH Connection
@@ -20,7 +20,7 @@ jobs:
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
-          key: ${{ secrets.VPS_SSH_KEY }}
+          key: ${{ vars.VPS_SSH_KEY }}
           port: 22
           script: |
             echo "=========================================="
