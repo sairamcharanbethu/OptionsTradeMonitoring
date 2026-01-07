@@ -1,49 +1,46 @@
 name: Test VPS Connection
 
 on:
-  workflow_dispatch:  # Allows manual trigger
+  workflow_dispatch:
 
 jobs:
   test-connection:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Debug - Check Secrets
-      run: |
-        echo "Host: ${{ secrets.VPS_HOST }}"
-        echo "Username: ${{ secrets.VPS_USERNAME }}"
-        echo "Key length: ${#VPS_SSH_KEY}"
-        echo "Key starts with: $(echo '${{ secrets.VPS_SSH_KEY }}' | head -c 50)"
-      env:
-        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-    
-    - name: Test SSH Connection
-      uses: appleboy/ssh-action@master
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USERNAME }}
-        key: ${{ secrets.VPS_SSH_KEY }}
-        port: 22
-        script: |
-          echo "=========================================="
-          echo "SSH Connection Successful!"
-          echo "=========================================="
-          echo "Hostname: $(hostname)"
-          echo "Current User: $(whoami)"
-          echo "Current Directory: $(pwd)"
-          echo "=========================================="
-          echo "Docker Version:"
-          docker --version
-          echo "=========================================="
-          echo "Docker Compose Version:"
-          docker-compose --version
-          echo "=========================================="
-          echo "Checking /opt directory:"
-          ls -la /opt/
-          echo "=========================================="
-          echo "System Info:"
-          uname -a
-          echo "=========================================="
-          echo "Disk Space:"
-          df -h
-          echo "=========================================="
+      - name: Sanity Check Secrets Exist
+        run: |
+          if [ -z "${{ secrets.VPS_HOST }}" ]; then echo "VPS_HOST missing" && exit 1; fi
+          if [ -z "${{ secrets.VPS_USERNAME }}" ]; then echo "VPS_USERNAME missing" && exit 1; fi
+          if [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then echo "VPS_SSH_KEY missing" && exit 1; fi
+          echo "Secrets present."
+
+      - name: Test SSH Connection
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          script: |
+            echo "=========================================="
+            echo "SSH Connection Successful"
+            echo "=========================================="
+            hostname
+            whoami
+            pwd
+
+            echo "Docker:"
+            docker --version
+
+            echo "Docker Compose:"
+            docker compose version
+
+            echo "Listing /opt:"
+            ls -la /opt
+
+            echo "System:"
+            uname -a
+
+            echo "Disk:"
+            df -h
