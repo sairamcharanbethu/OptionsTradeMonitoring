@@ -1,18 +1,59 @@
-name: Variable Injection Test
+name: Test VPS Connection
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-vars:
+  test-connection:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Print variables
-        run: |
-          echo "Host: $VPS_HOST"
-          echo "User: $VPS_USERNAME"
-          echo "Key: $VPS_SSH_KEY"
+      - name: Validate secrets
+        shell: bash
         env:
-          VPS_HOST_TEST: ${{ vars.VPS_HOST }}
-          VPS_USERNAME_TEST: ${{ vars.VPS_USERNAME }}
-          VPS_SSH_KEY_TEST: ${{ vars.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USERNAME: ${{ secrets.VPS_USERNAME }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if [ -z "$VPS_HOST" ]; then echo "VPS_HOST missing" && exit 1; fi
+          if [ -z "$VPS_USERNAME" ]; then echo "VPS_USERNAME missing" && exit 1; fi
+          if [ -z "$VPS_SSH_KEY" ]; then echo "VPS_SSH_KEY missing" && exit 1; fi
+          echo "Secrets present."
+
+      - name: Prepare SSH key
+        shell: bash
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g' > key.pem
+          chmod 600 key.pem
+
+      - name: Test SSH connection
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key_path: key.pem
+          port: 22
+          script: |
+            echo "=========================================="
+            echo "SSH Connection Successful"
+            echo "=========================================="
+            hostname
+            whoami
+            pwd
+
+            echo "Docker:"
+            docker --version
+
+            echo "Docker Compose:"
+            docker compose version
+
+            echo "Listing /opt:"
+            ls -la /opt
+
+            echo "System:"
+            uname -a
+
+            echo "Disk:"
+            df -h
