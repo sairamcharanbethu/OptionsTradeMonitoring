@@ -1,46 +1,18 @@
-name: Test VPS Connection
+name: Variable Injection Test
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-connection:
+  test-vars:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Sanity Check Secrets Exist
+      - name: Print variables
         run: |
-          if [ -z "${{ secrets.VPS_HOST }}" ]; then echo "VPS_HOST missing" && exit 1; fi
-          if [ -z "${{ secrets.VPS_USERNAME }}" ]; then echo "VPS_USERNAME missing" && exit 1; fi
-          if [ -z "${{ vars.VPS_SSH_KEY }}" ]; then echo "VPS_SSH_KEY missing" && exit 1; fi
-          echo "Secrets present."
-
-      - name: Test SSH Connection
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USERNAME }}
-          key: ${{ vars.VPS_SSH_KEY }}
-          port: 22
-          script: |
-            echo "=========================================="
-            echo "SSH Connection Successful"
-            echo "=========================================="
-            hostname
-            whoami
-            pwd
-
-            echo "Docker:"
-            docker --version
-
-            echo "Docker Compose:"
-            docker compose version
-
-            echo "Listing /opt:"
-            ls -la /opt
-
-            echo "System:"
-            uname -a
-
-            echo "Disk:"
-            df -h
+          echo "Host: $VPS_HOST"
+          echo "User: $VPS_USERNAME"
+          echo "Key: $VPS_SSH_KEY"
+        env:
+          VPS_HOST_TEST: ${{ vars.VPS_HOST }}
+          VPS_USERNAME_TEST: ${{ vars.VPS_USERNAME }}
+          VPS_SSH_KEY_TEST: ${{ vars.VPS_SSH_KEY }}
