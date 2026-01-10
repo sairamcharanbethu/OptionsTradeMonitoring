@@ -31,13 +31,13 @@ jobs:
       - name: Type check backend
         run: |
           cd backend
-          npm install
+          npm install --legacy-peer-deps
           npm run build
 
       - name: Type check frontend
         run: |
           cd frontend
-          npm install
+          npm install --legacy-peer-deps
           npm run build
 
   build-and-push:
