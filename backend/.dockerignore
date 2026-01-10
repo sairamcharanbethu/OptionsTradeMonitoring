@@ -1,5 +1,5 @@
 node_modules
-dist
+# dist removed to allow native build assets
 .git
 .gitignore
 README.md
