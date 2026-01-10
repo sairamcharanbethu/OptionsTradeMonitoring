@@ -122,12 +122,18 @@ jobs:
           echo "ENV_NAME=Production" >> $GITHUB_ENV
           echo "PORT_BACKEND=3001" >> $GITHUB_ENV
           echo "PORT_FRONTEND=80" >> $GITHUB_ENV
+          echo "PORT_DB=5432" >> $GITHUB_ENV
+          echo "PORT_REDIS=6379" >> $GITHUB_ENV
+          echo "PORT_REDIS_COMMANDER=8081" >> $GITHUB_ENV
         else
           echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging" >> $GITHUB_ENV
           echo "COMPOSE_PROJECT_NAME=options-monitor-staging" >> $GITHUB_ENV
           echo "ENV_NAME=Staging" >> $GITHUB_ENV
           echo "PORT_BACKEND=3002" >> $GITHUB_ENV
           echo "PORT_FRONTEND=81" >> $GITHUB_ENV
+          echo "PORT_DB=5433" >> $GITHUB_ENV
+          echo "PORT_REDIS=6380" >> $GITHUB_ENV
+          echo "PORT_REDIS_COMMANDER=8082" >> $GITHUB_ENV
         fi
 
     - name: Prepare SSH key
@@ -167,9 +173,8 @@ jobs:
           cd ${{ env.DEPLOY_PATH }}
           
           # Force stop any containers on the target ports to avoid "port already allocated" errors
-          # This handles cases where a container might be running under a different project name
           echo "🧹 Checking for port conflicts..."
-          for port in ${{ env.PORT_BACKEND }} ${{ env.PORT_FRONTEND }}; do
+          for port in ${{ env.PORT_BACKEND }} ${{ env.PORT_FRONTEND }} ${{ env.PORT_DB }} ${{ env.PORT_REDIS }} ${{ env.PORT_REDIS_COMMANDER }}; do
             PID=$(docker ps --format '{{.ID}} {{.Ports}}' | grep "0.0.0.0:$port" | awk '{print $1}' || true)
             if [ ! -z "$PID" ]; then
               echo "Stopping container $PID on port $port..."
@@ -189,7 +194,10 @@ jobs:
           echo "🔄 Restarting services..."
           export PORT_BACKEND=${{ env.PORT_BACKEND }}
           export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
-          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend
+          export PORT_DB=${{ env.PORT_DB }}
+          export PORT_REDIS=${{ env.PORT_REDIS }}
+          export PORT_REDIS_COMMANDER=${{ env.PORT_REDIS_COMMANDER }}
+          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend db redis redis-commander
           
           # Wait for containers to stabilize
           echo "🕒 Waiting for containers to stabilize..."
