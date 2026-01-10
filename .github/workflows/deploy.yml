@@ -148,17 +148,18 @@ jobs:
       env:
         VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       run: |
-        KEY_PATH="$RUNNER_TEMP/ssh_key.pem"
-        echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g' > "$KEY_PATH"
-        chmod 600 "$KEY_PATH"
-        echo "KEY_PATH=$KEY_PATH" >> $GITHUB_ENV
+        # Fix formatting while keeping it as a variable
+        FIXED_KEY=$(echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g')
+        echo "FIXED_SSH_KEY<<EOF" >> $GITHUB_ENV
+        echo "$FIXED_KEY" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
 
     - name: Deploy to VPS
       uses: appleboy/ssh-action@v1.2.0
       with:
         host: ${{ secrets.VPS_HOST }}
         username: ${{ secrets.VPS_USERNAME }}
-        key_path: ${{ env.KEY_PATH }}
+        key: ${{ env.FIXED_SSH_KEY }}
         port: 22
         script: |
           set -e
