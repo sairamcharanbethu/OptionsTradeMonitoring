@@ -39,16 +39,6 @@ services:
     ports:
       - "${PORT_REDIS:-6379}:6379"
 
-  redis-commander:
-    image: rediscommander/redis-commander:latest
-    restart: always
-    environment:
-      - REDIS_HOSTS=local:redis:6379
-    ports:
-      - "${PORT_REDIS_COMMANDER:-8081}:8081"
-    depends_on:
-      - redis
-
   frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
     restart: always
