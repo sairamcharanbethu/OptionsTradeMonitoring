@@ -11,14 +11,14 @@ services:
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - ssmedia_ssmedia_net
 
   backend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:latest
     restart: always
     ports:
       - "${PORT_BACKEND:-3001}:3001"
-    dns:
-      - 8.8.8.8
     environment:
       DATABASE_URL: ${DATABASE_URL}
       BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL}
@@ -29,15 +29,17 @@ services:
       MARKET_DATA_POLL_INTERVAL: ${MARKET_DATA_POLL_INTERVAL}
       ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
       POLYGON_API_KEY: ${POLYGON_API_KEY}
-    depends_on:
       - db
       - redis
+    networks:
+      - ssmedia_ssmedia_net
 
   redis:
     image: redis:alpine
     restart: always
-    ports:
       - "${PORT_REDIS:-6379}:6379"
+    networks:
+      - ssmedia_ssmedia_net
 
   frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
@@ -46,6 +48,12 @@ services:
       - "${PORT_FRONTEND:-3000}:80"
     depends_on:
       - backend
+    networks:
+      - ssmedia_ssmedia_net
+
+networks:
+  ssmedia_ssmedia_net:
+    external: true
 
 volumes:
   db-data:
