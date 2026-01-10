@@ -52,7 +52,7 @@ jobs:
             docker compose version
 
             echo "Listing /opt:"
-            ls -la /opt
+            ls -la /srv/ssmedia
 
             echo "System:"
             uname -a
