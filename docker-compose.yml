@@ -13,9 +13,7 @@ services:
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:latest
     restart: always
     ports:
       - "3001:3001"
@@ -52,9 +50,7 @@ services:
       - redis
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
     restart: always
     ports:
       - "3000:80"
