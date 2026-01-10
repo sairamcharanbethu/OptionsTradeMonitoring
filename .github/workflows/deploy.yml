@@ -211,6 +211,10 @@ jobs:
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend db redis
           else
             # Staging: Skip 'db' service as it uses Production DB. Remove orphans (like redis-commander)
+            # EXPLICITLY stop and remove the Staging DB container so it doesn't conflict or show as "Restarting"
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db || true
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db || true
+            
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --remove-orphans --no-deps backend frontend redis
           fi
           
