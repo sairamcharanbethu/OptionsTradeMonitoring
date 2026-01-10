@@ -7,6 +7,10 @@ COPY package*.json ./
 RUN npm install --legacy-peer-deps
 
 COPY . .
+
+ARG VITE_APP_BUILD_SHA
+ENV VITE_APP_BUILD_SHA=$VITE_APP_BUILD_SHA
+
 RUN npm run build
 
 # Step 2: Serve the application using Nginx

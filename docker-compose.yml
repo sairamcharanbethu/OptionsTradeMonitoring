@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "${PORT_DB:-5432}:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
@@ -16,7 +16,7 @@ services:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:latest
     restart: always
     ports:
-      - "3001:3001"
+      - "${PORT_BACKEND:-3001}:3001"
     dns:
       - 8.8.8.8
     environment:
@@ -37,7 +37,7 @@ services:
     image: redis:alpine
     restart: always
     ports:
-      - "6379:6379"
+      - "${PORT_REDIS:-6379}:6379"
 
   redis-commander:
     image: rediscommander/redis-commander:latest
@@ -45,7 +45,7 @@ services:
     environment:
       - REDIS_HOSTS=local:redis:6379
     ports:
-      - "8081:8081"
+      - "${PORT_REDIS_COMMANDER:-8081}:8081"
     depends_on:
       - redis
 
@@ -53,7 +53,7 @@ services:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
     restart: always
     ports:
-      - "3000:80"
+      - "${PORT_FRONTEND:-3000}:80"
     depends_on:
       - backend
 
