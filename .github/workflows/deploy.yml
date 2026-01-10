@@ -129,11 +129,11 @@ jobs:
           echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging" >> $GITHUB_ENV
           echo "COMPOSE_PROJECT_NAME=options-monitor-staging" >> $GITHUB_ENV
           echo "ENV_NAME=Staging" >> $GITHUB_ENV
-          echo "PORT_BACKEND=3002" >> $GITHUB_ENV
-          echo "PORT_FRONTEND=81" >> $GITHUB_ENV
-          echo "PORT_DB=5433" >> $GITHUB_ENV
-          echo "PORT_REDIS=6380" >> $GITHUB_ENV
-          echo "PORT_REDIS_COMMANDER=8082" >> $GITHUB_ENV
+          echo "PORT_BACKEND=30020" >> $GITHUB_ENV
+          echo "PORT_FRONTEND=8100" >> $GITHUB_ENV
+          echo "PORT_DB=54330" >> $GITHUB_ENV
+          echo "PORT_REDIS=46380" >> $GITHUB_ENV
+          echo "PORT_REDIS_COMMANDER=48082" >> $GITHUB_ENV
         fi
 
     - name: Prepare SSH key
@@ -172,16 +172,6 @@ jobs:
           
           cd ${{ env.DEPLOY_PATH }}
           
-          # Force stop any containers on the target ports to avoid "port already allocated" errors
-          echo "🧹 Checking for port conflicts..."
-          for port in ${{ env.PORT_BACKEND }} ${{ env.PORT_FRONTEND }} ${{ env.PORT_DB }} ${{ env.PORT_REDIS }} ${{ env.PORT_REDIS_COMMANDER }}; do
-            PID=$(docker ps --format '{{.ID}} {{.Ports}}' | grep "0.0.0.0:$port" | awk '{print $1}' || true)
-            if [ ! -z "$PID" ]; then
-              echo "Stopping container $PID on port $port..."
-              docker stop $PID || true
-            fi
-          done
-
           # Login to GitHub Container Registry
           echo "Logging into GHCR..."
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
