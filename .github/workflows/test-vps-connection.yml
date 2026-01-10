@@ -1,9 +1,18 @@
 name: Test VPS Connection
+
 on:
   workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
 jobs:
   test-connection:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
     steps:
       - name: Validate secrets
         shell: bash
@@ -16,6 +25,7 @@ jobs:
           if [ -z "$VPS_USERNAME" ]; then echo "VPS_USERNAME missing" && exit 1; fi
           if [ -z "$VPS_SSH_KEY" ]; then echo "VPS_SSH_KEY missing" && exit 1; fi
           echo "Secrets present."
+      
       - name: Prepare SSH key
         shell: bash
         env:
@@ -25,6 +35,7 @@ jobs:
           echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g' > "$KEY_PATH"
           chmod 644 "$KEY_PATH"
           echo "KEY_PATH=$KEY_PATH" >> $GITHUB_ENV
+      
       - name: Test SSH connection
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -49,3 +60,15 @@ jobs:
             uname -a
             echo "Disk:"
             df -h
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Verify registry login
+        run: |
+          echo "Successfully logged in to ${{ env.REGISTRY }}"
+          echo "Username: ${{ github.actor }}"
