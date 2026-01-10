@@ -1,14 +1,3 @@
-# Build stage
-FROM node:20-slim AS builder
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm install
-
-COPY . .
-RUN NODE_OPTIONS="--max-old-space-size=4096" npm run build
-
 # Production stage
 FROM node:20-slim
 
@@ -22,10 +11,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 
-COPY --from=builder /app/package*.json ./
+# Copy dependency files and install production dependencies
+COPY package*.json ./
 RUN npm install --omit=dev
 
-COPY --from=builder /app/dist ./dist
+# Copy pre-built dist folder from the CI runner
+COPY dist ./dist
 
 # Create directory for scripts
 COPY src/scripts ./src/scripts

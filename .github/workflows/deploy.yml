@@ -16,10 +16,15 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  type-check:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -28,93 +33,81 @@ jobs:
             backend/package-lock.json
             frontend/package-lock.json
 
-      - name: Type check backend
+      - name: Build backend
         run: |
           cd backend
           npm install --legacy-peer-deps
           npm run build
 
-      - name: Type check frontend
+      - name: Build frontend
         run: |
           cd frontend
           npm install --legacy-peer-deps
+          export VITE_APP_BUILD_SHA=${{ github.sha }}
           npm run build
 
-  build-and-push:
-    needs: type-check
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-    
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Log in to Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Convert repository name to lowercase
-      id: repo
-      run: echo "lowercase=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
-    
-    - name: Extract metadata for backend
-      id: meta-backend
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend
-        tags: |
-          type=sha
-          type=raw,value=latest
-    
-    - name: Build and push backend image
-      uses: docker/build-push-action@v6
-      with:
-        context: ./backend
-        file: ./backend/Dockerfile
-        platforms: linux/arm64
-        push: true
-        tags: ${{ steps.meta-backend.outputs.tags }}
-        labels: ${{ steps.meta-backend.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-    
-    - name: Extract metadata for frontend
-      id: meta-frontend
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend
-        tags: |
-          type=sha
-          type=raw,value=latest
-    
-    - name: Build and push frontend image
-      uses: docker/build-push-action@v6
-      with:
-        context: ./frontend
-        file: ./frontend/Dockerfile
-        platforms: linux/arm64
-        push: true
-        tags: ${{ steps.meta-frontend.outputs.tags }}
-        labels: ${{ steps.meta-frontend.outputs.labels }}
-        build-args: |
-          VITE_APP_BUILD_SHA=${{ github.sha }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Convert repository name to lowercase
+        id: repo
+        run: echo "lowercase=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+      
+      - name: Extract metadata for backend
+        id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend
+          tags: |
+            type=sha
+            type=raw,value=latest
+      
+      - name: Build and push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Extract metadata for frontend
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend
+          tags: |
+            type=sha
+            type=raw,value=latest
+      
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
+    needs: build
+    runs-on: self-hosted
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     
     steps:
