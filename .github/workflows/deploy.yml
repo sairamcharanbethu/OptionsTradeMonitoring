@@ -130,71 +130,90 @@ jobs:
           echo "PORT_FRONTEND=81" >> $GITHUB_ENV
         fi
 
-    - name: Deploy natively
+    - name: Prepare SSH key
+      shell: bash
+      env:
+        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       run: |
-        set -e
-        echo "=========================================="
-        echo "🚀 Starting native deployment to ${{ env.ENV_NAME }}..."
-        echo "=========================================="
-        
-        # Ensure target directory exists
-        mkdir -p ${{ env.DEPLOY_PATH }}
-        
-        # Sync configuration files from the checked-out repository
-        cp docker-compose.yml ${{ env.DEPLOY_PATH }}/
-        cd ${{ env.DEPLOY_PATH }}
-        
-        # Login to GitHub Container Registry
-        echo "Logging into GHCR..."
-        echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-        
-        # Pull latest images
-        echo "📥 Pulling latest images..."
-        docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull backend frontend
-        
-        # Restart services with environment-specific ports
-        echo "🔄 Restarting services..."
-        PORT_BACKEND=${{ env.PORT_BACKEND }} PORT_FRONTEND=${{ env.PORT_FRONTEND }} \
-        docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend
-        
-        # Wait for containers to stabilize
-        echo "🕒 Waiting for containers to stabilize..."
-        sleep 10
-        
-        # Check status
-        echo "=========================================="
-        echo "📊 Container Status (${{ env.ENV_NAME }}):"
-        docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
-        
-        # Show logs if containers are failing
-        if docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps | grep -q "Restarting\|Exited"; then
+        # Fix formatting while keeping it as a variable
+        FIXED_KEY=$(echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g')
+        echo "FIXED_SSH_KEY<<EOF" >> $GITHUB_ENV
+        echo "$FIXED_KEY" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+
+    - name: Copy docker-compose.yml to remote VPS
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        key: ${{ env.FIXED_SSH_KEY }}
+        port: 22
+        source: "docker-compose.yml"
+        target: ${{ env.DEPLOY_PATH }}
+
+    - name: Deploy to remote VPS
+      uses: appleboy/ssh-action@v1.2.0
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USERNAME }}
+        key: ${{ env.FIXED_SSH_KEY }}
+        port: 22
+        script: |
+          set -e
           echo "=========================================="
-          echo "⚠️  Issues detected. Backend logs:"
-          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 backend
+          echo "🚀 Starting remote deployment to ${{ env.ENV_NAME }}..."
           echo "=========================================="
-          echo "⚠️  Frontend logs:"
-          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 frontend
-          exit 1
-        else
+          
+          cd ${{ env.DEPLOY_PATH }}
+          
+          # Login to GitHub Container Registry
+          echo "Logging into GHCR..."
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          
+          # Pull latest images
+          echo "📥 Pulling latest images..."
+          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull backend frontend
+          
+          # Restart services with environment-specific ports
+          echo "🔄 Restarting services..."
+          export PORT_BACKEND=${{ env.PORT_BACKEND }}
+          export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
+          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend
+          
+          # Wait for containers to stabilize
+          echo "🕒 Waiting for containers to stabilize..."
+          sleep 10
+          
+          # Check status
           echo "=========================================="
-          echo "✅ All containers in ${{ env.ENV_NAME }} running successfully!"
-        fi
-        
-        # Clean up old images
-        echo "=========================================="
-        echo "🧹 Cleaning up old images..."
-        docker image prune -f
-        
-        echo "=========================================="
-        echo "✅ ${{ env.ENV_NAME }} Deployment completed!"
-        echo "=========================================="
+          echo "📊 Container Status (${{ env.ENV_NAME }}):"
+          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
+          
+          # Show logs if containers are failing
+          if docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps | grep -q "Restarting\|Exited"; then
+            echo "=========================================="
+            echo "⚠️  Issues detected. Backend logs:"
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 backend
+            echo "=========================================="
+            echo "⚠️  Frontend logs:"
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 frontend
+            exit 1
+          else
+            echo "=========================================="
+            echo "✅ All containers in ${{ env.ENV_NAME }} running successfully!"
+          fi
+          
+          # Clean up old images
+          echo "=========================================="
+          echo "🧹 Cleaning up old images..."
+          docker image prune -f
+          
+          echo "=========================================="
+          echo "✅ ${{ env.ENV_NAME }} Deployment completed!"
+          echo "=========================================="
 
     - name: Health Check
       run: |
         echo "Performing health check..."
-        # Wait a bit more for the app to be ready externally
         sleep 5
-        # Attempt to reach the frontend/backend if applicable
-        # Replace with your actual domain/IP if available in secrets
-        # curl -f http://${{ secrets.VPS_HOST }} || exit 1
-        echo "Health check placeholder: Deployment verified on VPS."
+        echo "Health check placeholder: Deployment triggered on remote VPS."
