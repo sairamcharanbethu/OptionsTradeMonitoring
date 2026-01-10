@@ -34,11 +34,15 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
     
+    - name: Convert repository name to lowercase
+      id: repo
+      run: echo "lowercase=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
+    
     - name: Extract metadata for backend
       id: meta-backend
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend
+        images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend
         tags: |
           type=sha
           type=raw,value=latest
@@ -52,14 +56,14 @@ jobs:
         push: true
         tags: ${{ steps.meta-backend.outputs.tags }}
         labels: ${{ steps.meta-backend.outputs.labels }}
-        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:buildcache
-        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-backend:buildcache,mode=max
+        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend:buildcache
+        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend:buildcache,mode=max
     
     - name: Extract metadata for frontend
       id: meta-frontend
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend
+        images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend
         tags: |
           type=sha
           type=raw,value=latest
@@ -73,8 +77,8 @@ jobs:
         push: true
         tags: ${{ steps.meta-frontend.outputs.tags }}
         labels: ${{ steps.meta-frontend.outputs.labels }}
-        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:buildcache
-        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-frontend:buildcache,mode=max
+        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend:buildcache
+        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend:buildcache,mode=max
 
   deploy:
     needs: build-and-push
