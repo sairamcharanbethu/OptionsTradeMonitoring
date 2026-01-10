@@ -48,7 +48,7 @@ jobs:
           type=raw,value=latest
     
     - name: Build and push backend image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: ./backend
         file: ./backend/Dockerfile
@@ -56,8 +56,8 @@ jobs:
         push: true
         tags: ${{ steps.meta-backend.outputs.tags }}
         labels: ${{ steps.meta-backend.outputs.labels }}
-        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend:buildcache
-        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend:buildcache,mode=max
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
     
     - name: Extract metadata for frontend
       id: meta-frontend
@@ -69,7 +69,7 @@ jobs:
           type=raw,value=latest
     
     - name: Build and push frontend image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v6
       with:
         context: ./frontend
         file: ./frontend/Dockerfile
@@ -77,8 +77,8 @@ jobs:
         push: true
         tags: ${{ steps.meta-frontend.outputs.tags }}
         labels: ${{ steps.meta-frontend.outputs.labels }}
-        cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend:buildcache
-        cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend:buildcache,mode=max
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
   deploy:
     needs: build-and-push
@@ -105,11 +105,11 @@ jobs:
       run: |
         KEY_PATH="$RUNNER_TEMP/ssh_key.pem"
         echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g' > "$KEY_PATH"
-        chmod 644 "$KEY_PATH"
+        chmod 600 "$KEY_PATH"
         echo "KEY_PATH=$KEY_PATH" >> $GITHUB_ENV
     
     - name: Deploy to VPS
-      uses: appleboy/ssh-action@v1.0.3
+      uses: appleboy/ssh-action@v1.2.0
       with:
         host: ${{ secrets.VPS_HOST }}
         username: ${{ secrets.VPS_USERNAME }}
@@ -123,6 +123,7 @@ jobs:
           cd /srv/ssmedia/docker/OptionsTradeMonitoring
           
           # Login to GitHub Container Registry
+          # Note: Consider storing PAT in VPS_GHCR_TOKEN secret for better security
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           
           # Pull latest images
