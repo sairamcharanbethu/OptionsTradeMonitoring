@@ -46,8 +46,9 @@ jobs:
           export VITE_APP_BUILD_SHA=${{ github.sha }}
           npm run build
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+      # QEMU is not needed for native ARM64 builds
+      # - name: Set up QEMU
+      #   uses: docker/setup-qemu-action@v3
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -170,6 +171,15 @@ jobs:
           
           cd ${{ env.DEPLOY_PATH }}
           
+          # For Staging: Copy .env from Production if it doesn't exist
+          if [[ "${{ env.ENV_NAME }}" == "Staging" ]]; then
+             echo "📂 Copying .env from Production to Staging..."
+             # We assume Prod is at /srv/ssmedia/docker/OptionsTradeMonitoring
+             # Use -n to not overwrite if one exists (or force -f if we want sync)
+             # User implies they want to use it, so let's forcing copy to keep in sync
+             cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || echo "⚠️ Could not copy .env from Prod"
+          fi
+          
           # Login to GitHub Container Registry
           echo "Logging into GHCR..."
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -188,8 +198,8 @@ jobs:
           if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend db redis
           else
-            # Staging: Skip 'db' service as it uses Production DB
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend redis
+            # Staging: Skip 'db' service as it uses Production DB. Remove orphans (like redis-commander)
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --remove-orphans --no-deps backend frontend redis
           fi
           
           # Wait for containers to stabilize
