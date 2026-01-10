@@ -131,12 +131,34 @@ jobs:
           echo "ENV_NAME=Staging" >> $GITHUB_ENV
         fi
 
+    - name: Validate secrets
+      shell: bash
+      env:
+        VPS_HOST: ${{ secrets.VPS_HOST }}
+        VPS_USERNAME: ${{ secrets.VPS_USERNAME }}
+        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      run: |
+        if [ -z "$VPS_HOST" ]; then echo "VPS_HOST missing" && exit 1; fi
+        if [ -z "$VPS_USERNAME" ]; then echo "VPS_USERNAME missing" && exit 1; fi
+        if [ -z "$VPS_SSH_KEY" ]; then echo "VPS_SSH_KEY missing" && exit 1; fi
+        echo "Secrets validated."
+    
+    - name: Prepare SSH key
+      shell: bash
+      env:
+        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      run: |
+        KEY_PATH="$RUNNER_TEMP/ssh_key.pem"
+        echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g' > "$KEY_PATH"
+        chmod 600 "$KEY_PATH"
+        echo "KEY_PATH=$KEY_PATH" >> $GITHUB_ENV
+
     - name: Deploy to VPS
       uses: appleboy/ssh-action@v1.2.0
       with:
         host: ${{ secrets.VPS_HOST }}
         username: ${{ secrets.VPS_USERNAME }}
-        key: ${{ secrets.VPS_SSH_KEY }}
+        key_path: ${{ env.KEY_PATH }}
         port: 22
         script: |
           set -e
