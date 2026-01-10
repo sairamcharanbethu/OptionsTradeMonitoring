@@ -111,6 +111,8 @@ jobs:
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     
     steps:
+    - uses: actions/checkout@v4
+
     - name: Set deployment environment variables
       id: set-env
       run: |
@@ -118,94 +120,74 @@ jobs:
           echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring" >> $GITHUB_ENV
           echo "COMPOSE_PROJECT_NAME=options-monitor-prod" >> $GITHUB_ENV
           echo "ENV_NAME=Production" >> $GITHUB_ENV
+          echo "PORT_BACKEND=3001" >> $GITHUB_ENV
+          echo "PORT_FRONTEND=80" >> $GITHUB_ENV
         else
           echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging" >> $GITHUB_ENV
           echo "COMPOSE_PROJECT_NAME=options-monitor-staging" >> $GITHUB_ENV
           echo "ENV_NAME=Staging" >> $GITHUB_ENV
+          echo "PORT_BACKEND=3002" >> $GITHUB_ENV
+          echo "PORT_FRONTEND=81" >> $GITHUB_ENV
         fi
 
-    - name: Validate secrets
-      shell: bash
-      env:
-        VPS_HOST: ${{ secrets.VPS_HOST }}
-        VPS_USERNAME: ${{ secrets.VPS_USERNAME }}
-        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+    - name: Deploy natively
       run: |
-        if [ -z "$VPS_HOST" ]; then echo "VPS_HOST missing" && exit 1; fi
-        if [ -z "$VPS_USERNAME" ]; then echo "VPS_USERNAME missing" && exit 1; fi
-        if [ -z "$VPS_SSH_KEY" ]; then echo "VPS_SSH_KEY missing" && exit 1; fi
-        echo "Secrets validated."
-    
-    - name: Prepare SSH key
-      shell: bash
-      env:
-        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-      run: |
-        # Fix formatting while keeping it as a variable
-        FIXED_KEY=$(echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g')
-        echo "FIXED_SSH_KEY<<EOF" >> $GITHUB_ENV
-        echo "$FIXED_KEY" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
-
-    - name: Deploy to VPS
-      uses: appleboy/ssh-action@v1.2.0
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USERNAME }}
-        key: ${{ env.FIXED_SSH_KEY }}
-        port: 22
-        script: |
-          set -e
+        set -e
+        echo "=========================================="
+        echo "🚀 Starting native deployment to ${{ env.ENV_NAME }}..."
+        echo "=========================================="
+        
+        # Ensure target directory exists
+        mkdir -p ${{ env.DEPLOY_PATH }}
+        
+        # Sync configuration files from the checked-out repository
+        cp docker-compose.yml ${{ env.DEPLOY_PATH }}/
+        cd ${{ env.DEPLOY_PATH }}
+        
+        # Login to GitHub Container Registry
+        echo "Logging into GHCR..."
+        echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        
+        # Pull latest images
+        echo "📥 Pulling latest images..."
+        docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull backend frontend
+        
+        # Restart services with environment-specific ports
+        echo "🔄 Restarting services..."
+        PORT_BACKEND=${{ env.PORT_BACKEND }} PORT_FRONTEND=${{ env.PORT_FRONTEND }} \
+        docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend
+        
+        # Wait for containers to stabilize
+        echo "🕒 Waiting for containers to stabilize..."
+        sleep 10
+        
+        # Check status
+        echo "=========================================="
+        echo "📊 Container Status (${{ env.ENV_NAME }}):"
+        docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
+        
+        # Show logs if containers are failing
+        if docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps | grep -q "Restarting\|Exited"; then
           echo "=========================================="
-          echo "🚀 Starting deployment to ${{ env.ENV_NAME }}..."
+          echo "⚠️  Issues detected. Backend logs:"
+          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 backend
           echo "=========================================="
-          
-          mkdir -p ${{ env.DEPLOY_PATH }}
-          cd ${{ env.DEPLOY_PATH }}
-          
-          # Login to GitHub Container Registry
-          echo "Logging into GHCR..."
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          
-          # Pull latest images
-          echo "📥 Pulling latest ARM64 images..."
-          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull backend frontend
-          
-          # Restart only backend and frontend services
-          echo "🔄 Restarting services..."
-          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend
-          
-          # Wait a moment for containers to start
-          echo "🕒 Waiting for containers to stabilize..."
-          sleep 10
-          
-          # Check status
+          echo "⚠️  Frontend logs:"
+          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 frontend
+          exit 1
+        else
           echo "=========================================="
-          echo "📊 Container Status (${{ env.ENV_NAME }}):"
-          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
-          
-          # Show logs if containers are failing
-          if docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps | grep -q "Restarting\|Exited"; then
-            echo "=========================================="
-            echo "⚠️  Issues detected. Backend logs:"
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 backend
-            echo "=========================================="
-            echo "⚠️  Frontend logs:"
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 frontend
-            exit 1
-          else
-            echo "=========================================="
-            echo "✅ All containers in ${{ env.ENV_NAME }} running successfully!"
-          fi
-          
-          # Clean up old images
-          echo "=========================================="
-          echo "🧹 Cleaning up old images..."
-          docker image prune -f
-          
-          echo "=========================================="
-          echo "✅ ${{ env.ENV_NAME }} Deployment completed!"
-          echo "=========================================="
+          echo "✅ All containers in ${{ env.ENV_NAME }} running successfully!"
+        fi
+        
+        # Clean up old images
+        echo "=========================================="
+        echo "🧹 Cleaning up old images..."
+        docker image prune -f
+        
+        echo "=========================================="
+        echo "✅ ${{ env.ENV_NAME }} Deployment completed!"
+        echo "=========================================="
 
     - name: Health Check
       run: |
