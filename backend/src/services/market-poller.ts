@@ -15,7 +15,7 @@ export class MarketPoller {
   }
 
   public start() {
-    const interval = process.env.MARKET_DATA_POLL_INTERVAL || '*/15 * * * *';
+    const interval = process.env.MARKET_DATA_POLL_INTERVAL || '*/1 * * * *';
     console.log(`[MarketPoller] Starting polling job with interval: ${interval}`);
 
     cron.schedule(interval, async () => {

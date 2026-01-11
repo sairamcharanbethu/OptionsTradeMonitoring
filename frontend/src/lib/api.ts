@@ -283,6 +283,12 @@ export const api = {
     return res.json();
   },
 
+  async getPortfolioBriefing(): Promise<{ briefing: string; discord_message: string }> {
+    const res = await authFetch(`${API_BASE}/ai/briefing`);
+    if (!res.ok) throw new Error('Failed to fetch portfolio briefing');
+    return res.json();
+  },
+
   async getSettings(): Promise<Record<string, string>> {
     const res = await authFetch(`${API_BASE}/settings`);
     if (!res.ok) throw new Error('Failed to fetch settings');

@@ -100,6 +100,42 @@
       opacity: .7;
     }
   }
+
+  @keyframes pulse-green {
+    0% {
+      background-color: transparent;
+    }
+
+    30% {
+      background-color: rgba(34, 197, 94, 0.4);
+    }
+
+    100% {
+      background-color: transparent;
+    }
+  }
+
+  @keyframes pulse-red {
+    0% {
+      background-color: transparent;
+    }
+
+    30% {
+      background-color: rgba(239, 68, 68, 0.4);
+    }
+
+    100% {
+      background-color: transparent;
+    }
+  }
+
+  .pulse-up {
+    animation: pulse-green 2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .pulse-down {
+    animation: pulse-red 2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
 }
 
 /* Global button and card transitions */

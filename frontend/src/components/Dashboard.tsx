@@ -116,12 +116,15 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const [marketStatus, setMarketStatus] = useState<{ open: boolean; marketHours: string; timezone: string } | null>(null);
   const [isAddingPosition, setIsAddingPosition] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
+  const [priceChanges, setPriceChanges] = useState<Record<number, 'up' | 'down' | null>>({});
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [historyData, setHistoryData] = useState<Record<number, any[]>>({});
+  const [portfolioBriefing, setPortfolioBriefing] = useState<{ briefing: string; discord_message: string } | null>(null);
+  const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false);
 
   // Filter States
   const [tickerFilter, setTickerFilter] = useState('');
@@ -188,31 +191,51 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     }
   }
 
-  const loadPositions = async () => {
+  const loadPositions = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.getPositions();
+
+      // Track price changes for animations
+      const changes: Record<number, 'up' | 'down' | null> = {};
+      data.forEach(newPos => {
+        const oldPos = positions.find(p => p.id === newPos.id);
+        if (oldPos && oldPos.current_price != null && newPos.current_price != null) {
+          if (Number(newPos.current_price) > Number(oldPos.current_price)) {
+            changes[newPos.id] = 'up';
+          } else if (Number(newPos.current_price) < Number(oldPos.current_price)) {
+            changes[newPos.id] = 'down';
+          }
+        }
+      });
+
+      if (Object.keys(changes).length > 0) {
+        setPriceChanges(changes);
+        // Clear pulses after animation ends
+        setTimeout(() => setPriceChanges({}), 2100);
+      }
+
       setPositions(data);
       setLastRefreshed(new Date());
       setRefreshError(null);
       loadPortfolioStats();
     } catch (err) {
       console.error('Failed to load positions:', err);
-      setRefreshError('Connection error');
+      setRefreshError('Market offline');
     } finally {
       setLoading(false);
     }
-  };
+  }, [positions]);
 
   useEffect(() => {
     loadPositions();
     loadMarketStatus();
-    const interval = setInterval(() => {
+    const intervalId = setInterval(() => {
       loadPositions();
       loadMarketStatus();
-    }, 60000); // refresh every min
-    return () => clearInterval(interval);
-  }, []);
+    }, 30000); // refresh every 30s
+    return () => clearInterval(intervalId);
+  }, [loadPositions]);
 
   const getPnL = (pos: Position) => {
     if (pos.current_price == null) return 0;
@@ -325,20 +348,30 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
   const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
-  async function handleForceSync() {
+  const handleForceSync = async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      setRefreshError(null);
       await api.forcePoll();
       await loadPositions();
-      setLastRefreshed(new Date());
     } catch (err) {
-      console.error('Force sync failed:', err);
-      setRefreshError('Sync failed');
+      console.error('Failed to force sync:', err);
     } finally {
       setLoading(false);
     }
-  }
+  };
+
+  const handleGenerateBriefing = async () => {
+    setIsGeneratingBriefing(true);
+    try {
+      const data = await api.getPortfolioBriefing();
+      setPortfolioBriefing(data);
+    } catch (err) {
+      console.error('Failed to generate briefing:', err);
+      alert('Failed to generate AI briefing. Please ensure Ollama or OpenRouter is configured.');
+    } finally {
+      setIsGeneratingBriefing(false);
+    }
+  };
 
   return (
     <div className="container mx-auto py-8 space-y-8">
@@ -349,7 +382,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             <div className="flex items-center gap-2">
               <h2 className="text-xl sm:text-2xl font-bold transition-all">Positions Monitor</h2>
               <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">
-                v1.2.3 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
+                v1.2.4 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-1">
@@ -667,7 +700,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                               <div className="text-xs">
                                 <div className="font-bold text-blue-600 dark:text-blue-400">{getDte(pos.expiration_date)}d</div>
                                 <div className="opacity-70">In: ${Number(pos.entry_price).toFixed(2)}</div>
-                                <div className="opacity-70">Now: ${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}</div>
+                                <div className={cn("opacity-70 transition-colors duration-500 px-1 rounded", priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
+                                  Now: ${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}
+                                </div>
                               </div>
                             </TableCell>
                             <TableCell>
@@ -689,7 +724,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                               </div>
                             </TableCell>
                             <TableCell>
-                              <div className={cn("font-bold transition-premium", getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500')}>
+                              <div className={cn("font-bold transition-premium p-1 rounded", getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500', priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
                                 {getPnL(pos) >= 0 ? '+' : ''}{getPnL(pos).toFixed(2)}
                                 <div className="text-[10px] opacity-70">
                                   ({getRoi(pos) > 0 ? '+' : ''}{getRoi(pos).toFixed(2)}%)
@@ -783,7 +818,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                           <div className="grid grid-cols-2 gap-2 py-2 border-y border-muted/50 text-xs">
                             <div>
                               <p className="text-[9px] text-muted-foreground uppercase">Current Price</p>
-                              <p className="font-mono font-medium">${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}</p>
+                              <p className={cn("font-mono font-medium transition-colors duration-500 px-1 rounded", priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
+                                ${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}
+                              </p>
                             </div>
                             <div>
                               <p className="text-[9px] text-muted-foreground uppercase">Stop Loss</p>
@@ -894,6 +931,61 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
         </TabsContent>
 
         <TabsContent value="portfolio" className="space-y-8 mt-0">
+          {/* AI Portfolio Manager */}
+          <Card className="border-primary/20 bg-primary/5 shadow-premium overflow-hidden group">
+            <CardHeader className="pb-3 border-b border-primary/10">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg flex items-center gap-2 text-primary">
+                  <BrainCircuit className="h-5 w-5 animate-pulse" />
+                  AI Portfolio Manager
+                </CardTitle>
+                <Button
+                  size="sm"
+                  onClick={handleGenerateBriefing}
+                  disabled={isGeneratingBriefing}
+                  className="gap-2 shadow-sm transition-all hover:shadow-primary/25"
+                >
+                  {isGeneratingBriefing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+                  {portfolioBriefing ? 'Regenerate Briefing' : 'Generate Holistic Analysis'}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {isGeneratingBriefing ? (
+                <div className="p-12 flex flex-col items-center justify-center space-y-4 text-center">
+                  <div className="relative">
+                    <BrainCircuit className="h-12 w-12 text-primary animate-pulse" />
+                    <Loader2 className="h-16 w-16 text-primary/30 animate-spin absolute -top-2 -left-2" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-bold text-primary">AI Strategy Engine Working...</p>
+                    <p className="text-xs text-muted-foreground max-w-[300px]">Reviewing all Greeks, price action, and risk scenarios for your entire portfolio.</p>
+                  </div>
+                </div>
+              ) : portfolioBriefing ? (
+                <div className="p-6 space-y-4 animate-in fade-in slide-in-from-top-4 duration-700">
+                  <div className="relative">
+                    <div className="p-4 rounded-xl bg-background border shadow-inner text-sm leading-relaxed whitespace-pre-wrap font-sans italic text-slate-700 dark:text-slate-300">
+                      {portfolioBriefing.briefing}
+                    </div>
+                    <div className="absolute -top-3 -right-3">
+                      <Badge className="bg-primary text-[9px] uppercase tracking-wider">Strategic Insight</Badge>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-end gap-2 text-[10px] text-muted-foreground">
+                    <Info className="h-3 w-3" />
+                    Generated by AI based on current market data and risk profile.
+                  </div>
+                </div>
+              ) : (
+                <div className="p-10 flex flex-col items-center justify-center space-y-3 text-center opacity-70 group-hover:opacity-100 transition-opacity">
+                  <Activity className="h-10 w-10 text-muted-foreground/30" />
+                  <p className="text-sm text-muted-foreground max-w-[280px]">Need a bird's-eye view? Click above to have AI analyze your total risk exposure and suggest strategic adjustments.</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
             <Card className="hover:shadow-md transition-shadow">
               <CardHeader className="pb-2">
