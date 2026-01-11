@@ -8,26 +8,61 @@ import { AIService } from './ai-service';
 export class MarketPoller {
   private fastify: FastifyInstance;
   private aiService: AIService;
+  private currentIntervalSeconds: number = 60; // Default 1 min
+  private timerId: NodeJS.Timeout | null = null;
 
   constructor(fastify: FastifyInstance) {
     this.fastify = fastify;
     this.aiService = new AIService(fastify);
   }
 
-  public start() {
-    const interval = process.env.MARKET_DATA_POLL_INTERVAL || '*/1 * * * *';
-    console.log(`[MarketPoller] Starting polling job with interval: ${interval}`);
+  public async start() {
+    // 1. Fetch the preferred interval from settings
+    try {
+      const { rows } = await this.fastify.pg.query(
+        "SELECT value FROM settings WHERE key = 'market_poll_interval' ORDER BY updated_at DESC LIMIT 1"
+      );
+      if (rows.length > 0) {
+        this.currentIntervalSeconds = parseInt(rows[0].value, 10) || 60;
+      } else {
+        // Fallback to env or 60
+        const envInterval = process.env.MARKET_DATA_POLL_INTERVAL;
+        if (envInterval && envInterval.startsWith('*/')) {
+          this.currentIntervalSeconds = parseInt(envInterval.split('/')[1].split(' ')[0], 10) * 60 || 60;
+        } else {
+          this.currentIntervalSeconds = 60;
+        }
+      }
+    } catch (err) {
+      console.error('[MarketPoller] Failed to load poll interval from DB:', err);
+    }
 
-    cron.schedule(interval, async () => {
+    console.log(`[MarketPoller] Starting polling job with interval: ${this.currentIntervalSeconds}s`);
+
+    // Start recursive loop
+    this.scheduleNextPoll();
+
+    this.startBriefingJob();
+  }
+
+  private scheduleNextPoll() {
+    if (this.timerId) clearTimeout(this.timerId);
+
+    this.timerId = setTimeout(async () => {
       try {
         await this.poll();
       } catch (err) {
         console.error('[MarketPoller] Error during poll execution:', err);
+      } finally {
+        this.scheduleNextPoll(); // Schedule next run after current one finishes
       }
-    });
+    }, this.currentIntervalSeconds * 1000);
+  }
 
-    this.poll().catch(err => console.error('[MarketPoller] Initial poll failed:', err));
-    this.startBriefingJob();
+  public updateInterval(seconds: number) {
+    console.log(`[MarketPoller] Updating poll interval to: ${seconds}s`);
+    this.currentIntervalSeconds = seconds;
+    this.scheduleNextPoll(); // Reschedule immediately
   }
 
   private startBriefingJob() {

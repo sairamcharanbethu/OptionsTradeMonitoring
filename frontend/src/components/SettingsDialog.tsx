@@ -25,6 +25,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [openRouterKey, setOpenRouterKey] = useState('');
     const [model, setModel] = useState('mistral:7b-instruct-q4_K_M');
     const [briefingFrequency, setBriefingFrequency] = useState('disabled');
+    const [pollInterval, setPollInterval] = useState('60');
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -58,6 +59,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setOpenRouterKey(data.openrouter_key || '');
             setModel(data.ai_model || 'mistral:7b-instruct-q4_K_M');
             setBriefingFrequency(data.briefing_frequency || 'disabled');
+            setPollInterval(data.market_poll_interval || '60');
         } catch (err) {
             console.error(err);
         } finally {
@@ -117,7 +119,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 ai_provider: provider,
                 openrouter_key: openRouterKey,
                 ai_model: model,
-                briefing_frequency: briefingFrequency
+                briefing_frequency: briefingFrequency,
+                market_poll_interval: pollInterval
             });
             setOpen(false);
         } catch (err) {
@@ -212,6 +215,33 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 AI-generated portfolio summary sent to Discord at 8:30 AM ET.
                                             </p>
                                         </div>
+                                    </div>
+                                    <div className="grid gap-2 pt-2 border-t mt-4">
+                                        <Label htmlFor="pollInterval" className="flex items-center gap-2">
+                                            Market Poll Interval
+                                            {parseInt(pollInterval) < 30 && (
+                                                <Badge variant="destructive" className="text-[8px] h-4">High Risk</Badge>
+                                            )}
+                                        </Label>
+                                        <Select value={pollInterval} onValueChange={setPollInterval}>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Select Interval" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="1">Every 1 second (Ultra-Aggressive)</SelectItem>
+                                                <SelectItem value="5">Every 5 seconds</SelectItem>
+                                                <SelectItem value="10">Every 10 seconds</SelectItem>
+                                                <SelectItem value="30">Every 30 seconds</SelectItem>
+                                                <SelectItem value="60">Every 1 minute (Recommended)</SelectItem>
+                                                <SelectItem value="300">Every 5 minutes</SelectItem>
+                                                <SelectItem value="900">Every 15 minutes</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        <p className={`text-[10px] ${parseInt(pollInterval) < 30 ? 'text-destructive font-bold' : 'text-muted-foreground'}`}>
+                                            {parseInt(pollInterval) < 30
+                                                ? 'Caution: Fast polling may cause Yahoo Finance to block your IP.'
+                                                : 'How often the server fetches fresh prices and Greeks.'}
+                                        </p>
                                     </div>
                                     <Button className="w-full mt-2" onClick={handleSaveSettings} disabled={saving || loading}>
                                         {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

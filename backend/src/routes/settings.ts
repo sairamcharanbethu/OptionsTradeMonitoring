@@ -55,6 +55,14 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 // Invalidate cache
                 await redis.set(`USER_SETTINGS:${userId}`, '', 1);
 
+                // If poll interval was updated, notify the poller service
+                if (updates.market_poll_interval) {
+                    const newInterval = parseInt(updates.market_poll_interval, 10);
+                    if (!isNaN(newInterval) && (fastify as any).poller) {
+                        (fastify as any).poller.updateInterval(newInterval);
+                    }
+                }
+
                 return { status: 'ok', message: 'Settings updated' };
             } catch (err) {
                 await client.query('ROLLBACK');

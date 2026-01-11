@@ -382,7 +382,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             <div className="flex items-center gap-2">
               <h2 className="text-xl sm:text-2xl font-bold transition-all">Positions Monitor</h2>
               <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">
-                v1.2.4 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
+                v1.2.5 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-1">
