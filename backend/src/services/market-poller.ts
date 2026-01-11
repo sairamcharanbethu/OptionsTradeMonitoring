@@ -371,12 +371,12 @@ export class MarketPoller {
        WHERE id = $8`,
       [
         price,
-        greeks?.delta || null,
-        greeks?.theta || null,
-        greeks?.gamma || null,
-        greeks?.vega || null,
-        iv || null,
-        underlyingPrice || null,
+        greeks?.delta ?? null,
+        greeks?.theta ?? null,
+        greeks?.gamma ?? null,
+        greeks?.vega ?? null,
+        iv ?? null,
+        underlyingPrice ?? null,
         position.id
       ]
     );

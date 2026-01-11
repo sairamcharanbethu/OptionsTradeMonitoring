@@ -214,7 +214,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   }, []);
 
   const getPnL = (pos: Position) => {
-    if (!pos.current_price) return 0;
+    if (pos.current_price == null) return 0;
     return (Number(pos.current_price) - Number(pos.entry_price)) * pos.quantity * 100; // Assuming standard options contract size 100
   };
 
@@ -228,7 +228,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     }
 
     // For open positions, calculate unrealized ROI
-    if (!pos.current_price) return 0;
+    if (pos.current_price == null) return 0;
     const unrealizedPnl = (Number(pos.current_price) - Number(pos.entry_price)) * Number(pos.quantity) * 100;
     return (unrealizedPnl / cost) * 100;
   };
@@ -348,7 +348,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             <div className="flex items-center gap-2">
               <h2 className="text-xl sm:text-2xl font-bold transition-all">Positions Monitor</h2>
               <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">
-                v1.2.1 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
+                v1.2.2 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-1">
@@ -666,7 +666,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                               <div className="text-xs">
                                 <div className="font-bold text-blue-600 dark:text-blue-400">{getDte(pos.expiration_date)}d</div>
                                 <div className="opacity-70">In: ${Number(pos.entry_price).toFixed(2)}</div>
-                                <div className="opacity-70">Now: ${pos.current_price ? Number(pos.current_price).toFixed(2) : '-'}</div>
+                                <div className="opacity-70">Now: ${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}</div>
                               </div>
                             </TableCell>
                             <TableCell>
@@ -782,7 +782,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                           <div className="grid grid-cols-2 gap-2 py-2 border-y border-muted/50 text-xs">
                             <div>
                               <p className="text-[9px] text-muted-foreground uppercase">Current Price</p>
-                              <p className="font-mono font-medium">${pos.current_price ? Number(pos.current_price).toFixed(2) : '-'}</p>
+                              <p className="font-mono font-medium">${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}</p>
                             </div>
                             <div>
                               <p className="text-[9px] text-muted-foreground uppercase">Stop Loss</p>

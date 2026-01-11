@@ -94,12 +94,12 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
         }
     };
 
-    const formatCurrency = (val: number | undefined) => val ? `$${val.toFixed(2)}` : '-';
+    const formatCurrency = (val: number | undefined) => val != null ? `$${val.toFixed(2)}` : '-';
 
     // Calculations
-    const currentPrice = position.current_price || 0;
-    const entryPrice = position.entry_price || 0;
-    const quantity = position.quantity || 1;
+    const currentPrice = position.current_price ?? 0;
+    const entryPrice = position.entry_price ?? 0;
+    const quantity = position.quantity ?? 1;
     const marketValue = currentPrice * quantity * 100; // Standard option multiplier
     const costBasis = entryPrice * quantity * 100;
     const unrealizedPnl = marketValue - costBasis;
@@ -219,7 +219,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                 </div>
                                 <div className="p-2 text-center rounded bg-slate-100 dark:bg-slate-800 border">
                                     <div className="text-[10px] uppercase text-slate-600 font-bold">IV</div>
-                                    <div className="font-mono text-sm">{position.iv ? position.iv.toFixed(1) + '%' : '-'}</div>
+                                    <div className="font-mono text-sm">{position.iv != null ? position.iv.toFixed(1) + '%' : '-'}</div>
                                 </div>
                             </div>
                         </div>

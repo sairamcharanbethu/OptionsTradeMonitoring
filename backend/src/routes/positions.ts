@@ -49,6 +49,12 @@ const positionResponseSchema = {
     current_price: { type: 'number', nullable: true },
     status: { type: 'string', enum: ['OPEN', 'CLOSED', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED'] },
     realized_pnl: { type: 'number', nullable: true },
+    delta: { type: 'number', nullable: true },
+    theta: { type: 'number', nullable: true },
+    gamma: { type: 'number', nullable: true },
+    vega: { type: 'number', nullable: true },
+    iv: { type: 'number', nullable: true },
+    underlying_price: { type: 'number', nullable: true },
     created_at: { type: 'string', format: 'date-time' },
     updated_at: { type: 'string', format: 'date-time' }
   }
