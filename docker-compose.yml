@@ -46,6 +46,8 @@ services:
   frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
     restart: always
+    ports:
+      - "${PORT_FRONTEND:-3000}:80"
     depends_on:
       - backend
     networks:
