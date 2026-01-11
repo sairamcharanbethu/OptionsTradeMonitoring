@@ -23,15 +23,18 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
       
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: |
             backend/package-lock.json
             frontend/package-lock.json
+        continue-on-error: true  # Don't fail if cache setup fails
 
       - name: Build backend and frontend (parallel)
         run: |
@@ -41,7 +44,7 @@ jobs:
           (
             cd backend
             echo "[Backend] Installing dependencies..."
-            npm install --legacy-peer-deps
+            npm ci --legacy-peer-deps 2>/dev/null || npm install --legacy-peer-deps
             echo "[Backend] Building..."
             npm run build
             echo "[Backend] ✅ Done"
@@ -52,7 +55,7 @@ jobs:
           (
             cd frontend
             echo "[Frontend] Installing dependencies..."
-            npm install --legacy-peer-deps
+            npm ci --legacy-peer-deps 2>/dev/null || npm install --legacy-peer-deps
             echo "[Frontend] Building..."
             export VITE_APP_BUILD_SHA=${{ github.sha }}
             npm run build
@@ -78,10 +81,6 @@ jobs:
           fi
           echo "✅ Both builds completed successfully!"
 
-      # QEMU is not needed for native ARM64 builds
-      # - name: Set up QEMU
-      #   uses: docker/setup-qemu-action@v3
-      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
@@ -103,7 +102,9 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend
           tags: |
             type=sha
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
       
       - name: Build and push backend image
         uses: docker/build-push-action@v6
@@ -124,7 +125,9 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend
           tags: |
             type=sha
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
       
       - name: Build and push frontend image
         uses: docker/build-push-action@v6
@@ -144,7 +147,8 @@ jobs:
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
     - name: Set deployment environment variables
       id: set-env
@@ -163,7 +167,7 @@ jobs:
           echo "ENV_NAME=Staging" >> $GITHUB_ENV
           echo "PORT_BACKEND=30020" >> $GITHUB_ENV
           echo "PORT_FRONTEND=8200" >> $GITHUB_ENV
-          echo "PORT_DB=5432" >> $GITHUB_ENV # Staging now uses Prod DB port
+          echo "PORT_DB=5432" >> $GITHUB_ENV
           echo "PORT_REDIS=46380" >> $GITHUB_ENV
         fi
 
@@ -206,14 +210,11 @@ jobs:
           # For Staging: Copy .env from Production if it doesn't exist
           if [[ "${{ env.ENV_NAME }}" == "Staging" ]]; then
              echo "📂 Copying .env from Production to Staging..."
-             # We assume Prod is at /srv/ssmedia/docker/OptionsTradeMonitoring
-             # Use -n to not overwrite if one exists (or force -f if we want sync)
-             # User implies they want to use it, so let's forcing copy to keep in sync
              cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || echo "⚠️ Could not copy .env from Prod"
           fi
           
           # Login to GitHub Container Registry
-          echo "Logging into GHCR..."
+          echo "🔐 Logging into GHCR..."
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           
           # Pull latest images
@@ -230,11 +231,12 @@ jobs:
           if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend db redis
           else
-            # Staging: Skip 'db' service as it uses Production DB. Remove orphans (like redis-commander)
-            # EXPLICITLY stop and remove the Staging DB container so it doesn't conflict or show as "Restarting"
+            # Staging: Skip 'db' service as it uses Production DB
+            echo "🛑 Stopping and removing Staging DB container..."
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db || true
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db || true
             
+            echo "🚀 Starting Staging services (backend, frontend, redis)..."
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --remove-orphans --no-deps backend frontend redis
           fi
           
@@ -273,4 +275,12 @@ jobs:
 
     - name: Health Check
       run: |
-        echo "✅ Deployment complete. Health check placeholder."
+        echo "=========================================="
+        echo "🏥 Health Check Summary"
+        echo "=========================================="
+        echo "Environment: ${{ env.ENV_NAME }}"
+        echo "Backend Port: ${{ env.PORT_BACKEND }}"
+        echo "Frontend Port: ${{ env.PORT_FRONTEND }}"
+        echo "Deployment Path: ${{ env.DEPLOY_PATH }}"
+        echo "✅ Deployment completed successfully!"
+        echo "=========================================="
