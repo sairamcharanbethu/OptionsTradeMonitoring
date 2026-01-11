@@ -12,8 +12,51 @@ const ChangePasswordSchema = z.object({
     newPassword: z.string().min(6),
 });
 
+// OpenAPI schemas for documentation
+const authBodySchema = {
+    type: 'object',
+    required: ['username', 'password'],
+    properties: {
+        username: { type: 'string', minLength: 3, description: 'Username (min 3 characters)' },
+        password: { type: 'string', minLength: 6, description: 'Password (min 6 characters)' }
+    }
+};
+
+const authResponseSchema = {
+    type: 'object',
+    properties: {
+        token: { type: 'string', description: 'JWT authentication token' },
+        user: {
+            type: 'object',
+            properties: {
+                id: { type: 'integer' },
+                username: { type: 'string' },
+                role: { type: 'string', enum: ['USER', 'ADMIN'] }
+            }
+        }
+    }
+};
+
+const errorSchema = {
+    type: 'object',
+    properties: {
+        error: { type: 'string' }
+    }
+};
+
 export default async function authRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
-    fastify.post('/signup', async (request, reply) => {
+    fastify.post('/signup', {
+        schema: {
+            tags: ['Auth'],
+            summary: 'Create a new user account',
+            description: 'Register a new user with username and password. Returns a JWT token upon successful registration.',
+            body: authBodySchema,
+            response: {
+                200: authResponseSchema,
+                400: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         let { username, password } = AuthSchema.parse(request.body);
         username = username.toLowerCase();
 
@@ -41,7 +84,18 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
         return { token, user: newUser[0] };
     });
 
-    fastify.post('/signin', async (request, reply) => {
+    fastify.post('/signin', {
+        schema: {
+            tags: ['Auth'],
+            summary: 'Sign in to get JWT token',
+            description: 'Authenticate with username and password. Returns a JWT token to use for protected endpoints.',
+            body: authBodySchema,
+            response: {
+                200: authResponseSchema,
+                401: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         let { username, password } = AuthSchema.parse(request.body);
         username = username.toLowerCase();
 
@@ -70,7 +124,33 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
     });
 
     fastify.post('/change-password', {
-        onRequest: [fastify.authenticate]
+        onRequest: [fastify.authenticate],
+        schema: {
+            tags: ['Auth'],
+            summary: 'Change password',
+            description: 'Change the current user\'s password. Requires authentication.',
+            security: [{ bearerAuth: [] }],
+            body: {
+                type: 'object',
+                required: ['currentPassword', 'newPassword'],
+                properties: {
+                    currentPassword: { type: 'string', minLength: 6 },
+                    newPassword: { type: 'string', minLength: 6 }
+                }
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        status: { type: 'string' },
+                        message: { type: 'string' }
+                    }
+                },
+                400: errorSchema,
+                404: errorSchema,
+                500: errorSchema
+            }
+        }
     }, async (request, reply) => {
         const { currentPassword, newPassword } = ChangePasswordSchema.parse(request.body);
         const { id } = (request as any).user;
@@ -106,7 +186,40 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
     });
 
     fastify.post('/update-profile', {
-        onRequest: [fastify.authenticate]
+        onRequest: [fastify.authenticate],
+        schema: {
+            tags: ['Auth'],
+            summary: 'Update username',
+            description: 'Update the current user\'s username. Returns a new JWT token with updated claims.',
+            security: [{ bearerAuth: [] }],
+            body: {
+                type: 'object',
+                required: ['username'],
+                properties: {
+                    username: { type: 'string', minLength: 3 }
+                }
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        status: { type: 'string' },
+                        token: { type: 'string' },
+                        user: {
+                            type: 'object',
+                            properties: {
+                                id: { type: 'integer' },
+                                username: { type: 'string' },
+                                role: { type: 'string' }
+                            }
+                        }
+                    }
+                },
+                400: errorSchema,
+                404: errorSchema,
+                500: errorSchema
+            }
+        }
     }, async (request, reply) => {
         const { username } = z.object({ username: z.string().min(3) }).parse(request.body);
         const { id, role } = (request as any).user;
@@ -147,8 +260,25 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
     });
 
     fastify.get('/me', {
-        onRequest: [fastify.authenticate]
+        onRequest: [fastify.authenticate],
+        schema: {
+            tags: ['Auth'],
+            summary: 'Get current user',
+            description: 'Returns the authenticated user\'s information from the JWT token.',
+            security: [{ bearerAuth: [] }],
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'integer' },
+                        username: { type: 'string' },
+                        role: { type: 'string', enum: ['USER', 'ADMIN'] }
+                    }
+                }
+            }
+        }
     }, async (request, reply) => {
         return (request as any).user;
     });
 }
+

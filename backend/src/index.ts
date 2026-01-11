@@ -1,6 +1,8 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import postgres from '@fastify/postgres';
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
 import { Client } from 'pg';
 import { positionRoutes } from './routes/positions';
 import { marketDataRoutes } from './routes/market-data';
@@ -80,6 +82,48 @@ const start = async () => {
 
     await fastify.register(cors, {
       origin: true
+    });
+
+    // Swagger/OpenAPI configuration
+    await fastify.register(swagger, {
+      openapi: {
+        openapi: '3.0.0',
+        info: {
+          title: 'Options Trade Monitoring API',
+          description: 'API for tracking and monitoring options trading positions with real-time price updates, alerts, and portfolio analytics.',
+          version: '1.0.0'
+        },
+        servers: [
+          { url: 'http://localhost:3001', description: 'Local development' }
+        ],
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              type: 'http',
+              scheme: 'bearer',
+              bearerFormat: 'JWT',
+              description: 'Enter your JWT token obtained from /api/auth/signin'
+            }
+          }
+        },
+        tags: [
+          { name: 'Auth', description: 'Authentication endpoints' },
+          { name: 'Positions', description: 'Options positions management' },
+          { name: 'Settings', description: 'User settings' },
+          { name: 'Admin', description: 'Admin operations' },
+          { name: 'Market', description: 'Market data and status' },
+          { name: 'AI', description: 'AI-powered analysis' }
+        ]
+      }
+    });
+
+    await fastify.register(swaggerUi, {
+      routePrefix: '/docs',
+      uiConfig: {
+        docExpansion: 'list',
+        deepLinking: true,
+        persistAuthorization: true
+      }
     });
 
     if (!process.env.JWT_SECRET) {
