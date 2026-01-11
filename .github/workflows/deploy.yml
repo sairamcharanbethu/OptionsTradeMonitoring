@@ -121,16 +121,12 @@ jobs:
           echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring" >> $GITHUB_ENV
           echo "COMPOSE_PROJECT_NAME=options-monitor-prod" >> $GITHUB_ENV
           echo "ENV_NAME=Production" >> $GITHUB_ENV
-          echo "PORT_BACKEND=3001" >> $GITHUB_ENV
-          echo "PORT_FRONTEND=80" >> $GITHUB_ENV
           echo "PORT_DB=5432" >> $GITHUB_ENV
           echo "PORT_REDIS=6379" >> $GITHUB_ENV
         else
           echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging" >> $GITHUB_ENV
           echo "COMPOSE_PROJECT_NAME=options-monitor-staging" >> $GITHUB_ENV
           echo "ENV_NAME=Staging" >> $GITHUB_ENV
-          echo "PORT_BACKEND=30020" >> $GITHUB_ENV
-          echo "PORT_FRONTEND=8100" >> $GITHUB_ENV
           echo "PORT_DB=5432" >> $GITHUB_ENV # Staging now uses Prod DB port
           echo "PORT_REDIS=46380" >> $GITHUB_ENV
         fi
@@ -190,8 +186,6 @@ jobs:
           
           # Restart services with environment-specific ports
           echo "🔄 Restarting services..."
-          export PORT_BACKEND=${{ env.PORT_BACKEND }}
-          export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
           export PORT_DB=${{ env.PORT_DB }}
           export PORT_REDIS=${{ env.PORT_REDIS }}
           
