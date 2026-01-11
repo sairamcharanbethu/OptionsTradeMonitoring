@@ -387,8 +387,8 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     }
 
     // Invalidate cache
-    await redis.set(`USER_POSITIONS:${userId}`, '', 1);
-    await redis.set(`USER_STATS:${userId}`, '', 1);
+    await redis.del(`USER_POSITIONS:${userId}`);
+    await redis.del(`USER_STATS:${userId}`);
 
     return reply.code(201).send(newPosition);
   });
@@ -647,7 +647,8 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     const { rows } = await fastify.pg.query(query, values);
 
     // Invalidate cache
-    await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+    await redis.del(`USER_POSITIONS:${userId}`);
+    await redis.del(`USER_STATS:${userId}`);
 
     return rows[0];
   });
@@ -736,8 +737,8 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       }
 
       // Invalidate cache
-      await redis.set(`USER_POSITIONS:${userId}`, '', 1);
-      await redis.set(`USER_STATS:${userId}`, '', 1);
+      await redis.del(`USER_POSITIONS:${userId}`);
+      await redis.del(`USER_STATS:${userId}`);
 
       return reply.code(204).send();
     } catch (err: any) {
