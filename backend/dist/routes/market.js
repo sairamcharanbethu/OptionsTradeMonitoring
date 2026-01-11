@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.marketRoutes = marketRoutes;
+const redis_1 = require("../lib/redis");
 async function marketRoutes(fastify, options) {
     fastify.addHook('onRequest', fastify.authenticate);
     fastify.get('/status', async (request, reply) => {
@@ -23,15 +24,16 @@ async function marketRoutes(fastify, options) {
     });
     fastify.post('/force-poll', async (request, reply) => {
         try {
+            const { id: userId } = request.user;
             const poller = fastify.poller;
             if (!poller) {
                 return reply.code(500).send({ error: 'Market poller not initialized' });
             }
-            console.log('Received force poll request...');
-            // Don't await the poll if you want immediate response, 
-            // OR await it to confirm completion. User likely wants confirmation it ran.
-            // Given it might take time (multiple tickers), let's await it to ensure new data is there when dashboard refreshes.
+            console.log(`Received force poll request from user ${userId}...`);
             await poller.poll(true);
+            // Invalidate user cache to ensure fresh data on next GET
+            await redis_1.redis.del(`USER_POSITIONS:${userId}`);
+            await redis_1.redis.del(`USER_STATS:${userId}`);
             return { status: 'ok', message: 'Market data sync triggered successfully' };
         }
         catch (err) {

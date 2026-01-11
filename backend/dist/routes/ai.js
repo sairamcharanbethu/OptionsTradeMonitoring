@@ -41,5 +41,24 @@ async function aiRoutes(fastify, options) {
             return reply.code(500).send({ error: err.message || 'AI Analysis Failed' });
         }
     });
+    // Holistic Portfolio Briefing
+    fastify.get('/briefing', async (request, reply) => {
+        const { id: userId } = request.user;
+        try {
+            // Fetch all active/relevant positions for this user
+            const { rows: positions } = await fastify.pg.query(`SELECT * FROM positions 
+                 WHERE user_id = $1 AND status IN ('OPEN', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED')
+                 ORDER BY expiration_date ASC`, [userId]);
+            if (positions.length === 0) {
+                return { briefing: "You have no active positions to analyze.", discord_message: "No active positions." };
+            }
+            const briefing = await aiService.generateBriefing(positions);
+            return briefing;
+        }
+        catch (err) {
+            fastify.log.error(err);
+            return reply.code(500).send({ error: err.message || 'AI Briefing Failed' });
+        }
+    });
 }
 //# sourceMappingURL=ai.js.map

@@ -12,23 +12,57 @@ const ai_service_1 = require("./ai-service");
 class MarketPoller {
     fastify;
     aiService;
+    currentIntervalSeconds = 60; // Default 1 min
+    timerId = null;
     constructor(fastify) {
         this.fastify = fastify;
         this.aiService = new ai_service_1.AIService(fastify);
     }
-    start() {
-        const interval = process.env.MARKET_DATA_POLL_INTERVAL || '*/15 * * * *';
-        console.log(`[MarketPoller] Starting polling job with interval: ${interval}`);
-        node_cron_1.default.schedule(interval, async () => {
+    async start() {
+        // 1. Fetch the preferred interval from settings
+        try {
+            const { rows } = await this.fastify.pg.query("SELECT value FROM settings WHERE key = 'market_poll_interval' ORDER BY updated_at DESC LIMIT 1");
+            if (rows.length > 0) {
+                this.currentIntervalSeconds = parseInt(rows[0].value, 10) || 60;
+            }
+            else {
+                // Fallback to env or 60
+                const envInterval = process.env.MARKET_DATA_POLL_INTERVAL;
+                if (envInterval && envInterval.startsWith('*/')) {
+                    this.currentIntervalSeconds = parseInt(envInterval.split('/')[1].split(' ')[0], 10) * 60 || 60;
+                }
+                else {
+                    this.currentIntervalSeconds = 60;
+                }
+            }
+        }
+        catch (err) {
+            console.error('[MarketPoller] Failed to load poll interval from DB:', err);
+        }
+        console.log(`[MarketPoller] Starting polling job with interval: ${this.currentIntervalSeconds}s`);
+        // Start recursive loop
+        this.scheduleNextPoll();
+        this.startBriefingJob();
+    }
+    scheduleNextPoll() {
+        if (this.timerId)
+            clearTimeout(this.timerId);
+        this.timerId = setTimeout(async () => {
             try {
                 await this.poll();
             }
             catch (err) {
                 console.error('[MarketPoller] Error during poll execution:', err);
             }
-        });
-        this.poll().catch(err => console.error('[MarketPoller] Initial poll failed:', err));
-        this.startBriefingJob();
+            finally {
+                this.scheduleNextPoll(); // Schedule next run after current one finishes
+            }
+        }, this.currentIntervalSeconds * 1000);
+    }
+    updateInterval(seconds) {
+        console.log(`[MarketPoller] Updating poll interval to: ${seconds}s`);
+        this.currentIntervalSeconds = seconds;
+        this.scheduleNextPoll(); // Reschedule immediately
     }
     startBriefingJob() {
         // Default to 8:30 AM ET
@@ -146,15 +180,20 @@ class MarketPoller {
         const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
         return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
     }
-    async getOptionPremium(symbol, strike, type, expiration) {
+    async getOptionPremium(symbol, strike, type, expiration, skipCache = false) {
         const ticker = this.constructOSITicker(symbol, strike, type, expiration);
         // Redis Cache Check
         const CACHE_KEY = `PRICE:${ticker}`;
         const CACHE_TTL = 300; // 5 minutes
-        const cached = await redis_1.redis.get(CACHE_KEY);
-        if (cached) {
-            // console.log(`[MarketPoller] Cache hit for ${ticker}`);
-            return JSON.parse(cached);
+        if (!skipCache) {
+            const cached = await redis_1.redis.get(CACHE_KEY);
+            if (cached) {
+                // console.log(`[MarketPoller] Cache hit for ${ticker}`);
+                return JSON.parse(cached);
+            }
+        }
+        else {
+            console.log(`[MarketPoller] Cache bypass (force sync) for ${ticker}`);
         }
         // console.log(`[MarketPoller] Fetching premium for: ${ticker}`);
         return new Promise((resolve) => {
@@ -221,7 +260,7 @@ class MarketPoller {
             });
         });
     }
-    async syncPrice(symbol) {
+    async syncPrice(symbol, skipCache = false) {
         console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
         const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'", [symbol]);
         if (positions.length === 0) {
@@ -230,7 +269,7 @@ class MarketPoller {
         }
         let lastFetchedPrice = null;
         for (const position of positions) {
-            const data = await this.getOptionPremium(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+            const data = await this.getOptionPremium(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date, skipCache);
             if (data && data.price !== null) {
                 // console.log(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
                 console.log(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${data.underlying_price} Greeks:`, data.greeks);
@@ -284,7 +323,7 @@ class MarketPoller {
         }
         const symbols = [...new Set(positions.map(p => p.symbol))];
         for (const symbol of symbols) {
-            await this.syncPrice(symbol);
+            await this.syncPrice(symbol, force);
             // Stay within limits, sequential delay
             await new Promise(resolve => setTimeout(resolve, 5000));
         }
@@ -309,12 +348,12 @@ class MarketPoller {
            underlying_price = $7
        WHERE id = $8`, [
             price,
-            greeks?.delta || null,
-            greeks?.theta || null,
-            greeks?.gamma || null,
-            greeks?.vega || null,
-            iv || null,
-            underlyingPrice || null,
+            greeks?.delta ?? null,
+            greeks?.theta ?? null,
+            greeks?.gamma ?? null,
+            greeks?.vega ?? null,
+            iv ?? null,
+            underlyingPrice ?? null,
             position.id
         ]);
         await this.fastify.pg.query('INSERT INTO price_history (position_id, price) VALUES ($1, $2)', [position.id, price]);

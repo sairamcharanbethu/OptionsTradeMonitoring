@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { api, Position } from '@/lib/api';
 import {
   Table,
@@ -112,6 +112,7 @@ interface PortfolioStats {
 
 export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const [positions, setPositions] = useState<Position[]>([]);
+  const positionsRef = useRef<Position[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<PortfolioStats | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -198,10 +199,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     try {
       const data = await api.getPositions();
 
-      // Track price changes for animations
+      // Track price changes for animations using the REF (previous value)
       const changes: Record<number, 'up' | 'down' | null> = {};
       data.forEach(newPos => {
-        const oldPos = positions.find(p => p.id === newPos.id);
+        const oldPos = positionsRef.current.find(p => p.id === newPos.id);
         if (oldPos && oldPos.current_price != null && newPos.current_price != null) {
           if (Number(newPos.current_price) > Number(oldPos.current_price)) {
             changes[newPos.id] = 'up';
@@ -218,6 +219,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
       }
 
       setPositions(data);
+      positionsRef.current = data; // Update ref for next comparison
       setLastRefreshed(new Date());
       setRefreshError(null);
       loadPortfolioStats();
@@ -227,7 +229,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     } finally {
       setLoading(false);
     }
-  }, [positions]);
+  }, []); // NO DEPENDENCIES - Decoupled from positions state
 
   useEffect(() => {
     loadPositions();
@@ -384,7 +386,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             <div className="flex items-center gap-2">
               <h2 className="text-xl sm:text-2xl font-bold transition-all">Positions Monitor</h2>
               <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">
-                v1.2.5 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
+                v1.2.6 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-1">

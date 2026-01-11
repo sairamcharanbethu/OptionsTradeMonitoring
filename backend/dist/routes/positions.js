@@ -48,6 +48,12 @@ const positionResponseSchema = {
         current_price: { type: 'number', nullable: true },
         status: { type: 'string', enum: ['OPEN', 'CLOSED', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED'] },
         realized_pnl: { type: 'number', nullable: true },
+        delta: { type: 'number', nullable: true },
+        theta: { type: 'number', nullable: true },
+        gamma: { type: 'number', nullable: true },
+        vega: { type: 'number', nullable: true },
+        iv: { type: 'number', nullable: true },
+        underlying_price: { type: 'number', nullable: true },
         created_at: { type: 'string', format: 'date-time' },
         updated_at: { type: 'string', format: 'date-time' }
     }
@@ -349,8 +355,8 @@ async function positionRoutes(fastify, options) {
             fastify.log.error({ err }, 'Failed to trigger immediate sync');
         }
         // Invalidate cache
-        await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
-        await redis_1.redis.set(`USER_STATS:${userId}`, '', 1);
+        await redis_1.redis.del(`USER_POSITIONS:${userId}`);
+        await redis_1.redis.del(`USER_STATS:${userId}`);
         return reply.code(201).send(newPosition);
     });
     // UPDATE position status (CLOSE)
@@ -575,7 +581,8 @@ async function positionRoutes(fastify, options) {
         ];
         const { rows } = await fastify.pg.query(query, values);
         // Invalidate cache
-        await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
+        await redis_1.redis.del(`USER_POSITIONS:${userId}`);
+        await redis_1.redis.del(`USER_STATS:${userId}`);
         return rows[0];
     });
     // SYNC single position
@@ -612,8 +619,11 @@ async function positionRoutes(fastify, options) {
         const symbol = rows[0].symbol;
         const poller = fastify.poller;
         if (poller) {
-            await poller.syncPrice(symbol);
+            await poller.syncPrice(symbol, true);
         }
+        // Invalidate user cache to ensure fresh data on next GET
+        await redis_1.redis.del(`USER_POSITIONS:${userId}`);
+        await redis_1.redis.del(`USER_STATS:${userId}`);
         return { status: 'ok', symbol };
     });
     // DELETE position
@@ -651,8 +661,8 @@ async function positionRoutes(fastify, options) {
                 return reply.code(404).send({ error: 'Position not found' });
             }
             // Invalidate cache
-            await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
-            await redis_1.redis.set(`USER_STATS:${userId}`, '', 1);
+            await redis_1.redis.del(`USER_POSITIONS:${userId}`);
+            await redis_1.redis.del(`USER_STATS:${userId}`);
             return reply.code(204).send();
         }
         catch (err) {
