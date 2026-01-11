@@ -194,10 +194,34 @@ export class MarketPoller {
 
       pythonProcess.on('close', (code: number) => {
         try {
-          // Log raw output for debugging if needed
-          // console.log(`[MarketPoller] Raw Python output: ${dataString}`);
+          // Handle potential noisy output from Python dependencies (e.g., "Mibian req...")
+          // by scanning lines backwards to find the last valid JSON object
+          const lines = dataString.trim().split('\n');
+          let result = null;
 
-          const result = JSON.parse(dataString);
+          for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            try {
+              const parsed = JSON.parse(line);
+              // Validate it's our expected response format
+              if (parsed && (parsed.status === 'ok' || parsed.status === 'error')) {
+                result = parsed;
+                break;
+              }
+            } catch (parseErr) {
+              // Not a JSON line, likely a log from a dependency - continue searching
+              continue;
+            }
+          }
+
+          if (!result) {
+            console.warn(`[MarketPoller] Failed to find valid JSON in output for ${ticker}. Raw output (first 200 chars): ${dataString.substring(0, 200)}`);
+            resolve(null);
+            return;
+          }
+
           if (result.status === 'ok' && typeof result.price === 'number') {
             // Enrich with metadata for easier Redis inspection
             result.metadata = {
@@ -213,7 +237,7 @@ export class MarketPoller {
             resolve(null);
           }
         } catch (e) {
-          console.error(`[MarketPoller] Failed to parse output for ${ticker}:`, e);
+          console.error(`[MarketPoller] Error processing output for ${ticker}:`, e);
           resolve(null);
         }
       });
