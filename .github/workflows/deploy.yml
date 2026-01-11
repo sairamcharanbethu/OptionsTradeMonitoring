@@ -33,6 +33,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Debug Workspace
+        run: |
+          echo "Current Directory: $(pwd)"
+          echo "Workspace: ${{ github.workspace }}"
+          ls -la
+          ls -la backend || echo "backend not found"
+          ls -la frontend || echo "frontend not found"
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
