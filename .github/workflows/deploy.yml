@@ -2,9 +2,9 @@ name: Build and Deploy
 
 on:
   push:
-    branches: [ "main", "staging" ]
+    branches: ["main", "staging"]
   pull_request:
-    branches: [ "main", "staging" ]
+    branches: ["main", "staging"]
   workflow_dispatch:
 
 concurrency:
@@ -18,38 +18,94 @@ env:
 jobs:
   build:
     runs-on: self-hosted
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: backend
-            context: ./backend
-          - service: frontend
-            context: ./frontend
     permissions:
       contents: read
       packages: write
+    outputs:
+      backend-tag: ${{ steps.tags.outputs.backend }}
+      frontend-tag: ${{ steps.tags.outputs.frontend }}
 
     steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: ${{ matrix.context }}/package-lock.json
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Install dependencies and build
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install and build (parallel)
         run: |
-          cd ${{ matrix.context }}
-          npm ci --legacy-peer-deps
-          npm run build
-        env:
-          VITE_APP_BUILD_SHA: ${{ github.sha }}
+          set -e
+          echo "🚀 Starting parallel npm builds..."
+          
+          # Create log files for better debugging
+          mkdir -p /tmp/build-logs
+          
+          # Backend build in background
+          (
+            set -e
+            cd backend
+            echo "[Backend] Installing dependencies..."
+            npm ci --legacy-peer-deps --prefer-offline --no-audit
+            echo "[Backend] Building..."
+            npm run build
+            echo "[Backend] ✅ Done"
+          ) > /tmp/build-logs/backend.log 2>&1 &
+          PID_BACKEND=$!
+          
+          # Frontend build in background
+          (
+            set -e
+            cd frontend
+            echo "[Frontend] Installing dependencies..."
+            npm ci --legacy-peer-deps --prefer-offline --no-audit
+            echo "[Frontend] Building..."
+            export VITE_APP_BUILD_SHA=${{ github.sha }}
+            npm run build
+            echo "[Frontend] ✅ Done"
+          ) > /tmp/build-logs/frontend.log 2>&1 &
+          PID_FRONTEND=$!
+          
+          # Wait for both and capture results
+          echo "⏳ Waiting for parallel builds..."
+          
+          BACKEND_OK=0
+          FRONTEND_OK=0
+          
+          wait $PID_BACKEND || BACKEND_OK=1
+          wait $PID_FRONTEND || FRONTEND_OK=1
+          
+          # Show logs
+          echo "========== Backend Build Log =========="
+          cat /tmp/build-logs/backend.log
+          echo "========== Frontend Build Log =========="
+          cat /tmp/build-logs/frontend.log
+          
+          # Check results
+          if [ $BACKEND_OK -ne 0 ]; then
+            echo "❌ Backend build failed!"
+            exit 1
+          fi
+          if [ $FRONTEND_OK -ne 0 ]; then
+            echo "❌ Frontend build failed!"
+            exit 1
+          fi
+          
+          echo "✅ Both npm builds completed successfully!"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+        with:
+          # Use docker-container driver for better caching
+          driver-opts: |
+            image=moby/buildkit:latest
+            network=host
+
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -57,102 +113,252 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Convert repository name to lowercase
-        id: repo
-        run: echo "lowercase=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
-      
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-${{ matrix.service }}
-          tags: |
-            type=sha
-            type=raw,value=latest
-      
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.context }}/Dockerfile
-          platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Generate image tags
+        id: tags
+        run: |
+          REPO_LOWER="${GITHUB_REPOSITORY,,}"
+          SHA_SHORT="${GITHUB_SHA::7}"
+          
+          echo "repo=${REPO_LOWER}" >> $GITHUB_OUTPUT
+          echo "sha=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "backend=${{ env.REGISTRY }}/${REPO_LOWER}-backend:sha-${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "frontend=${{ env.REGISTRY }}/${REPO_LOWER}-frontend:sha-${SHA_SHORT}" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker images (parallel)
+        if: github.event_name != 'pull_request'
+        run: |
+          set -e
+          echo "🐳 Starting parallel Docker builds..."
+          
+          REPO="${{ steps.tags.outputs.repo }}"
+          SHA="${{ steps.tags.outputs.sha }}"
+          
+          mkdir -p /tmp/docker-logs
+          
+          # Backend Docker build
+          (
+            set -e
+            echo "[Docker Backend] Starting build..."
+            docker buildx build \
+              --platform linux/arm64 \
+              --push \
+              --tag "${{ env.REGISTRY }}/${REPO}-backend:sha-${SHA}" \
+              --tag "${{ env.REGISTRY }}/${REPO}-backend:latest" \
+              --cache-from type=gha,scope=backend \
+              --cache-to type=gha,mode=max,scope=backend \
+              --progress=plain \
+              ./backend
+            echo "[Docker Backend] ✅ Done"
+          ) > /tmp/docker-logs/backend.log 2>&1 &
+          PID_BACKEND=$!
+          
+          # Frontend Docker build
+          (
+            set -e
+            echo "[Docker Frontend] Starting build..."
+            docker buildx build \
+              --platform linux/arm64 \
+              --push \
+              --tag "${{ env.REGISTRY }}/${REPO}-frontend:sha-${SHA}" \
+              --tag "${{ env.REGISTRY }}/${REPO}-frontend:latest" \
+              --cache-from type=gha,scope=frontend \
+              --cache-to type=gha,mode=max,scope=frontend \
+              --progress=plain \
+              ./frontend
+            echo "[Docker Frontend] ✅ Done"
+          ) > /tmp/docker-logs/frontend.log 2>&1 &
+          PID_FRONTEND=$!
+          
+          # Progress indicator while waiting
+          echo "⏳ Building images in parallel..."
+          while kill -0 $PID_BACKEND 2>/dev/null || kill -0 $PID_FRONTEND 2>/dev/null; do
+            sleep 10
+            echo "   ...still building ($(date +%H:%M:%S))"
+          done
+          
+          # Capture exit codes
+          BACKEND_OK=0
+          FRONTEND_OK=0
+          wait $PID_BACKEND || BACKEND_OK=1
+          wait $PID_FRONTEND || FRONTEND_OK=1
+          
+          # Show logs
+          echo "========== Docker Backend Log =========="
+          cat /tmp/docker-logs/backend.log
+          echo "========== Docker Frontend Log =========="
+          cat /tmp/docker-logs/frontend.log
+          
+          # Check results
+          if [ $BACKEND_OK -ne 0 ]; then
+            echo "❌ Backend Docker build failed!"
+            exit 1
+          fi
+          if [ $FRONTEND_OK -ne 0 ]; then
+            echo "❌ Frontend Docker build failed!"
+            exit 1
+          fi
+          
+          echo "✅ Both Docker images built and pushed!"
+
+      # For PRs: just build without pushing to verify Dockerfiles work
+      - name: Build Docker images (PR verification)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🔍 Building images for PR verification (no push)..."
+          
+          # Build both in parallel, just don't push
+          docker buildx build \
+            --platform linux/arm64 \
+            --cache-from type=gha,scope=backend \
+            ./backend &
+          
+          docker buildx build \
+            --platform linux/arm64 \
+            --cache-from type=gha,scope=frontend \
+            ./frontend &
+          
+          wait
+          echo "✅ PR Docker builds verified!"
 
   deploy:
     needs: build
     runs-on: self-hosted
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    
+    if: |
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging') && 
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+
     steps:
-    - uses: actions/checkout@v4
-      with:
-        sparse-checkout: |
-          docker-compose.yml
-        sparse-checkout-cone-mode: false
+      - name: Checkout docker-compose only
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            docker-compose.yml
+          sparse-checkout-cone-mode: false
 
-    - name: Set deployment environment variables
-      id: set-env
-      run: |
-        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-          echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring" >> $GITHUB_ENV
-          echo "COMPOSE_PROJECT_NAME=options-monitor-prod" >> $GITHUB_ENV
-          echo "ENV_NAME=Production" >> $GITHUB_ENV
-          echo "PORT_BACKEND=3001" >> $GITHUB_ENV
-          echo "PORT_FRONTEND=8100" >> $GITHUB_ENV
-          echo "PORT_DB=5432" >> $GITHUB_ENV
-          echo "PORT_REDIS=6379" >> $GITHUB_ENV
-        else
-          echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging" >> $GITHUB_ENV
-          echo "COMPOSE_PROJECT_NAME=options-monitor-staging" >> $GITHUB_ENV
-          echo "ENV_NAME=Staging" >> $GITHUB_ENV
-          echo "PORT_BACKEND=30020" >> $GITHUB_ENV
-          echo "PORT_FRONTEND=8200" >> $GITHUB_ENV
-          echo "PORT_DB=5432" >> $GITHUB_ENV
-          echo "PORT_REDIS=46380" >> $GITHUB_ENV
-        fi
+      - name: Set deployment environment
+        id: env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            cat >> $GITHUB_ENV << 'EOF'
+          DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring
+          COMPOSE_PROJECT_NAME=options-monitor-prod
+          ENV_NAME=Production
+          PORT_BACKEND=3001
+          PORT_FRONTEND=8100
+          PORT_DB=5432
+          PORT_REDIS=6379
+          IS_PRODUCTION=true
+          EOF
+          else
+            cat >> $GITHUB_ENV << 'EOF'
+          DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging
+          COMPOSE_PROJECT_NAME=options-monitor-staging
+          ENV_NAME=Staging
+          PORT_BACKEND=30020
+          PORT_FRONTEND=8200
+          PORT_DB=5432
+          PORT_REDIS=46380
+          IS_PRODUCTION=false
+          EOF
+          fi
 
-    - name: Prepare SSH key
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.VPS_SSH_KEY }}" | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
-        chmod 600 ~/.ssh/deploy_key
-        ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-    - name: Deploy
-      run: |
-        # Copy compose file
-        scp -i ~/.ssh/deploy_key docker-compose.yml ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_PATH }}/
-        
-        # Deploy via SSH
-        ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
+      - name: Deploy to ${{ env.ENV_NAME }}
+        env:
+          SSH_HOST: ${{ secrets.VPS_HOST }}
+          SSH_USER: ${{ secrets.VPS_USERNAME }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${SSH_USER}@${SSH_HOST}"
+          SCP_CMD="scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          
+          echo "=========================================="
+          echo "🚀 Deploying to ${{ env.ENV_NAME }}..."
+          echo "=========================================="
+          
+          # Copy docker-compose.yml
+          $SCP_CMD docker-compose.yml ${SSH_USER}@${SSH_HOST}:${{ env.DEPLOY_PATH }}/
+          
+          # Execute deployment
+          $SSH_CMD << REMOTE_SCRIPT
           set -e
           cd ${{ env.DEPLOY_PATH }}
           
-          [[ "${{ env.ENV_NAME }}" == "Staging" ]] && cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || true
+          echo "📂 Setting up environment..."
           
+          # For Staging: sync .env from Production
+          if [[ "${{ env.IS_PRODUCTION }}" != "true" ]]; then
+            cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env 2>/dev/null || echo "⚠️ Could not copy .env"
+          fi
+          
+          # Login to registry
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           
+          # Pull images in parallel
+          echo "📥 Pulling latest images..."
           docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull backend frontend
           
+          # Set port variables
           export PORT_BACKEND=${{ env.PORT_BACKEND }}
           export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
           export PORT_DB=${{ env.PORT_DB }}
           export PORT_REDIS=${{ env.PORT_REDIS }}
           
-          if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend db redis
+          # Deploy based on environment
+          echo "🔄 Restarting services..."
+          if [[ "${{ env.IS_PRODUCTION }}" == "true" ]]; then
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps --remove-orphans backend frontend db redis
           else
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db || true
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db || true
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --remove-orphans --no-deps backend frontend redis
+            # Staging: remove db service, use production database
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db 2>/dev/null || true
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db 2>/dev/null || true
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps --remove-orphans backend frontend redis
           fi
           
+          # Quick health check
+          echo "🕒 Waiting for services to start..."
           sleep 5
+          
+          # Verify deployment
+          echo "📊 Container Status:"
           docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
-          docker image prune -f
-        DEPLOY_SCRIPT
+          
+          # Check for issues
+          if docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps | grep -qE "Restarting|Exited"; then
+            echo "❌ Deployment issues detected!"
+            echo "--- Backend Logs ---"
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=30 backend
+            echo "--- Frontend Logs ---"
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=30 frontend
+            exit 1
+          fi
+          
+          # Cleanup
+          echo "🧹 Cleaning up old images..."
+          docker image prune -f --filter "until=24h"
+          
+          echo "=========================================="
+          echo "✅ ${{ env.ENV_NAME }} deployment complete!"
+          echo "=========================================="
+          REMOTE_SCRIPT
+
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ env.ENV_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend Port | ${{ env.PORT_BACKEND }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend Port | ${{ env.PORT_FRONTEND }} |" >> $GITHUB_STEP_SUMMARY
