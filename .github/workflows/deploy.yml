@@ -18,6 +18,14 @@ env:
 jobs:
   build:
     runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            context: ./backend
+          - service: frontend
+            context: ./frontend
     permissions:
       contents: read
       packages: write
@@ -29,63 +37,21 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: |
-            backend/package-lock.json
-            frontend/package-lock.json
+          cache-dependency-path: ${{ matrix.context }}/package-lock.json
 
-      - name: Build backend and frontend (parallel)
+      - name: Install dependencies and build
         run: |
-          echo "🚀 Starting parallel builds..."
-          
-          # Backend build in background
-          (
-            cd backend
-            echo "[Backend] Installing dependencies..."
-            npm install --legacy-peer-deps
-            echo "[Backend] Building..."
-            npm run build
-            echo "[Backend] ✅ Done"
-          ) &
-          BACKEND_PID=$!
-          
-          # Frontend build in background
-          (
-            cd frontend
-            echo "[Frontend] Installing dependencies..."
-            npm install --legacy-peer-deps
-            echo "[Frontend] Building..."
-            export VITE_APP_BUILD_SHA=${{ github.sha }}
-            npm run build
-            echo "[Frontend] ✅ Done"
-          ) &
-          FRONTEND_PID=$!
-          
-          # Wait for both to complete
-          echo "⏳ Waiting for parallel builds to complete..."
-          wait $BACKEND_PID
-          BACKEND_EXIT=$?
-          wait $FRONTEND_PID
-          FRONTEND_EXIT=$?
-          
-          # Check results
-          if [ $BACKEND_EXIT -ne 0 ]; then
-            echo "❌ Backend build failed!"
-            exit 1
-          fi
-          if [ $FRONTEND_EXIT -ne 0 ]; then
-            echo "❌ Frontend build failed!"
-            exit 1
-          fi
-          echo "✅ Both builds completed successfully!"
+          cd ${{ matrix.context }}
+          npm ci --legacy-peer-deps
+          npm run build
+        env:
+          VITE_APP_BUILD_SHA: ${{ github.sha }}
 
-      # QEMU is not needed for native ARM64 builds
-      # - name: Set up QEMU
-      #   uses: docker/setup-qemu-action@v3
-      
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
       - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -96,47 +62,26 @@ jobs:
         id: repo
         run: echo "lowercase=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
       
-      - name: Extract metadata for backend
-        id: meta-backend
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-backend
+          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-${{ matrix.service }}
           tags: |
             type=sha
             type=raw,value=latest
       
-      - name: Build and push backend image
+      - name: Build and push image
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.context }}/Dockerfile
           platforms: linux/arm64
-          push: true
-          tags: ${{ steps.meta-backend.outputs.tags }}
-          labels: ${{ steps.meta-backend.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      
-      - name: Extract metadata for frontend
-        id: meta-frontend
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-frontend
-          tags: |
-            type=sha
-            type=raw,value=latest
-      
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          platforms: linux/arm64
-          push: true
-          tags: ${{ steps.meta-frontend.outputs.tags }}
-          labels: ${{ steps.meta-frontend.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
   deploy:
     needs: build
@@ -145,6 +90,10 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
+      with:
+        sparse-checkout: |
+          docker-compose.yml
+        sparse-checkout-cone-mode: false
 
     - name: Set deployment environment variables
       id: set-env
@@ -163,65 +112,33 @@ jobs:
           echo "ENV_NAME=Staging" >> $GITHUB_ENV
           echo "PORT_BACKEND=30020" >> $GITHUB_ENV
           echo "PORT_FRONTEND=8200" >> $GITHUB_ENV
-          echo "PORT_DB=5432" >> $GITHUB_ENV # Staging now uses Prod DB port
+          echo "PORT_DB=5432" >> $GITHUB_ENV
           echo "PORT_REDIS=46380" >> $GITHUB_ENV
         fi
 
     - name: Prepare SSH key
-      shell: bash
-      env:
-        VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
       run: |
-        # Fix formatting while keeping it as a variable
-        FIXED_KEY=$(echo "$VPS_SSH_KEY" | sed 's/\\n/\n/g')
-        echo "FIXED_SSH_KEY<<EOF" >> $GITHUB_ENV
-        echo "$FIXED_KEY" >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        mkdir -p ~/.ssh
+        echo "${{ secrets.VPS_SSH_KEY }}" | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+        ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
-    - name: Copy docker-compose.yml to remote VPS
-      uses: appleboy/scp-action@v0.1.7
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USERNAME }}
-        key: ${{ env.FIXED_SSH_KEY }}
-        port: 22
-        source: "docker-compose.yml"
-        target: ${{ env.DEPLOY_PATH }}
-
-    - name: Deploy to remote VPS
-      uses: appleboy/ssh-action@v1.2.0
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USERNAME }}
-        key: ${{ env.FIXED_SSH_KEY }}
-        port: 22
-        script: |
+    - name: Deploy
+      run: |
+        # Copy compose file
+        scp -i ~/.ssh/deploy_key docker-compose.yml ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_PATH }}/
+        
+        # Deploy via SSH
+        ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
           set -e
-          echo "=========================================="
-          echo "🚀 Starting remote deployment to ${{ env.ENV_NAME }}..."
-          echo "=========================================="
-          
           cd ${{ env.DEPLOY_PATH }}
           
-          # For Staging: Copy .env from Production if it doesn't exist
-          if [[ "${{ env.ENV_NAME }}" == "Staging" ]]; then
-             echo "📂 Copying .env from Production to Staging..."
-             # We assume Prod is at /srv/ssmedia/docker/OptionsTradeMonitoring
-             # Use -n to not overwrite if one exists (or force -f if we want sync)
-             # User implies they want to use it, so let's forcing copy to keep in sync
-             cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || echo "⚠️ Could not copy .env from Prod"
-          fi
+          [[ "${{ env.ENV_NAME }}" == "Staging" ]] && cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || true
           
-          # Login to GitHub Container Registry
-          echo "Logging into GHCR..."
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           
-          # Pull latest images
-          echo "📥 Pulling latest images..."
           docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull backend frontend
           
-          # Restart services with environment-specific ports
-          echo "🔄 Restarting services..."
           export PORT_BACKEND=${{ env.PORT_BACKEND }}
           export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
           export PORT_DB=${{ env.PORT_DB }}
@@ -230,47 +147,12 @@ jobs:
           if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend db redis
           else
-            # Staging: Skip 'db' service as it uses Production DB. Remove orphans (like redis-commander)
-            # EXPLICITLY stop and remove the Staging DB container so it doesn't conflict or show as "Restarting"
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db || true
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db || true
-            
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --remove-orphans --no-deps backend frontend redis
           fi
           
-          # Wait for containers to stabilize
-          echo "🕒 Waiting for containers to stabilize..."
           sleep 5
-          
-          # Check status
-          echo "=========================================="
-          echo "📊 Container Status (${{ env.ENV_NAME }}):"
           docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
-          
-          # Show logs if containers are failing
-          if docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps | grep -q "Restarting\|Exited"; then
-            echo "=========================================="
-            echo "⚠️  Issues detected. Backend logs:"
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 backend
-            echo "=========================================="
-            echo "⚠️  Frontend logs:"
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} logs --tail=50 frontend
-            exit 1
-          else
-            echo "=========================================="
-            echo "✅ All containers in ${{ env.ENV_NAME }} running successfully!"
-          fi
-          
-          # Clean up old images
-          echo "=========================================="
-          echo "🧹 Cleaning up old images..."
           docker image prune -f
-          
-          echo "=========================================="
-          echo "✅ ${{ env.ENV_NAME }} Deployment completed!"
-          echo "=========================================="
-          exit 0
-
-    - name: Health Check
-      run: |
-        echo "✅ Deployment complete. Health check placeholder."
+        DEPLOY_SCRIPT
