@@ -708,7 +708,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-1">
-                                <PositionDetailsDialog position={pos} onCloseUpdate={loadPositions} />
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => handleViewDetails(pos)}>
+                                  <Info className="h-4 w-4" />
+                                </Button>
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
                                     <Button variant="ghost" className="h-8 w-8 p-0">
@@ -795,7 +797,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                               <Badge variant="destructive" className="text-[9px] animate-pulse">{pos.status === 'STOP_TRIGGERED' ? 'STOPPED' : 'PROFIT'}</Badge>
                             )}
                             <div className="flex gap-2">
-                              <PositionDetailsDialog position={pos} onCloseUpdate={loadPositions} />
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => handleViewDetails(pos)}>
+                                <Info className="h-4 w-4" />
+                              </Button>
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                   <Button variant="ghost" size="icon" className="h-8 w-8">
