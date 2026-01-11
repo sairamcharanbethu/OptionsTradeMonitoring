@@ -164,17 +164,21 @@ export class MarketPoller {
     return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
   }
 
-  private async getOptionPremium(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string): Promise<any | null> {
+  private async getOptionPremium(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string, skipCache: boolean = false): Promise<any | null> {
     const ticker = this.constructOSITicker(symbol, strike, type, expiration);
 
     // Redis Cache Check
     const CACHE_KEY = `PRICE:${ticker}`;
     const CACHE_TTL = 300; // 5 minutes
 
-    const cached = await redis.get(CACHE_KEY);
-    if (cached) {
-      // console.log(`[MarketPoller] Cache hit for ${ticker}`);
-      return JSON.parse(cached);
+    if (!skipCache) {
+      const cached = await redis.get(CACHE_KEY);
+      if (cached) {
+        // console.log(`[MarketPoller] Cache hit for ${ticker}`);
+        return JSON.parse(cached);
+      }
+    } else {
+      console.log(`[MarketPoller] Cache bypass (force sync) for ${ticker}`);
     }
 
     // console.log(`[MarketPoller] Fetching premium for: ${ticker}`);
@@ -249,7 +253,7 @@ export class MarketPoller {
     });
   }
 
-  public async syncPrice(symbol: string) {
+  public async syncPrice(symbol: string, skipCache: boolean = false) {
     console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
     const { rows: positions } = await this.fastify.pg.query(
       "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'",
@@ -268,7 +272,8 @@ export class MarketPoller {
         position.symbol,
         Number(position.strike_price),
         position.option_type,
-        position.expiration_date
+        position.expiration_date,
+        skipCache
       );
 
       if (data && data.price !== null) {
@@ -337,7 +342,7 @@ export class MarketPoller {
     const symbols = [...new Set(positions.map(p => p.symbol))];
 
     for (const symbol of symbols) {
-      await this.syncPrice(symbol);
+      await this.syncPrice(symbol, force);
       // Stay within limits, sequential delay
       await new Promise(resolve => setTimeout(resolve, 5000));
     }

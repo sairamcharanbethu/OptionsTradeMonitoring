@@ -682,8 +682,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     const symbol = rows[0].symbol;
     const poller = (fastify as any).poller;
     if (poller) {
-      await poller.syncPrice(symbol);
+      await poller.syncPrice(symbol, true);
     }
+
+    // Invalidate user cache to ensure fresh data on next GET
+    await redis.del(`USER_POSITIONS:${userId}`);
+    await redis.del(`USER_STATS:${userId}`);
 
     return { status: 'ok', symbol };
   });

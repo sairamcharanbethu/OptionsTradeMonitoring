@@ -70,6 +70,16 @@ class RedisClient {
             await this.client.quit();
         }
     }
+
+    // Fail-open del
+    async del(key: string): Promise<void> {
+        if (!this.isConnected || !this.client) return;
+        try {
+            await this.client.del(key);
+        } catch (err) {
+            // Ignore
+        }
+    }
 }
 
 export const redis = new RedisClient();
