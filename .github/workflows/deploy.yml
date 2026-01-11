@@ -29,14 +29,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Debug - List directory structure
+        run: |
+          echo "📂 Repository structure:"
+          ls -la
+          echo ""
+          echo "📂 Backend:"
+          ls -la backend/ || echo "backend/ not found"
+          echo ""
+          echo "📂 Frontend:"
+          ls -la frontend/ || echo "frontend/ not found"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: |
-            backend/package-lock.json
-            frontend/package-lock.json
+          cache-dependency-path: "**/package-lock.json"
 
       - name: Install and build (parallel)
         run: |
@@ -101,7 +110,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          # Use docker-container driver for better caching
           driver-opts: |
             image=moby/buildkit:latest
             network=host
@@ -170,7 +178,7 @@ jobs:
           ) > /tmp/docker-logs/frontend.log 2>&1 &
           PID_FRONTEND=$!
           
-          # Progress indicator while waiting
+          # Progress indicator
           echo "⏳ Building images in parallel..."
           while kill -0 $PID_BACKEND 2>/dev/null || kill -0 $PID_FRONTEND 2>/dev/null; do
             sleep 10
@@ -201,22 +209,13 @@ jobs:
           
           echo "✅ Both Docker images built and pushed!"
 
-      # For PRs: just build without pushing to verify Dockerfiles work
       - name: Build Docker images (PR verification)
         if: github.event_name == 'pull_request'
         run: |
           echo "🔍 Building images for PR verification (no push)..."
           
-          # Build both in parallel, just don't push
-          docker buildx build \
-            --platform linux/arm64 \
-            --cache-from type=gha,scope=backend \
-            ./backend &
-          
-          docker buildx build \
-            --platform linux/arm64 \
-            --cache-from type=gha,scope=frontend \
-            ./frontend &
+          docker buildx build --platform linux/arm64 ./backend &
+          docker buildx build --platform linux/arm64 ./frontend &
           
           wait
           echo "✅ PR Docker builds verified!"
@@ -360,5 +359,3 @@ jobs:
           echo "| Environment | ${{ env.ENV_NAME }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Backend Port | ${{ env.PORT_BACKEND }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Frontend Port | ${{ env.PORT_FRONTEND }} |" >> $GITHUB_STEP_SUMMARY
