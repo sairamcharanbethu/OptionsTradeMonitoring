@@ -39,7 +39,7 @@ ${posSummary}
 
 Task: Provide a high-level summary of the portfolio's health, highlight positions needing immediate attention (due to PnL or Greek shifts), and suggest next steps.
 Style: Professional trader tone, concise but insightful.
-Format: JSON { "briefing": "Full analysis here...", "discord": "Formatted Discord message with emojis..." }`;
+Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discord message with emojis..." }`;
         const response = await this.generateAnalysisInternal(prompt);
         return {
             briefing: response.analysis,
@@ -122,7 +122,7 @@ Format: JSON { "briefing": "Full analysis here...", "discord": "Formatted Discor
             const parsed = JSON.parse(text);
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.reasoning || parsed.analysis || parsed.summary || text,
+                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
                 discord: parsed.discord
             };
         }
@@ -155,7 +155,7 @@ Format: JSON { "briefing": "Full analysis here...", "discord": "Formatted Discor
             const parsed = JSON.parse(text);
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.reasoning || parsed.analysis || parsed.summary || text,
+                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
                 discord: parsed.discord
             };
         }

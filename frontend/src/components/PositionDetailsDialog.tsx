@@ -13,9 +13,11 @@ import { cn, parseLocalDate } from '@/lib/utils';
 interface PositionDetailsDialogProps {
     position: Position;
     onCloseUpdate?: () => void;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
 }
 
-export default function PositionDetailsDialog({ position: initialPosition, onCloseUpdate }: PositionDetailsDialogProps) {
+export default function PositionDetailsDialog({ position: initialPosition, onCloseUpdate, open, onOpenChange }: PositionDetailsDialogProps) {
     const [position, setPosition] = useState<Position>(initialPosition);
     const [analysis, setAnalysis] = useState<{ verdict: string, text: string } | null>(null);
     const [loading, setLoading] = useState(false);
@@ -111,12 +113,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
         : position.strike_price - entryPrice;
 
     return (
-        <Dialog>
-            <DialogTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600">
-                    <Info className="h-4 w-4" />
-                </Button>
-            </DialogTrigger>
+        <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="sm:max-w-[650px] max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                     <div className="flex items-start justify-between gap-4">

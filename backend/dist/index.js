@@ -39,6 +39,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fastify_1 = __importDefault(require("fastify"));
 const cors_1 = __importDefault(require("@fastify/cors"));
 const postgres_1 = __importDefault(require("@fastify/postgres"));
+const swagger_1 = __importDefault(require("@fastify/swagger"));
+const swagger_ui_1 = __importDefault(require("@fastify/swagger-ui"));
 const pg_1 = require("pg");
 const positions_1 = require("./routes/positions");
 const market_data_1 = require("./routes/market-data");
@@ -106,6 +108,45 @@ const start = async () => {
         });
         await fastify.register(cors_1.default, {
             origin: true
+        });
+        // Swagger/OpenAPI configuration
+        await fastify.register(swagger_1.default, {
+            openapi: {
+                openapi: '3.0.0',
+                info: {
+                    title: 'Options Trade Monitoring API',
+                    description: 'API for tracking and monitoring options trading positions with real-time price updates, alerts, and portfolio analytics.',
+                    version: '1.0.0'
+                },
+                // Empty servers array = Swagger uses relative URLs (works on any host/port)
+                servers: [],
+                components: {
+                    securitySchemes: {
+                        bearerAuth: {
+                            type: 'http',
+                            scheme: 'bearer',
+                            bearerFormat: 'JWT',
+                            description: 'Enter your JWT token obtained from /api/auth/signin'
+                        }
+                    }
+                },
+                tags: [
+                    { name: 'Auth', description: 'Authentication endpoints' },
+                    { name: 'Positions', description: 'Options positions management' },
+                    { name: 'Settings', description: 'User settings' },
+                    { name: 'Admin', description: 'Admin operations' },
+                    { name: 'Market', description: 'Market data and status' },
+                    { name: 'AI', description: 'AI-powered analysis' }
+                ]
+            }
+        });
+        await fastify.register(swagger_ui_1.default, {
+            routePrefix: '/docs',
+            uiConfig: {
+                docExpansion: 'list',
+                deepLinking: true,
+                persistAuthorization: true
+            }
         });
         if (!process.env.JWT_SECRET) {
             throw new Error('JWT_SECRET environment variable is required');

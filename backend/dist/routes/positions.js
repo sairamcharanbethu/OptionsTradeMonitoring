@@ -14,10 +14,87 @@ const PositionSchema = zod_1.z.object({
     take_profit_trigger: zod_1.z.number().optional(),
     trailing_stop_loss_pct: zod_1.z.number().optional(),
 });
+// OpenAPI schemas for documentation
+const positionBodySchema = {
+    type: 'object',
+    required: ['symbol', 'option_type', 'strike_price', 'expiration_date', 'entry_price', 'quantity'],
+    properties: {
+        symbol: { type: 'string', description: 'Stock ticker symbol (e.g., AAPL, TSLA)' },
+        option_type: { type: 'string', enum: ['CALL', 'PUT'], description: 'Type of option' },
+        strike_price: { type: 'number', description: 'Strike price of the option' },
+        expiration_date: { type: 'string', format: 'date', description: 'Expiration date (YYYY-MM-DD)' },
+        entry_price: { type: 'number', description: 'Price paid per contract' },
+        quantity: { type: 'integer', minimum: 1, description: 'Number of contracts' },
+        stop_loss_trigger: { type: 'number', description: 'Optional fixed stop loss price' },
+        take_profit_trigger: { type: 'number', description: 'Optional take profit price' },
+        trailing_stop_loss_pct: { type: 'number', description: 'Trailing stop loss percentage (e.g., 10 for 10%)' }
+    }
+};
+const positionResponseSchema = {
+    type: 'object',
+    properties: {
+        id: { type: 'integer' },
+        user_id: { type: 'integer' },
+        symbol: { type: 'string' },
+        option_type: { type: 'string', enum: ['CALL', 'PUT'] },
+        strike_price: { type: 'number' },
+        expiration_date: { type: 'string' },
+        entry_price: { type: 'number' },
+        quantity: { type: 'integer' },
+        stop_loss_trigger: { type: 'number', nullable: true },
+        take_profit_trigger: { type: 'number', nullable: true },
+        trailing_stop_loss_pct: { type: 'number', nullable: true },
+        trailing_high_price: { type: 'number', nullable: true },
+        current_price: { type: 'number', nullable: true },
+        status: { type: 'string', enum: ['OPEN', 'CLOSED', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED'] },
+        realized_pnl: { type: 'number', nullable: true },
+        created_at: { type: 'string', format: 'date-time' },
+        updated_at: { type: 'string', format: 'date-time' }
+    }
+};
+const errorSchema = {
+    type: 'object',
+    properties: {
+        error: { type: 'string' }
+    }
+};
+const statsResponseSchema = {
+    type: 'object',
+    properties: {
+        totalTrades: { type: 'integer' },
+        closedTrades: { type: 'integer' },
+        winRate: { type: 'number', description: 'Win rate percentage' },
+        profitFactor: { type: 'number' },
+        totalRealizedPnl: { type: 'number' },
+        equityCurve: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    date: { type: 'string', format: 'date-time' },
+                    pnl: { type: 'number' }
+                }
+            }
+        }
+    }
+};
 async function positionRoutes(fastify, options) {
     fastify.addHook('onRequest', fastify.authenticate);
     // GET all positions (including analytics if closed)
-    fastify.get('/', async (request, reply) => {
+    fastify.get('/', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Get all positions',
+            description: 'Retrieve all option positions for the authenticated user.',
+            security: [{ bearerAuth: [] }],
+            response: {
+                200: {
+                    type: 'array',
+                    items: positionResponseSchema
+                }
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const CACHE_KEY = `USER_POSITIONS:${userId}`;
         // Try cache
@@ -30,7 +107,17 @@ async function positionRoutes(fastify, options) {
         return rows;
     });
     // GET portfolio stats
-    fastify.get('/stats', async (request, reply) => {
+    fastify.get('/stats', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Get portfolio statistics',
+            description: 'Returns portfolio analytics including win rate, profit factor, and equity curve.',
+            security: [{ bearerAuth: [] }],
+            response: {
+                200: statsResponseSchema
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const CACHE_KEY = `USER_STATS:${userId}`;
         // Try cache
@@ -90,7 +177,33 @@ async function positionRoutes(fastify, options) {
         return result;
     });
     // GET symbol search
-    fastify.get('/search', async (request, reply) => {
+    fastify.get('/search', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Search for stock symbols',
+            description: 'Search for stock/ETF symbols by keyword.',
+            security: [{ bearerAuth: [] }],
+            querystring: {
+                type: 'object',
+                required: ['q'],
+                properties: {
+                    q: { type: 'string', description: 'Search query' }
+                }
+            },
+            response: {
+                200: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            symbol: { type: 'string' },
+                            name: { type: 'string' }
+                        }
+                    }
+                }
+            }
+        }
+    }, async (request, reply) => {
         const { q } = request.query;
         if (!q)
             return [];
@@ -127,7 +240,24 @@ async function positionRoutes(fastify, options) {
         }
     });
     // GET single position
-    fastify.get('/:id', async (request, reply) => {
+    fastify.get('/:id', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Get a single position',
+            description: 'Retrieve a specific position by ID.',
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Position ID' }
+                }
+            },
+            response: {
+                200: positionResponseSchema,
+                404: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
         const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
@@ -137,7 +267,33 @@ async function positionRoutes(fastify, options) {
         return rows[0];
     });
     // GET price history
-    fastify.get('/:id/history', async (request, reply) => {
+    fastify.get('/:id/history', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Get price history',
+            description: 'Retrieve historical price data for a position.',
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Position ID' }
+                }
+            },
+            response: {
+                200: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            price: { type: 'number' },
+                            recorded_at: { type: 'string', format: 'date-time' }
+                        }
+                    }
+                },
+                404: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
         // Verify ownership first
@@ -148,7 +304,19 @@ async function positionRoutes(fastify, options) {
         return rows;
     });
     // CREATE position
-    fastify.post('/', async (request, reply) => {
+    fastify.post('/', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Create a new position',
+            description: 'Create a new options position to track. This is the API equivalent of the UI form.',
+            security: [{ bearerAuth: [] }],
+            body: positionBodySchema,
+            response: {
+                201: positionResponseSchema,
+                400: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         const body = PositionSchema.parse(request.body);
         // Default trailing peak to entry price
         const trailingHigh = body.entry_price;
@@ -187,7 +355,32 @@ async function positionRoutes(fastify, options) {
     });
     // UPDATE position status (CLOSE)
     // CLOSE position (Manual)
-    fastify.post('/:id/close', async (request, reply) => {
+    fastify.post('/:id/close', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Close a position',
+            description: 'Close a position fully or partially. If quantity is less than current quantity, a partial close is performed.',
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Position ID' }
+                }
+            },
+            body: {
+                type: 'object',
+                properties: {
+                    price: { type: 'number', description: 'Close price (defaults to current price if not specified)' },
+                    quantity: { type: 'integer', description: 'Quantity to close (defaults to full position)' }
+                }
+            },
+            response: {
+                200: positionResponseSchema,
+                400: errorSchema,
+                404: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
         const body = request.body;
@@ -248,7 +441,24 @@ async function positionRoutes(fastify, options) {
         }
     });
     // REOPEN position (Manual)
-    fastify.patch('/:id/reopen', async (request, reply) => {
+    fastify.patch('/:id/reopen', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Reopen a closed position',
+            description: 'Reopen a previously closed or triggered position, resetting stop loss and status.',
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Position ID' }
+                }
+            },
+            response: {
+                200: positionResponseSchema,
+                404: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
         // 1. Fetch current position to get entry price and trailing pct
@@ -286,7 +496,38 @@ async function positionRoutes(fastify, options) {
         return rows[0];
     });
     // UPDATE position full
-    fastify.put('/:id', async (request, reply) => {
+    fastify.put('/:id', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Update a position',
+            description: 'Update position fields. If trailing stop % is changed on a triggered position, it will be reopened.',
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Position ID' }
+                }
+            },
+            body: {
+                type: 'object',
+                properties: {
+                    symbol: { type: 'string' },
+                    option_type: { type: 'string', enum: ['CALL', 'PUT'] },
+                    strike_price: { type: 'number' },
+                    expiration_date: { type: 'string', format: 'date' },
+                    entry_price: { type: 'number' },
+                    quantity: { type: 'integer' },
+                    stop_loss_trigger: { type: 'number' },
+                    take_profit_trigger: { type: 'number' },
+                    trailing_stop_loss_pct: { type: 'number' }
+                }
+            },
+            response: {
+                200: positionResponseSchema,
+                404: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
         const body = PositionSchema.partial().parse(request.body); // Allow partial updates
@@ -338,7 +579,30 @@ async function positionRoutes(fastify, options) {
         return rows[0];
     });
     // SYNC single position
-    fastify.post('/:id/sync', async (request, reply) => {
+    fastify.post('/:id/sync', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Sync position price',
+            description: 'Trigger an immediate price sync for this position\'s underlying symbol.',
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Position ID' }
+                }
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        status: { type: 'string' },
+                        symbol: { type: 'string' }
+                    }
+                },
+                404: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
         const { rows } = await fastify.pg.query('SELECT symbol FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
@@ -353,7 +617,25 @@ async function positionRoutes(fastify, options) {
         return { status: 'ok', symbol };
     });
     // DELETE position
-    fastify.delete('/:id', async (request, reply) => {
+    fastify.delete('/:id', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Delete a position',
+            description: 'Permanently delete a position and its associated price history and alerts.',
+            security: [{ bearerAuth: [] }],
+            params: {
+                type: 'object',
+                properties: {
+                    id: { type: 'string', description: 'Position ID' }
+                }
+            },
+            response: {
+                204: { type: 'null', description: 'Position deleted successfully' },
+                404: errorSchema,
+                500: errorSchema
+            }
+        }
+    }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
         try {

@@ -132,6 +132,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   // Sorting State
   const [sortConfig, setSortConfig] = useState<{ key: 'symbol' | 'dte' | 'pnl', direction: 'asc' | 'desc' } | null>({ key: 'dte', direction: 'asc' });
 
+  // Modal State for Details
+  const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedTicker(tickerFilter);
@@ -142,6 +146,11 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const handleEdit = (pos: Position) => {
     setEditingPosition(pos);
     setIsDialogOpen(true);
+  };
+
+  const handleViewDetails = (pos: Position) => {
+    setSelectedPosition(pos);
+    setIsDetailsOpen(true);
   };
 
   const handleDelete = async (id: number) => {
@@ -437,6 +446,16 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </Dialog>
           </div>
         </div>
+
+        {/* Global Details Modal */}
+        {selectedPosition && (
+          <PositionDetailsDialog
+            position={selectedPosition}
+            open={isDetailsOpen}
+            onOpenChange={setIsDetailsOpen}
+            onCloseUpdate={loadPositions}
+          />
+        )}
 
         <TabsContent value="overview" className="space-y-8 mt-0">
 

@@ -43,10 +43,10 @@ class MarketPoller {
             }
         });
     }
-    async sendMorningBriefings() {
-        console.log('[MarketPoller] Executing morning briefings...');
-        const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT user_id FROM positions');
-        for (const { user_id: userId } of users) {
+    async sendMorningBriefings(ignoreFrequency = false) {
+        console.log(`[MarketPoller] Executing morning briefings (ignoreFrequency: ${ignoreFrequency})...`);
+        const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT p.user_id, u.username FROM positions p JOIN users u ON p.user_id = u.id');
+        for (const { user_id: userId, username } of users) {
             try {
                 // 1. Check user settings for briefing frequency
                 const { rows: settingsRows } = await this.fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
@@ -55,20 +55,20 @@ class MarketPoller {
                     return acc;
                 }, {});
                 const frequency = settings.briefing_frequency || 'disabled';
-                if (frequency === 'disabled')
+                if (!ignoreFrequency && frequency === 'disabled')
                     continue;
                 // 2. Decide if we should send it today
-                if (!this.shouldSendBriefingToday(frequency))
+                if (!ignoreFrequency && !this.shouldSendBriefingToday(frequency))
                     continue;
                 // 3. Fetch open positions
-                const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE user_id = $1 AND status != 'CLOSED'", [userId]);
+                const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.user_id = $1 AND p.status != 'CLOSED'", [userId]);
                 if (positions.length === 0)
                     continue;
                 // 4. Generate AI briefing
                 console.log(`[MarketPoller] Generating briefing for user ${userId}...`);
                 const briefingData = await this.aiService.generateBriefing(positions);
                 // 5. Notify N8n
-                await this.notifyN8nBriefing(userId, briefingData.briefing, briefingData.discord_message);
+                await this.notifyN8nBriefing(userId, username, briefingData.briefing, briefingData.discord_message);
             }
             catch (err) {
                 console.error(`[MarketPoller] Failed to send briefing for user ${userId}:`, err);
@@ -95,7 +95,7 @@ class MarketPoller {
             default: return false;
         }
     }
-    async notifyN8nBriefing(userId, briefing, discordMessage) {
+    async notifyN8nBriefing(userId, username, briefing, discordMessage) {
         const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
         if (!N8N_WEBHOOK_URL)
             return;
@@ -105,9 +105,11 @@ class MarketPoller {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     event: 'MORNING_BRIEFING',
+                    notification_type: 'briefing',
                     user_id: userId,
+                    username: username,
                     briefing: briefing,
-                    discord_message: discordMessage,
+                    discord_message: `**[User: ${username}]**\n${discordMessage}`,
                     timestamp: new Date().toISOString()
                 })
             });
@@ -198,7 +200,7 @@ class MarketPoller {
     }
     async syncPrice(symbol) {
         console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
-        const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE symbol = $1 AND status != 'CLOSED'", [symbol]);
+        const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'", [symbol]);
         if (positions.length === 0) {
             console.log(`[MarketPoller] No active or triggered positions found for ${symbol}.`);
             return null;
@@ -252,7 +254,7 @@ class MarketPoller {
         }
         console.log(`[MarketPoller] ${force ? 'FORCED ' : ''}Polling option premiums via yfinance at ${new Date().toISOString()}...`);
         // Poll all non-CLOSED positions so user sees up-to-date price until they manually close
-        const { rows: positions } = await this.fastify.pg.query("SELECT * FROM positions WHERE status != 'CLOSED'");
+        const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'");
         if (positions.length === 0) {
             console.log('[MarketPoller] No active positions to poll.');
             return;
@@ -340,6 +342,7 @@ class MarketPoller {
         }
     }
     async notifyN8n(position, price, pnl, lossAvoided, type = 'STOP_LOSS', aiSummary, discordMessage, greeks, iv) {
+        const username = position.username || 'Unknown';
         const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
         if (!N8N_WEBHOOK_URL)
             return;
@@ -349,6 +352,8 @@ class MarketPoller {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+                    notification_type: 'alert',
+                    username: username,
                     symbol: position.symbol,
                     ticker: position.symbol,
                     option_type: position.option_type,
@@ -359,7 +364,7 @@ class MarketPoller {
                     loss_avoided: lossAvoided,
                     position_id: position.id,
                     ai_summary: aiSummary,
-                    discord_message: discordMessage,
+                    discord_message: `**[User: ${username}]**\n${discordMessage}`,
                     greeks: greeks,
                     iv: iv,
                     timestamp: new Date().toISOString()
