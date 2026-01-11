@@ -3,9 +3,9 @@ FROM node:20-slim
 
 # Install Python and dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv python3-scipy && \
+    python3 python3-pip python3-venv && \
     python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir yfinance mibian
+    /opt/venv/bin/pip install --no-cache-dir scipy yfinance mibian
 
 ENV PATH="/opt/venv/bin:$PATH"
 
