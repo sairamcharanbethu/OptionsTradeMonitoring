@@ -180,18 +180,6 @@ jobs:
              cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || echo "⚠️ Could not copy .env from Prod"
           fi
           
-          # For Production: Force stop keys ports to avoid conflicts with old/other containers
-          if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
-            echo "🧹 Checking for Production port conflicts..."
-            for port in ${{ env.PORT_BACKEND }} ${{ env.PORT_FRONTEND }}; do
-              PID=$(docker ps --format '{{.ID}} {{.Ports}}' | grep "0.0.0.0:$port" | awk '{print $1}' || true)
-              if [ ! -z "$PID" ]; then
-                echo "Stopping container $PID on port $port..."
-                docker stop $PID || true
-              fi
-            done
-          fi
-          
           # Login to GitHub Container Registry
           echo "Logging into GHCR..."
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
