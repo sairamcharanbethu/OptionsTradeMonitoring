@@ -93,9 +93,8 @@ const start = async () => {
           description: 'API for tracking and monitoring options trading positions with real-time price updates, alerts, and portfolio analytics.',
           version: '1.0.0'
         },
-        servers: [
-          { url: 'http://localhost:3001', description: 'Local development' }
-        ],
+        // Empty servers array = Swagger uses relative URLs (works on any host/port)
+        servers: [],
         components: {
           securitySchemes: {
             bearerAuth: {
