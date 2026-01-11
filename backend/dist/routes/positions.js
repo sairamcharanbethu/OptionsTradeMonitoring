@@ -112,6 +112,33 @@ async function positionRoutes(fastify, options) {
         await redis_1.redis.set(CACHE_KEY, JSON.stringify(rows), 60);
         return rows;
     });
+    // GET lightweight price/greek updates for active positions
+    fastify.get('/updates', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Get lightweight position updates',
+            description: 'Returns only prices, greeks, and status for open positions to minimize payload.',
+            security: [{ bearerAuth: [] }]
+        }
+    }, async (request, reply) => {
+        const { id: userId } = request.user;
+        // We don't cache this as much or at all because it's for real-time updates
+        const query = `
+      SELECT 
+        id, current_price, delta, theta, gamma, vega, iv, 
+        underlying_price, status, realized_pnl, updated_at,
+        trailing_high_price, stop_loss_trigger
+      FROM positions 
+      WHERE user_id = $1 AND status != 'CLOSED'
+    `;
+        const { rows } = await fastify.pg.query(query, [userId]);
+        // Transform to a map/dictionary for easier frontend patching
+        const updates = rows.reduce((acc, row) => {
+            acc[row.id] = row;
+            return acc;
+        }, {});
+        return updates;
+    });
     // GET portfolio stats
     fastify.get('/stats', {
         schema: {

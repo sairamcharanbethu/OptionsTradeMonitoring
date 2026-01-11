@@ -163,7 +163,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     if (confirm('Are you sure you want to delete this position?')) {
       try {
         await api.deletePosition(id);
-        loadPositions();
+        loadPositions(false);
       } catch (err) {
         console.error(err);
         alert('Failed to delete position. Please try again.');
@@ -194,10 +194,22 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     }
   }
 
-  const loadPositions = useCallback(async () => {
-    setLoading(true);
+  const loadPositions = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const data = await api.getPositions();
+      let data: Position[];
+
+      if (silent && positionsRef.current.length > 0) {
+        const updates = await api.getPositionUpdates();
+        data = positionsRef.current.map(p => {
+          if (updates[p.id]) {
+            return { ...p, ...updates[p.id] };
+          }
+          return p;
+        });
+      } else {
+        data = await api.getPositions();
+      }
 
       // Track price changes for animations using the REF (previous value)
       const changes: Record<number, 'up' | 'down' | null> = {};
@@ -222,20 +234,23 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
       positionsRef.current = data; // Update ref for next comparison
       setLastRefreshed(new Date());
       setRefreshError(null);
+
+      // Only reload stats if it's the first load or something likely changed
+      // For silent refreshes, we might skip it or do it less often
       loadPortfolioStats();
     } catch (err) {
       console.error('Failed to load positions:', err);
-      setRefreshError('Market offline');
+      if (!silent) setRefreshError('Market offline');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []); // NO DEPENDENCIES - Decoupled from positions state
 
   useEffect(() => {
-    loadPositions();
+    loadPositions(false); // Initial full load
     loadMarketStatus();
     const intervalId = setInterval(() => {
-      loadPositions();
+      loadPositions(true); // Silent periodic updates
       loadMarketStatus();
     }, 30000); // refresh every 30s
     return () => clearInterval(intervalId);
@@ -356,7 +371,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     setLoading(true);
     try {
       await api.forcePoll();
-      await loadPositions();
+      await loadPositions(false);
     } catch (err) {
       console.error('Failed to force sync:', err);
     } finally {
@@ -386,7 +401,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             <div className="flex items-center gap-2">
               <h2 className="text-xl sm:text-2xl font-bold transition-all">Positions Monitor</h2>
               <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">
-                v1.2.6 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
+                v1.2.7 {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-1">
@@ -459,7 +474,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </Button>
 
 
-            <Button variant="outline" size="icon" onClick={loadPositions}>
+            <Button variant="outline" size="icon" onClick={() => loadPositions(false)}>
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={handleDialogChange}>
@@ -476,7 +491,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 <PositionForm
                   position={editingPosition || undefined}
                   onSuccess={() => {
-                    loadPositions();
+                    loadPositions(false);
                     handleDialogChange(false);
                   }}
                 />
@@ -921,7 +936,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                           <span className="text-blue-500 font-medium text-xs">${Number(pos.loss_avoided || 0).toFixed(2)}</span>
                         </TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="sm" className="h-7 text-[10px] transition-opacity hover:bg-primary/10 hover:text-primary" onClick={() => api.reopenPosition(pos.id).then(loadPositions)}>
+                          <Button variant="ghost" size="sm" className="h-7 text-[10px] transition-opacity hover:bg-primary/10 hover:text-primary" onClick={() => api.reopenPosition(pos.id).then(() => loadPositions(false))}>
                             <RefreshCw className="h-3 w-3 mr-1" /> Reopen
                           </Button>
                         </TableCell>

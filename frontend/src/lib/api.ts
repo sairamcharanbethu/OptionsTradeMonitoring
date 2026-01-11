@@ -183,6 +183,12 @@ export const api = {
     }));
   },
 
+  async getPositionUpdates(): Promise<Record<number, Partial<Position>>> {
+    const res = await authFetch(`${API_BASE}/positions/updates?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch position updates');
+    return res.json();
+  },
+
   async searchSymbols(q: string): Promise<{ symbol: string, name: string }[]> {
     const res = await authFetch(`${API_BASE}/positions/search?q=${encodeURIComponent(q)}`);
     if (!res.ok) throw new Error('Failed to search symbols');
