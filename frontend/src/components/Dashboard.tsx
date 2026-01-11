@@ -72,7 +72,9 @@ import {
   Search,
   X,
   ArrowUpDown,
-  MoreHorizontal
+  MoreHorizontal,
+  BrainCircuit,
+  Loader2
 } from 'lucide-react';
 import {
   DropdownMenu,
