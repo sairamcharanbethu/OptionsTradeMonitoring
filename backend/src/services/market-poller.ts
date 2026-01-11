@@ -164,17 +164,21 @@ export class MarketPoller {
     return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
   }
 
-  private async getOptionPremium(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string): Promise<any | null> {
+  private async getOptionPremium(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string, skipCache: boolean = false): Promise<any | null> {
     const ticker = this.constructOSITicker(symbol, strike, type, expiration);
 
     // Redis Cache Check
     const CACHE_KEY = `PRICE:${ticker}`;
     const CACHE_TTL = 300; // 5 minutes
 
-    const cached = await redis.get(CACHE_KEY);
-    if (cached) {
-      // console.log(`[MarketPoller] Cache hit for ${ticker}`);
-      return JSON.parse(cached);
+    if (!skipCache) {
+      const cached = await redis.get(CACHE_KEY);
+      if (cached) {
+        // console.log(`[MarketPoller] Cache hit for ${ticker}`);
+        return JSON.parse(cached);
+      }
+    } else {
+      console.log(`[MarketPoller] Cache bypass (force sync) for ${ticker}`);
     }
 
     // console.log(`[MarketPoller] Fetching premium for: ${ticker}`);
@@ -194,10 +198,35 @@ export class MarketPoller {
 
       pythonProcess.on('close', (code: number) => {
         try {
-          // Log raw output for debugging if needed
-          // console.log(`[MarketPoller] Raw Python output: ${dataString}`);
+          // Flatten output in case of multiple chunks
+          const lines = dataString.trim().split('\n');
+          let result = null;
 
-          const result = JSON.parse(dataString);
+          // Try to parse the last line first, as that's where our script prints the JSON
+          // If dependencies print noise, it usually appears before or we can filter it out.
+          for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            try {
+              const parsed = JSON.parse(line);
+              // Basic validation to ensure it's our expected object
+              if (parsed && (parsed.status === 'ok' || parsed.status === 'error')) {
+                result = parsed;
+                break;
+              }
+            } catch (e) {
+              // Not a JSON line, likely a log from a dependency (e.g. "Mibian req...")
+              continue;
+            }
+          }
+
+          if (!result) {
+            console.warn(`[MarketPoller] Failed to find valid JSON in output for ${ticker}. Raw output preview: ${dataString.substring(0, 200)}...`);
+            resolve(null);
+            return;
+          }
+
           if (result.status === 'ok' && typeof result.price === 'number') {
             // Enrich with metadata for easier Redis inspection
             result.metadata = {
@@ -213,7 +242,7 @@ export class MarketPoller {
             resolve(null);
           }
         } catch (e) {
-          console.error(`[MarketPoller] Failed to parse output for ${ticker}:`, e);
+          console.error(`[MarketPoller] Error processing output for ${ticker}:`, e);
           resolve(null);
         }
       });
@@ -225,8 +254,8 @@ export class MarketPoller {
     });
   }
 
-  public async syncPrice(symbol: string) {
-    console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
+  public async syncPrice(symbol: string, skipCache: boolean = false) {
+    console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol} (skipCache: ${skipCache})`);
     const { rows: positions } = await this.fastify.pg.query(
       "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'",
       [symbol]
@@ -244,7 +273,8 @@ export class MarketPoller {
         position.symbol,
         Number(position.strike_price),
         position.option_type,
-        position.expiration_date
+        position.expiration_date,
+        skipCache
       );
 
       if (data && data.price !== null) {

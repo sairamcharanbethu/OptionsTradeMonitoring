@@ -132,6 +132,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   // Sorting State
   const [sortConfig, setSortConfig] = useState<{ key: 'symbol' | 'dte' | 'pnl', direction: 'asc' | 'desc' } | null>({ key: 'dte', direction: 'asc' });
 
+  // Modal State for Details
+  const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedTicker(tickerFilter);
@@ -142,6 +146,11 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const handleEdit = (pos: Position) => {
     setEditingPosition(pos);
     setIsDialogOpen(true);
+  };
+
+  const handleViewDetails = (pos: Position) => {
+    setSelectedPosition(pos);
+    setIsDetailsOpen(true);
   };
 
   const handleDelete = async (id: number) => {
@@ -437,6 +446,19 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </Dialog>
           </div>
         </div>
+    </div>
+
+        {/* Global Details Modal */ }
+  {
+    selectedPosition && (
+      <PositionDetailsDialog
+        position={selectedPosition}
+        open={isDetailsOpen}
+        onOpenChange={setIsDetailsOpen}
+        onCloseUpdate={loadPositions}
+      />
+    )
+  }
 
         <TabsContent value="overview" className="space-y-8 mt-0">
 
@@ -689,7 +711,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-1">
-                                <PositionDetailsDialog position={pos} onCloseUpdate={loadPositions} />
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => handleViewDetails(pos)}>
+                                  <Info className="h-4 w-4" />
+                                </Button>
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
                                     <Button variant="ghost" className="h-8 w-8 p-0">
@@ -776,7 +800,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                               <Badge variant="destructive" className="text-[9px] animate-pulse">{pos.status === 'STOP_TRIGGERED' ? 'STOPPED' : 'PROFIT'}</Badge>
                             )}
                             <div className="flex gap-2">
-                              <PositionDetailsDialog position={pos} onCloseUpdate={loadPositions} />
+                            <div className="flex gap-2">
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => handleViewDetails(pos)}>
+                                <Info className="h-4 w-4" />
+                              </Button>
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                   <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -1030,12 +1057,14 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
           </Card>
         </TabsContent>
 
-        {user.role === 'ADMIN' && (
-          <TabsContent value="users" className="mt-0">
-            <UserManagement />
-          </TabsContent>
-        )}
-      </Tabs>
-    </div>
+  {
+    user.role === 'ADMIN' && (
+      <TabsContent value="users" className="mt-0">
+        <UserManagement />
+      </TabsContent>
+    )
+  }
+      </Tabs >
+    </div >
   );
 }
