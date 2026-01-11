@@ -33,18 +33,50 @@ jobs:
             backend/package-lock.json
             frontend/package-lock.json
 
-      - name: Build backend
+      - name: Build backend and frontend (parallel)
         run: |
-          cd backend
-          npm install --legacy-peer-deps
-          npm run build
-
-      - name: Build frontend
-        run: |
-          cd frontend
-          npm install --legacy-peer-deps
-          export VITE_APP_BUILD_SHA=${{ github.sha }}
-          npm run build
+          echo "🚀 Starting parallel builds..."
+          
+          # Backend build in background
+          (
+            cd backend
+            echo "[Backend] Installing dependencies..."
+            npm install --legacy-peer-deps
+            echo "[Backend] Building..."
+            npm run build
+            echo "[Backend] ✅ Done"
+          ) &
+          BACKEND_PID=$!
+          
+          # Frontend build in background
+          (
+            cd frontend
+            echo "[Frontend] Installing dependencies..."
+            npm install --legacy-peer-deps
+            echo "[Frontend] Building..."
+            export VITE_APP_BUILD_SHA=${{ github.sha }}
+            npm run build
+            echo "[Frontend] ✅ Done"
+          ) &
+          FRONTEND_PID=$!
+          
+          # Wait for both to complete
+          echo "⏳ Waiting for parallel builds to complete..."
+          wait $BACKEND_PID
+          BACKEND_EXIT=$?
+          wait $FRONTEND_PID
+          FRONTEND_EXIT=$?
+          
+          # Check results
+          if [ $BACKEND_EXIT -ne 0 ]; then
+            echo "❌ Backend build failed!"
+            exit 1
+          fi
+          if [ $FRONTEND_EXIT -ne 0 ]; then
+            echo "❌ Frontend build failed!"
+            exit 1
+          fi
+          echo "✅ Both builds completed successfully!"
 
       # QEMU is not needed for native ARM64 builds
       # - name: Set up QEMU
@@ -208,7 +240,7 @@ jobs:
           
           # Wait for containers to stabilize
           echo "🕒 Waiting for containers to stabilize..."
-          sleep 10
+          sleep 5
           
           # Check status
           echo "=========================================="
@@ -241,6 +273,4 @@ jobs:
 
     - name: Health Check
       run: |
-        echo "Performing health check..."
-        sleep 5
-        echo "Health check placeholder: Deployment triggered on remote VPS."
+        echo "✅ Deployment complete. Health check placeholder."
