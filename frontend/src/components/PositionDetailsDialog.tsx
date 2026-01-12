@@ -94,7 +94,10 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
         }
     };
 
-    const formatCurrency = (val: number | undefined) => val != null ? `$${val.toFixed(2)}` : '-';
+    const formatCurrency = (val: number | undefined) => {
+        if (val == null) return '-';
+        return `$${Number(val).toFixed(2)}`;
+    };
 
     // Calculations
     const currentPrice = position.current_price ?? 0;
@@ -103,14 +106,14 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
     const marketValue = currentPrice * quantity * 100; // Standard option multiplier
     const costBasis = entryPrice * quantity * 100;
     const unrealizedPnl = marketValue - costBasis;
-    const unrealizedPnlPct = entryPrice ? ((currentPrice - entryPrice) / entryPrice) * 100 : 0;
+    const unrealizedPnlPct = entryPrice ? ((Number(currentPrice) - Number(entryPrice)) / Number(entryPrice)) * 100 : 0;
     const isProfit = unrealizedPnl >= 0;
 
     // Advanced Stats
     const dte = Math.ceil((parseLocalDate(position.expiration_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
     const breakEven = position.option_type === 'CALL'
-        ? position.strike_price + entryPrice
-        : position.strike_price - entryPrice;
+        ? Number(position.strike_price) + Number(entryPrice)
+        : Number(position.strike_price) - Number(entryPrice);
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -203,23 +206,23 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                                 <div className="p-2 text-center rounded bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100">
                                     <div className="text-[10px] uppercase text-blue-600 font-bold">Delta</div>
-                                    <div className="font-mono text-sm">{position.delta?.toFixed(3) ?? '-'}</div>
+                                    <div className="font-mono text-sm">{position.delta != null ? Number(position.delta).toFixed(3) : '-'}</div>
                                 </div>
                                 <div className="p-2 text-center rounded bg-purple-50/50 dark:bg-purple-900/10 border border-purple-100">
                                     <div className="text-[10px] uppercase text-purple-600 font-bold">Theta</div>
-                                    <div className="font-mono text-sm">{position.theta?.toFixed(3) ?? '-'}</div>
+                                    <div className="font-mono text-sm">{position.theta != null ? Number(position.theta).toFixed(3) : '-'}</div>
                                 </div>
                                 <div className="p-2 text-center rounded bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100">
                                     <div className="text-[10px] uppercase text-emerald-600 font-bold">Gamma</div>
-                                    <div className="font-mono text-sm">{position.gamma?.toFixed(3) ?? '-'}</div>
+                                    <div className="font-mono text-sm">{position.gamma != null ? Number(position.gamma).toFixed(3) : '-'}</div>
                                 </div>
                                 <div className="p-2 text-center rounded bg-orange-50/50 dark:bg-orange-900/10 border border-orange-100">
                                     <div className="text-[10px] uppercase text-orange-600 font-bold">Vega</div>
-                                    <div className="font-mono text-sm">{position.vega?.toFixed(3) ?? '-'}</div>
+                                    <div className="font-mono text-sm">{position.vega != null ? Number(position.vega).toFixed(3) : '-'}</div>
                                 </div>
                                 <div className="p-2 text-center rounded bg-slate-100 dark:bg-slate-800 border">
                                     <div className="text-[10px] uppercase text-slate-600 font-bold">IV</div>
-                                    <div className="font-mono text-sm">{position.iv != null ? position.iv.toFixed(1) + '%' : '-'}</div>
+                                    <div className="font-mono text-sm">{position.iv != null ? Number(position.iv).toFixed(1) + '%' : '-'}</div>
                                 </div>
                             </div>
                         </div>
