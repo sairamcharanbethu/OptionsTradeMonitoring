@@ -17,66 +17,47 @@ env:
 
 jobs:
   build:
-    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            context: backend
+          - service: frontend
+            context: frontend
     permissions:
       contents: read
       packages: write
 
     steps:
+      - name: Clean Runner Workspace
+        run: |
+          echo "🧹 Cleaning previous build artifacts..."
+          rm -rf node_modules package-lock.json dist || true
+          
       - uses: actions/checkout@v4
+        with:
+          clean: true
       
+      - name: Debug Workspace Structure
+        run: |
+          echo "📍 Current Dir: $(pwd)"
+          echo "📂 Root Contents:"
+          ls -F
+          echo "🔍 Checking subdirs:"
+          ls -d */ || echo "No subdirectories found"
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: |
-            backend/package-lock.json
-            frontend/package-lock.json
 
-      - name: Build backend and frontend (parallel)
+      - name: Install dependencies and build
         run: |
-          echo "🚀 Starting parallel builds..."
-          
-          # Backend build in background
-          (
-            cd backend
-            echo "[Backend] Installing dependencies..."
-            npm install --legacy-peer-deps
-            echo "[Backend] Building..."
-            npm run build
-            echo "[Backend] ✅ Done"
-          ) &
-          BACKEND_PID=$!
-          
-          # Frontend build in background
-          (
-            cd frontend
-            echo "[Frontend] Installing dependencies..."
-            npm install --legacy-peer-deps
-            echo "[Frontend] Building..."
-            export VITE_APP_BUILD_SHA=${{ github.sha }}
-            npm run build
-            echo "[Frontend] ✅ Done"
-          ) &
-          FRONTEND_PID=$!
-          
-          # Wait for both to complete
-          echo "⏳ Waiting for parallel builds to complete..."
-          wait $BACKEND_PID
-          BACKEND_EXIT=$?
-          wait $FRONTEND_PID
-          FRONTEND_EXIT=$?
-          
-          # Check results
-          if [ $BACKEND_EXIT -ne 0 ]; then
-            echo "❌ Backend build failed!"
-            exit 1
-          fi
-          if [ $FRONTEND_EXIT -ne 0 ]; then
-            echo "❌ Frontend build failed!"
-            exit 1
-          fi
-          echo "✅ Both builds completed successfully!"
+          cd ${{ matrix.context }}
+          npm install --legacy-peer-deps
+          npm run build
+        env:
+          VITE_APP_BUILD_SHA: ${{ github.sha }}
 
       # QEMU is not needed for native ARM64 builds
       # - name: Set up QEMU
