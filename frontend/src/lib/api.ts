@@ -186,7 +186,30 @@ export const api = {
   async getPositionUpdates(): Promise<Record<number, Partial<Position>>> {
     const res = await authFetch(`${API_BASE}/positions/updates?t=${Date.now()}`);
     if (!res.ok) throw new Error('Failed to fetch position updates');
-    return res.json();
+    const data = await res.json();
+    const result: Record<number, Partial<Position>> = {};
+
+    for (const [key, val] of Object.entries(data)) {
+      const id = Number(key);
+      const p = val as any; // Cast to any to access raw fields
+      result[id] = {
+        ...p,
+        current_price: p.current_price != null ? Number(p.current_price) : undefined,
+        stop_loss_trigger: p.stop_loss_trigger != null ? Number(p.stop_loss_trigger) : undefined,
+        take_profit_trigger: p.take_profit_trigger != null ? Number(p.take_profit_trigger) : undefined,
+        trailing_high_price: p.trailing_high_price != null ? Number(p.trailing_high_price) : undefined,
+        trailing_stop_loss_pct: p.trailing_stop_loss_pct != null ? Number(p.trailing_stop_loss_pct) : undefined,
+        realized_pnl: p.realized_pnl != null ? Number(p.realized_pnl) : undefined,
+        loss_avoided: p.loss_avoided != null ? Number(p.loss_avoided) : undefined,
+        delta: p.delta != null ? Number(p.delta) : undefined,
+        theta: p.theta != null ? Number(p.theta) : undefined,
+        gamma: p.gamma != null ? Number(p.gamma) : undefined,
+        vega: p.vega != null ? Number(p.vega) : undefined,
+        iv: p.iv != null ? Number(p.iv) : undefined,
+        underlying_price: p.underlying_price != null ? Number(p.underlying_price) : undefined,
+      };
+    }
+    return result;
   },
 
   async searchSymbols(q: string): Promise<{ symbol: string, name: string }[]> {

@@ -545,7 +545,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="h-[60px] p-0 px-6">
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                   <AreaChart data={
                     positions
                       .filter(p => p.status === 'CLOSED')
@@ -726,15 +726,17 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             </TableCell>
                             <TableCell>
                               <div className="text-[10px] space-y-1">
-                                <div className="text-red-500 font-medium whitespace-nowrap">SL: ${pos.stop_loss_trigger?.toFixed(2)}</div>
-                                {pos.take_profit_trigger && (
-                                  <div className="text-green-600 font-medium whitespace-nowrap">TP: ${pos.take_profit_trigger.toFixed(2)}</div>
+                                <div className="text-red-500 font-medium whitespace-nowrap">
+                                  SL: ${typeof pos.stop_loss_trigger === 'number' ? pos.stop_loss_trigger.toFixed(2) : '-'}
+                                </div>
+                                {pos.take_profit_trigger != null && (
+                                  <div className="text-green-600 font-medium whitespace-nowrap">TP: ${Number(pos.take_profit_trigger).toFixed(2)}</div>
                                 )}
                               </div>
                             </TableCell>
                             <TableCell className="w-[100px] min-w-[100px]">
-                              <div className="h-[30px]">
-                                <ResponsiveContainer width="100%" height="100%">
+                              <div className="h-[30px] w-full">
+                                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                                   <LineChart data={historyData[pos.id] || []}>
                                     <YAxis hide domain={['auto', 'auto']} />
                                     <Line type="monotone" dataKey="price" stroke={getPnL(pos) >= 0 ? '#10b981' : '#ef4444'} strokeWidth={2} dot={false} isAnimationActive={false} />
