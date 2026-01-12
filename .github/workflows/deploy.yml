@@ -31,22 +31,25 @@ jobs:
       packages: write
 
     steps:
-      - name: Clean Runner Workspace
+      - name: Clean and Restore Runner Workspace
         run: |
-          echo "🧹 Cleaning previous build artifacts..."
-          rm -rf node_modules package-lock.json dist || true
+          echo "🧹 Deep cleaning runner..."
+          # Force disable sparse checkout if stuck
+          git sparse-checkout disable || true
+          # Clean untracked files
+          git clean -ffdx || true
           
       - uses: actions/checkout@v4
         with:
           clean: true
+          fetch-depth: 0 # Fetch all history to ensure subdirectories are available
       
-      - name: Debug Workspace Structure
+      - name: Verify Workspace
         run: |
           echo "📍 Current Dir: $(pwd)"
-          echo "📂 Root Contents:"
-          ls -F
-          echo "🔍 Checking subdirs:"
-          ls -d */ || echo "No subdirectories found"
+          ls -R | head -n 20
+          if [ ! -d "backend" ]; then echo "❌ CRITICAL: backend dir not found!"; exit 1; fi
+          if [ ! -d "frontend" ]; then echo "❌ CRITICAL: frontend dir not found!"; exit 1; fi
 
       - uses: actions/setup-node@v4
         with:
