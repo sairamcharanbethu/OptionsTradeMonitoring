@@ -1,5 +1,6 @@
 
 import sys
+import os
 import json
 import yfinance as yf
 import mibian
@@ -43,9 +44,24 @@ def fetch_option_data(os_ticker):
             underlying_symbol = os_ticker[:-15]
 
         underlying = yf.Ticker(underlying_symbol)
-        u_price = underlying.fast_info.last_price
-        
+        try:
+            u_price = underlying.fast_info.last_price
+        except:
+            # Fallback to info
+            u_price = underlying.info.get('regularMarketPrice') or underlying.info.get('lastPrice') or 0.0
+
+        if not u_price:
+             print(json.dumps({"status": "error", "symbol": os_ticker, "message": f"Underlying price for {underlying_symbol} not found"}))
+             return
+
         strike = info.get('strikePrice')
+        if not strike:
+            # Fallback parse strike from ticker
+            try:
+                strike = float(os_ticker[-8:]) / 1000
+            except:
+                print(json.dumps({"status": "error", "message": "Could not determine strike price"}))
+                return
         
         # Expiration
         # expireDate is timestamp in info
@@ -54,34 +70,45 @@ def fetch_option_data(os_ticker):
             expiry = datetime.fromtimestamp(expire_ts)
         else:
             # Fallback parsing date from string AAPL[250117]C...
-            # date_str = os_ticker[-15:-9]
-            # expiry = datetime.strptime(date_str, "%y%m%d")
-            # This is risky without strict validation, let's hope yf gave it.
-            print(json.dumps({"status": "error", "message": "Could not determine expiration"}))
-            return
+            try:
+                # Find where digits start after underlying
+                import re
+                match = re.search(r'\d{6}', os_ticker)
+                if match:
+                    date_str = match.group(0)
+                    expiry = datetime.strptime(date_str, "%y%m%d")
+                else:
+                    raise ValueError("No date pattern found")
+            except Exception as e:
+                print(json.dumps({"status": "error", "message": f"Could not determine expiration: {str(e)}"}))
+                return
 
         days_to_expiry = (expiry - datetime.now()).days
-        if days_to_expiry < 0: days_to_expiry = 0
         # Mibian uses days, but avoid 0 division or issues
         days_calc = max(days_to_expiry, 0.01) # Use small fraction if expiring today
 
         # Volatility (IV)
-        # Try to use market IV if available, else standard 30?
+        # Try to use market IV if available, else compute it
         iv = info.get('impliedVolatility')
+        try:
+            r = float(os.environ.get('RISK_FREE_RATE', 4.5))
+        except:
+            r = 4.5
+
         if iv:
             iv = iv * 100 # Mibian expects percentage (e.g. 25, not 0.25)
         else:
              # If no IV, we can't calculate Greeks accurately.
              # but we can try to compute IV using Mibian given the price!
-             # Interest rate approx 4.5% (risk free)
-             bs_iv = mibian.BS([u_price, strike, 4.5, days_calc], callPrice=last_price) if 'C' in os_ticker else \
-                     mibian.BS([u_price, strike, 4.5, days_calc], putPrice=last_price)
-             iv = bs_iv.impliedVolatility
+             try:
+                 bs_iv = mibian.BS([u_price, strike, r, days_calc], callPrice=last_price) if 'C' in os_ticker else \
+                         mibian.BS([u_price, strike, r, days_calc], putPrice=last_price)
+                 iv = bs_iv.impliedVolatility
+             except:
+                 iv = 30.0 # Extreme fallback
         
         # 3. Calculate Greeks using Mibian
         # BS([UnderlyingPrice, StrikePrice, InterestRate, DaysToExpiration], volatility=x)
-        r = 4.5 # Risk free rate approx
-        
         c = mibian.BS([u_price, strike, r, days_calc], volatility=iv)
         
         greeks = {}
@@ -124,6 +151,7 @@ def fetch_option_data(os_ticker):
             "iv": float(iv)
         }
         print(json.dumps(output))
+        sys.stdout.flush()
 
     except Exception as e:
         # Check if it's a 404/Quote not found specifically if possible or just log message

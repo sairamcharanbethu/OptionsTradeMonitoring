@@ -51,25 +51,23 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
       if (engineResult.triggered) {
         results.alerts_triggered++;
 
-        // Calculate realized PnL and Loss Avoided
-        // Assuming 100 contracts per position for options
-        const pnl = (price - Number(position.entry_price)) * position.quantity * 100;
+        const triggerType = engineResult.triggerType || 'STOP_LOSS';
+        const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
 
-        // Close the position
+        // Update position status but do NOT close it (allow user to see final price)
         await fastify.pg.query(
           `UPDATE positions 
-           SET status = 'CLOSED', 
-               realized_pnl = $1, 
+           SET status = $1,
                loss_avoided = $2,
                updated_at = CURRENT_TIMESTAMP 
-           WHERE id = $3`,
-          [pnl, engineResult.lossAvoided, position.id]
+           WHERE id = $3 AND status = 'OPEN'`,
+          [newStatus, engineResult.lossAvoided, position.id]
         );
 
         // Record the Alert
         await fastify.pg.query(
           'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',
-          [position.id, 'STOP_LOSS', position.stop_loss_trigger, price]
+          [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]
         );
 
         // Generate AI Summary for the alert (Discord Message)
@@ -80,7 +78,7 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
             type: position.option_type,
             strike: position.strike_price,
             expiration: position.expiration_date,
-            event: 'STOP_LOSS_TRIGGERED',
+            event: triggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
             price: price,
             pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
             greeks: {
@@ -93,6 +91,9 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
           fastify.log.error(err, 'AI Summary generation failed');
         }
 
+        // Calculate realized PnL for the alert message
+        const pnl = (price - Number(position.entry_price)) * position.quantity * 100;
+
         // 6. Alert Fan-out (Call n8n)
         const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
         if (N8N_WEBHOOK_URL) {
@@ -101,7 +102,7 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                event: 'STOP_LOSS_TRIGGERED',
+                event: triggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
                 symbol: position.symbol,
                 ticker: position.symbol,
                 option_type: position.option_type,
