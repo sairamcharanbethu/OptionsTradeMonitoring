@@ -31,11 +31,6 @@ jobs:
       packages: write
 
     steps:
-      - name: Clean workspace
-        run: |
-          rm -rf ~/actions-runner/_work/OptionsTradeMonitoring/
-        continue-on-error: true
-
       - uses: actions/checkout@v4
       
       - uses: actions/setup-node@v4
