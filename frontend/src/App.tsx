@@ -1,15 +1,18 @@
 import { useState, useEffect } from 'react';
 import Dashboard from './components/Dashboard';
+import StockAnalysis from './components/StockAnalysis';
 import Auth from './components/Auth';
 import { api, User } from './lib/api';
 import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Button } from './components/ui/button';
-import { LogOut, User as UserIcon, Loader2 } from 'lucide-react';
+import { LogOut, User as UserIcon, Loader2, LayoutDashboard, BarChart3 } from 'lucide-react';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<'dashboard' | 'analysis'>('dashboard');
+  const [initialTicker, setInitialTicker] = useState<string | undefined>();
 
   useEffect(() => {
     async function initAuth() {
@@ -55,7 +58,15 @@ function App() {
               <h1 className="text-xl font-bold tracking-tight">Options Monitor</h1>
             </div>
 
-            <div className="flex items-center gap-3">
+            <nav className="hidden md:flex items-center ml-8 gap-4">
+              <Button variant={view === 'dashboard' ? 'secondary' : 'ghost'} size="sm" className="gap-2" onClick={() => setView('dashboard')}>
+                <LayoutDashboard className="h-4 w-4" /> Dashboard
+              </Button>
+              <Button variant={view === 'analysis' ? 'secondary' : 'ghost'} size="sm" className="gap-2" onClick={() => setView('analysis')}>
+                <BarChart3 className="h-4 w-4" /> Stock Analysis
+              </Button>
+            </nav>
+            <div className="flex items-center gap-3 ml-auto">
               <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-xs font-medium">
                 <UserIcon className="h-3 w-3" />
                 <span>{user.username}</span>
@@ -68,7 +79,11 @@ function App() {
           </div>
         </header>
         <main>
-          <Dashboard user={user} onUserUpdate={setUser} />
+          {view === 'dashboard' ? (
+            <Dashboard user={user} onUserUpdate={setUser} onNavigateToAnalysis={(t) => { setInitialTicker(t); setView('analysis'); }} />
+          ) : (
+            <StockAnalysis initialTicker={initialTicker} />
+          )}
         </main>
       </div>
     </ThemeProvider>

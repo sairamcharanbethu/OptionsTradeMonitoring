@@ -318,6 +318,12 @@ export const api = {
     return res.json();
   },
 
+  async getMLForecast(ticker: string): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ml/forecast?ticker=${encodeURIComponent(ticker)}`);
+    if (!res.ok) throw new Error('Failed to fetch ML forecast');
+    return res.json();
+  },
+
   async getSettings(): Promise<Record<string, string>> {
     const res = await authFetch(`${API_BASE}/settings`);
     if (!res.ok) throw new Error('Failed to fetch settings');

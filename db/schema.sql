@@ -61,3 +61,19 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, key)
 );
+
+-- ML Predictions Table
+CREATE TABLE IF NOT EXISTS ml_predictions (
+    id SERIAL PRIMARY KEY,
+    ticker VARCHAR(20) UNIQUE NOT NULL,
+    status VARCHAR(20) NOT NULL, -- PENDING, SUCCESS, FAILED
+    forecast_next_day DECIMAL(15, 2),
+    forecast_next_week DECIMAL(15, 2),
+    indicators JSONB,
+    expected_move VARCHAR(50),
+    confidence DECIMAL(5, 4),
+    ai_summary TEXT,
+    error_message TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);

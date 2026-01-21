@@ -99,6 +99,7 @@ import { User } from '@/lib/api';
 interface DashboardProps {
   user: User;
   onUserUpdate: (user: User) => void;
+  onNavigateToAnalysis?: (ticker: string) => void;
 }
 
 interface PortfolioStats {
@@ -110,7 +111,7 @@ interface PortfolioStats {
   equityCurve: Array<{ date: string, pnl: number }>;
 }
 
-export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
+export default function Dashboard({ user, onUserUpdate, onNavigateToAnalysis }: DashboardProps) {
   const [positions, setPositions] = useState<Position[]>([]);
   const positionsRef = useRef<Position[]>([]);
   const [loading, setLoading] = useState(true);
@@ -777,6 +778,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end">
                                     <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                    <DropdownMenuItem onClick={() => onNavigateToAnalysis?.(pos.symbol)}>
+                                      <BrainCircuit className="mr-2 h-4 w-4" />
+                                      Analyze Stock
+                                    </DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => handleEdit(pos)}>
                                       <Pencil className="mr-2 h-4 w-4" />
                                       Edit Position
@@ -868,6 +873,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end">
                                   <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                  <DropdownMenuItem onClick={() => onNavigateToAnalysis?.(pos.symbol)}>
+                                    <BrainCircuit className="mr-2 h-4 w-4" />
+                                    Analyze Stock
+                                  </DropdownMenuItem>
                                   <DropdownMenuItem onClick={() => handleEdit(pos)}>
                                     <Pencil className="mr-2 h-4 w-4" />
                                     Edit

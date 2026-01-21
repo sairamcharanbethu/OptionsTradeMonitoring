@@ -79,6 +79,21 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         };
     }
 
+    async generatePredictionSummary(ticker: string, forecast: any, indicators: any): Promise<string> {
+        const prompt = `Stock Analysis for ${ticker}:
+- Forecast Next Day: $${forecast.next_day}
+- Forecast Next Week: $${forecast.next_week}
+- RSI: ${indicators.rsi}
+- Sentiment Score: ${indicators.sentiment} (0 to 1)
+- MACD: ${indicators.macd}
+- SMA 20/50/200: ${indicators.sma20}/${indicators.sma50}/${indicators.sma200}
+
+Task: Provide a concise (max 50 words) professional trading summary.
+Format: JSON { "analysis": "Your summary here..." }`;
+        const res = await this.generateAnalysisInternal(prompt);
+        return res.analysis;
+    }
+
     private async generateAnalysisInternal(prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
         try {
             // 1. Fetch settings from DB
