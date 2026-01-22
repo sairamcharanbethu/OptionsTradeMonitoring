@@ -300,19 +300,19 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                     : "Profit Zone visualization. X-axis is stock move, Y-axis is days to expiration (Top=Now, Bottom=Exp)."}
                             </p>
 
-                            {!position.delta && (
+                            {position.delta == null && (
                                 <div className="py-8 text-center text-sm text-muted-foreground">
                                     Greeks are required for simulation. Please refresh the position.
                                 </div>
                             )}
 
-                            {position.delta && !position.underlying_price && (
+                            {position.delta != null && position.underlying_price == null && (
                                 <div className="py-8 text-center text-sm text-muted-foreground">
                                     Underlying price is required for simulation. Please refresh the position to fetch market data.
                                 </div>
                             )}
 
-                            {position.delta && position.underlying_price && (
+                            {position.delta != null && position.underlying_price != null && (
                                 <>
                                     {viewMode === 'table' ? (
                                         <div className="rounded-md border overflow-hidden">
