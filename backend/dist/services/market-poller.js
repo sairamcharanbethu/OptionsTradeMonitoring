@@ -365,8 +365,9 @@ class MarketPoller {
                 const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
                 await this.fastify.pg.query(`UPDATE positions 
              SET status = $1, 
+                 loss_avoided = $2,
                  updated_at = CURRENT_TIMESTAMP 
-             WHERE id = $2 AND status = 'OPEN'`, [newStatus, position.id]);
+             WHERE id = $3 AND status = 'OPEN'`, [newStatus, engineResult.lossAvoided, position.id]);
                 await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]);
                 // Generate AI Summary for the alert (Discord Message)
                 let aiData = { summary: '', discord_message: '' };

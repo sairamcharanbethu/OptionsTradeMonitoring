@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.aiRoutes = aiRoutes;
 const ai_service_1 = require("../services/ai-service");
+const prediction_service_1 = require("../services/prediction-service");
 async function aiRoutes(fastify, options) {
     fastify.addHook('onRequest', fastify.authenticate);
     const aiService = new ai_service_1.AIService(fastify);
@@ -59,6 +60,12 @@ async function aiRoutes(fastify, options) {
             fastify.log.error(err);
             return reply.code(500).send({ error: err.message || 'AI Briefing Failed' });
         }
+    });
+    fastify.get('/predict/:symbol', async (request, reply) => {
+        const { symbol } = request.params;
+        const predictionService = new prediction_service_1.PredictionService(fastify); // Or instantiate once at top if preferred, but lightweight here
+        const result = await predictionService.analyzeStock(symbol);
+        return result;
     });
 }
 //# sourceMappingURL=ai.js.map

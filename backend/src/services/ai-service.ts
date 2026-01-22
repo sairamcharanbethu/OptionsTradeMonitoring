@@ -79,6 +79,14 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         };
     }
 
+    async askAI(prompt: string): Promise<{ verdict: string; analysis: string }> {
+        const response = await this.generateAnalysisInternal(prompt);
+        return {
+            verdict: response.verdict,
+            analysis: response.analysis
+        };
+    }
+
     private async generateAnalysisInternal(prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
         try {
             // 1. Fetch settings from DB

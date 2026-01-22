@@ -93,7 +93,9 @@ import {
 import UserManagement from './UserManagement';
 import PositionForm from './PositionForm';
 import PositionDetailsDialog from './PositionDetailsDialog';
+
 import SettingsDialog from './SettingsDialog';
+import Prediction from '@/pages/Prediction';
 import { User } from '@/lib/api';
 
 interface DashboardProps {
@@ -445,6 +447,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             <TabsList className="hidden md:flex order-2 md:order-1">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
+              <TabsTrigger value="prediction">AI Prediction</TabsTrigger>
               {user.role === 'ADMIN' && (
                 <TabsTrigger value="users">Users</TabsTrigger>
               )}
@@ -458,6 +461,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 <SelectContent>
                   <SelectItem value="overview">Overview</SelectItem>
                   <SelectItem value="portfolio">Portfolio</SelectItem>
+                  <SelectItem value="prediction">AI Prediction</SelectItem>
                   {user.role === 'ADMIN' && (
                     <SelectItem value="users">Users</SelectItem>
                   )}
@@ -1165,6 +1169,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="prediction" className="mt-0">
+          <Prediction />
         </TabsContent>
 
         {user.role === 'ADMIN' && (

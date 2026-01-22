@@ -54,6 +54,13 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
             analysis: response.analysis
         };
     }
+    async askAI(prompt) {
+        const response = await this.generateAnalysisInternal(prompt);
+        return {
+            verdict: response.verdict,
+            analysis: response.analysis
+        };
+    }
     async generateAnalysisInternal(prompt) {
         try {
             // 1. Fetch settings from DB

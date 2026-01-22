@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { AIService } from '../services/ai-service';
+import { PredictionService } from '../services/prediction-service';
 
 export async function aiRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
     fastify.addHook('onRequest', fastify.authenticate);
@@ -75,5 +76,13 @@ export async function aiRoutes(fastify: FastifyInstance, options: FastifyPluginO
             fastify.log.error(err);
             return reply.code(500).send({ error: err.message || 'AI Briefing Failed' });
         }
+    });
+
+
+    fastify.get('/predict/:symbol', async (request, reply) => {
+        const { symbol } = request.params as { symbol: string };
+        const predictionService = new PredictionService(fastify); // Or instantiate once at top if preferred, but lightweight here
+        const result = await predictionService.analyzeStock(symbol);
+        return result;
     });
 }
