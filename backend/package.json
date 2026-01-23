@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
     "start": "node dist/index.js",
-    "build": "tsc",
+    "build": "tsc && node copy-scripts.js",
     "test": "ts-node src/services/stop-loss-engine.test.ts"
   },
   "keywords": [],

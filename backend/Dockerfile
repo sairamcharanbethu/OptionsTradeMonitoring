@@ -5,7 +5,7 @@ FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv && \
     python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir scipy yfinance mibian
+    /opt/venv/bin/pip install --no-cache-dir scipy yfinance mibian scikit-learn pandas
 
 ENV PATH="/opt/venv/bin:$PATH"
 
