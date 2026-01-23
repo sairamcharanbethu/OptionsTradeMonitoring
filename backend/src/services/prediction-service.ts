@@ -113,7 +113,8 @@ export class PredictionService {
 
     private async runPythonScript(scriptPath: string, data: any[]): Promise<any> {
         return new Promise((resolve, reject) => {
-            const pythonProcess = spawn('python', [scriptPath]);
+            // Use python3 to ensure compatibility in Docker environment
+            const pythonProcess = spawn('python3', [scriptPath]);
 
             let resultString = '';
             let errorString = '';

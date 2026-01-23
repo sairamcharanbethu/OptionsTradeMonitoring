@@ -357,14 +357,8 @@ export class MarketPoller {
   }
 
   public async poll(force: boolean = false) {
-    if (!force && !this.isMarketOpen()) {
-      console.log(`[MarketPoller] Skipping scheduled poll at ${new Date().toISOString()}: Market is closed.`);
-      return;
-    }
+    console.log(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
 
-    console.log(`[MarketPoller] ${force ? 'FORCED ' : ''}Polling option premiums via yfinance at ${new Date().toISOString()}...`);
-
-    // Poll all non-CLOSED positions so user sees up-to-date price until they manually close
     const { rows: positions } = await this.fastify.pg.query(
       "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'"
     );
@@ -375,8 +369,14 @@ export class MarketPoller {
     }
 
     const symbols = [...new Set(positions.map(p => p.symbol))];
+    const isMarketOpen = this.isMarketOpen();
+
+    if (!force && !isMarketOpen) {
+      console.log('[MarketPoller] Market is closed. Will only perform housekeeping (auto-expiry).');
+    }
 
     for (const symbol of symbols) {
+      // 1. Auto-Close Expired Logic
       // Check for expired positions for this symbol first
       const symbolPositions = positions.filter(p => p.symbol === symbol);
       const today = new Date();
@@ -386,6 +386,7 @@ export class MarketPoller {
         const expDate = new Date(pos.expiration_date);
         expDate.setHours(0, 0, 0, 0);
 
+        // Standard comparison: If expiration date is strictly less than today (yesterday or earlier), it's expired.
         if (expDate < today) {
           console.log(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
           // Close with 0 PnL
@@ -399,13 +400,20 @@ export class MarketPoller {
                  WHERE id = $1`,
             [pos.id]
           );
-          continue; // Skip sync for this specific position
+          // Mark as closed locally so we don't sync it below
+          pos.status = 'CLOSED';
         }
       }
 
-      await this.syncPrice(symbol, force);
-      // Stay within limits, sequential delay
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // 2. Price Sync (Only if Market Open or Forced)
+      // Filter out positions we just closed
+      const activePositions = symbolPositions.filter(p => p.status !== 'CLOSED');
+
+      if ((force || isMarketOpen) && activePositions.length > 0) {
+        await this.syncPrice(symbol, force);
+        // Stay within limits, sequential delay
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
     }
   }
 
@@ -458,8 +466,8 @@ export class MarketPoller {
         await this.fastify.pg.query(
           `UPDATE positions 
              SET status = $1, 
-                 loss_avoided = $2,
-                 updated_at = CURRENT_TIMESTAMP 
+             loss_avoided = $2,
+             updated_at = CURRENT_TIMESTAMP 
              WHERE id = $3 AND status = 'OPEN'`,
           [newStatus, engineResult.lossAvoided, position.id]
         );
