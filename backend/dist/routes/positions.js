@@ -653,6 +653,52 @@ async function positionRoutes(fastify, options) {
         await redis_1.redis.del(`USER_STATS:${userId}`);
         return { status: 'ok', symbol };
     });
+    // BULK DELETE positions
+    fastify.post('/bulk-delete', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Bulk delete positions',
+            description: 'Delete multiple positions by ID.',
+            security: [{ bearerAuth: [] }],
+            body: {
+                type: 'object',
+                required: ['ids'],
+                properties: {
+                    ids: { type: 'array', items: { type: 'integer' } }
+                }
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' },
+                        count: { type: 'integer' }
+                    }
+                },
+                500: errorSchema
+            }
+        }
+    }, async (request, reply) => {
+        const { id: userId } = request.user;
+        const { ids } = request.body;
+        if (!ids || ids.length === 0) {
+            return { success: true, count: 0 };
+        }
+        try {
+            // Manually clean up dependencies 
+            await fastify.pg.query('DELETE FROM alerts WHERE position_id = ANY($1)', [ids]);
+            await fastify.pg.query('DELETE FROM price_history WHERE position_id = ANY($1)', [ids]);
+            const result = await fastify.pg.query('DELETE FROM positions WHERE id = ANY($1) AND user_id = $2', [ids, userId]);
+            // Invalidate cache
+            await redis_1.redis.del(`USER_POSITIONS:${userId}`);
+            await redis_1.redis.del(`USER_STATS:${userId}`);
+            return { success: true, count: result.rowCount };
+        }
+        catch (err) {
+            fastify.log.error(err);
+            return reply.code(500).send({ error: 'Failed to bulk delete positions' });
+        }
+    });
     // DELETE position
     fastify.delete('/:id', {
         schema: {

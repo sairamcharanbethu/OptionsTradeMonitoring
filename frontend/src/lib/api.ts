@@ -283,6 +283,14 @@ export const api = {
     if (!res.ok) throw new Error('Failed to delete position');
   },
 
+  async bulkDeletePositions(ids: number[]): Promise<void> {
+    const res = await authFetch(`${API_BASE}/positions/bulk-delete`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+    if (!res.ok) throw new Error('Failed to bulk delete positions');
+  },
+
   async getMarketStatus(): Promise<{ open: boolean; marketHours: string; timezone: string }> {
     const response = await authFetch(`${API_BASE}/market/status`);
     if (!response.ok) throw new Error('Failed to fetch market status');

@@ -144,6 +144,43 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
+  // Bulk Selection State
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  const toggleSelection = (id: number) => {
+    const newSet = new Set(selectedIds);
+    if (newSet.has(id)) {
+      newSet.delete(id);
+    } else {
+      newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filteredPositions.length && filteredPositions.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filteredPositions.map(p => p.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!confirm(`Are you sure you want to delete ${selectedIds.size} positions?`)) return;
+
+    setLoading(true);
+    try {
+      await api.bulkDeletePositions(Array.from(selectedIds));
+      setSelectedIds(new Set());
+      await loadPositions(false);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to bulk delete positions.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedTicker(tickerFilter);
@@ -603,6 +640,23 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                       )}
                     </div>
 
+                    {/* Bulk Actions (Visible when selected) */}
+                    {selectedIds.size > 0 && (
+                      <div className="flex items-center gap-2 animate-in fade-in slide-in-from-top-1">
+                        <Badge variant="secondary" className="h-9 px-3 flex gap-2 items-center">
+                          {selectedIds.size} Selected
+                          <div className="h-4 w-[1px] bg-border mx-1" />
+                          <button
+                            onClick={handleBulkDelete}
+                            className="text-red-500 hover:text-red-700 font-bold flex items-center gap-1"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Delete
+                          </button>
+                        </Badge>
+                      </div>
+                    )}
+
                     {/* Status Filter */}
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
                       <SelectTrigger className="h-9 text-xs w-[130px]">
@@ -663,6 +717,14 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-[30px]">
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                            checked={filteredPositions.length > 0 && selectedIds.size === filteredPositions.length}
+                            onChange={toggleSelectAll}
+                          />
+                        </TableHead>
                         <TableHead className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => toggleSort('symbol')}>
                           <div className="flex items-center gap-1">
                             Symbol {sortConfig?.key === 'symbol' && <ArrowUpDown className="h-3 w-3" />}
@@ -686,10 +748,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                     </TableHeader>
                     <TableBody>
                       {loading ? (
-                        <TableRow><TableCell colSpan={7} className="text-center py-8">Loading...</TableCell></TableRow>
+                        <TableRow><TableCell colSpan={8} className="text-center py-8">Loading...</TableCell></TableRow>
                       ) : filteredPositions.length === 0 ? (
                         <TableRow>
-                          <TableCell colSpan={7} className="text-center py-12">
+                          <TableCell colSpan={8} className="text-center py-12">
                             <div className="flex flex-col items-center justify-center text-muted-foreground gap-2">
                               <Search className="h-8 w-8 opacity-20" />
                               <p>No matching trades found.</p>
@@ -711,7 +773,15 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                         </TableRow>
                       ) : (
                         filteredPositions.map((pos) => (
-                          <TableRow key={pos.id} className={cn("hover:bg-muted/50 transition-colors", pos.status !== 'OPEN' && 'bg-orange-50/50 dark:bg-orange-900/5')}>
+                          <TableRow key={pos.id} className={cn("hover:bg-muted/50 transition-colors", pos.status !== 'OPEN' && 'bg-orange-50/50 dark:bg-orange-900/5', selectedIds.has(pos.id) && "bg-muted")}>
+                            <TableCell>
+                              <input
+                                type="checkbox"
+                                className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                                checked={selectedIds.has(pos.id)}
+                                onChange={() => toggleSelection(pos.id)}
+                              />
+                            </TableCell>
                             <TableCell>
                               <div className="flex flex-col">
                                 <span className="font-bold">{pos.symbol}</span>

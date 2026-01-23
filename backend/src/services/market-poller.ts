@@ -377,6 +377,32 @@ export class MarketPoller {
     const symbols = [...new Set(positions.map(p => p.symbol))];
 
     for (const symbol of symbols) {
+      // Check for expired positions for this symbol first
+      const symbolPositions = positions.filter(p => p.symbol === symbol);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      for (const pos of symbolPositions) {
+        const expDate = new Date(pos.expiration_date);
+        expDate.setHours(0, 0, 0, 0);
+
+        if (expDate < today) {
+          console.log(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
+          // Close with 0 PnL
+          await this.fastify.pg.query(
+            `UPDATE positions 
+                 SET status = 'CLOSED', 
+                     exit_price = 0, 
+                     realized_pnl = 0, 
+                     notes = COALESCE(notes, '') || ' [Auto-closed as Expired]',
+                     updated_at = CURRENT_TIMESTAMP 
+                 WHERE id = $1`,
+            [pos.id]
+          );
+          continue; // Skip sync for this specific position
+        }
+      }
+
       await this.syncPrice(symbol, force);
       // Stay within limits, sequential delay
       await new Promise(resolve => setTimeout(resolve, 5000));
