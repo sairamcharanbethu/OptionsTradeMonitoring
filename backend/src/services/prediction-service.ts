@@ -5,6 +5,7 @@ import { FastifyInstance } from 'fastify';
 import { AIService } from './ai-service';
 import { spawn } from 'child_process';
 import path from 'path';
+import { redis } from '../lib/redis';
 
 export interface TechnicalIndicators {
     rsi: number;
@@ -43,34 +44,56 @@ export class PredictionService {
     }
 
     async analyzeStock(symbol: string): Promise<PredictionResult> {
+        const cacheKey = `PREDICTION:${symbol.toUpperCase()}`;
+        const historicalCacheKey = `HISTORICAL_DATA:${symbol.toUpperCase()}`;
+
         try {
-            // 1. Fetch Historical Data (Last 500 days for better training context)
-            const endDate = new Date();
-            const startDate = new Date();
-            startDate.setDate(endDate.getDate() - 730); // 2 years
-
-            const period1 = startDate.toISOString().split('T')[0];
-            const period2 = endDate.toISOString().split('T')[0];
-
-            const result = await yahooFinance.historical(symbol, {
-                period1,
-                period2,
-                interval: '1d'
-            });
-
-            if (!result || !Array.isArray(result) || (result as any[]).length < 200) {
-                throw new Error(`Insufficient data for ${symbol}. Need at least 200 days of history.`);
+            // 0. Check for cached final prediction (15 min TTL)
+            const cachedPrediction = await redis.get(cacheKey);
+            if (cachedPrediction) {
+                console.log(`[PredictionService] Returning cached prediction for ${symbol}`);
+                return JSON.parse(cachedPrediction);
             }
 
-            // Clean data for Python
-            const historicalData = (result as any[]).map(row => ({
-                date: row.date.toISOString().split('T')[0],
-                open: row.open,
-                high: row.high,
-                low: row.low,
-                close: row.close,
-                volume: row.volume
-            }));
+            // 1. Fetch Historical Data (Last 2 years)
+            let historicalData: any[] = [];
+            const cachedHistorical = await redis.get(historicalCacheKey);
+
+            if (cachedHistorical) {
+                console.log(`[PredictionService] Using cached historical data for ${symbol}`);
+                historicalData = JSON.parse(cachedHistorical);
+            } else {
+                const endDate = new Date();
+                const startDate = new Date();
+                startDate.setDate(endDate.getDate() - 730);
+
+                const period1 = startDate.toISOString().split('T')[0];
+                const period2 = endDate.toISOString().split('T')[0];
+
+                console.log(`[PredictionService] Fetching fresh historical data for ${symbol}...`);
+                const result = await yahooFinance.historical(symbol, {
+                    period1,
+                    period2,
+                    interval: '1d'
+                });
+
+                if (!result || !Array.isArray(result) || (result as any[]).length < 200) {
+                    throw new Error(`Insufficient data for ${symbol}. Need at least 200 days of history.`);
+                }
+
+                // Clean data for Python
+                historicalData = (result as any[]).map(row => ({
+                    date: row.date.toISOString().split('T')[0],
+                    open: row.open,
+                    high: row.high,
+                    low: row.low,
+                    close: row.close,
+                    volume: row.volume
+                }));
+
+                // Cache historical data for 1 hour
+                await redis.set(historicalCacheKey, JSON.stringify(historicalData), 3600);
+            }
 
             // 2. Run ML Prediction (Python)
             // Assuming script is at src/scripts/predict_stock.py and we are running from dist/ or src/
@@ -101,13 +124,18 @@ export class PredictionService {
             // 4. AI Analysis (Augmented with ML)
             const aiAnalysis = await this.getAIAnalysis(symbol, currentPrice, indicators, mlResult);
 
-            return {
+            const finalResult: PredictionResult = {
                 symbol: symbol.toUpperCase(),
                 currentPrice,
                 history: prices.slice(-180), // Return last 180 days for chart
                 indicators,
                 aiAnalysis
             };
+
+            // Cache final prediction for 15 minutes
+            await redis.set(cacheKey, JSON.stringify(finalResult), 900);
+
+            return finalResult;
 
         } catch (err: any) {
             this.fastify.log.error(err);
