@@ -320,6 +320,15 @@ export const api = {
     return res.json();
   },
 
+  async predictStock(symbol: string): Promise<any> {
+    const res = await authFetch(`${API_BASE}/ai/predict/${symbol}`);
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt || 'Failed to fetch prediction');
+    }
+    return res.json();
+  },
+
   async getPortfolioBriefing(): Promise<{ briefing: string; discord_message: string }> {
     const res = await authFetch(`${API_BASE}/ai/briefing`);
     if (!res.ok) throw new Error('Failed to fetch portfolio briefing');

@@ -7,6 +7,8 @@ import {
 
 import { Loader2, TrendingUp, TrendingDown, AlignJustify, BrainCircuit, Activity } from 'lucide-react';
 
+import { api } from '@/lib/api';
+
 interface PredictionData {
     symbol: string;
     currentPrice: number;
@@ -23,14 +25,6 @@ interface PredictionData {
         reasoning: string;
     };
 }
-
-const fetchPrediction = async (symbol: string, token: string) => {
-    const res = await fetch(`http://localhost:3001/api/ai/predict/${symbol}`, {
-        headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!res.ok) throw new Error(await res.text());
-    return res.json() as Promise<PredictionData>;
-};
 
 export default function Prediction() {
     const [symbol, setSymbol] = useState('');
@@ -49,7 +43,10 @@ export default function Prediction() {
         setError(null);
         setData(null);
 
-        fetchPrediction(querySymbol, token)
+        setError(null);
+        setData(null);
+
+        api.predictStock(querySymbol)
             .then(res => {
                 if (mounted) setData(res);
             })
@@ -129,7 +126,7 @@ export default function Prediction() {
                             </div>
                         </div>
 
-                        <div className="h-[400px] w-full">
+                        <div className="h-[400px] w-full min-h-[400px]">
                             <ResponsiveContainer width="100%" height="100%">
                                 <LineChart data={data.history}>
                                     <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.5} />
@@ -157,9 +154,6 @@ export default function Prediction() {
                                         dot={false}
                                         name="Price"
                                     />
-                                    {/* We could add SMA lines here if we computed them for history, 
-                      but currently backend only sends current indicator values. 
-                      Ideally we'd send indicator history for plotting. */}
                                 </LineChart>
                             </ResponsiveContainer>
                         </div>
