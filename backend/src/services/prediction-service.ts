@@ -49,8 +49,12 @@ export class PredictionService {
             const startDate = new Date();
             startDate.setDate(endDate.getDate() - 730); // 2 years
 
+            const period1 = startDate.toISOString().split('T')[0];
+            const period2 = endDate.toISOString().split('T')[0];
+
             const result = await yahooFinance.historical(symbol, {
-                period1: startDate,
+                period1,
+                period2,
                 interval: '1d'
             });
 
