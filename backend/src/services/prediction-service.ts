@@ -1,5 +1,5 @@
-
-import yahooFinance from 'yahoo-finance2';
+import YahooFinancePackage from 'yahoo-finance2';
+const yahooFinance = new YahooFinancePackage();
 import { FastifyInstance } from 'fastify';
 
 import { AIService } from './ai-service';
