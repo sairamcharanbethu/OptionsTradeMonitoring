@@ -1,7 +1,10 @@
 
 import yahooFinance from 'yahoo-finance2';
 import { FastifyInstance } from 'fastify';
+
 import { AIService } from './ai-service';
+import { spawn } from 'child_process';
+import path from 'path';
 
 export interface TechnicalIndicators {
     rsi: number;
@@ -41,12 +44,10 @@ export class PredictionService {
 
     async analyzeStock(symbol: string): Promise<PredictionResult> {
         try {
-            // 1. Fetch Historical Data (Last 200 days needed for SMA200 + buffer)
-            const queryOptions = { period1: '2023-01-01', interval: '1d' as const }; // Simple start date, or we calc 300 days ago
-
+            // 1. Fetch Historical Data (Last 500 days for better training context)
             const endDate = new Date();
             const startDate = new Date();
-            startDate.setDate(endDate.getDate() - 400); // Fetch ~1 year+ to be safe for 200 SMA
+            startDate.setDate(endDate.getDate() - 730); // 2 years
 
             const result = await yahooFinance.historical(symbol, {
                 period1: startDate,
@@ -57,13 +58,28 @@ export class PredictionService {
                 throw new Error(`Insufficient data for ${symbol}. Need at least 200 days of history.`);
             }
 
-            // Sort by date ascending just in case
-            const prices = (result as any[]).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+            // Clean data for Python
+            const historicalData = (result as any[]).map(row => ({
+                date: row.date.toISOString().split('T')[0],
+                open: row.open,
+                high: row.high,
+                low: row.low,
+                close: row.close,
+                volume: row.volume
+            }));
 
-            const closes = prices.map(p => p.close);
+            // 2. Run ML Prediction (Python)
+            // Assuming script is at src/scripts/predict_stock.py and we are running from dist/ or src/
+            const scriptPath = path.resolve(__dirname, '../scripts/predict_stock.py');
+
+            const mlResult = await this.runPythonScript(scriptPath, historicalData);
+
+            // 3. Technical Indicators (Still useful to return for frontend charting)
+            // Re-sort for our calc if needed (Python handled sorting too)
+            const prices = historicalData.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+            const closes = prices.map((p: any) => p.close);
             const currentPrice = closes[closes.length - 1];
 
-            // 2. Calculate Indicators
             const rsi = this.calculateRSI(closes);
             const macd = this.calculateMACD(closes);
             const sma50 = this.calculateSMA(closes, 50);
@@ -78,16 +94,13 @@ export class PredictionService {
                 bollinger
             };
 
-            // 3. AI Analysis
-            const aiAnalysis = await this.getAIAnalysis(symbol, currentPrice, indicators);
+            // 4. AI Analysis (Augmented with ML)
+            const aiAnalysis = await this.getAIAnalysis(symbol, currentPrice, indicators, mlResult);
 
             return {
                 symbol: symbol.toUpperCase(),
                 currentPrice,
-                history: prices.slice(-180).map(p => ({
-                    date: p.date.toISOString().split('T')[0],
-                    close: p.close
-                })), // Return last 180 days for chart
+                history: prices.slice(-180), // Return last 180 days for chart
                 indicators,
                 aiAnalysis
             };
@@ -98,40 +111,69 @@ export class PredictionService {
         }
     }
 
-    private async getAIAnalysis(symbol: string, price: number, indicators: TechnicalIndicators) {
+    private async runPythonScript(scriptPath: string, data: any[]): Promise<any> {
+        return new Promise((resolve, reject) => {
+            const pythonProcess = spawn('python', [scriptPath]);
+
+            let resultString = '';
+            let errorString = '';
+
+            pythonProcess.stdout.on('data', (data) => {
+                resultString += data.toString();
+            });
+
+            pythonProcess.stderr.on('data', (data) => {
+                errorString += data.toString();
+            });
+
+            pythonProcess.on('close', (code) => {
+                if (code !== 0) {
+                    return reject(new Error(`Python script exited with code ${code}: ${errorString}`));
+                }
+                try {
+                    // Extract JSON from stdout (in case of extra prints)
+                    const lines = resultString.trim().split('\n');
+                    const jsonLine = lines[lines.length - 1];
+                    const json = JSON.parse(jsonLine);
+
+                    if (json.error) return reject(new Error(json.error));
+                    resolve(json);
+                } catch (e) {
+                    reject(new Error(`Failed to parse Python output. Raw: ${resultString} | Error: ${e}`));
+                }
+            });
+
+            // Send data to stdin
+            pythonProcess.stdin.write(JSON.stringify(data));
+            pythonProcess.stdin.end();
+        });
+    }
+
+    private async getAIAnalysis(symbol: string, price: number, indicators: TechnicalIndicators, mlResult: any) {
         const prompt = `
-        Analyze this stock based on technical indicators:
-        Symbol: ${symbol}
-        Price: $${price.toFixed(2)}
+        Analyze this stock combining Technical Analysis and Machine Learning predictions.
         
-        Indicators:
-        - RSI (14): ${indicators.rsi.toFixed(2)} (Overbought > 70, Oversold < 30)
-        - MACD: Line ${indicators.macd.macd.toFixed(2)}, Signal ${indicators.macd.signal.toFixed(2)} (Diff: ${indicators.macd.histogram.toFixed(2)})
+        ASSET: ${symbol} at $${price.toFixed(2)}
+
+        1. MACHINE LEARNING MODEL (Random Forest Simulation):
+        - Probability of Up-trend: ${(mlResult.prediction_probability_up * 100).toFixed(1)}%
+        - Model Sentiment: ${mlResult.sentiment}
+        - Key Drivers: RSI=${mlResult.features.rsi.toFixed(1)}, Recent Trend=${mlResult.features.trend_5.toFixed(3)}
+        
+        2. TECHNICAL INDICATORS:
+        - RSI (14): ${indicators.rsi.toFixed(2)}
+        - MACD: ${indicators.macd.macd.toFixed(2)} (Signal: ${indicators.macd.signal.toFixed(2)})
         - SMA 50: $${indicators.sma50.toFixed(2)}
         - SMA 200: $${indicators.sma200.toFixed(2)}
-        - Bollinger Bands: Upper $${indicators.bollinger.upper.toFixed(2)}, Lower $${indicators.bollinger.lower.toFixed(2)}
+        - Trend: Price is ${price > indicators.sma200 ? 'above' : 'below'} SMA200 (Long term) and ${price > indicators.sma50 ? 'above' : 'below'} SMA50 (Medium term).
 
-        Trend Context:
-        - Price vs SMA50: ${price > indicators.sma50 ? 'Above (Bullish)' : 'Below (Bearish)'}
-        - Price vs SMA200: ${price > indicators.sma200 ? 'Above (Bullish)' : 'Below (Bearish)'}
-        - SMA50 vs SMA200: ${indicators.sma50 > indicators.sma200 ? 'Golden Cross zone' : 'Death Cross zone'}
-
-        Task: Provide a trading verdict (Buy/Sell/Hold) and a concise reasoning paragraph explaining the technical setup.
+        TASK: Provide a final trading verdict (Buy/Sell/Hold) and synthesis.
+        - Weigh the ML probability heavily but verify with technicals.
+        - If ML is bullish (>55%) and Price > SMA200, it's a strong signal.
+        - If conflict (ML Bullish but Price < SMA200), suggest caution or 'Hold'.
+        
         Format: JSON { "verdict": "Buy" | "Sell" | "Hold", "reasoning": "..." }
         `;
-
-        // We can temporarily expose a public method or just cast to any to access the internal generation
-        // Or better, add a generic 'analyze' method to AIService. 
-        // For now, I'll reuse the private generateAnalysisInternal via a new public method or direct access if protected.
-        // Looking at AIService, it has generateAnalysis but it expects specific options interface. 
-        // I should probably add a generic method to AIService or just abuse the existing one with dummy data?
-        // No, let's look at AIService again. It allows adding a generic method. 
-        // Since I cannot modify AIService easily without context switch, I will try to extend it or assuming I can modify it.
-        // Actually, I am writing this NEW file. I should modify AIService in the next step to support this, 
-        // OR simply cast to any to call 'generateAnalysisInternal' if it was public/protected? 
-        // It's private. 
-        // I will MODIFY AIService in the next step to expose a generic `askAI(prompt: string)` method.
-        // For now, I will assume `aiService.askAI(prompt)` exists.
 
         return (this.aiService as any).askAI(prompt);
     }
