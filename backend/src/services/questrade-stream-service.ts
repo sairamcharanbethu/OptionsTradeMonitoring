@@ -60,24 +60,29 @@ export class QuestradeStreamService extends EventEmitter {
                 "SELECT symbol, option_type, strike_price, expiration_date FROM positions WHERE status != 'CLOSED'"
             );
 
-            const initialIds: number[] = [];
+            // Given we might have multiple positions for the same option (scaling in),
+            // we must deduplicate the IDs.
+            const uniqueIds = new Set<number>();
 
             // If we have positions, resolve their IDs
             if (result.rows.length > 0) {
                 for (const pos of result.rows) {
                     const ticker = this.constructOSITicker(pos.symbol, Number(pos.strike_price), pos.option_type, pos.expiration_date);
                     const id = await this.resolveSymbolId(ticker);
-                    if (id) initialIds.push(id);
+                    if (id) uniqueIds.add(id);
                 }
             }
 
             // If no positions, we MUST provide at least one ID to connect (Questrade Requirement).
             // Let's fallback to SPY.
-            if (initialIds.length === 0) {
+            if (uniqueIds.size === 0) {
                 console.log('[Stream] No active positions. Resolving SPY fallback...');
                 const spyId = await this.resolveSymbolId('SPY');
-                if (spyId) initialIds.push(spyId);
+                if (spyId) uniqueIds.add(spyId);
             }
+
+            // Convert to array for joining
+            const initialIds = Array.from(uniqueIds);
 
             // If still empty (e.g. SPY lookup failed), connection will likely fail with 400.
             const idsParam = initialIds.join(',');
@@ -97,7 +102,7 @@ export class QuestradeStreamService extends EventEmitter {
             // 2. Connect to Allocated Port
             // Construct URL: wss://<host>:<port>/v1/markets/quotes?access_token=...
             const host = apiServer.replace(/^https:\/\//, '');
-            const wsUrl = `wss://${host}:${streamPort}/v1/markets/quotes?access_token=${token.access_token}`; // ids param might not be needed here if sent in step 1, but usually safer to re-send? 
+            const wsUrl = `wss://${host}:${streamPort}/v1/markets/quotes?access_token=${token.access_token}`;
             // Diagnostic script worked with 2-step. Handshake usually doesn't need params if step 1 did it?
             // Actually diagnostic successfully connected to port WITHOUT ids in the `wss://` url, 
             // but `startHeartbeat` re-syncs anyway.
@@ -130,9 +135,12 @@ export class QuestradeStreamService extends EventEmitter {
         this.reconnectAttempts = 0;
         this.startHeartbeat();
 
-        // Initial Subscription Sync is handled by the connection URL query params now.
-        // We defer the next sync to the heartbeat loop.
-        // this.syncSubscriptions();
+        // Initial Subscription Sync
+        // We add a small delay to allow the connection to stabilize before sending commands.
+        // This avoids the '1017' error that occurs when sending immediately.
+        setTimeout(() => {
+            this.syncSubscriptions();
+        }, 2000);
     }
 
     private startHeartbeat() {
