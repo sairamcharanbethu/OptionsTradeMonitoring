@@ -369,4 +369,5 @@ export const api = {
     });
     if (!res.ok) throw new Error('Failed to update settings');
   }
+};
 

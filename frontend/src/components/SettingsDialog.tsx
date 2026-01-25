@@ -220,111 +220,114 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                     </DialogDescription>
                 </DialogHeader>
 
-                <TabsList className="grid w-full grid-cols-3 mb-4">
-                    <TabsTrigger value="ai">AI Setup</TabsTrigger>
-                    <TabsTrigger value="integrations">Integrations</TabsTrigger>
-                    <TabsTrigger value="account">Account</TabsTrigger>
-                </TabsList>
+                <Tabs defaultValue="ai" className="w-full">
+                    <TabsList className="grid w-full grid-cols-3 mb-4">
+                        <TabsTrigger value="ai">AI Setup</TabsTrigger>
+                        <TabsTrigger value="integrations">Integrations</TabsTrigger>
+                        <TabsTrigger value="account">Account</TabsTrigger>
+                    </TabsList>
 
-                <TabsContent value="ai">
-                    {loading ? (
-                        <div className="flex justify-center py-8">
-                            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                        </div>
-                    ) : (
-                        <div className="grid gap-6 py-2">
-                            <section className="space-y-4">
-                                <div className="grid gap-4">
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="provider">AI Provider</Label>
-                                        <Select value={provider} onValueChange={setProvider}>
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="Select Provider" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="ollama">Local Ollama</SelectItem>
-                                                <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
+                    <TabsContent value="ai">
+                        {loading ? (
+                            <div className="flex justify-center py-8">
+                                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                            </div>
+                        ) : (
+                            <div className="grid gap-6 py-2">
+                                <section className="space-y-4">
+                                    <div className="grid gap-4">
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="provider">AI Provider</Label>
+                                            <Select value={provider} onValueChange={setProvider}>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Select Provider" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="ollama">Local Ollama</SelectItem>
+                                                    <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
 
-                                    {provider === 'openrouter' && (
-                                        <div className="grid gap-2 animate-in fade-in slide-in-from-top-2">
-                                            <Label htmlFor="key">OpenRouter API Key</Label>
+                                        {provider === 'openrouter' && (
+                                            <div className="grid gap-2 animate-in fade-in slide-in-from-top-2">
+                                                <Label htmlFor="key">OpenRouter API Key</Label>
+                                                <Input
+                                                    id="key"
+                                                    type="password"
+                                                    value={openRouterKey}
+                                                    onChange={(e) => setOpenRouterKey(e.target.value)}
+                                                    placeholder="sk-or-..."
+                                                />
+                                            </div>
+                                        )}
+
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="model">Model Name</Label>
                                             <Input
-                                                id="key"
-                                                type="password"
-                                                value={openRouterKey}
-                                                onChange={(e) => setOpenRouterKey(e.target.value)}
-                                                placeholder="sk-or-..."
+                                                id="model"
+                                                value={model}
+                                                onChange={(e) => setModel(e.target.value)}
+                                                placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3-haiku'}
                                             />
                                         </div>
-                                    )}
 
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="model">Model Name</Label>
-                                        <Input
-                                            id="model"
-                                            value={model}
-                                            onChange={(e) => setModel(e.target.value)}
-                                            placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3-haiku'}
-                                        />
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="frequency">Morning Briefing Frequency</Label>
+                                            <Select value={briefingFrequency} onValueChange={setBriefingFrequency}>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Select Frequency" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="disabled">Disabled</SelectItem>
+                                                    <SelectItem value="daily">Daily (Mon-Sun)</SelectItem>
+                                                    <SelectItem value="every_2_days">Every 2 Days</SelectItem>
+                                                    <SelectItem value="monday">Every Monday</SelectItem>
+                                                    <SelectItem value="friday">Every Friday</SelectItem>
+                                                    <SelectItem value="weekly">Weekly (Monday)</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            <p className="text-[10px] text-muted-foreground">
+                                                AI-generated portfolio summary sent to Discord at 8:30 AM ET.
+                                            </p>
+                                        </div>
                                     </div>
-
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="frequency">Morning Briefing Frequency</Label>
-                                        <Select value={briefingFrequency} onValueChange={setBriefingFrequency}>
+                                    <div className="grid gap-2 pt-2 border-t mt-4">
+                                        <Label htmlFor="pollInterval" className="flex items-center gap-2">
+                                            Market Poll Interval
+                                            {parseInt(pollInterval) < 30 && (
+                                                <Badge variant="destructive" className="text-[8px] h-4">High Risk</Badge>
+                                            )}
+                                        </Label>
+                                        <Select value={pollInterval} onValueChange={setPollInterval}>
                                             <SelectTrigger>
-                                                <SelectValue placeholder="Select Frequency" />
+                                                <SelectValue placeholder="Select Interval" />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                <SelectItem value="disabled">Disabled</SelectItem>
-                                                <SelectItem value="daily">Daily (Mon-Sun)</SelectItem>
-                                                <SelectItem value="every_2_days">Every 2 Days</SelectItem>
-                                                <SelectItem value="monday">Every Monday</SelectItem>
-                                                <SelectItem value="friday">Every Friday</SelectItem>
-                                                <SelectItem value="weekly">Weekly (Monday)</SelectItem>
+                                                <SelectItem value="1">Every 1 second (Ultra-Aggressive)</SelectItem>
+                                                <SelectItem value="5">Every 5 seconds</SelectItem>
+                                                <SelectItem value="10">Every 10 seconds</SelectItem>
+                                                <SelectItem value="30">Every 30 seconds</SelectItem>
+                                                <SelectItem value="60">Every 1 minute (Recommended)</SelectItem>
+                                                <SelectItem value="300">Every 5 minutes</SelectItem>
+                                                <SelectItem value="900">Every 15 minutes</SelectItem>
                                             </SelectContent>
                                         </Select>
-                                        <p className="text-[10px] text-muted-foreground">
-                                            AI-generated portfolio summary sent to Discord at 8:30 AM ET.
+                                        <p className={`text-[10px] ${parseInt(pollInterval) < 30 ? 'text-destructive font-bold' : 'text-muted-foreground'}`}>
+                                            {parseInt(pollInterval) < 30
+                                                ? 'Caution: Fast polling may cause Yahoo Finance to block your IP.'
+                                                : 'How often the server fetches fresh prices and Greeks.'}
                                         </p>
                                     </div>
-                                </div>
-                                <div className="grid gap-2 pt-2 border-t mt-4">
-                                    <Label htmlFor="pollInterval" className="flex items-center gap-2">
-                                        Market Poll Interval
-                                        {parseInt(pollInterval) < 30 && (
-                                            <Badge variant="destructive" className="text-[8px] h-4">High Risk</Badge>
-                                        )}
-                                    </Label>
-                                    <Select value={pollInterval} onValueChange={setPollInterval}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Select Interval" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="1">Every 1 second (Ultra-Aggressive)</SelectItem>
-                                            <SelectItem value="5">Every 5 seconds</SelectItem>
-                                            <SelectItem value="10">Every 10 seconds</SelectItem>
-                                            <SelectItem value="30">Every 30 seconds</SelectItem>
-                                            <SelectItem value="60">Every 1 minute (Recommended)</SelectItem>
-                                            <SelectItem value="300">Every 5 minutes</SelectItem>
-                                            <SelectItem value="900">Every 15 minutes</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    <p className={`text-[10px] ${parseInt(pollInterval) < 30 ? 'text-destructive font-bold' : 'text-muted-foreground'}`}>
-                                        {parseInt(pollInterval) < 30
-                                            ? 'Caution: Fast polling may cause Yahoo Finance to block your IP.'
-                                            : 'How often the server fetches fresh prices and Greeks.'}
-                                    </p>
-                                </div>
-                                <Button className="w-full mt-2" onClick={handleSaveSettings} disabled={saving || loading}>
-                                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                    Save AI Configuration
-                                </Button>
-                            </section>
-                        </div>
-                    )}
+                                    <Button className="w-full mt-2" onClick={handleSaveSettings} disabled={saving || loading}>
+                                        {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                        Save AI Configuration
+                                    </Button>
+                                </section>
+                            </div>
+                        )}
+                    </TabsContent>
+
                     <TabsContent value="integrations">
                         <div className="grid gap-6 py-2">
                             <section className="space-y-4">
