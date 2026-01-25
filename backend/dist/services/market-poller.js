@@ -181,18 +181,10 @@ class MarketPoller {
     }
     async getOptionPremium(symbol, strike, type, expiration, skipCache = false) {
         const ticker = this.constructOSITicker(symbol, strike, type, expiration);
-        // Redis Cache Check for Price
-        const CACHE_KEY = `PRICE:${ticker}`;
-        const CACHE_TTL = 300; // 5 minutes
-        if (!skipCache) {
-            const cached = await redis_1.redis.get(CACHE_KEY);
-            if (cached)
-                return JSON.parse(cached);
-        }
         try {
             const questrade = this.fastify.questrade;
             // 1. Get/Resolve Option Symbol ID
-            // We can cache the symbolId for the ticker longer than the price
+            // We can STILL cache the symbolId for the ticker (it never changes for a specific option)
             const SYMBOL_ID_CACHE_KEY = `SYMBOL_ID:${ticker}`;
             let symbolId = null;
             const cachedId = await redis_1.redis.get(SYMBOL_ID_CACHE_KEY);
@@ -210,7 +202,7 @@ class MarketPoller {
                 console.warn(`[MarketPoller] Could not resolve symbol ID for ${ticker} on Questrade.`);
                 return null;
             }
-            // 2. Get Quote from Questrade
+            // 2. Get Quote from Questrade (FRESH EVERY TIME)
             const quote = await questrade.getOptionQuote(symbolId);
             if (!quote)
                 return null;
@@ -238,7 +230,7 @@ class MarketPoller {
                     expiration
                 }
             };
-            await redis_1.redis.set(CACHE_KEY, JSON.stringify(result), CACHE_TTL).catch(err => console.error('[MarketPoller] Redis set failed:', err));
+            // We no longer set PRICE cache in Redis as per user request
             return result;
         }
         catch (err) {

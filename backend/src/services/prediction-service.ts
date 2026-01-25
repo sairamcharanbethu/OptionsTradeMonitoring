@@ -42,17 +42,9 @@ export class PredictionService {
     }
 
     async analyzeStock(symbol: string): Promise<PredictionResult> {
-        const cacheKey = `PREDICTION:${symbol.toUpperCase()}`;
         const historicalCacheKey = `HISTORICAL_DATA:${symbol.toUpperCase()}`;
 
         try {
-            // 0. Check for cached final prediction (15 min TTL)
-            const cachedPrediction = await redis.get(cacheKey);
-            if (cachedPrediction) {
-                console.log(`[PredictionService] Returning cached prediction for ${symbol}`);
-                return JSON.parse(cachedPrediction);
-            }
-
             // 1. Fetch Historical Data (Last 2 years)
             let historicalData: any[] = [];
             const cachedHistorical = await redis.get(historicalCacheKey);
@@ -130,9 +122,6 @@ export class PredictionService {
                 indicators,
                 aiAnalysis
             };
-
-            // Cache final prediction for 15 minutes
-            await redis.set(cacheKey, JSON.stringify(finalResult), 900);
 
             return finalResult;
 

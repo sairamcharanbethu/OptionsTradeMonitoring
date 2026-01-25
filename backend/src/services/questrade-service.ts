@@ -147,17 +147,51 @@ export class QuestradeService {
         }
     }
 
+    private async axiosWithRetry(requestFn: () => Promise<any>, maxRetries = 2): Promise<any> {
+        let lastError: any;
+        for (let i = 0; i <= maxRetries; i++) {
+            try {
+                return await requestFn();
+            } catch (err: any) {
+                lastError = err;
+                if (err.response?.status === 429) {
+                    console.log(`[QuestradeService] Rate limit hit (429). Retry ${i + 1}/${maxRetries} after 5s...`);
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    continue;
+                }
+                throw err;
+            }
+        }
+        throw lastError;
+    }
+
     async getSymbolId(symbol: string): Promise<number | null> {
         await this.ensureAuthenticated();
         try {
-            const response = await axios.get<any>(`${this.token!.api_server}v1/symbols?names=${symbol.toUpperCase()}`, {
+            console.log(`[QuestradeService] Resolving symbol: ${symbol}`);
+            // Attempt 1: Exact name lookup
+            const response = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/symbols?names=${symbol.toUpperCase()}`, {
                 headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
-            });
+            }) as any);
 
-            const symbols = response.data.symbols;
-            return symbols && symbols.length > 0 ? symbols[0].symbolId : null;
+            if (response.data.symbols && response.data.symbols.length > 0) {
+                return response.data.symbols[0].symbolId;
+            }
+
+            // Attempt 2: Search fallback (useful for options that might have slightly different names)
+            console.log(`[QuestradeService] Exact match failed for ${symbol}. Trying search...`);
+            const searchResponse = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/symbols/search?prefix=${symbol.toUpperCase()}`, {
+                headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
+            }) as any);
+
+            if (searchResponse.data.symbols && searchResponse.data.symbols.length > 0) {
+                // Return the first match that looks like our symbol
+                return searchResponse.data.symbols[0].symbolId;
+            }
+
+            return null;
         } catch (err: any) {
-            console.error(`[QuestradeService] Failed to get symbol ID for ${symbol}:`, err.message);
+            console.error(`[QuestradeService] Failed to get symbol ID for ${symbol}:`, err.response?.data || err.message);
             return null;
         }
     }
@@ -165,9 +199,9 @@ export class QuestradeService {
     async getQuote(symbolId: number): Promise<any> {
         await this.ensureAuthenticated();
         try {
-            const response = await axios.get<any>(`${this.token!.api_server}v1/markets/quotes/${symbolId}`, {
+            const response = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/markets/quotes/${symbolId}`, {
                 headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
-            });
+            }) as any);
             return response.data.quotes[0];
         } catch (err: any) {
             console.error(`[QuestradeService] Failed to get quote for ${symbolId}:`, err.message);
@@ -179,7 +213,7 @@ export class QuestradeService {
         await this.ensureAuthenticated();
         try {
             // Note: v1/markets/quotes/options is specifically for options and can provide Greeks
-            const response = await axios.post<any>(`${this.token!.api_server}v1/markets/quotes/options`, {
+            const response = await this.axiosWithRetry(() => axios.post(`${this.token!.api_server}v1/markets/quotes/options`, {
                 filters: [
                     {
                         optionId: symbolId
@@ -187,7 +221,7 @@ export class QuestradeService {
                 ]
             }, {
                 headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
-            });
+            }) as any);
             return response.data.optionQuotes && response.data.optionQuotes.length > 0 ? response.data.optionQuotes[0] : null;
         } catch (err: any) {
             console.error(`[QuestradeService] Failed to get option quote for ${symbolId}:`, err.message);
@@ -201,14 +235,14 @@ export class QuestradeService {
             const start = startTime.toISOString();
             const end = endTime.toISOString();
 
-            const response = await axios.get<any>(`${this.token!.api_server}v1/markets/candles/${symbolId}`, {
+            const response = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/markets/candles/${symbolId}`, {
                 params: {
                     startTime: start,
                     endTime: end,
                     interval: interval
                 },
                 headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
-            });
+            }) as any);
 
             return response.data.candles;
         } catch (err: any) {
