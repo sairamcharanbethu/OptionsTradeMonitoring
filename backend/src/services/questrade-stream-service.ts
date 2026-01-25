@@ -45,16 +45,20 @@ export class QuestradeStreamService extends EventEmitter {
                 return;
             }
 
-            // Deriving WS URL: replace https:// with wss:// and append endpoint
+            // Questrade API Server usually: https://api01.iq.questrade.com/
+            // Stream URL: wss://api01.iq.questrade.com/v1/markets/quotes?mode=WebSocket&access_token=...
+            // "stream=true" is for HTTP streaming, removing it for WebSocket.
+
             // Prevent double slash if api_server ends with /
             const baseUrl = token.api_server.replace('https:', 'wss:').replace(/\/$/, '');
-            const wsUrl = `${baseUrl}/v1/markets/quotes?stream=true&mode=WebSocket&access_token=${token.access_token}`;
-            console.log(`[Stream] Connecting to ${baseUrl}...`);
+            const wsUrl = `${baseUrl}/v1/markets/quotes?mode=WebSocket&access_token=${token.access_token}`;
+            console.log(`[Stream] Connecting to ${baseUrl} (mode=WebSocket)...`);
 
-            // Questrade often requires User-Agent header
+            // Questrade often requires User-Agent header and sometimes Origin
             this.ws = new WebSocket(wsUrl, {
                 headers: {
-                    'User-Agent': 'OptionsTradeMonitoring/1.0'
+                    'User-Agent': 'OptionsTradeMonitoring/1.0',
+                    'Origin': 'https://my.questrade.com'
                 }
             });
 
