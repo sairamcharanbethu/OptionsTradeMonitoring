@@ -95,10 +95,25 @@ export class QuestradeStreamService extends EventEmitter {
         this.reconnectAttempts = 0;
         this.startHeartbeat();
 
-        // Resubscribe to existing symbols
-        if (this.activeSymbolIds.size > 0) {
-            this.updateSubscriptions(Array.from(this.activeSymbolIds));
-        }
+        // Initial Subscription Sync
+        this.syncSubscriptions();
+    }
+
+    private startHeartbeat() {
+        // Refresh Lock every 10s
+        // Sync Subscriptions every 60s
+        if (this.pingInterval) clearInterval(this.pingInterval);
+
+        let counter = 0;
+        this.pingInterval = setInterval(async () => {
+            counter++;
+            await this.refreshLock();
+
+            // Every 60 seconds (approx)
+            if (counter % 6 === 0) {
+                await this.syncSubscriptions();
+            }
+        }, 10000);
     }
 
     private onMessage(data: WebSocket.Data) {
@@ -155,15 +170,6 @@ export class QuestradeStreamService extends EventEmitter {
         }, ms);
     }
 
-    private startHeartbeat() {
-        // Refresh Lock every 10s
-        this.pingInterval = setInterval(async () => {
-            await this.refreshLock();
-            // Optional: Send ping frame to WS if supported
-            // if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.ping();
-        }, 10000);
-    }
-
     // --- External API ---
 
     public subscribe(symbolIds: number[]) {
@@ -182,17 +188,108 @@ export class QuestradeStreamService extends EventEmitter {
         }
     }
 
+    // --- Helper for OSI Ticker ---
+    private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
+        try {
+            let dateStr = '';
+            if (expiration instanceof Date) {
+                const year = expiration.getFullYear();
+                const month = (expiration.getMonth() + 1).toString().padStart(2, '0');
+                const day = expiration.getDate().toString().padStart(2, '0');
+                dateStr = `${year}-${month}-${day}`;
+            } else {
+                dateStr = expiration.split('T')[0];
+            }
+
+            const parts = dateStr.split('-');
+            if (parts.length !== 3) return symbol; // Fallback
+
+            const YY = parts[0].slice(-2);
+            const MM = parts[1].padStart(2, '0');
+            const DD = parts[2].padStart(2, '0');
+            const side = type === 'CALL' ? 'C' : 'P';
+            const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
+
+            return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
+        } catch (e) {
+            return symbol;
+        }
+    }
+
+    private async resolveSymbolId(ticker: string): Promise<number | null> {
+        const CACHE_KEY = `SYMBOL_ID:${ticker}`;
+        const cached = await redis.get(CACHE_KEY);
+        if (cached) return parseInt(cached, 10);
+
+        try {
+            const id = await this.qt.getSymbolId(ticker);
+            if (id) {
+                await redis.set(CACHE_KEY, id.toString(), 86400); // 24h
+            }
+            return id;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    public async syncSubscriptions() {
+        if (!this.isConnected) return;
+
+        try {
+            console.log('[Stream] Syncing active subscriptions...');
+            const result = await (this.fastify as any).pg.query(
+                "SELECT symbol, option_type, strike_price, expiration_date FROM positions WHERE status != 'CLOSED'"
+            );
+
+            const newIds = new Set<number>();
+
+            for (const pos of result.rows) {
+                // Construct Option Ticker
+                const ticker = this.constructOSITicker(
+                    pos.symbol,
+                    Number(pos.strike_price),
+                    pos.option_type,
+                    pos.expiration_date
+                );
+
+                const id = await this.resolveSymbolId(ticker);
+                if (id) newIds.add(id);
+            }
+
+            // Also include any explicitly requested IDs (via .subscribe method)
+            this.activeSymbolIds.forEach(id => newIds.add(id));
+
+            if (newIds.size === 0) return;
+
+            // Convert to array
+            const idsList = Array.from(newIds);
+
+            // Check if different from current subscriptions to avoid spamming
+            // Ideally we tracked what we SENT to WS. For now, we resubscribe to ensure sync.
+            // Or we can simple send 'action: subscribe' which is additive/idempotent usually.
+
+            console.log(`[Stream] Subscribing to ${idsList.length} symbols/options.`);
+            this.updateSubscriptions(idsList);
+
+            // Update local set
+            this.activeSymbolIds = newIds;
+
+        } catch (err: any) {
+            console.error('[Stream] Failed to sync subscriptions:', err.message);
+        }
+    }
+
     private updateSubscriptions(ids: number[]) {
         if (!this.ws) return;
-        // Questrade WS Example Command (Hypothetical but standard):
-        // { "action": "subscribe", "ids": [123, 456] }
-        // Or simpler: just the string of IDs?
-        // Let's try sending standard JSON payload.
-        // NOTE: If Questrade streaming doesn't support upstream commands, 
-        // we might have to use the HTTP endpoint to POST subscriptions to a stream port.
-        // BUT we will assume standard WS capability.
+        // Sending comma-separated list of IDs is standard for some streamer modes
+        // But let's stick to the command format we guessed, or try IDs string if 400.
+        // Based on "GET ...?ids=..." working, maybe writing IDs to socket works?
+        // Let's try standard JSON first.
         const msg = JSON.stringify({ action: 'subscribe', ids });
         this.ws.send(msg);
+
+        // Also send "Raw" ids just in case (some WS endpoints take raw lines)
+        // this.ws.send(ids.join(',')); 
     }
 
     // --- Redis Locking ---
