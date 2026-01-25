@@ -94,41 +94,74 @@ export class QuestradeService {
         return !!token;
     }
 
-    private async ensureAuthenticated() {
-        if (this.token && this.token.expires_at > Date.now() + 60000) {
-            return;
+    private async getActiveToken(): Promise<QuestradeToken | null> {
+        // 1. Check local memory first (fastest)
+        if (this.token && this.token.expires_at > Date.now() + 30000) {
+            return this.token;
         }
 
-        if (this.isRefreshing) {
-            // Simple wait if already refreshing
-            while (this.isRefreshing) {
-                await new Promise(resolve => setTimeout(resolve, 500));
+        // 2. Check Redis global cache (shared across nodes)
+        const cached = await redis.get('QUESTRADE_ACTIVE_TOKEN');
+        if (cached) {
+            try {
+                const parsed = JSON.parse(cached);
+                if (parsed.expires_at > Date.now() + 30000) {
+                    this.token = parsed;
+                    return parsed;
+                }
+            } catch (e) {
+                console.warn('[QuestradeService] Failed to parse cached token, ignoring.');
             }
-            return;
         }
 
-        this.isRefreshing = true;
+        // 3. Need to refresh - Use Distributed Lock to ensure ONLY ONE instance rotates the linear token
+        const LOCK_KEY = 'QUESTRADE_REFRESH_LOCK';
+        const isLocked = await redis.setNX(LOCK_KEY, 'LOCKED', 30); // 30s lock
+
+        if (!isLocked) {
+            // Another instance is refreshing, wait and poll for the result
+            console.log('[QuestradeService] Auth Refresh is Locked by another instance. Waiting for update...');
+            for (let i = 0; i < 20; i++) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                const freshCached = await redis.get('QUESTRADE_ACTIVE_TOKEN');
+                if (freshCached) {
+                    try {
+                        const parsed = JSON.parse(freshCached);
+                        if (parsed.expires_at > Date.now() + 30000) {
+                            this.token = parsed;
+                            return parsed;
+                        }
+                    } catch (e) { }
+                }
+            }
+            throw new Error('Timed out waiting for Questrade token refresh by concurrent process');
+        }
+
+        try {
+            // We have the lock - we are responsible for the rotation
+            return await this.performRefresh();
+        } finally {
+            await redis.del(LOCK_KEY);
+        }
+    }
+
+    private async performRefresh(): Promise<QuestradeToken> {
         try {
             let refreshToken = await this.getTokenFromDb();
 
-            if (refreshToken) {
-                console.log(`[QuestradeService] Using live Refresh Token from DB: ${refreshToken.substring(0, 10)}...`);
-            } else {
+            if (!refreshToken) {
                 refreshToken = process.env.QUESTRADE_REFRESH_TOKEN || null;
-                if (refreshToken) {
-                    console.log(`[QuestradeService] Using fallback Refresh Token from ENV: ${refreshToken.substring(0, 10)}...`);
-                } else {
-                    throw new Error('Questrade Refresh Token not found in DB or ENV');
-                }
+                if (!refreshToken) throw new Error('Questrade Refresh Token not found in DB or ENV');
             }
 
             const clientId = await this.getClientId();
-            console.log(`[QuestradeService] Refreshing access token for CID: ${clientId?.substring(0, 5)}... with: ${refreshToken?.substring(0, 10)}...`);
+            console.log(`[QuestradeService] Rotating linear tokens for CID: ${clientId?.substring(0, 5)}...`);
             const tokenUrl = `https://login.questrade.com/oauth2/token?grant_type=refresh_token&refresh_token=${refreshToken}`;
-            const response = await axios.get<any>(tokenUrl);
 
+            const response = await this.axiosWithRetry(() => axios.get<any>(tokenUrl) as any);
             const data = response.data;
-            this.token = {
+
+            const newToken: QuestradeToken = {
                 access_token: data.access_token,
                 refresh_token: data.refresh_token,
                 api_server: data.api_server,
@@ -137,18 +170,24 @@ export class QuestradeService {
                 expires_at: Date.now() + (data.expires_in * 1000)
             };
 
+            // Atomically update DB and Global Cache for other nodes/processes
             await this.saveTokenToDb(data.refresh_token);
-            console.log('[QuestradeService] Token refreshed successfully.');
+            await redis.set('QUESTRADE_ACTIVE_TOKEN', JSON.stringify(newToken), data.expires_in - 60);
 
+            this.token = newToken;
+            console.log('[QuestradeService] Linear token rotation successful.');
+            return newToken;
         } catch (err: any) {
-            console.error('[QuestradeService] Authentication failed:', err.response?.data || err.message);
+            console.error('[QuestradeService] Authentication rotation failed:', err.message);
             throw err;
-        } finally {
-            this.isRefreshing = false;
         }
     }
 
-    private async axiosWithRetry(requestFn: () => Promise<any>, maxRetries = 2): Promise<any> {
+    private async ensureAuthenticated() {
+        await this.getActiveToken();
+    }
+
+    private async axiosWithRetry(requestFn: () => Promise<any>, maxRetries = 3): Promise<any> {
         let lastError: any;
         for (let i = 0; i <= maxRetries; i++) {
             try {
@@ -171,8 +210,20 @@ export class QuestradeService {
                     await new Promise(resolve => setTimeout(resolve, waitTime));
                     continue;
                 }
+
+                // If it's a 400-500 error but NOT 429, don't retry, just throw but with body if possible
+                if (err.response?.data) {
+                    const bodyMsg = typeof err.response.data === 'string' ? err.response.data : JSON.stringify(err.response.data);
+                    err.message = `${err.message} | Body: ${bodyMsg}`;
+                }
                 throw err;
             }
+        }
+
+        // Final throw if retries exhausted
+        if (lastError.response?.data) {
+            const bodyMsg = typeof lastError.response.data === 'string' ? lastError.response.data : JSON.stringify(lastError.response.data);
+            lastError.message = `${lastError.message} | Final Body: ${bodyMsg}`;
         }
         throw lastError;
     }
@@ -281,7 +332,7 @@ export class QuestradeService {
             return null;
         } catch (err: any) {
             console.error(`[QuestradeService] Error during resolution for ${symbol}:`, err.response?.data || err.message);
-            return null;
+            throw err; // Propagate to caller
         }
     }
 
@@ -334,7 +385,7 @@ export class QuestradeService {
             return response.data.candles || [];
         } catch (err: any) {
             console.error(`[QuestradeService] Failed to get historical data for ${symbolId}:`, err.response?.data || err.message);
-            return [];
+            throw err; // Propagate to caller
         }
     }
 }
