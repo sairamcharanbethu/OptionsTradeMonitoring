@@ -133,8 +133,23 @@ export default function Prediction() {
             </div>
 
             {error && (
-                <div className="p-4 bg-red-900/20 border border-red-500/50 text-red-200 rounded-lg">
-                    Error: {(error as Error).message}
+                <div className={`p-4 rounded-lg flex items-start gap-3 ${(error as any).message?.includes('Rate') || (error as any).message?.includes('429') || (error as any).message?.includes('wait')
+                        ? 'bg-yellow-900/20 border border-yellow-500/50 text-yellow-200'
+                        : 'bg-red-900/20 border border-red-500/50 text-red-200'
+                    }`}>
+                    <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                    <div>
+                        <div className="font-medium">
+                            {(error as any).message?.includes('Rate') || (error as any).message?.includes('wait')
+                                ? 'Rate Limit Reached'
+                                : 'Analysis Error'}
+                        </div>
+                        <div className="text-sm opacity-80 mt-1">
+                            {(error as any).message?.includes('Rate') || (error as any).message?.includes('wait')
+                                ? 'Questrade API rate limit reached. Please wait 2-3 minutes before trying again. Each prediction fetches 2 years of historical data.'
+                                : (error as Error).message}
+                        </div>
+                    </div>
                 </div>
             )}
 
