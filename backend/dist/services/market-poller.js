@@ -5,7 +5,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MarketPoller = void 0;
 const node_cron_1 = __importDefault(require("node-cron"));
-const child_process_1 = require("child_process");
 const stop_loss_engine_1 = require("./stop-loss-engine");
 const redis_1 = require("../lib/redis");
 const ai_service_1 = require("./ai-service");
@@ -182,83 +181,70 @@ class MarketPoller {
     }
     async getOptionPremium(symbol, strike, type, expiration, skipCache = false) {
         const ticker = this.constructOSITicker(symbol, strike, type, expiration);
-        // Redis Cache Check
+        // Redis Cache Check for Price
         const CACHE_KEY = `PRICE:${ticker}`;
         const CACHE_TTL = 300; // 5 minutes
         if (!skipCache) {
             const cached = await redis_1.redis.get(CACHE_KEY);
-            if (cached) {
-                // console.log(`[MarketPoller] Cache hit for ${ticker}`);
+            if (cached)
                 return JSON.parse(cached);
+        }
+        try {
+            const questrade = this.fastify.questrade;
+            // 1. Get/Resolve Option Symbol ID
+            // We can cache the symbolId for the ticker longer than the price
+            const SYMBOL_ID_CACHE_KEY = `SYMBOL_ID:${ticker}`;
+            let symbolId = null;
+            const cachedId = await redis_1.redis.get(SYMBOL_ID_CACHE_KEY);
+            if (cachedId) {
+                symbolId = parseInt(cachedId, 10);
             }
-        }
-        else {
-            console.log(`[MarketPoller] Cache bypass (force sync) for ${ticker}`);
-        }
-        // console.log(`[MarketPoller] Fetching premium for: ${ticker}`);
-        return new Promise((resolve) => {
-            const pythonProcess = (0, child_process_1.spawn)('python3', ['/app/src/scripts/fetch_option_price.py', ticker]);
-            let dataString = '';
-            pythonProcess.stdout.on('data', (data) => {
-                dataString += data.toString();
-            });
-            pythonProcess.stderr.on('data', (data) => {
-                console.error(`[MarketPoller] Python stderr: ${data}`);
-            });
-            pythonProcess.on('close', (code) => {
-                try {
-                    // Handle potential noisy output from Python dependencies (e.g., "Mibian req...")
-                    // by scanning lines backwards to find the last valid JSON object
-                    const lines = dataString.trim().split('\n');
-                    let result = null;
-                    for (let i = lines.length - 1; i >= 0; i--) {
-                        const line = lines[i].trim();
-                        if (!line)
-                            continue;
-                        try {
-                            const parsed = JSON.parse(line);
-                            // Validate it's our expected response format
-                            if (parsed && (parsed.status === 'ok' || parsed.status === 'error')) {
-                                result = parsed;
-                                break;
-                            }
-                        }
-                        catch (parseErr) {
-                            // Not a JSON line, likely a log from a dependency - continue searching
-                            continue;
-                        }
-                    }
-                    if (!result) {
-                        console.warn(`[MarketPoller] Failed to find valid JSON in output for ${ticker}. Raw output (first 200 chars): ${dataString.substring(0, 200)}`);
-                        resolve(null);
-                        return;
-                    }
-                    if (result.status === 'ok' && typeof result.price === 'number') {
-                        // Enrich with metadata for easier Redis inspection
-                        result.metadata = {
-                            symbol: symbol,
-                            strike: strike,
-                            type: type,
-                            expiration: expiration,
-                        };
-                        redis_1.redis.set(CACHE_KEY, JSON.stringify(result), CACHE_TTL).catch(err => console.error('[MarketPoller] Redis set failed:', err));
-                        resolve(result); // Return full object { price, greeks, iv ... }
-                    }
-                    else {
-                        console.warn(`[MarketPoller] Retrieval failed for ${ticker}: ${result.message}`);
-                        resolve(null);
-                    }
+            else {
+                console.log(`[MarketPoller] Resolving Questrade Symbol ID for ${ticker}...`);
+                symbolId = await questrade.getSymbolId(ticker);
+                if (symbolId) {
+                    await redis_1.redis.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
                 }
-                catch (e) {
-                    console.error(`[MarketPoller] Error processing output for ${ticker}:`, e);
-                    resolve(null);
+            }
+            if (!symbolId) {
+                console.warn(`[MarketPoller] Could not resolve symbol ID for ${ticker} on Questrade.`);
+                return null;
+            }
+            // 2. Get Quote from Questrade
+            const quote = await questrade.getOptionQuote(symbolId);
+            if (!quote)
+                return null;
+            // Calculate premium (use Mid price if available, else last)
+            const bid = quote.bidPrice || 0;
+            const ask = quote.askPrice || 0;
+            const price = (bid > 0 && ask > 0) ? (bid + ask) / 2 : quote.lastTradePrice || 0;
+            const result = {
+                status: 'ok',
+                symbol: ticker,
+                price,
+                iv: quote.impliedVolatility * 100 || 0,
+                underlying_price: quote.underlyingPrice || 0,
+                greeks: {
+                    delta: quote.delta || 0,
+                    gamma: quote.gamma || 0,
+                    theta: (quote.theta || 0) / 365, // Standardize if needed, usually Questrade is per day
+                    vega: quote.vega || 0,
+                    rho: quote.rho || 0
+                },
+                metadata: {
+                    symbol,
+                    strike,
+                    type,
+                    expiration
                 }
-            });
-            pythonProcess.on('error', (err) => {
-                console.error(`[MarketPoller] Python process error:`, err);
-                resolve(null);
-            });
-        });
+            };
+            await redis_1.redis.set(CACHE_KEY, JSON.stringify(result), CACHE_TTL).catch(err => console.error('[MarketPoller] Redis set failed:', err));
+            return result;
+        }
+        catch (err) {
+            console.error(`[MarketPoller] Questrade fetch failed for ${ticker}:`, err.message);
+            return null;
+        }
     }
     async syncPrice(symbol, skipCache = false) {
         console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
@@ -310,19 +296,19 @@ class MarketPoller {
         return currentTimeMinutes >= marketOpenMinutes && currentTimeMinutes <= marketCloseMinutes;
     }
     async poll(force = false) {
-        if (!force && !this.isMarketOpen()) {
-            console.log(`[MarketPoller] Skipping scheduled poll at ${new Date().toISOString()}: Market is closed.`);
-            return;
-        }
-        console.log(`[MarketPoller] ${force ? 'FORCED ' : ''}Polling option premiums via yfinance at ${new Date().toISOString()}...`);
-        // Poll all non-CLOSED positions so user sees up-to-date price until they manually close
+        console.log(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
         const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'");
         if (positions.length === 0) {
             console.log('[MarketPoller] No active positions to poll.');
             return;
         }
         const symbols = [...new Set(positions.map(p => p.symbol))];
+        const isMarketOpen = this.isMarketOpen();
+        if (!force && !isMarketOpen) {
+            console.log('[MarketPoller] Market is closed. Will only perform housekeeping (auto-expiry).');
+        }
         for (const symbol of symbols) {
+            // 1. Auto-Close Expired Logic
             // Check for expired positions for this symbol first
             const symbolPositions = positions.filter(p => p.symbol === symbol);
             const today = new Date();
@@ -330,6 +316,7 @@ class MarketPoller {
             for (const pos of symbolPositions) {
                 const expDate = new Date(pos.expiration_date);
                 expDate.setHours(0, 0, 0, 0);
+                // Standard comparison: If expiration date is strictly less than today (yesterday or earlier), it's expired.
                 if (expDate < today) {
                     console.log(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
                     // Close with 0 PnL
@@ -340,12 +327,18 @@ class MarketPoller {
                      notes = COALESCE(notes, '') || ' [Auto-closed as Expired]',
                      updated_at = CURRENT_TIMESTAMP 
                  WHERE id = $1`, [pos.id]);
-                    continue; // Skip sync for this specific position
+                    // Mark as closed locally so we don't sync it below
+                    pos.status = 'CLOSED';
                 }
             }
-            await this.syncPrice(symbol, force);
-            // Stay within limits, sequential delay
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            // 2. Price Sync (Only if Market Open or Forced)
+            // Filter out positions we just closed
+            const activePositions = symbolPositions.filter(p => p.status !== 'CLOSED');
+            if ((force || isMarketOpen) && activePositions.length > 0) {
+                await this.syncPrice(symbol, force);
+                // Stay within limits, sequential delay
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
         }
     }
     async processUpdate(position, price, greeks, iv, underlyingPrice) {
@@ -385,8 +378,8 @@ class MarketPoller {
                 const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
                 await this.fastify.pg.query(`UPDATE positions 
              SET status = $1, 
-                 loss_avoided = $2,
-                 updated_at = CURRENT_TIMESTAMP 
+             loss_avoided = $2,
+             updated_at = CURRENT_TIMESTAMP 
              WHERE id = $3 AND status = 'OPEN'`, [newStatus, engineResult.lossAvoided, position.id]);
                 await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]);
                 // Generate AI Summary for the alert (Discord Message)

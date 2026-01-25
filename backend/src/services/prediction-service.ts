@@ -1,4 +1,3 @@
-import yahooFinance from 'yahoo-finance2';
 import { FastifyInstance } from 'fastify';
 
 import { AIService } from './ai-service';
@@ -66,28 +65,29 @@ export class PredictionService {
                 const startDate = new Date();
                 startDate.setDate(endDate.getDate() - 730);
 
-                const period1 = startDate.toISOString().split('T')[0];
-                const period2 = endDate.toISOString().split('T')[0];
+                console.log(`[PredictionService] Fetching fresh Questrade historical data for ${symbol}...`);
 
-                console.log(`[PredictionService] Fetching fresh historical data for ${symbol}...`);
-                const result = await yahooFinance.historical(symbol, {
-                    period1,
-                    period2,
-                    interval: '1d'
-                });
+                const questrade = (this.fastify as any).questrade;
+                const symbolId = await questrade.getSymbolId(symbol);
 
-                if (!result || !Array.isArray(result) || (result as any[]).length < 200) {
-                    throw new Error(`Insufficient data for ${symbol}. Need at least 200 days of history.`);
+                if (!symbolId) {
+                    throw new Error(`Symbol ${symbol} not found on Questrade.`);
                 }
 
-                // Clean data for Python
-                historicalData = (result as any[]).map(row => ({
-                    date: row.date.toISOString().split('T')[0],
-                    open: row.open,
-                    high: row.high,
-                    low: row.low,
-                    close: row.close,
-                    volume: row.volume
+                const candles = await questrade.getHistoricalData(symbolId, startDate, endDate, 'OneDay');
+
+                if (!candles || candles.length < 200) {
+                    throw new Error(`Insufficient data for ${symbol} from Questrade. Need at least 200 days of history.`);
+                }
+
+                // Map Questrade candles to expected format
+                historicalData = candles.map((c: any) => ({
+                    date: c.start.split('T')[0],
+                    open: c.open,
+                    high: c.high,
+                    low: c.low,
+                    close: c.close,
+                    volume: c.volume
                 }));
 
                 // Cache historical data for 1 hour

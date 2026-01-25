@@ -686,6 +686,7 @@ async function positionRoutes(fastify, options) {
         }
         try {
             // Manually clean up dependencies 
+            console.log(`[Bulk Delete] Deleting IDs: ${ids.join(', ')} for user ${userId}`);
             await fastify.pg.query('DELETE FROM alerts WHERE position_id = ANY($1)', [ids]);
             await fastify.pg.query('DELETE FROM price_history WHERE position_id = ANY($1)', [ids]);
             const result = await fastify.pg.query('DELETE FROM positions WHERE id = ANY($1) AND user_id = $2', [ids, userId]);

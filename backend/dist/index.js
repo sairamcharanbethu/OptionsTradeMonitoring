@@ -176,6 +176,9 @@ const start = async () => {
         fastify.get('/', async () => {
             return { message: 'Options Monitoring API' };
         });
+        const { QuestradeService } = await Promise.resolve().then(() => __importStar(require('./services/questrade-service')));
+        const questrade = new QuestradeService(fastify);
+        fastify.decorate('questrade', questrade);
         // Initialize poller BEFORE listen
         const { MarketPoller } = await Promise.resolve().then(() => __importStar(require('./services/market-poller')));
         const poller = new MarketPoller(fastify);
