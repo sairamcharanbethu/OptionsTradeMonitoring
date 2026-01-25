@@ -1,6 +1,5 @@
 import cron from 'node-cron';
 import { FastifyInstance } from 'fastify';
-import { spawn } from 'child_process';
 import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
@@ -202,90 +201,76 @@ export class MarketPoller {
   private async getOptionPremium(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string, skipCache: boolean = false): Promise<any | null> {
     const ticker = this.constructOSITicker(symbol, strike, type, expiration);
 
-    // Redis Cache Check
-    const CACHE_KEY = `PRICE:${ticker}`;
-    const CACHE_TTL = 300; // 5 minutes
+    try {
+      const questrade = (this.fastify as any).questrade;
 
-    if (!skipCache) {
-      const cached = await redis.get(CACHE_KEY);
-      if (cached) {
-        // console.log(`[MarketPoller] Cache hit for ${ticker}`);
-        return JSON.parse(cached);
-      }
-    } else {
-      console.log(`[MarketPoller] Cache bypass (force sync) for ${ticker}`);
-    }
+      // 1. Get/Resolve Option Symbol ID
+      // We can STILL cache the symbolId for the ticker (it never changes for a specific option)
+      const SYMBOL_ID_CACHE_KEY = `SYMBOL_ID:${ticker}`;
+      let symbolId: number | null = null;
 
-    // console.log(`[MarketPoller] Fetching premium for: ${ticker}`);
-
-    return new Promise((resolve) => {
-      const pythonProcess = spawn('python3', ['/app/src/scripts/fetch_option_price.py', ticker]);
-
-      let dataString = '';
-
-      pythonProcess.stdout.on('data', (data: Buffer) => {
-        dataString += data.toString();
-      });
-
-      pythonProcess.stderr.on('data', (data: Buffer) => {
-        console.error(`[MarketPoller] Python stderr: ${data}`);
-      });
-
-      pythonProcess.on('close', (code: number) => {
-        try {
-          // Handle potential noisy output from Python dependencies (e.g., "Mibian req...")
-          // by scanning lines backwards to find the last valid JSON object
-          const lines = dataString.trim().split('\n');
-          let result = null;
-
-          for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i].trim();
-            if (!line) continue;
-
-            try {
-              const parsed = JSON.parse(line);
-              // Validate it's our expected response format
-              if (parsed && (parsed.status === 'ok' || parsed.status === 'error')) {
-                result = parsed;
-                break;
-              }
-            } catch (parseErr) {
-              // Not a JSON line, likely a log from a dependency - continue searching
-              continue;
-            }
-          }
-
-          if (!result) {
-            console.warn(`[MarketPoller] Failed to find valid JSON in output for ${ticker}. Raw output (first 200 chars): ${dataString.substring(0, 200)}`);
-            resolve(null);
-            return;
-          }
-
-          if (result.status === 'ok' && typeof result.price === 'number') {
-            // Enrich with metadata for easier Redis inspection
-            result.metadata = {
-              symbol: symbol,
-              strike: strike,
-              type: type,
-              expiration: expiration,
-            };
-            redis.set(CACHE_KEY, JSON.stringify(result), CACHE_TTL).catch(err => console.error('[MarketPoller] Redis set failed:', err));
-            resolve(result); // Return full object { price, greeks, iv ... }
-          } else {
-            console.warn(`[MarketPoller] Retrieval failed for ${ticker}: ${result.message}`);
-            resolve(null);
-          }
-        } catch (e) {
-          console.error(`[MarketPoller] Error processing output for ${ticker}:`, e);
-          resolve(null);
+      const cachedId = await redis.get(SYMBOL_ID_CACHE_KEY);
+      if (cachedId) {
+        symbolId = parseInt(cachedId, 10);
+      } else {
+        console.log(`[MarketPoller] Resolving Questrade Symbol ID for ${ticker}...`);
+        symbolId = await questrade.getSymbolId(ticker);
+        if (symbolId) {
+          await redis.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
         }
-      });
+      }
 
-      pythonProcess.on('error', (err: Error) => {
-        console.error(`[MarketPoller] Python process error:`, err);
-        resolve(null);
-      });
-    });
+      if (!symbolId) {
+        console.warn(`[MarketPoller] Could not resolve symbol ID for ${ticker} on Questrade.`);
+        return null;
+      }
+
+      // 2. Get Quote from Questrade (FRESH EVERY TIME)
+      const quote = await questrade.getOptionQuote(symbolId);
+      if (!quote) return null;
+
+      // 3. Fetch Underlying Price (Questrade option quote doesn't include it in JSON)
+      let underlyingPrice = 0;
+      if (quote.underlyingId) {
+        const uQuotes = await questrade.getQuote([quote.underlyingId]);
+        if (uQuotes && uQuotes.length > 0) {
+          underlyingPrice = uQuotes[0].lastTradePrice || 0;
+        }
+      }
+
+      // Calculate premium (use Mid price if available, else last)
+      const bid = quote.bidPrice || 0;
+      const ask = quote.askPrice || 0;
+      const price = (bid > 0 && ask > 0) ? (bid + ask) / 2 : quote.lastTradePrice || 0;
+
+      const result = {
+        status: 'ok',
+        symbol: ticker,
+        price,
+        iv: quote.volatility || 0,
+        underlying_price: underlyingPrice,
+        greeks: {
+          delta: quote.delta || 0,
+          gamma: quote.gamma || 0,
+          theta: quote.theta || 0,
+          vega: quote.vega || 0,
+          rho: quote.rho || 0
+        },
+        metadata: {
+          symbol,
+          strike,
+          type,
+          expiration
+        }
+      };
+
+      // We no longer set PRICE cache in Redis as per user request
+      return result;
+
+    } catch (err: any) {
+      console.error(`[MarketPoller] Questrade fetch failed for ${ticker}:`, err.message);
+      return null;
+    }
   }
 
   public async syncPrice(symbol: string, skipCache: boolean = false) {
@@ -463,7 +448,7 @@ export class MarketPoller {
         const triggerType = engineResult.triggerType || 'STOP_LOSS';
         const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
 
-        await this.fastify.pg.query(
+        const updateResult = await this.fastify.pg.query(
           `UPDATE positions 
              SET status = $1, 
              loss_avoided = $2,
@@ -471,6 +456,11 @@ export class MarketPoller {
              WHERE id = $3 AND status = 'OPEN'`,
           [newStatus, engineResult.lossAvoided, position.id]
         );
+
+        if (updateResult.rowCount === 0) {
+          // Already updated or state mismatch, skip AI alert
+          return;
+        }
 
         await this.fastify.pg.query(
           'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',

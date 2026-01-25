@@ -341,6 +341,27 @@ export const api = {
     return res.json();
   },
 
+  // Questrade Integration
+  async getQuestradeConfig(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/settings/questrade/config`);
+    if (!res.ok) throw new Error('Failed to fetch Questrade config');
+    return res.json();
+  },
+  async saveQuestradeClient(clientId: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/settings/questrade/client`, {
+      method: 'POST',
+      body: JSON.stringify({ clientId })
+    });
+    if (!res.ok) throw new Error('Failed to save Questrade client ID');
+  },
+  async saveQuestradeToken(data: any): Promise<void> {
+    const res = await authFetch(`${API_BASE}/settings/questrade/token`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error('Failed to save Questrade token');
+  },
+
   async updateSettings(settings: Record<string, string>): Promise<void> {
     const res = await authFetch(`${API_BASE}/settings`, {
       method: 'POST',

@@ -1,11 +1,11 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
     ReferenceLine, Legend
 } from 'recharts';
 
-import { Loader2, TrendingUp, TrendingDown, AlignJustify, BrainCircuit, Activity } from 'lucide-react';
+import { Loader2, TrendingUp, TrendingDown, AlignJustify, BrainCircuit, Activity, Clock, AlertTriangle } from 'lucide-react';
 
 import { api } from '@/lib/api';
 
@@ -18,6 +18,8 @@ interface PredictionData {
         macd: { macd: number; signal: number; histogram: number };
         sma50: number;
         sma200: number;
+        ema9: number;
+        ema21: number;
         bollinger: { upper: number; lower: number; middle: number };
     };
     aiAnalysis: {
@@ -25,6 +27,8 @@ interface PredictionData {
         reasoning: string;
     };
 }
+
+const COOLDOWN_SECONDS = 60; // 1 minute cooldown between requests
 
 export default function Prediction() {
     const [symbol, setSymbol] = useState('');
@@ -34,8 +38,18 @@ export default function Prediction() {
     const [data, setData] = useState<PredictionData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<Error | null>(null);
+    const [cooldown, setCooldown] = useState(0);
 
-    React.useEffect(() => {
+    // Cooldown timer effect
+    useEffect(() => {
+        if (cooldown <= 0) return;
+        const timer = setInterval(() => {
+            setCooldown(prev => Math.max(0, prev - 1));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [cooldown]);
+
+    useEffect(() => {
         if (!querySymbol || !token) return;
 
         let mounted = true;
@@ -43,15 +57,21 @@ export default function Prediction() {
         setError(null);
         setData(null);
 
-        setError(null);
-        setData(null);
-
         api.predictStock(querySymbol)
             .then(res => {
-                if (mounted) setData(res);
+                if (mounted) {
+                    setData(res);
+                    setCooldown(COOLDOWN_SECONDS); // Start cooldown after successful request
+                }
             })
             .catch(err => {
-                if (mounted) setError(err);
+                if (mounted) {
+                    setError(err);
+                    // If rate limited, set a longer cooldown
+                    if (err.message?.includes('Rate') || err.message?.includes('429') || err.message?.includes('Too Many')) {
+                        setCooldown(COOLDOWN_SECONDS * 2);
+                    }
+                }
             })
             .finally(() => {
                 if (mounted) setIsLoading(false);
@@ -62,7 +82,9 @@ export default function Prediction() {
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
-        if (symbol.trim()) setQuerySymbol(symbol.toUpperCase());
+        if (symbol.trim() && cooldown === 0) {
+            setQuerySymbol(symbol.toUpperCase());
+        }
     };
 
     const getVerdictColor = (verdict: string) => {
@@ -80,7 +102,7 @@ export default function Prediction() {
                     <BrainCircuit className="w-8 h-8 text-purple-400" />
                     AI Stock Prediction
                 </h1>
-                <form onSubmit={handleSearch} className="flex gap-2 w-full md:w-auto">
+                <form onSubmit={handleSearch} className="flex gap-2 w-full md:w-auto items-center">
                     <input
                         type="text"
                         value={symbol}
@@ -90,17 +112,51 @@ export default function Prediction() {
                     />
                     <button
                         type="submit"
-                        disabled={isLoading || !symbol}
-                        className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg disabled:opacity-50 font-medium transition-colors"
+                        disabled={isLoading || !symbol || cooldown > 0}
+                        className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg disabled:opacity-50 font-medium transition-colors min-w-[120px]"
                     >
-                        {isLoading ? <Loader2 className="animate-spin" /> : 'Analyze'}
+                        {isLoading ? <Loader2 className="animate-spin mx-auto" /> :
+                            cooldown > 0 ? (
+                                <span className="flex items-center gap-1 justify-center">
+                                    <Clock className="w-4 h-4" /> {cooldown}s
+                                </span>
+                            ) : 'Analyze'}
                     </button>
                 </form>
             </div>
 
+            {/* Questrade API Constraints & Transparency */}
+            <div className="bg-slate-800/30 border border-slate-700/50 rounded-lg p-4 text-xs text-slate-400">
+                <div className="flex items-center gap-2 font-semibold text-slate-300 mb-2">
+                    <Activity className="w-4 h-4 text-cyan-500" />
+                    Questrade API Synchronization
+                </div>
+                <ul className="space-y-1 ml-6 list-disc">
+                    <li><strong>Market Data Limit:</strong> Questrade allows ~15,000 requests/hour. To preserve your budget, we cache 5-year history in the database.</li>
+                    <li><strong>Incremental Sync:</strong> Only new "gap" candles are fetched since your last sync, reducing API payload by 99%.</li>
+                    <li><strong>Accuracy:</strong> AI leverages deep history (5 years) to calculate long-term SMA/EMA cross-overs and support levels.</li>
+                    <li><strong>Cooldown:</strong> A {COOLDOWN_SECONDS}s window is required between new symbols to prevent terminal rate-limiting.</li>
+                </ul>
+            </div>
+
             {error && (
-                <div className="p-4 bg-red-900/20 border border-red-500/50 text-red-200 rounded-lg">
-                    Error: {(error as Error).message}
+                <div className={`p-4 rounded-lg flex items-start gap-3 ${(error as any).message?.includes('Rate') || (error as any).message?.includes('429') || (error as any).message?.includes('wait')
+                    ? 'bg-yellow-900/20 border border-yellow-500/50 text-yellow-200'
+                    : 'bg-red-900/20 border border-red-500/50 text-red-200'
+                    }`}>
+                    <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+                    <div>
+                        <div className="font-medium">
+                            {(error as any).message?.includes('Rate') || (error as any).message?.includes('wait')
+                                ? 'Rate Limit Reached'
+                                : 'Analysis Error'}
+                        </div>
+                        <div className="text-sm opacity-80 mt-1">
+                            {(error as any).message?.includes('Rate') || (error as any).message?.includes('wait')
+                                ? 'Questrade API rate limit reached. Please wait 2-3 minutes before trying again. Each prediction fetches 2 years of historical data.'
+                                : (error as Error).message}
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -195,6 +251,20 @@ export default function Prediction() {
                                     <div className="text-xs text-slate-400 mb-1">MACD</div>
                                     <div className={`text-xl font-mono ${data.indicators.macd.histogram > 0 ? 'text-green-400' : 'text-red-400'}`}>
                                         {data.indicators.macd.histogram.toFixed(2)}
+                                    </div>
+                                </div>
+
+                                <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                    <div className="text-xs text-slate-400 mb-1">EMA 9</div>
+                                    <div className={`text-lg font-mono ${data.currentPrice > data.indicators.ema9 ? 'text-green-400' : 'text-red-400'}`}>
+                                        ${data.indicators.ema9.toFixed(2)}
+                                    </div>
+                                </div>
+
+                                <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                    <div className="text-xs text-slate-400 mb-1">EMA 21</div>
+                                    <div className={`text-lg font-mono ${data.currentPrice > data.indicators.ema21 ? 'text-green-400' : 'text-red-400'}`}>
+                                        ${data.indicators.ema21.toFixed(2)}
                                     </div>
                                 </div>
 

@@ -12,6 +12,9 @@ def calculate_rsi(data, window=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+def calculate_ema(data, window):
+    return data.ewm(span=window, adjust=False).mean()
+
 def process_and_predict():
     try:
         # Read JSON from stdin
@@ -22,25 +25,25 @@ def process_and_predict():
         json_data = json.loads(input_data)
         
         # Convert to DataFrame
-        # Expecting input: [{ "date": "...", "close": 123.45, "open": ..., "high": ..., "low": ..., "volume": ... }]
         df = pd.DataFrame(json_data)
         df['date'] = pd.to_datetime(df['date'])
         df = df.sort_values('date')
         df.set_index('date', inplace=True)
         
-        # Feature Engineering (Replicating some logic from predict_nvda + standard indicators)
-        df['Close_Shift_1'] = df['close'].shift(1) # Previous Close
+        # Feature Engineering
+        df['Close_Shift_1'] = df['close'].shift(1)
         df['Open_Shift_1'] = df['open'].shift(1)
         
-        # Target: 1 if Price went UP next day, 0 otherwise (Simulation logic)
-        # We want to predict tomorrow's movement.
-        # But for training, we need labels. 
-        # Target = (Next Close > Current Close).astype(int)
+        # EMA Indicators
+        df['EMA9'] = calculate_ema(df['close'], 9)
+        df['EMA21'] = calculate_ema(df['close'], 21)
+        
+        # Target: 1 if Price went UP next day
         df['Target'] = (df['close'].shift(-1) > df['close']).astype(int)
         
         # Rolling Averages / Windows
         horizons = [2, 5, 10, 60, 250]
-        predictors = []
+        predictors = ['EMA9', 'EMA21']
         
         for horizon in horizons:
             rolling_averages = df.rolling(horizon).mean()

@@ -39,9 +39,15 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [profileError, setProfileError] = useState<string | null>(null);
     const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
 
+    // Questrade State
+    const [qtClientId, setQtClientId] = useState('');
+    const [qtConnecting, setQtConnecting] = useState(false);
+    const [qtSaved, setQtSaved] = useState(false);
+
     useEffect(() => {
         if (open) {
             loadSettings();
+            loadQuestradeConfig();
             setPwError(null);
             setPwSuccess(null);
             setProfileError(null);
@@ -51,6 +57,75 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setUsername(user.username);
         }
     }, [open, user.username]);
+
+    // Handle OAuth Callback on mount/refresh
+    useEffect(() => {
+        const hash = window.location.hash;
+        if (hash && hash.includes('access_token=')) {
+            handleQuestradeCallback(hash);
+        }
+    }, []);
+
+    async function loadQuestradeConfig() {
+        try {
+            const config = await api.getQuestradeConfig();
+            if (config.clientId) {
+                setQtClientId(config.clientId);
+            }
+            setQtSaved(!!config.isLinked);
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    async function handleQuestradeCallback(hash: string) {
+        setQtConnecting(true);
+        try {
+            // Parse hash params: #access_token=...&refresh_token=...
+            const params = new URLSearchParams(hash.replace('#', '?'));
+            const data = {
+                access_token: params.get('access_token'),
+                refresh_token: params.get('refresh_token'),
+                api_server: params.get('api_server'),
+                token_type: params.get('token_type'),
+                expires_in: params.get('expires_in')
+            };
+
+            if (data.access_token && data.refresh_token) {
+                await api.saveQuestradeToken(data);
+                // Clear hash
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                await loadQuestradeConfig(); // Refresh status
+                setOpen(true); // Re-open dialog
+                alert('Questrade connected successfully!');
+            }
+        } catch (err) {
+            console.error('Failed to parse Questrade callback:', err);
+        } finally {
+            setQtConnecting(false);
+        }
+    }
+
+    async function initiateQuestradeLogin() {
+        if (!qtClientId) {
+            alert('Please enter your Questrade Consumer Key first.');
+            return;
+        }
+
+        setQtConnecting(true);
+        try {
+            // Save client ID first
+            await api.saveQuestradeClient(qtClientId);
+
+            const redirectUri = window.location.origin + window.location.pathname;
+            const authUrl = `https://login.questrade.com/oauth2/authorize?client_id=${qtClientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}`;
+
+            window.location.href = authUrl;
+        } catch (err) {
+            console.error(err);
+            setQtConnecting(false);
+        }
+    }
 
     async function loadSettings() {
         setLoading(true);
@@ -147,8 +222,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 </DialogHeader>
 
                 <Tabs defaultValue="ai" className="w-full">
-                    <TabsList className="grid w-full grid-cols-2 mb-4">
+                    <TabsList className="grid w-full grid-cols-3 mb-4">
                         <TabsTrigger value="ai">AI Setup</TabsTrigger>
+                        <TabsTrigger value="integrations">Integrations</TabsTrigger>
                         <TabsTrigger value="account">Account</TabsTrigger>
                     </TabsList>
 
@@ -251,6 +327,53 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 </section>
                             </div>
                         )}
+                    </TabsContent>
+
+                    <TabsContent value="integrations">
+                        <div className="grid gap-6 py-2">
+                            <section className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <h3 className="text-sm font-semibold">Brokerage (Questrade)</h3>
+                                    <Badge variant={qtSaved ? "outline" : "secondary"}>
+                                        {qtSaved ? "Configured" : "Not Linked"}
+                                    </Badge>
+                                </div>
+
+                                <div className="grid gap-4 p-4 border rounded-lg bg-muted/30">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="qt-client">Consumer Key (Client ID)</Label>
+                                        <Input
+                                            id="qt-client"
+                                            value={qtClientId}
+                                            onChange={(e) => setQtClientId(e.target.value)}
+                                            placeholder="Your Questrade API key"
+                                            type="password"
+                                        />
+                                        <p className="text-[10px] text-muted-foreground">
+                                            Found in the Questrade API Center as "Consumer Key".
+                                        </p>
+                                    </div>
+
+                                    <Button
+                                        onClick={initiateQuestradeLogin}
+                                        disabled={qtConnecting}
+                                        className="w-full bg-[#ffcc00] text-black hover:bg-[#e6b800] font-bold"
+                                    >
+                                        {qtConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                        Connect Questrade
+                                    </Button>
+
+                                    <p className="text-[10px] text-center text-muted-foreground italic">
+                                        This will redirect you to Questrade to authorize this application.
+                                    </p>
+                                </div>
+
+                                <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded text-[11px] text-blue-200">
+                                    <strong>Note:</strong> Replacing Yahoo Finance with Questrade provides
+                                    real-time (or delayed) data from a licensed broker.
+                                </div>
+                            </section>
+                        </div>
                     </TabsContent>
 
                     <TabsContent value="account">

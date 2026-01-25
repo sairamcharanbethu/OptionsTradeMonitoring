@@ -66,5 +66,52 @@ async function settingsRoutes(fastify) {
             return reply.code(500).send({ error: 'Failed to update settings' });
         }
     });
+    // QUESTRADE CONFIG
+    fastify.get('/questrade/config', async (request, reply) => {
+        try {
+            const questrade = fastify.questrade;
+            const clientId = await questrade.getClientId();
+            const isLinked = await questrade.isLinked();
+            return { clientId, isLinked };
+        }
+        catch (err) {
+            return reply.code(500).send({ error: 'Failed to fetch Questrade config' });
+        }
+    });
+    // QUESTRADE SAVE CLIENT ID
+    fastify.post('/questrade/client', async (request, reply) => {
+        const { clientId } = request.body;
+        if (!clientId)
+            return reply.code(400).send({ error: 'clientId required' });
+        try {
+            const questrade = fastify.questrade;
+            await questrade.setClientId(clientId);
+            return { status: 'ok' };
+        }
+        catch (err) {
+            return reply.code(500).send({ error: 'Failed to save client ID' });
+        }
+    });
+    // QUESTRADE TOKEN CALLBACK (from frontend hash)
+    fastify.post('/questrade/token', async (request, reply) => {
+        const data = request.body;
+        if (!data.access_token || !data.refresh_token) {
+            return reply.code(400).send({ error: 'Invalid token data' });
+        }
+        try {
+            const questrade = fastify.questrade;
+            await questrade.initializeWithToken({
+                access_token: data.access_token,
+                refresh_token: data.refresh_token,
+                api_server: data.api_server,
+                token_type: data.token_type,
+                expires_in: parseInt(data.expires_in, 10)
+            });
+            return { status: 'ok' };
+        }
+        catch (err) {
+            return reply.code(500).send({ error: 'Failed to initialize Questrade token' });
+        }
+    });
 }
 //# sourceMappingURL=settings.js.map

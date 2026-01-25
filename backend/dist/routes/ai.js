@@ -63,9 +63,27 @@ async function aiRoutes(fastify, options) {
     });
     fastify.get('/predict/:symbol', async (request, reply) => {
         const { symbol } = request.params;
-        const predictionService = new prediction_service_1.PredictionService(fastify); // Or instantiate once at top if preferred, but lightweight here
-        const result = await predictionService.analyzeStock(symbol);
-        return result;
+        const predictionService = new prediction_service_1.PredictionService(fastify);
+        try {
+            const result = await predictionService.analyzeStock(symbol);
+            return result;
+        }
+        catch (err) {
+            // Check for rate limit errors and return user-friendly response
+            if (err.message?.includes('Too Many') || err.message?.includes('429') || err.message?.includes('Rate')) {
+                return reply.code(429).send({
+                    error: 'Rate Limited',
+                    message: 'Questrade API rate limit reached. Please wait 2-3 minutes before trying again. The system processes many market data requests for historical analysis.',
+                    retryAfter: 180 // 3 minutes in seconds
+                });
+            }
+            // For other errors, return 500 with message
+            fastify.log.error(err);
+            return reply.code(500).send({
+                error: 'Prediction Failed',
+                message: err.message || 'An unexpected error occurred during stock analysis.'
+            });
+        }
     });
 }
 //# sourceMappingURL=ai.js.map

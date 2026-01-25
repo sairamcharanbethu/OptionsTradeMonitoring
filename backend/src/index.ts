@@ -158,6 +158,10 @@ const start = async () => {
       return { message: 'Options Monitoring API' };
     });
 
+    const { QuestradeService } = await import('./services/questrade-service');
+    const questrade = new QuestradeService(fastify);
+    fastify.decorate('questrade', questrade);
+
     // Initialize poller BEFORE listen
     const { MarketPoller } = await import('./services/market-poller');
     const poller = new MarketPoller(fastify);
