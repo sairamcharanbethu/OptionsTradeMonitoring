@@ -134,28 +134,22 @@ export class QuestradeStreamService extends EventEmitter {
         this.isConnected = true;
         this.reconnectAttempts = 0;
         this.startHeartbeat();
-
-        // Initial Subscription Sync
-        // We add a small delay to allow the connection to stabilize before sending commands.
-        // This avoids the '1017' error that occurs when sending immediately.
-        setTimeout(() => {
-            this.syncSubscriptions();
-        }, 2000);
+        // Subscription sync removed - was causing 1017 errors
     }
 
     private startHeartbeat() {
         // Refresh Lock every 10s
-        // Sync Subscriptions every 60s
         if (this.pingInterval) clearInterval(this.pingInterval);
 
-        let counter = 0;
         this.pingInterval = setInterval(async () => {
-            counter++;
             await this.refreshLock();
-
-            // Every 60 seconds (approx)
-            if (counter % 6 === 0) {
-                await this.syncSubscriptions();
+            // WS Ping to keep connection alive (if supported)
+            if (this.ws && this.ws.readyState === 1) {
+                try {
+                    this.ws.ping();
+                } catch (e) {
+                    // Some WS implementations don't support ping()
+                }
             }
         }, 10000);
     }
