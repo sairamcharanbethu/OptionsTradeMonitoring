@@ -42,49 +42,36 @@ export class PredictionService {
     }
 
     async analyzeStock(symbol: string): Promise<PredictionResult> {
-        const historicalCacheKey = `HISTORICAL_DATA:${symbol.toUpperCase()}`;
-
         try {
-            // 1. Fetch Historical Data (Last 2 years)
-            let historicalData: any[] = [];
-            const cachedHistorical = await redis.get(historicalCacheKey);
+            // 1. Fetch Fresh Historical Data (Last 2 years) - CALCULATION ONLY, NO CACHE
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(endDate.getDate() - 730);
 
-            if (cachedHistorical) {
-                console.log(`[PredictionService] Using cached historical data for ${symbol}`);
-                historicalData = JSON.parse(cachedHistorical);
-            } else {
-                const endDate = new Date();
-                const startDate = new Date();
-                startDate.setDate(endDate.getDate() - 730);
+            console.log(`[PredictionService] Fetching fresh Questrade historical data for ${symbol}...`);
 
-                console.log(`[PredictionService] Fetching fresh Questrade historical data for ${symbol}...`);
+            const questrade = (this.fastify as any).questrade;
+            const symbolId = await questrade.getSymbolId(symbol);
 
-                const questrade = (this.fastify as any).questrade;
-                const symbolId = await questrade.getSymbolId(symbol);
-
-                if (!symbolId) {
-                    throw new Error(`Symbol ${symbol} not found on Questrade.`);
-                }
-
-                const candles = await questrade.getHistoricalData(symbolId, startDate, endDate, 'OneDay');
-
-                if (!candles || candles.length < 200) {
-                    throw new Error(`Insufficient data for ${symbol} from Questrade. Need at least 200 days of history.`);
-                }
-
-                // Map Questrade candles to expected format
-                historicalData = candles.map((c: any) => ({
-                    date: c.start.split('T')[0],
-                    open: c.open,
-                    high: c.high,
-                    low: c.low,
-                    close: c.close,
-                    volume: c.volume
-                }));
-
-                // Cache historical data for 1 hour
-                await redis.set(historicalCacheKey, JSON.stringify(historicalData), 3600);
+            if (!symbolId) {
+                throw new Error(`Symbol ${symbol} not found on Questrade.`);
             }
+
+            const candles = await questrade.getHistoricalData(symbolId, startDate, endDate, 'OneDay');
+
+            if (!candles || candles.length < 200) {
+                throw new Error(`Insufficient data for ${symbol} from Questrade. Need at least 200 days of history.`);
+            }
+
+            // Map Questrade candles to expected format
+            const historicalData = candles.map((c: any) => ({
+                date: c.start.split('T')[0],
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+                volume: c.volume
+            }));
 
             // 2. Run ML Prediction (Python)
             // Assuming script is at src/scripts/predict_stock.py and we are running from dist/ or src/
@@ -133,11 +120,25 @@ export class PredictionService {
 
     private async runPythonScript(scriptPath: string, data: any[]): Promise<any> {
         return new Promise((resolve, reject) => {
-            // Use python3 to ensure compatibility in Docker environment
-            const pythonProcess = spawn('python3', [scriptPath]);
+            // Environment-aware python command
+            const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+            const pythonProcess = spawn(pythonCmd, [scriptPath]);
 
             let resultString = '';
             let errorString = '';
+
+            pythonProcess.on('error', (err) => {
+                reject(new Error(`Failed to start Python process (${pythonCmd}): ${err.message}. Ensure Python is installed and in your PATH.`));
+            });
+
+            if (pythonProcess.stdin) {
+                pythonProcess.stdin.on('error', (err) => {
+                    console.error('[PredictionService] Stdin error:', err.message);
+                });
+                // Feed data to script via stdin
+                pythonProcess.stdin.write(JSON.stringify(data));
+                pythonProcess.stdin.end();
+            }
 
             pythonProcess.stdout.on('data', (data) => {
                 resultString += data.toString();
@@ -152,7 +153,6 @@ export class PredictionService {
                     return reject(new Error(`Python script exited with code ${code}: ${errorString}`));
                 }
                 try {
-                    // Extract JSON from stdout (in case of extra prints)
                     const lines = resultString.trim().split('\n');
                     const jsonLine = lines[lines.length - 1];
                     const json = JSON.parse(jsonLine);
@@ -163,10 +163,6 @@ export class PredictionService {
                     reject(new Error(`Failed to parse Python output. Raw: ${resultString} | Error: ${e}`));
                 }
             });
-
-            // Send data to stdin
-            pythonProcess.stdin.write(JSON.stringify(data));
-            pythonProcess.stdin.end();
         });
     }
 

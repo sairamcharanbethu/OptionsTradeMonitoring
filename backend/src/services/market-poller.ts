@@ -229,6 +229,15 @@ export class MarketPoller {
       const quote = await questrade.getOptionQuote(symbolId);
       if (!quote) return null;
 
+      // 3. Fetch Underlying Price (Questrade option quote doesn't include it in JSON)
+      let underlyingPrice = 0;
+      if (quote.underlyingId) {
+        const uQuotes = await questrade.getQuote([quote.underlyingId]);
+        if (uQuotes && uQuotes.length > 0) {
+          underlyingPrice = uQuotes[0].lastTradePrice || 0;
+        }
+      }
+
       // Calculate premium (use Mid price if available, else last)
       const bid = quote.bidPrice || 0;
       const ask = quote.askPrice || 0;
@@ -238,12 +247,12 @@ export class MarketPoller {
         status: 'ok',
         symbol: ticker,
         price,
-        iv: quote.impliedVolatility * 100 || 0,
-        underlying_price: quote.underlyingPrice || 0,
+        iv: quote.volatility || 0,
+        underlying_price: underlyingPrice,
         greeks: {
           delta: quote.delta || 0,
           gamma: quote.gamma || 0,
-          theta: (quote.theta || 0) / 365, // Standardize if needed, usually Questrade is per day
+          theta: quote.theta || 0,
           vega: quote.vega || 0,
           rho: quote.rho || 0
         },
