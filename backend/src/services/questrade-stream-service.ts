@@ -46,16 +46,17 @@ export class QuestradeStreamService extends EventEmitter {
             }
 
             // Deriving WS URL: replace https:// with wss:// and append endpoint
-            // Questrade API Server usually: https://api01.iq.questrade.com/
-            // Stream URL: wss://api01.iq.questrade.com/v1/markets/quotes?stream=true&mode=WebSocket
-            // Note: The specific endpoint might differ. Assuming standard pattern.
-            // If documentation says 'v1/markets/quotes' supports websocket, we use that.
-            // Or we try to use the dedicated notification port if needed.
+            // Prevent double slash if api_server ends with /
+            const baseUrl = token.api_server.replace('https:', 'wss:').replace(/\/$/, '');
+            const wsUrl = `${baseUrl}/v1/markets/quotes?stream=true&mode=WebSocket&access_token=${token.access_token}`;
+            console.log(`[Stream] Connecting to ${baseUrl}...`);
 
-            const wsUrl = `${token.api_server.replace('https:', 'wss:')}v1/markets/quotes?access_token=${token.access_token}`;
-            console.log(`[Stream] Connecting to ${token.api_server}...`);
-
-            this.ws = new WebSocket(wsUrl);
+            // Questrade often requires User-Agent header
+            this.ws = new WebSocket(wsUrl, {
+                headers: {
+                    'User-Agent': 'OptionsTradeMonitoring/1.0'
+                }
+            });
 
             this.ws.on('open', this.onOpen.bind(this));
             this.ws.on('message', this.onMessage.bind(this));
@@ -118,7 +119,8 @@ export class QuestradeStreamService extends EventEmitter {
             this.ws.removeAllListeners();
             this.ws = null;
         }
-        // Release lock? Maybe not immediately to prevent thrashing.
+        // Release lock immediately so we (or others) can reconnect immediately
+        redis.del(this.LOCK_KEY).catch(err => console.error('[Stream] Failed to release lock:', err));
     }
 
     private scheduleReconnect(delay?: number) {
@@ -137,6 +139,8 @@ export class QuestradeStreamService extends EventEmitter {
         // Refresh Lock every 10s
         this.pingInterval = setInterval(async () => {
             await this.refreshLock();
+            // Optional: Send ping frame to WS if supported
+            // if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.ping();
         }, 10000);
     }
 
