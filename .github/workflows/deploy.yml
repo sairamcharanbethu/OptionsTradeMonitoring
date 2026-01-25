@@ -88,7 +88,6 @@ jobs:
       - name: Cleanup workspace
         if: always()
         run: |
-          docker system prune -f || true
           sudo rm -rf "$GITHUB_WORKSPACE"/* "$GITHUB_WORKSPACE"/.* 2>/dev/null || true
 
   deploy:
