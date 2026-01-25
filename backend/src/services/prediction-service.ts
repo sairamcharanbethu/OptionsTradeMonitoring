@@ -192,7 +192,11 @@ export class PredictionService {
         Format: JSON { "verdict": "Buy" | "Sell" | "Hold", "reasoning": "..." }
         `;
 
-        return (this.aiService as any).askAI(prompt);
+        const result = await (this.aiService as any).askAI(prompt);
+        return {
+            verdict: result.verdict,
+            reasoning: result.analysis || result.reasoning || ''
+        };
     }
 
     private calculateRSI(prices: number[], period: number = 14): number {
