@@ -417,60 +417,77 @@ async function positionRoutes(fastify, options) {
         const { id: userId } = request.user;
         const { id } = request.params;
         const body = request.body;
-        // 1. Fetch Position and Verify Ownership
-        const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
-        if (rows.length === 0) {
-            return reply.code(404).send({ error: 'Position not found' });
-        }
-        const position = rows[0];
-        // 2. Determine Close Price and Quantity
-        const closePrice = body?.price !== undefined ? body.price : Number(position.current_price);
-        const closeQty = body?.quantity !== undefined ? body.quantity : Number(position.quantity);
-        const currentQty = Number(position.quantity);
-        if (closeQty <= 0 || closeQty > currentQty) {
-            return reply.code(400).send({ error: 'Invalid quantity' });
-        }
-        // 3. Calculate Analytics for the closed portion
-        const entryPrice = Number(position.entry_price);
-        const realizedPnl = (closePrice - entryPrice) * closeQty * 100;
-        if (closeQty < currentQty) {
-            // PARTIAL CLOSE
-            // Update existing position to reflect remaining quantity
-            await fastify.pg.query('UPDATE positions SET quantity = quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [closeQty, id]);
-            // Create a NEW closed position record for the sold portion
-            const insertQuery = `
-        INSERT INTO positions (
-          user_id, symbol, option_type, strike_price, expiration_date, 
-          entry_price, quantity, stop_loss_trigger, take_profit_trigger,
-          trailing_high_price, trailing_stop_loss_pct, current_price,
-          status, realized_pnl, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'CLOSED', $13, $14, CURRENT_TIMESTAMP)
-        RETURNING *
-      `;
-            const values = [
-                userId, position.symbol, position.option_type, position.strike_price, position.expiration_date,
-                position.entry_price, closeQty, position.stop_loss_trigger, position.take_profit_trigger,
-                position.trailing_high_price, position.trailing_stop_loss_pct, closePrice, realizedPnl, position.created_at
-            ];
-            const { rows: newRows } = await fastify.pg.query(insertQuery, values);
-            return newRows[0];
-        }
-        else {
-            // FULL CLOSE
-            const updateQuery = `
-        UPDATE positions 
-        SET status = 'CLOSED', 
-            realized_pnl = $1, 
-            current_price = $2,
-            updated_at = CURRENT_TIMESTAMP 
-        WHERE id = $3 
-        RETURNING *
-      `;
-            const { rows: updatedRows } = await fastify.pg.query(updateQuery, [realizedPnl, closePrice, id]);
+        const client = await fastify.pg.connect();
+        try {
+            // START TRANSACTION
+            await client.query('BEGIN');
+            // 1. Fetch Position and Verify Ownership (Lock row for update)
+            const { rows } = await client.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2 FOR UPDATE', [id, userId]);
+            if (rows.length === 0) {
+                await client.query('ROLLBACK');
+                return reply.code(404).send({ error: 'Position not found' });
+            }
+            const position = rows[0];
+            // 2. Determine Close Price and Quantity
+            const closePrice = body?.price !== undefined ? body.price : Number(position.current_price);
+            const closeQty = body?.quantity !== undefined ? body.quantity : Number(position.quantity);
+            const currentQty = Number(position.quantity);
+            if (closeQty <= 0 || closeQty > currentQty) {
+                await client.query('ROLLBACK');
+                return reply.code(400).send({ error: 'Invalid quantity' });
+            }
+            // 3. Calculate Analytics for the closed portion
+            const entryPrice = Number(position.entry_price);
+            const realizedPnl = (closePrice - entryPrice) * closeQty * 100;
+            let resultPosition;
+            if (closeQty < currentQty) {
+                // PARTIAL CLOSE
+                // Update existing position to reflect remaining quantity
+                await client.query('UPDATE positions SET quantity = quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [closeQty, id]);
+                // Create a NEW closed position record for the sold portion
+                const insertQuery = `
+          INSERT INTO positions (
+            user_id, symbol, option_type, strike_price, expiration_date, 
+            entry_price, quantity, stop_loss_trigger, take_profit_trigger,
+            trailing_high_price, trailing_stop_loss_pct, current_price,
+            status, realized_pnl, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'CLOSED', $13, $14, CURRENT_TIMESTAMP)
+          RETURNING *
+        `;
+                const values = [
+                    userId, position.symbol, position.option_type, position.strike_price, position.expiration_date,
+                    position.entry_price, closeQty, position.stop_loss_trigger, position.take_profit_trigger,
+                    position.trailing_high_price, position.trailing_stop_loss_pct, closePrice, realizedPnl, position.created_at
+                ];
+                const { rows: newRows } = await client.query(insertQuery, values);
+                resultPosition = newRows[0];
+            }
+            else {
+                // FULL CLOSE
+                const updateQuery = `
+          UPDATE positions 
+          SET status = 'CLOSED', 
+              realized_pnl = $1, 
+              current_price = $2,
+              updated_at = CURRENT_TIMESTAMP 
+          WHERE id = $3 
+          RETURNING *
+        `;
+                const { rows: updatedRows } = await client.query(updateQuery, [realizedPnl, closePrice, id]);
+                resultPosition = updatedRows[0];
+            }
+            // COMMIT
+            await client.query('COMMIT');
             // Invalidate cache
-            const userId = request.user.id;
             await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
-            return updatedRows[0];
+            return resultPosition;
+        }
+        catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        }
+        finally {
+            client.release();
         }
     });
     // REOPEN position (Manual)
@@ -494,39 +511,52 @@ async function positionRoutes(fastify, options) {
     }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
-        // 1. Fetch current position to get entry price and trailing pct
-        const { rows: existing } = await fastify.pg.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
-        if (existing.length === 0) {
-            return reply.code(404).send({ error: 'Position not found' });
-        }
-        const pos = existing[0];
-        // 2. Reset high water mark to entry price (or current price?)
-        // Entry price is safer to prevent immediate re-trigger if current price is low
-        const newHigh = Number(pos.entry_price);
-        let newStopTrigger = pos.stop_loss_trigger;
-        // 3. Recalculate stop loss if trailing % exists
-        if (pos.trailing_stop_loss_pct) {
-            newStopTrigger = newHigh * (1 - Number(pos.trailing_stop_loss_pct) / 100);
-        }
-        const { rows } = await fastify.pg.query(`UPDATE positions 
-       SET status = 'OPEN', 
-           realized_pnl = NULL, 
-           loss_avoided = NULL,
-           trailing_high_price = $1,
-           stop_loss_trigger = $2,
-           updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $3 
-       RETURNING *`, [newHigh, newStopTrigger, id]);
-        // 4. Trigger immediate sync
+        const client = await fastify.pg.connect();
         try {
-            fastify.poller.syncPrice(pos.symbol);
+            await client.query('BEGIN');
+            // 1. Fetch current position to get entry price and trailing pct
+            const { rows: existing } = await client.query('SELECT * FROM positions WHERE id = $1 AND user_id = $2 FOR UPDATE', [id, userId]);
+            if (existing.length === 0) {
+                await client.query('ROLLBACK');
+                return reply.code(404).send({ error: 'Position not found' });
+            }
+            const pos = existing[0];
+            // 2. Reset high water mark to entry price (or current price?)
+            // Entry price is safer to prevent immediate re-trigger if current price is low
+            const newHigh = Number(pos.entry_price);
+            let newStopTrigger = pos.stop_loss_trigger;
+            // 3. Recalculate stop loss if trailing % exists
+            if (pos.trailing_stop_loss_pct) {
+                newStopTrigger = newHigh * (1 - Number(pos.trailing_stop_loss_pct) / 100);
+            }
+            const { rows } = await client.query(`UPDATE positions 
+         SET status = 'OPEN', 
+             realized_pnl = NULL, 
+             loss_avoided = NULL,
+             trailing_high_price = $1,
+             stop_loss_trigger = $2,
+             updated_at = CURRENT_TIMESTAMP 
+         WHERE id = $3 
+         RETURNING *`, [newHigh, newStopTrigger, id]);
+            await client.query('COMMIT');
+            // 4. Trigger immediate sync
+            try {
+                fastify.poller.syncPrice(pos.symbol);
+            }
+            catch (err) {
+                fastify.log.error({ err }, 'Failed to trigger immediate sync on reopen');
+            }
+            // Invalidate cache
+            await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
+            return rows[0];
         }
         catch (err) {
-            fastify.log.error({ err }, 'Failed to trigger immediate sync on reopen');
+            await client.query('ROLLBACK');
+            throw err;
         }
-        // Invalidate cache
-        await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
-        return rows[0];
+        finally {
+            client.release();
+        }
     });
     // UPDATE position full
     fastify.put('/:id', {
@@ -684,20 +714,27 @@ async function positionRoutes(fastify, options) {
         if (!ids || ids.length === 0) {
             return { success: true, count: 0 };
         }
+        const client = await fastify.pg.connect();
         try {
+            await client.query('BEGIN');
             // Manually clean up dependencies 
             console.log(`[Bulk Delete] Deleting IDs: ${ids.join(', ')} for user ${userId}`);
-            await fastify.pg.query('DELETE FROM alerts WHERE position_id = ANY($1)', [ids]);
-            await fastify.pg.query('DELETE FROM price_history WHERE position_id = ANY($1)', [ids]);
-            const result = await fastify.pg.query('DELETE FROM positions WHERE id = ANY($1) AND user_id = $2', [ids, userId]);
+            await client.query('DELETE FROM alerts WHERE position_id = ANY($1)', [ids]);
+            await client.query('DELETE FROM price_history WHERE position_id = ANY($1)', [ids]);
+            const result = await client.query('DELETE FROM positions WHERE id = ANY($1) AND user_id = $2', [ids, userId]);
+            await client.query('COMMIT');
             // Invalidate cache
             await redis_1.redis.del(`USER_POSITIONS:${userId}`);
             await redis_1.redis.del(`USER_STATS:${userId}`);
             return { success: true, count: result.rowCount };
         }
         catch (err) {
+            await client.query('ROLLBACK');
             fastify.log.error(err);
             return reply.code(500).send({ error: 'Failed to bulk delete positions' });
+        }
+        finally {
+            client.release();
         }
     });
     // DELETE position
@@ -714,7 +751,12 @@ async function positionRoutes(fastify, options) {
                 }
             },
             response: {
-                204: { type: 'null', description: 'Position deleted successfully' },
+                200: {
+                    type: 'object',
+                    properties: {
+                        success: { type: 'boolean' }
+                    }
+                },
                 404: errorSchema,
                 500: errorSchema
             }
@@ -722,26 +764,32 @@ async function positionRoutes(fastify, options) {
     }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
+        const client = await fastify.pg.connect();
         try {
-            // Verify ownership
-            const { rows: check } = await fastify.pg.query('SELECT id FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
-            if (check.length === 0)
-                return reply.code(404).send({ error: 'Position not found' });
-            // Manually clean up dependencies just in case CASCADE isn't working/setup
-            await fastify.pg.query('DELETE FROM alerts WHERE position_id = $1', [id]);
-            await fastify.pg.query('DELETE FROM price_history WHERE position_id = $1', [id]);
-            const result = await fastify.pg.query('DELETE FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
-            if (result.rowCount === 0) {
+            await client.query('BEGIN');
+            // Verify ownership & Existence first
+            const { rows: check } = await client.query('SELECT id FROM positions WHERE id = $1 AND user_id = $2 FOR UPDATE', [id, userId]);
+            if (check.length === 0) {
+                await client.query('ROLLBACK');
                 return reply.code(404).send({ error: 'Position not found' });
             }
+            // Manual Cascade
+            await client.query('DELETE FROM alerts WHERE position_id = $1', [id]);
+            await client.query('DELETE FROM price_history WHERE position_id = $1', [id]);
+            await client.query('DELETE FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
+            await client.query('COMMIT');
             // Invalidate cache
             await redis_1.redis.del(`USER_POSITIONS:${userId}`);
             await redis_1.redis.del(`USER_STATS:${userId}`);
-            return reply.code(204).send();
+            return { success: true };
         }
         catch (err) {
+            await client.query('ROLLBACK');
             fastify.log.error(err);
             return reply.code(500).send({ error: 'Failed to delete position' });
+        }
+        finally {
+            client.release();
         }
     });
 }
