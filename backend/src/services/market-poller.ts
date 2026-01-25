@@ -27,7 +27,7 @@ export class MarketPoller {
         this.currentIntervalSeconds = parseInt(rows[0].value, 10) || 60;
       }
     } catch (err) {
-      this.fastify.log.error('[MarketPoller] Failed to load poll interval from DB:', err);
+      this.fastify.log.error(`[MarketPoller] Failed to load poll interval from DB: ${err}`);
     }
 
     // Start recursive loop
@@ -53,7 +53,7 @@ export class MarketPoller {
           // this.fastify.log.debug('[MarketPoller] Standby (Lock held by another instance).');
         }
       } catch (err) {
-        this.fastify.log.error('[MarketPoller] Error during poll execution:', err);
+        this.fastify.log.error(`[MarketPoller] Error during poll execution: ${err}`);
       } finally {
         this.scheduleNextPoll();
       }
@@ -94,7 +94,7 @@ export class MarketPoller {
       try {
         await this.sendMorningBriefings();
       } catch (err) {
-        this.fastify.log.error('[MarketPoller] Error during morning briefing execution:', err);
+        this.fastify.log.error(`[MarketPoller] Error during morning briefing execution: ${err}`);
       }
     });
   }
@@ -137,7 +137,7 @@ export class MarketPoller {
         await this.notifyN8nBriefing(userId, username, briefingData.briefing, briefingData.discord_message);
 
       } catch (err) {
-        this.fastify.log.error(`[MarketPoller] Failed to send briefing for user ${userId}:`, err);
+        this.fastify.log.error(`[MarketPoller] Failed to send briefing for user ${userId}: ${err}`);
       }
     }
   }
@@ -508,7 +508,7 @@ export class MarketPoller {
             underlying_price: underlyingPrice ?? position.underlying_price
           });
         } catch (err) {
-          this.fastify.log.error('[MarketPoller] AI Summary generation failed:', err);
+          this.fastify.log.error(`[MarketPoller] AI Summary generation failed: ${err}`);
         }
 
         // Calculate realized PnL
