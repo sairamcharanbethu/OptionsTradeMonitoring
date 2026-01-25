@@ -69,7 +69,7 @@ class RedisClient {
     async setNX(key: string, value: string, ttlSeconds: number): Promise<boolean> {
         if (!this.isConnected || !this.client) return false;
         try {
-            const result = await this.client.set(key, value, 'NX', 'EX', ttlSeconds);
+            const result = await (this.client as any).set(key, value, 'NX', 'EX', ttlSeconds);
             return result === 'OK';
         } catch (err) {
             return false;
