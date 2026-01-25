@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify';
 import { EventEmitter } from 'events';
 import { QuestradeService } from './questrade-service';
 import { redis } from '../lib/redis';
+import axios from 'axios';
 
 export class QuestradeStreamService extends EventEmitter {
     private fastify: FastifyInstance;
@@ -25,7 +26,6 @@ export class QuestradeStreamService extends EventEmitter {
     async start() {
         this.attemptConnection();
     }
-
     private async attemptConnection() {
         // 1. Check Distributed Lock (Am I the master?)
         // Simple lock: Set with NX and EX (expiry). Refresh often.
@@ -45,14 +45,29 @@ export class QuestradeStreamService extends EventEmitter {
                 return;
             }
 
-            // Questrade API Server usually: https://api01.iq.questrade.com/
-            // Stream URL: wss://api01.iq.questrade.com/v1/markets/quotes?mode=WebSocket&access_token=...
-            // "stream=true" is for HTTP streaming, removing it for WebSocket.
+            // 1. Get Allocated Port via HTTP
+            // Note: Questrade requires mode=WebSocket to trigger port allocation
+            // The API server URL usually ends in /, remove it.
+            const apiServer = token.api_server.replace(/\/$/, '');
+            console.log(`[Stream] Allocating WebSocket port from ${apiServer}...`);
 
-            // Prevent double slash if api_server ends with /
-            const baseUrl = token.api_server.replace('https:', 'wss:').replace(/\/$/, '');
-            const wsUrl = `${baseUrl}/v1/markets/quotes?mode=WebSocket&access_token=${token.access_token}`;
-            console.log(`[Stream] Connecting to ${baseUrl} (mode=WebSocket)...`);
+            const portRes = await axios.get(`${apiServer}/v1/markets/quotes?mode=WebSocket`, {
+                headers: { Authorization: `Bearer ${token.access_token}` }
+            });
+
+            if (!portRes.data || !portRes.data.streamPort) {
+                throw new Error('Failed to allocate stream port: ' + JSON.stringify(portRes.data));
+            }
+
+            const streamPort = portRes.data.streamPort;
+            console.log(`[Stream] Port allocated: ${streamPort}`);
+
+            // 2. Connect to Allocated Port
+            // Construct URL: wss://<host>:<port>/v1/markets/quotes?access_token=...
+            const host = apiServer.replace(/^https:\/\//, '');
+            const wsUrl = `wss://${host}:${streamPort}/v1/markets/quotes?access_token=${token.access_token}`;
+
+            console.log(`[Stream] Connecting to ${wsUrl} ...`);
 
             // Questrade often requires User-Agent header and sometimes Origin
             this.ws = new WebSocket(wsUrl, {
@@ -69,6 +84,7 @@ export class QuestradeStreamService extends EventEmitter {
 
         } catch (err: any) {
             console.error('[Stream] Connection setup failed:', err.message);
+            if (err.response) console.error('   API Response:', JSON.stringify(err.response.data));
             this.scheduleReconnect(5000);
         }
     }
