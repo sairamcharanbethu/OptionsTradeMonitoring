@@ -92,6 +92,11 @@ export class QuestradeService {
         }
     }
 
+    async isLinked(): Promise<boolean> {
+        const token = await this.getTokenFromDb();
+        return !!token;
+    }
+
     private async ensureAuthenticated() {
         if (this.token && this.token.expires_at > Date.now() + 60000) {
             return;

@@ -71,7 +71,8 @@ async function settingsRoutes(fastify) {
         try {
             const questrade = fastify.questrade;
             const clientId = await questrade.getClientId();
-            return { clientId };
+            const isLinked = await questrade.isLinked();
+            return { clientId, isLinked };
         }
         catch (err) {
             return reply.code(500).send({ error: 'Failed to fetch Questrade config' });

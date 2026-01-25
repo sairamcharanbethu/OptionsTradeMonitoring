@@ -71,8 +71,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             const config = await api.getQuestradeConfig();
             if (config.clientId) {
                 setQtClientId(config.clientId);
-                setQtSaved(true);
             }
+            setQtSaved(!!config.isLinked);
         } catch (err) {
             console.error(err);
         }
@@ -95,6 +95,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 await api.saveQuestradeToken(data);
                 // Clear hash
                 window.history.replaceState(null, '', window.location.pathname + window.location.search);
+                await loadQuestradeConfig(); // Refresh status
                 setOpen(true); // Re-open dialog
                 alert('Questrade connected successfully!');
             }
