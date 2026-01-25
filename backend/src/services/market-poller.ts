@@ -10,9 +10,12 @@ export class MarketPoller {
   private currentIntervalSeconds: number = 60; // Default 1 min
   private timerId: NodeJS.Timeout | null = null;
 
-  constructor(fastify: FastifyInstance) {
+  private redisClient: any;
+
+  constructor(fastify: FastifyInstance, redisClient?: any) {
     this.fastify = fastify;
     this.aiService = new AIService(fastify);
+    this.redisClient = redisClient || redis;
   }
 
   private readonly LOCK_KEY = 'MARKET_POLLER_LEADER';
@@ -20,7 +23,7 @@ export class MarketPoller {
   public async start() {
     // 1. Fetch the preferred interval from settings
     try {
-      const { rows } = await this.fastify.pg.query(
+      const { rows } = await (this.fastify as any).pg.query(
         "SELECT value FROM settings WHERE key = 'market_poll_interval' ORDER BY updated_at DESC LIMIT 1"
       );
       if (rows.length > 0) {
@@ -43,7 +46,7 @@ export class MarketPoller {
         // Distributed Lock Check
         // Attempt to acquire lock for slightly longer than the interval
         const lockDuration = this.currentIntervalSeconds + 5;
-        const acquired = await redis.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
+        const acquired = await this.redisClient.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
 
         if (acquired) {
           await this.poll();
@@ -78,7 +81,6 @@ export class MarketPoller {
     // Questrade stream quotes usually imply we know the ID. 
     // Let's rely on the Poller's cache if possible, or just skip if we can't map.
     // Actually, for immediate STOP LOSS, we really want to process this.
-
     // Let's assume for this iteration we mainly broadcast for UI.
     // Stop Loss checks are still run by the Poller periodically (1 min).
     // If we want real-time stop loss, we'd need a robust ID map.
@@ -101,12 +103,12 @@ export class MarketPoller {
 
   public async sendMorningBriefings(ignoreFrequency: boolean = false) {
     this.fastify.log.info(`[MarketPoller] Executing morning briefings (ignoreFrequency: ${ignoreFrequency})...`);
-    const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT p.user_id, u.username FROM positions p JOIN users u ON p.user_id = u.id');
+    const { rows: users } = await (this.fastify as any).pg.query('SELECT DISTINCT p.user_id, u.username FROM positions p JOIN users u ON p.user_id = u.id');
 
     for (const { user_id: userId, username } of users) {
       try {
         // 1. Check user settings for briefing frequency
-        const { rows: settingsRows } = await this.fastify.pg.query(
+        const { rows: settingsRows } = await (this.fastify as any).pg.query(
           'SELECT key, value FROM settings WHERE user_id = $1',
           [userId]
         );
@@ -122,7 +124,7 @@ export class MarketPoller {
         if (!ignoreFrequency && !this.shouldSendBriefingToday(frequency)) continue;
 
         // 3. Fetch open positions
-        const { rows: positions } = await this.fastify.pg.query(
+        const { rows: positions } = await (this.fastify as any).pg.query(
           "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.user_id = $1 AND p.status != 'CLOSED'",
           [userId]
         );
@@ -230,15 +232,15 @@ export class MarketPoller {
       const SYMBOL_ID_CACHE_KEY = `SYMBOL_ID:${ticker}`;
       let symbolId: number | null = null;
 
-      const cachedId = await redis.get(SYMBOL_ID_CACHE_KEY);
+      const cachedId = await this.redisClient.get(SYMBOL_ID_CACHE_KEY);
       if (cachedId) {
         symbolId = parseInt(cachedId, 10);
       } else {
         this.fastify.log.info(`[MarketPoller] Resolving Questrade Symbol ID for ${ticker}...`);
         symbolId = await questrade.getSymbolId(ticker);
         if (symbolId) {
-          await redis.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
-          await redis.set(`SYMBOL_NAME:${symbolId}`, ticker, 86400);
+          await this.redisClient.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
+          await this.redisClient.set(`SYMBOL_NAME:${symbolId}`, ticker, 86400);
         }
       }
 
@@ -297,7 +299,7 @@ export class MarketPoller {
 
   public async syncPrice(symbol: string, skipCache: boolean = false) {
     this.fastify.log.info(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
-    const { rows: positions } = await this.fastify.pg.query(
+    const { rows: positions } = await (this.fastify as any).pg.query(
       "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'",
       [symbol]
     );
@@ -366,7 +368,7 @@ export class MarketPoller {
   public async poll(force: boolean = false) {
     this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
 
-    const { rows: positions } = await this.fastify.pg.query(
+    const { rows: positions } = await (this.fastify as any).pg.query(
       "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'"
     );
 
@@ -375,7 +377,7 @@ export class MarketPoller {
       return;
     }
 
-    const symbols = [...new Set(positions.map(p => p.symbol))];
+    const symbols = [...new Set(positions.map((p: any) => p.symbol))];
     const isMarketOpen = this.isMarketOpen();
 
     if (!force && !isMarketOpen) {
@@ -385,7 +387,7 @@ export class MarketPoller {
     for (const symbol of symbols) {
       // 1. Auto-Close Expired Logic
       // Check for expired positions for this symbol first
-      const symbolPositions = positions.filter(p => p.symbol === symbol);
+      const symbolPositions = positions.filter((p: any) => p.symbol === symbol);
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
@@ -397,7 +399,7 @@ export class MarketPoller {
         if (expDate < today) {
           this.fastify.log.info(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
           // Close with 0 PnL
-          await this.fastify.pg.query(
+          await (this.fastify as any).pg.query(
             `UPDATE positions 
                  SET status = 'CLOSED', 
                      exit_price = 0, 
@@ -414,12 +416,12 @@ export class MarketPoller {
 
       // 2. Price Sync (Only if Market Open or Forced)
       // Filter out positions we just closed
-      const activePositions = symbolPositions.filter(p => p.status !== 'CLOSED');
+      const activePositions = symbolPositions.filter((p: any) => p.status !== 'CLOSED');
 
       if ((force || isMarketOpen) && activePositions.length > 0) {
-        await this.syncPrice(symbol, force);
+        await this.syncPrice(symbol as string, force);
         // Stay within limits, sequential delay
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        await new Promise<void>(resolve => setTimeout(() => resolve(), 5000));
       }
     }
   }
@@ -434,7 +436,7 @@ export class MarketPoller {
     });
 
     // Update Price AND Greeks
-    await this.fastify.pg.query(
+    await (this.fastify as any).pg.query(
       `UPDATE positions 
        SET current_price = $1, 
            updated_at = CURRENT_TIMESTAMP,
@@ -457,7 +459,7 @@ export class MarketPoller {
       ]
     );
 
-    await this.fastify.pg.query(
+    await (this.fastify as any).pg.query(
       'INSERT INTO price_history (position_id, price) VALUES ($1, $2)',
       [position.id, price]
     );
@@ -470,7 +472,7 @@ export class MarketPoller {
         const triggerType = engineResult.triggerType || 'STOP_LOSS';
         const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
 
-        const updateResult = await this.fastify.pg.query(
+        const updateResult = await (this.fastify as any).pg.query(
           `UPDATE positions 
              SET status = $1, 
              loss_avoided = $2,
@@ -484,7 +486,7 @@ export class MarketPoller {
           return;
         }
 
-        await this.fastify.pg.query(
+        await (this.fastify as any).pg.query(
           'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',
           [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]
         );
@@ -517,7 +519,7 @@ export class MarketPoller {
         this.notifyN8n(position, price, realizedPnl, engineResult.lossAvoided, triggerType, aiData.summary, aiData.discord_message, greeks, iv);
       }
     } else if (engineResult.newHigh || engineResult.newStopLoss) {
-      await this.fastify.pg.query(
+      await (this.fastify as any).pg.query(
         `UPDATE positions 
          SET trailing_high_price = COALESCE($1, trailing_high_price),
              stop_loss_trigger = COALESCE($2, stop_loss_trigger),

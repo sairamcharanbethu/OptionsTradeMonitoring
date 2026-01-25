@@ -55,11 +55,11 @@ export class QuestradeStreamService extends EventEmitter {
                 headers: { Authorization: `Bearer ${token.access_token}` }
             });
 
-            if (!portRes.data || !portRes.data.streamPort) {
+            if (!(portRes.data as any) || !(portRes.data as any).streamPort) {
                 throw new Error('Failed to allocate stream port: ' + JSON.stringify(portRes.data));
             }
 
-            const streamPort = portRes.data.streamPort;
+            const streamPort = (portRes.data as any).streamPort;
             console.log(`[Stream] Port allocated: ${streamPort}`);
 
             // 2. Connect to Allocated Port
