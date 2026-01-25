@@ -183,10 +183,42 @@ const start = async () => {
         const { MarketPoller } = await Promise.resolve().then(() => __importStar(require('./services/market-poller')));
         const poller = new MarketPoller(fastify);
         fastify.decorate('poller', poller);
+        // --- WebSocket & Streaming Setup ---
+        await fastify.register(Promise.resolve().then(() => __importStar(require('@fastify/websocket'))));
+        const { redis } = await Promise.resolve().then(() => __importStar(require('./lib/redis')));
+        const { QuestradeStreamService } = await Promise.resolve().then(() => __importStar(require('./services/questrade-stream-service')));
+        const streamer = new QuestradeStreamService(fastify);
+        // Broadcast real-time quotes to all connected frontend clients
+        streamer.on('quote', async (quote) => {
+            // Enrich with Symbol if missing
+            if (!quote.symbol && quote.symbolId) {
+                const ticker = await redis.get(`SYMBOL_NAME:${quote.symbolId}`);
+                if (ticker)
+                    quote.symbol = ticker;
+            }
+            if (fastify.websocketServer) {
+                fastify.websocketServer.clients.forEach((client) => {
+                    if (client.readyState === 1) { // WebSocket.OPEN
+                        client.send(JSON.stringify({ type: 'PRICE_UPDATE', data: quote }));
+                    }
+                });
+            }
+            // Feed data into Poller for Stop Loss checks (Optimization: Don't wait for poll cycle)
+            // poller.onExternalPriceUpdate(quote); // TODO: Implement in MarketPoller
+        });
+        fastify.decorate('streamer', streamer);
+        // Public WebSocket endpoint
+        fastify.get('/api/ws', { websocket: true }, (connection, req) => {
+            connection.socket.on('message', (message) => {
+                // Handle subscriptions from frontend if we want selective streaming
+                // For now, we broadcast everything we have.
+            });
+        });
         const port = Number(process.env.PORT) || 3001;
         await fastify.listen({ port, host: '0.0.0.0' });
-        // Start the background cycle
+        // Start background services
         poller.start();
+        streamer.start();
         console.log(`Server listening on http://localhost:${port}`);
     }
     catch (err) {

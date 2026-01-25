@@ -91,6 +91,17 @@ class RedisClient {
             // Ignore
         }
     }
+
+    async expire(key: string, seconds: number): Promise<boolean> {
+        if (!this.isConnected || !this.client) return false;
+        try {
+            // ioredis returns 1 if timeout was set, 0 if key does not exist
+            const res = await this.client.expire(key, seconds);
+            return res === 1;
+        } catch (err) {
+            return false;
+        }
+    }
 }
 
 export const redis = new RedisClient();

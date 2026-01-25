@@ -17,6 +17,7 @@ class MarketPoller {
         this.fastify = fastify;
         this.aiService = new ai_service_1.AIService(fastify);
     }
+    LOCK_KEY = 'MARKET_POLLER_LEADER';
     async start() {
         // 1. Fetch the preferred interval from settings
         try {
@@ -24,21 +25,10 @@ class MarketPoller {
             if (rows.length > 0) {
                 this.currentIntervalSeconds = parseInt(rows[0].value, 10) || 60;
             }
-            else {
-                // Fallback to env or 60
-                const envInterval = process.env.MARKET_DATA_POLL_INTERVAL;
-                if (envInterval && envInterval.startsWith('*/')) {
-                    this.currentIntervalSeconds = parseInt(envInterval.split('/')[1].split(' ')[0], 10) * 60 || 60;
-                }
-                else {
-                    this.currentIntervalSeconds = 60;
-                }
-            }
         }
         catch (err) {
             console.error('[MarketPoller] Failed to load poll interval from DB:', err);
         }
-        console.log(`[MarketPoller] Starting polling job with interval: ${this.currentIntervalSeconds}s`);
         // Start recursive loop
         this.scheduleNextPoll();
         this.startBriefingJob();
@@ -48,13 +38,24 @@ class MarketPoller {
             clearTimeout(this.timerId);
         this.timerId = setTimeout(async () => {
             try {
-                await this.poll();
+                // Distributed Lock Check
+                // Attempt to acquire lock for slightly longer than the interval
+                const lockDuration = this.currentIntervalSeconds + 5;
+                const acquired = await redis_1.redis.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
+                if (acquired) {
+                    await this.poll();
+                    // Keep lock alive if poll took time? The EX is set on acquire.
+                    // Ideally we extend it during long polls, but for now this is sufficient for leadership election.
+                }
+                else {
+                    // console.log('[MarketPoller] Standby (Lock held by another instance).');
+                }
             }
             catch (err) {
                 console.error('[MarketPoller] Error during poll execution:', err);
             }
             finally {
-                this.scheduleNextPoll(); // Schedule next run after current one finishes
+                this.scheduleNextPoll();
             }
         }, this.currentIntervalSeconds * 1000);
     }
@@ -62,6 +63,23 @@ class MarketPoller {
         console.log(`[MarketPoller] Updating poll interval to: ${seconds}s`);
         this.currentIntervalSeconds = seconds;
         this.scheduleNextPoll(); // Reschedule immediately
+    }
+    // Called by QuestradeStreamService via Index.ts
+    async handlePriceUpdate(quote) {
+        if (!quote || !quote.symbolId)
+            return;
+        // Map SymbolID -> Position(s)
+        // Since we don't store symbolId in DB, we have to look it up or do a reverse check.
+        // Optimization: We can store a local cache of SymbolID -> Symbol string
+        // For now, let's try to match by resolving if needed, but that's slow.
+        // Better approach: If quote has 'symbol', use it. If not, we might skip or broadcast only.
+        // Questrade stream quotes usually imply we know the ID. 
+        // Let's rely on the Poller's cache if possible, or just skip if we can't map.
+        // Actually, for immediate STOP LOSS, we really want to process this.
+        // Let's assume for this iteration we mainly broadcast for UI.
+        // Stop Loss checks are still run by the Poller periodically (1 min).
+        // If we want real-time stop loss, we'd need a robust ID map.
+        // Future TODO: Add symbol_id to positions table.
     }
     startBriefingJob() {
         // Default to 8:30 AM ET
@@ -196,6 +214,7 @@ class MarketPoller {
                 symbolId = await questrade.getSymbolId(ticker);
                 if (symbolId) {
                     await redis_1.redis.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
+                    await redis_1.redis.set(`SYMBOL_NAME:${symbolId}`, ticker, 86400);
                 }
             }
             if (!symbolId) {
@@ -376,11 +395,15 @@ class MarketPoller {
             if (position.status === 'OPEN') {
                 const triggerType = engineResult.triggerType || 'STOP_LOSS';
                 const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
-                await this.fastify.pg.query(`UPDATE positions 
+                const updateResult = await this.fastify.pg.query(`UPDATE positions 
              SET status = $1, 
              loss_avoided = $2,
              updated_at = CURRENT_TIMESTAMP 
              WHERE id = $3 AND status = 'OPEN'`, [newStatus, engineResult.lossAvoided, position.id]);
+                if (updateResult.rowCount === 0) {
+                    // Already updated or state mismatch, skip AI alert
+                    return;
+                }
                 await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]);
                 // Generate AI Summary for the alert (Discord Message)
                 let aiData = { summary: '', discord_message: '' };
