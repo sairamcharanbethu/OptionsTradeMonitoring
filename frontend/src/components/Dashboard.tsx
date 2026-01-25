@@ -349,6 +349,14 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                       Market {marketStatus.open ? 'Open' : 'Closed'}
                     </span>
                   </div>
+
+                  <span className="text-[10px] text-muted-foreground mr-1">|</span>
+                  <div className="flex items-center gap-1.5" title="Questrade API Connection">
+                    <div className={`w-2 h-2 rounded-full ${(marketStatus as any).connectionStatus === 'CONNECTED' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500 animate-pulse'}`} />
+                    <span className={`text-[8px] sm:text-xs font-medium uppercase tracking-wider ${(marketStatus as any).connectionStatus === 'CONNECTED' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                      Broker {(marketStatus as any).connectionStatus === 'CONNECTED' ? 'Live' : 'Offline'}
+                    </span>
+                  </div>
                 </>
               )}
               {queryError && (

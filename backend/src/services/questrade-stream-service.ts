@@ -11,6 +11,10 @@ export class QuestradeStreamService extends EventEmitter {
     private qt: QuestradeService;
     private activeSymbolIds: Set<number> = new Set();
     private isConnected = false;
+
+    public get isSocketConnected(): boolean {
+        return this.isConnected;
+    }
     private reconnectTimer: NodeJS.Timeout | null = null;
     private pingInterval: NodeJS.Timeout | null = null;
     private reconnectAttempts = 0;
