@@ -126,8 +126,9 @@ export class QuestradeStreamService extends EventEmitter {
         this.reconnectAttempts = 0;
         this.startHeartbeat();
 
-        // Initial Subscription Sync
-        this.syncSubscriptions();
+        // Initial Subscription Sync is handled by the connection URL query params now.
+        // We defer the next sync to the heartbeat loop.
+        // this.syncSubscriptions();
     }
 
     private startHeartbeat() {
