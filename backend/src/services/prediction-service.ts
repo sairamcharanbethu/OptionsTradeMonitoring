@@ -44,15 +44,19 @@ export class PredictionService {
     async analyzeStock(symbol: string): Promise<PredictionResult> {
         try {
             const upperSymbol = symbol.toUpperCase();
-            const historicalCacheKey = `HISTORICAL_DATA:${upperSymbol}`;
-
-            // 1. Check Redis cache first for historical data
+            // 1. Check database cache for historical data (30-day retention)
             let historicalData: any[] = [];
-            const cachedHistorical = await redis.get(historicalCacheKey);
 
-            if (cachedHistorical) {
-                console.log(`[PredictionService] Using cached historical data for ${upperSymbol}`);
-                historicalData = JSON.parse(cachedHistorical);
+            const { rows } = await this.fastify.pg.query(
+                `SELECT data, fetched_at FROM stock_history_cache 
+                 WHERE symbol = $1 AND fetched_at > NOW() - INTERVAL '30 days'`,
+                [upperSymbol]
+            );
+
+            if (rows.length > 0) {
+                const hoursSinceFetch = Math.floor((Date.now() - new Date(rows[0].fetched_at).getTime()) / 1000 / 60 / 60);
+                console.log(`[PredictionService] Using cached historical data for ${upperSymbol} (cached ${hoursSinceFetch} hours ago)`);
+                historicalData = rows[0].data;
             } else {
                 // Fetch fresh from Questrade
                 const endDate = new Date();
@@ -84,9 +88,14 @@ export class PredictionService {
                     volume: c.volume
                 }));
 
-                // Cache for 4 hours (historical data doesn't change frequently)
-                await redis.set(historicalCacheKey, JSON.stringify(historicalData), 14400);
-                console.log(`[PredictionService] Cached ${historicalData.length} days of history for ${upperSymbol}`);
+                // Store in database (upsert for 30-day retention)
+                await this.fastify.pg.query(
+                    `INSERT INTO stock_history_cache (symbol, data, fetched_at) 
+                     VALUES ($1, $2, CURRENT_TIMESTAMP)
+                     ON CONFLICT (symbol) DO UPDATE SET data = $2, fetched_at = CURRENT_TIMESTAMP`,
+                    [upperSymbol, JSON.stringify(historicalData)]
+                );
+                console.log(`[PredictionService] Cached ${historicalData.length} days of history for ${upperSymbol} in database`);
             }
 
             // 2. Run ML Prediction (Python)
