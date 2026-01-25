@@ -79,7 +79,7 @@ export class QuestradeStreamService extends EventEmitter {
             const idsParam = initialIds.join(',');
             console.log(`[Stream] Connecting with IDs: ${idsParam}`);
 
-            const portRes = await axios.get(`${apiServer}/v1/markets/quotes?mode=WebSocket&ids=${idsParam}`, {
+            const portRes = await axios.get(`${apiServer}/v1/markets/quotes?stream=true&mode=WebSocket&ids=${idsParam}`, {
                 headers: { Authorization: `Bearer ${token.access_token}` }
             });
 
