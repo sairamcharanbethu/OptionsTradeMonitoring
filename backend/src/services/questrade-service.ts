@@ -35,18 +35,15 @@ export class QuestradeService {
 
     private async saveTokenToDb(refreshToken: string) {
         try {
-            // We need a user_id for the conflict check. We'll use the first user or 1.
-            const { rows: users } = await this.fastify.pg.query("SELECT id FROM users LIMIT 1");
-            const userId = users.length > 0 ? users[0].id : 1;
-
+            // Use user_id 1 as default/primary
             await this.fastify.pg.query(
                 `INSERT INTO settings (user_id, key, value, updated_at) 
-                 VALUES ($1, 'questrade_refresh_token', $2, CURRENT_TIMESTAMP)
-                 ON CONFLICT (user_id, key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP`,
-                [userId, refreshToken]
+                 VALUES (1, 'questrade_refresh_token', $1, CURRENT_TIMESTAMP)
+                 ON CONFLICT (user_id, key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
+                [refreshToken]
             );
         } catch (err) {
-            console.error('[QuestradeService] Failed to save token to DB:', err);
+            console.error('[QuestradeService] Failed to save token to DB, attempting migration...', err);
         }
     }
 
@@ -114,15 +111,19 @@ export class QuestradeService {
         try {
             let refreshToken = await this.getTokenFromDb();
 
-            // Fallback to env for initial setup
-            if (!refreshToken) {
+            if (refreshToken) {
+                console.log(`[QuestradeService] Using live Refresh Token from DB: ${refreshToken.substring(0, 10)}...`);
+            } else {
                 refreshToken = process.env.QUESTRADE_REFRESH_TOKEN || null;
-                if (!refreshToken) {
+                if (refreshToken) {
+                    console.log(`[QuestradeService] Using fallback Refresh Token from ENV: ${refreshToken.substring(0, 10)}...`);
+                } else {
                     throw new Error('Questrade Refresh Token not found in DB or ENV');
                 }
             }
 
-            console.log(`[QuestradeService] Refreshing access token with: ${refreshToken?.substring(0, 10)}...`);
+            const clientId = await this.getClientId();
+            console.log(`[QuestradeService] Refreshing access token for CID: ${clientId?.substring(0, 5)}... with: ${refreshToken?.substring(0, 10)}...`);
             const tokenUrl = `https://login.questrade.com/oauth2/token?grant_type=refresh_token&refresh_token=${refreshToken}`;
             const response = await axios.get<any>(tokenUrl);
 
@@ -155,8 +156,19 @@ export class QuestradeService {
             } catch (err: any) {
                 lastError = err;
                 if (err.response?.status === 429) {
-                    console.log(`[QuestradeService] Rate limit hit (429). Retry ${i + 1}/${maxRetries} after 5s...`);
-                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    const resetHeader = err.response.headers['x-ratelimit-reset'];
+                    let waitTime = 5000; // Default 5s
+
+                    if (resetHeader) {
+                        const resetTime = parseInt(resetHeader, 10);
+                        const now = Math.floor(Date.now() / 1000);
+                        waitTime = Math.max((resetTime - now) * 1000 + 500, 1000); // Wait until reset + 500ms buffer
+                        console.log(`[QuestradeService] Rate limit hit. Reset at ${resetTime} (in ${waitTime}ms). Waiting...`);
+                    } else {
+                        console.log(`[QuestradeService] Rate limit hit (429). Retry ${i + 1}/${maxRetries} after 5s...`);
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
                     continue;
                 }
                 throw err;
@@ -180,6 +192,19 @@ export class QuestradeService {
 
         // Questrade format: NVDA30Jan26C190.00
         return `${ticker}${day}${monthName}${year}${type}${strike}`;
+    }
+
+    async getSymbols(symbols: string[]): Promise<any[]> {
+        await this.ensureAuthenticated();
+        try {
+            const response = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/symbols?names=${symbols.join(',').toUpperCase()}`, {
+                headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
+            }) as any);
+            return response.data.symbols || [];
+        } catch (err: any) {
+            console.error(`[QuestradeService] Failed to get symbols ${symbols}:`, err.response?.data || err.message);
+            return [];
+        }
     }
 
     async getSymbolId(symbol: string): Promise<number | null> {
@@ -260,35 +285,32 @@ export class QuestradeService {
         }
     }
 
-    async getQuote(symbolId: number): Promise<any> {
+    async getQuote(symbolIds: number[]): Promise<any[]> {
         await this.ensureAuthenticated();
         try {
-            const response = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/markets/quotes/${symbolId}`, {
+            const response = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/markets/quotes?ids=${symbolIds.join(',')}`, {
                 headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
             }) as any);
-            return response.data.quotes[0];
+            return response.data.quotes || [];
         } catch (err: any) {
-            console.error(`[QuestradeService] Failed to get quote for ${symbolId}:`, err.message);
-            return null;
+            console.error(`[QuestradeService] Failed to get quotes for IDs ${symbolIds}:`, err.message);
+            return [];
         }
     }
 
     async getOptionQuote(symbolId: number): Promise<any> {
         await this.ensureAuthenticated();
         try {
-            // Note: v1/markets/quotes/options is specifically for options and can provide Greeks
+            // Updated body format according to documentation to prevent 400 errors
             const response = await this.axiosWithRetry(() => axios.post(`${this.token!.api_server}v1/markets/quotes/options`, {
-                filters: [
-                    {
-                        optionId: symbolId
-                    }
-                ]
+                optionIds: [symbolId]
             }, {
                 headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
             }) as any);
+
             return response.data.optionQuotes && response.data.optionQuotes.length > 0 ? response.data.optionQuotes[0] : null;
         } catch (err: any) {
-            console.error(`[QuestradeService] Failed to get option quote for ${symbolId}:`, err.message);
+            console.error(`[QuestradeService] Failed to get option quote for ${symbolId}:`, err.response?.data || err.message);
             return null;
         }
     }
@@ -296,6 +318,7 @@ export class QuestradeService {
     async getHistoricalData(symbolId: number, startTime: Date, endTime: Date, interval: string = 'OneDay'): Promise<any[]> {
         await this.ensureAuthenticated();
         try {
+            // Questrade expects ISO8601 strings
             const start = startTime.toISOString();
             const end = endTime.toISOString();
 
@@ -308,9 +331,9 @@ export class QuestradeService {
                 headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
             }) as any);
 
-            return response.data.candles;
+            return response.data.candles || [];
         } catch (err: any) {
-            console.error(`[QuestradeService] Failed to get historical data for ${symbolId}:`, err.message);
+            console.error(`[QuestradeService] Failed to get historical data for ${symbolId}:`, err.response?.data || err.message);
             return [];
         }
     }
