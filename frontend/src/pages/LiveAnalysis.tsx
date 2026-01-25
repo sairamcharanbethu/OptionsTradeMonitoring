@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '@/lib/api';
+import { useWebSocket } from '@/hooks/useWebSocket';
 import {
     Card,
     CardContent,
@@ -16,7 +17,9 @@ import {
     Loader2,
     Activity,
     RefreshCw,
-    X
+    X,
+    Wifi,
+    WifiOff
 } from 'lucide-react';
 
 interface Candle {
@@ -32,6 +35,15 @@ interface CandleWithEMA extends Candle {
     ema9Live: number | null;
     ema9Closed: number | null;
     state: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+}
+
+interface LiveQuote {
+    symbol: string;
+    lastTradePrice: number;
+    bidPrice: number;
+    askPrice: number;
+    volume: number;
+    timestamp: string;
 }
 
 // EMA calculation helper
@@ -68,6 +80,30 @@ export default function LiveAnalysis() {
     const [error, setError] = useState<string | null>(null);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
     const [autoRefresh, setAutoRefresh] = useState(true);
+    const [liveQuote, setLiveQuote] = useState<LiveQuote | null>(null);
+    const [isSubscribed, setIsSubscribed] = useState(false);
+
+    // WebSocket for real-time updates
+    const { isConnected: wsConnected, lastMessage } = useWebSocket();
+
+    // Handle WebSocket messages
+    useEffect(() => {
+        if (lastMessage && lastMessage.type === 'PRICE_UPDATE' && lastMessage.data) {
+            const quote = lastMessage.data;
+            // Only update if it's for our active ticker
+            if (quote.symbol && quote.symbol.toUpperCase() === activeTicker.toUpperCase()) {
+                setLiveQuote({
+                    symbol: quote.symbol,
+                    lastTradePrice: quote.lastTradePrice || quote.price || 0,
+                    bidPrice: quote.bidPrice || 0,
+                    askPrice: quote.askPrice || 0,
+                    volume: quote.volume || 0,
+                    timestamp: new Date().toISOString()
+                });
+                setLastUpdated(new Date());
+            }
+        }
+    }, [lastMessage, activeTicker]);
 
     const fetchCandles = useCallback(async (symbol: string) => {
         if (!symbol.trim()) return;
@@ -116,10 +152,21 @@ export default function LiveAnalysis() {
             setCandles(enrichedCandles.reverse()); // Most recent first
             setActiveTicker(symbol.toUpperCase());
             setLastUpdated(new Date());
+
+            // Subscribe to real-time updates for this symbol
+            try {
+                await api.subscribeLiveAnalysis(symbol);
+                setIsSubscribed(true);
+                console.log(`[LiveAnalysis] Subscribed to real-time updates for ${symbol}`);
+            } catch (subErr) {
+                console.warn('[LiveAnalysis] Failed to subscribe to real-time updates:', subErr);
+                setIsSubscribed(false);
+            }
         } catch (err: any) {
             console.error('Failed to fetch candles:', err);
             setError(err.message || 'Failed to fetch data');
             setCandles([]);
+            setIsSubscribed(false);
         } finally {
             setLoading(false);
         }
@@ -205,11 +252,27 @@ export default function LiveAnalysis() {
                     </div>
 
                     {activeTicker && (
-                        <div className="mt-4 flex items-center gap-4 text-sm text-muted-foreground">
+                        <div className="mt-4 flex items-center gap-4 text-sm text-muted-foreground flex-wrap">
                             <span>Showing: <span className="font-bold text-foreground">{activeTicker}</span></span>
                             {lastUpdated && (
                                 <span>Last updated: {lastUpdated.toLocaleTimeString()}</span>
                             )}
+                            <div className="flex items-center gap-1.5">
+                                {wsConnected ? (
+                                    <>
+                                        <Wifi className="h-3 w-3 text-green-500" />
+                                        <span className="text-green-600 text-xs">Live</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <WifiOff className="h-3 w-3 text-red-500" />
+                                        <span className="text-red-600 text-xs">Offline</span>
+                                    </>
+                                )}
+                                {isSubscribed && wsConnected && (
+                                    <Badge variant="secondary" className="text-[10px] ml-1">Subscribed</Badge>
+                                )}
+                            </div>
                             <label className="flex items-center gap-2 ml-auto cursor-pointer">
                                 <input
                                     type="checkbox"

@@ -71,4 +71,45 @@ export async function liveAnalysisRoutes(fastify: FastifyInstance, options: Fast
             return reply.code(500).send({ error: err.message || 'Search failed' });
         }
     });
+
+    // POST /api/live-analysis/subscribe/:symbol - Subscribe to real-time quotes
+    fastify.post('/subscribe/:symbol', async (request, reply) => {
+        try {
+            const { symbol } = request.params as { symbol: string };
+            const questrade = (fastify as any).questrade;
+            const streamer = (fastify as any).streamer;
+            const { redis } = await import('../lib/redis');
+
+            if (!questrade) {
+                return reply.code(500).send({ error: 'Questrade service not initialized' });
+            }
+
+            if (!streamer) {
+                return reply.code(500).send({ error: 'Streaming service not initialized' });
+            }
+
+            // 1. Resolve symbol to ID
+            const symbolId = await questrade.getSymbolId(symbol.toUpperCase());
+            if (!symbolId) {
+                return reply.code(404).send({ error: `Symbol ${symbol} not found` });
+            }
+
+            // 2. Cache symbol name for quote enrichment
+            await redis.set(`SYMBOL_NAME:${symbolId}`, symbol.toUpperCase(), 86400);
+
+            // 3. Subscribe to real-time quotes
+            streamer.subscribe([symbolId]);
+            console.log(`[LiveAnalysis] Subscribed to real-time quotes for ${symbol} (ID: ${symbolId})`);
+
+            return {
+                success: true,
+                symbol: symbol.toUpperCase(),
+                symbolId,
+                message: 'Subscribed to real-time quotes. Updates will be pushed via WebSocket.'
+            };
+        } catch (err: any) {
+            fastify.log.error(err);
+            return reply.code(500).send({ error: err.message || 'Subscription failed' });
+        }
+    });
 }

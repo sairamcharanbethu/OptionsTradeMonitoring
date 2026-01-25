@@ -178,6 +178,7 @@ const start = async () => {
 
     const { QuestradeStreamService } = await import('./services/questrade-stream-service');
     const streamer = new QuestradeStreamService(fastify);
+    fastify.decorate('streamer', streamer);
 
     // Broadcast real-time quotes to all connected frontend clients
     streamer.on('quote', async (quote) => {

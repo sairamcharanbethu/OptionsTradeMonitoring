@@ -135,6 +135,17 @@ export const api = {
     return res.json();
   },
 
+  async subscribeLiveAnalysis(symbol: string): Promise<{ success: boolean; symbol: string; symbolId: number }> {
+    const res = await authFetch(`${API_BASE}/live-analysis/subscribe/${encodeURIComponent(symbol)}`, {
+      method: 'POST'
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Subscription failed');
+    }
+    return res.json();
+  },
+
   async getAllUsers(): Promise<User[]> {
     const res = await authFetch(`${API_BASE}/admin/users`);
     if (!res.ok) throw new Error('Failed to fetch users');
