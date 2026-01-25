@@ -147,7 +147,7 @@ export class QuestradeStreamService extends EventEmitter {
         }, 10000);
     }
 
-    private onMessage(data: WebSocket.Data) {
+    private async onMessage(data: WebSocket.Data) {
         try {
             const msg = JSON.parse(data.toString());
 
@@ -159,7 +159,15 @@ export class QuestradeStreamService extends EventEmitter {
             }
 
             // Handle Stream Errors
-            if (msg.code && msg.message) {
+            if (msg.code) {
+                if (msg.code === 1017) {
+                    console.warn('[Stream] Token Invalid (1017). Forcing refresh...');
+                    // Invalidate and refresh token
+                    await this.qt.refreshToken();
+                    this.cleanup();
+                    this.scheduleReconnect(1000);
+                    return;
+                }
                 console.warn('[Stream] API Message:', msg);
             }
 

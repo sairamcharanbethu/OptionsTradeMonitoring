@@ -146,6 +146,10 @@ export class QuestradeService {
         }
     }
 
+    async refreshToken(): Promise<QuestradeToken> {
+        return await this.performRefresh();
+    }
+
     private async performRefresh(): Promise<QuestradeToken> {
         try {
             let refreshToken = await this.getTokenFromDb();
