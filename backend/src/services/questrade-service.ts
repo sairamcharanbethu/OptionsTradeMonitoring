@@ -122,7 +122,7 @@ export class QuestradeService {
                 }
             }
 
-            console.log('[QuestradeService] Refreshing access token...');
+            console.log(`[QuestradeService] Refreshing access token with: ${refreshToken?.substring(0, 10)}...`);
             const tokenUrl = `https://login.questrade.com/oauth2/token?grant_type=refresh_token&refresh_token=${refreshToken}`;
             const response = await axios.get<any>(tokenUrl);
 
@@ -165,11 +165,29 @@ export class QuestradeService {
         throw lastError;
     }
 
+    private osiToQuestradeName(osi: string): string {
+        const match = osi.match(/^([A-Z]+)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/);
+        if (!match) return osi;
+
+        const [, ticker, year, month, day, type, strikeStr] = match;
+
+        // Month conversion (01 -> Jan)
+        const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const monthName = months[parseInt(month, 10) - 1] || 'Jan';
+
+        // Strike conversion (00190000 -> 190.00)
+        const strike = (parseInt(strikeStr, 10) / 1000).toFixed(2);
+
+        // Questrade format: NVDA30Jan26C190.00
+        return `${ticker}${day}${monthName}${year}${type}${strike}`;
+    }
+
     async getSymbolId(symbol: string): Promise<number | null> {
         await this.ensureAuthenticated();
         try {
             console.log(`[QuestradeService] Resolving symbol: ${symbol}`);
-            // Attempt 1: Exact name lookup
+
+            // Step 1: Direct lookup with original symbol (might work for stocks or Questrade-style names)
             const response = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/symbols?names=${symbol.toUpperCase()}`, {
                 headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
             }) as any);
@@ -178,20 +196,66 @@ export class QuestradeService {
                 return response.data.symbols[0].symbolId;
             }
 
-            // Attempt 2: Search fallback (useful for options that might have slightly different names)
-            console.log(`[QuestradeService] Exact match failed for ${symbol}. Trying search...`);
-            const searchResponse = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/symbols/search?prefix=${symbol.toUpperCase()}`, {
-                headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
-            }) as any);
+            // Step 2: Conversion lookup (Only if it looks like OSI)
+            if (symbol.length >= 15) {
+                const qtName = this.osiToQuestradeName(symbol.toUpperCase());
+                console.log(`[QuestradeService] OSI lookup failed. Trying Questrade format: ${qtName}`);
+                const qtResponse = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/symbols?names=${qtName.toUpperCase()}`, {
+                    headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
+                }) as any);
 
-            if (searchResponse.data.symbols && searchResponse.data.symbols.length > 0) {
-                // Return the first match that looks like our symbol
-                return searchResponse.data.symbols[0].symbolId;
+                if (qtResponse.data.symbols && qtResponse.data.symbols.length > 0) {
+                    console.log(`[QuestradeService] Successfully resolved via Questrade format.`);
+                    return qtResponse.data.symbols[0].symbolId;
+                }
             }
 
+            // Step 3: Hierarchical Lookup (The "Final Boss" of lookups)
+            const tickerPart = symbol.match(/^[A-Z]+/)?.[0];
+            if (tickerPart && symbol.length > 10) {
+                console.log(`[QuestradeService] Name lookup failed. Performing hierarchical chain search for underlying: ${tickerPart}`);
+
+                // 3a. Get underlying ID
+                const undResponse = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/symbols?names=${tickerPart.toUpperCase()}`, {
+                    headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
+                }) as any);
+
+                if (undResponse.data.symbols && undResponse.data.symbols.length > 0) {
+                    const undId = undResponse.data.symbols[0].symbolId;
+
+                    // 3b. Fetch full chain
+                    const chainRes = await this.axiosWithRetry(() => axios.get(`${this.token!.api_server}v1/symbols/${undId}/options`, {
+                        headers: { Authorization: `${this.token!.token_type} ${this.token!.access_token}` }
+                    }) as any);
+
+                    // 3c. Parse OSI to find components for matching
+                    const match = symbol.toUpperCase().match(/^([A-Z]+)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/);
+                    if (match) {
+                        const [, , year, month, day, type, strikeStr] = match;
+                        const targetStrike = parseInt(strikeStr, 10) / 1000;
+                        const targetExpiryPrefix = `20${year}-${month}-${day}`; // Questrade uses ISO date strings for expiries
+
+                        const chain = chainRes.data.optionChain;
+                        const expiryMatch = chain.find((e: any) => e.expiryDate.startsWith(targetExpiryPrefix));
+
+                        if (expiryMatch) {
+                            for (const root of expiryMatch.chainPerRoot) {
+                                const strikeMatch = root.chainPerStrikePrice.find((s: any) => s.strikePrice === targetStrike);
+                                if (strikeMatch) {
+                                    const finalId = type === 'C' ? strikeMatch.callSymbolId : strikeMatch.putSymbolId;
+                                    console.log(`[QuestradeService] Hierarchical search SUCCEEDED. ID: ${finalId}`);
+                                    return finalId;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            console.warn(`[QuestradeService] Could not resolve symbol: ${symbol}`);
             return null;
         } catch (err: any) {
-            console.error(`[QuestradeService] Failed to get symbol ID for ${symbol}:`, err.response?.data || err.message);
+            console.error(`[QuestradeService] Error during resolution for ${symbol}:`, err.response?.data || err.message);
             return null;
         }
     }
