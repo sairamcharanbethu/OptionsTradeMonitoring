@@ -200,10 +200,19 @@ const start = async () => {
     fastify.decorate('streamer', streamer);
 
     // Public WebSocket endpoint
-    fastify.get('/api/ws', { websocket: true }, (connection: any, req) => {
+    fastify.get('/api/ws', { websocket: true }, (connection: any, req: any) => {
+      if (!connection || !connection.socket) {
+        fastify.log.error('[WebSocket] Connection object invalid or missing socket property.');
+        return;
+      }
+
       connection.socket.on('message', (message: any) => {
         // Handle subscriptions from frontend if we want selective streaming
         // For now, we broadcast everything we have.
+      });
+
+      connection.socket.on('error', (err: any) => {
+        fastify.log.error(`[WebSocket] Client error: ${err.message}`);
       });
     });
 
