@@ -1,11 +1,11 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
     ReferenceLine, Legend
 } from 'recharts';
 
-import { Loader2, TrendingUp, TrendingDown, AlignJustify, BrainCircuit, Activity } from 'lucide-react';
+import { Loader2, TrendingUp, TrendingDown, AlignJustify, BrainCircuit, Activity, Clock, AlertTriangle } from 'lucide-react';
 
 import { api } from '@/lib/api';
 
@@ -26,6 +26,8 @@ interface PredictionData {
     };
 }
 
+const COOLDOWN_SECONDS = 60; // 1 minute cooldown between requests
+
 export default function Prediction() {
     const [symbol, setSymbol] = useState('');
     const [querySymbol, setQuerySymbol] = useState<string | null>(null);
@@ -34,8 +36,18 @@ export default function Prediction() {
     const [data, setData] = useState<PredictionData | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<Error | null>(null);
+    const [cooldown, setCooldown] = useState(0);
 
-    React.useEffect(() => {
+    // Cooldown timer effect
+    useEffect(() => {
+        if (cooldown <= 0) return;
+        const timer = setInterval(() => {
+            setCooldown(prev => Math.max(0, prev - 1));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [cooldown]);
+
+    useEffect(() => {
         if (!querySymbol || !token) return;
 
         let mounted = true;
@@ -43,15 +55,21 @@ export default function Prediction() {
         setError(null);
         setData(null);
 
-        setError(null);
-        setData(null);
-
         api.predictStock(querySymbol)
             .then(res => {
-                if (mounted) setData(res);
+                if (mounted) {
+                    setData(res);
+                    setCooldown(COOLDOWN_SECONDS); // Start cooldown after successful request
+                }
             })
             .catch(err => {
-                if (mounted) setError(err);
+                if (mounted) {
+                    setError(err);
+                    // If rate limited, set a longer cooldown
+                    if (err.message?.includes('Rate') || err.message?.includes('429') || err.message?.includes('Too Many')) {
+                        setCooldown(COOLDOWN_SECONDS * 2);
+                    }
+                }
             })
             .finally(() => {
                 if (mounted) setIsLoading(false);
@@ -62,7 +80,9 @@ export default function Prediction() {
 
     const handleSearch = (e: React.FormEvent) => {
         e.preventDefault();
-        if (symbol.trim()) setQuerySymbol(symbol.toUpperCase());
+        if (symbol.trim() && cooldown === 0) {
+            setQuerySymbol(symbol.toUpperCase());
+        }
     };
 
     const getVerdictColor = (verdict: string) => {
@@ -80,7 +100,7 @@ export default function Prediction() {
                     <BrainCircuit className="w-8 h-8 text-purple-400" />
                     AI Stock Prediction
                 </h1>
-                <form onSubmit={handleSearch} className="flex gap-2 w-full md:w-auto">
+                <form onSubmit={handleSearch} className="flex gap-2 w-full md:w-auto items-center">
                     <input
                         type="text"
                         value={symbol}
@@ -90,12 +110,26 @@ export default function Prediction() {
                     />
                     <button
                         type="submit"
-                        disabled={isLoading || !symbol}
-                        className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg disabled:opacity-50 font-medium transition-colors"
+                        disabled={isLoading || !symbol || cooldown > 0}
+                        className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg disabled:opacity-50 font-medium transition-colors min-w-[120px]"
                     >
-                        {isLoading ? <Loader2 className="animate-spin" /> : 'Analyze'}
+                        {isLoading ? <Loader2 className="animate-spin mx-auto" /> :
+                            cooldown > 0 ? (
+                                <span className="flex items-center gap-1 justify-center">
+                                    <Clock className="w-4 h-4" /> {cooldown}s
+                                </span>
+                            ) : 'Analyze'}
                     </button>
                 </form>
+            </div>
+
+            {/* Rate Limit Info Banner */}
+            <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-800/50 px-4 py-2 rounded-lg border border-slate-700/50">
+                <AlertTriangle className="w-4 h-4 text-yellow-500" />
+                <span>
+                    <strong>Rate Limit:</strong> Questrade allows ~15,000 market data requests/hour.
+                    Each prediction uses multiple API calls. A 60-second cooldown is enforced between analyses to ensure stability.
+                </span>
             </div>
 
             {error && (
