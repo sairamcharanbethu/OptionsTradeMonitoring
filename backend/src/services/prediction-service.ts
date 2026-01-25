@@ -43,35 +43,51 @@ export class PredictionService {
 
     async analyzeStock(symbol: string): Promise<PredictionResult> {
         try {
-            // 1. Fetch Fresh Historical Data (Last 2 years) - CALCULATION ONLY, NO CACHE
-            const endDate = new Date();
-            const startDate = new Date();
-            startDate.setDate(endDate.getDate() - 730);
+            const upperSymbol = symbol.toUpperCase();
+            const historicalCacheKey = `HISTORICAL_DATA:${upperSymbol}`;
 
-            console.log(`[PredictionService] Fetching fresh Questrade historical data for ${symbol}...`);
+            // 1. Check Redis cache first for historical data
+            let historicalData: any[] = [];
+            const cachedHistorical = await redis.get(historicalCacheKey);
 
-            const questrade = (this.fastify as any).questrade;
-            const symbolId = await questrade.getSymbolId(symbol);
+            if (cachedHistorical) {
+                console.log(`[PredictionService] Using cached historical data for ${upperSymbol}`);
+                historicalData = JSON.parse(cachedHistorical);
+            } else {
+                // Fetch fresh from Questrade
+                const endDate = new Date();
+                const startDate = new Date();
+                startDate.setDate(endDate.getDate() - 730);
 
-            if (!symbolId) {
-                throw new Error(`Symbol ${symbol} not found on Questrade.`);
+                console.log(`[PredictionService] Fetching fresh Questrade historical data for ${upperSymbol}...`);
+
+                const questrade = (this.fastify as any).questrade;
+                const symbolId = await questrade.getSymbolId(upperSymbol);
+
+                if (!symbolId) {
+                    throw new Error(`Symbol ${upperSymbol} not found on Questrade.`);
+                }
+
+                const candles = await questrade.getHistoricalData(symbolId, startDate, endDate, 'OneDay');
+
+                if (!candles || candles.length < 200) {
+                    throw new Error(`Insufficient data for ${upperSymbol} from Questrade. Need at least 200 days of history.`);
+                }
+
+                // Map Questrade candles to expected format
+                historicalData = candles.map((c: any) => ({
+                    date: c.start.split('T')[0],
+                    open: c.open,
+                    high: c.high,
+                    low: c.low,
+                    close: c.close,
+                    volume: c.volume
+                }));
+
+                // Cache for 4 hours (historical data doesn't change frequently)
+                await redis.set(historicalCacheKey, JSON.stringify(historicalData), 14400);
+                console.log(`[PredictionService] Cached ${historicalData.length} days of history for ${upperSymbol}`);
             }
-
-            const candles = await questrade.getHistoricalData(symbolId, startDate, endDate, 'OneDay');
-
-            if (!candles || candles.length < 200) {
-                throw new Error(`Insufficient data for ${symbol} from Questrade. Need at least 200 days of history.`);
-            }
-
-            // Map Questrade candles to expected format
-            const historicalData = candles.map((c: any) => ({
-                date: c.start.split('T')[0],
-                open: c.open,
-                high: c.high,
-                low: c.low,
-                close: c.close,
-                volume: c.volume
-            }));
 
             // 2. Run ML Prediction (Python)
             // Assuming script is at src/scripts/predict_stock.py and we are running from dist/ or src/
