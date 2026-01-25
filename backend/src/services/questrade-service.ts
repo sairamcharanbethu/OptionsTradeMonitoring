@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { FastifyInstance } from 'fastify';
+import { redis } from '../lib/redis';
 
 interface QuestradeToken {
     access_token: string;
