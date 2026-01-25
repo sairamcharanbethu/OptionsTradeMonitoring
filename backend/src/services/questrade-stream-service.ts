@@ -1,6 +1,6 @@
-
 import WebSocket from 'ws';
 import { FastifyInstance } from 'fastify';
+import { EventEmitter } from 'events';
 import { QuestradeService } from './questrade-service';
 import { redis } from '../lib/redis';
 
@@ -183,4 +183,3 @@ export class QuestradeStreamService extends EventEmitter {
     }
 }
 
-import { EventEmitter } from 'events';
