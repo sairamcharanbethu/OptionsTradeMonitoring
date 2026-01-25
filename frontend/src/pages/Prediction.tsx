@@ -18,6 +18,8 @@ interface PredictionData {
         macd: { macd: number; signal: number; histogram: number };
         sma50: number;
         sma200: number;
+        ema9: number;
+        ema21: number;
         bollinger: { upper: number; lower: number; middle: number };
     };
     aiAnalysis: {
@@ -123,19 +125,24 @@ export default function Prediction() {
                 </form>
             </div>
 
-            {/* Rate Limit Info Banner */}
-            <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-800/50 px-4 py-2 rounded-lg border border-slate-700/50">
-                <AlertTriangle className="w-4 h-4 text-yellow-500" />
-                <span>
-                    <strong>Rate Limit:</strong> Questrade allows ~15,000 market data requests/hour.
-                    Each prediction uses multiple API calls. A 60-second cooldown is enforced between analyses to ensure stability.
-                </span>
+            {/* Questrade API Constraints & Transparency */}
+            <div className="bg-slate-800/30 border border-slate-700/50 rounded-lg p-4 text-xs text-slate-400">
+                <div className="flex items-center gap-2 font-semibold text-slate-300 mb-2">
+                    <Activity className="w-4 h-4 text-cyan-500" />
+                    Questrade API Synchronization
+                </div>
+                <ul className="space-y-1 ml-6 list-disc">
+                    <li><strong>Market Data Limit:</strong> Questrade allows ~15,000 requests/hour. To preserve your budget, we cache 5-year history in the database.</li>
+                    <li><strong>Incremental Sync:</strong> Only new "gap" candles are fetched since your last sync, reducing API payload by 99%.</li>
+                    <li><strong>Accuracy:</strong> AI leverages deep history (5 years) to calculate long-term SMA/EMA cross-overs and support levels.</li>
+                    <li><strong>Cooldown:</strong> A {COOLDOWN_SECONDS}s window is required between new symbols to prevent terminal rate-limiting.</li>
+                </ul>
             </div>
 
             {error && (
                 <div className={`p-4 rounded-lg flex items-start gap-3 ${(error as any).message?.includes('Rate') || (error as any).message?.includes('429') || (error as any).message?.includes('wait')
-                        ? 'bg-yellow-900/20 border border-yellow-500/50 text-yellow-200'
-                        : 'bg-red-900/20 border border-red-500/50 text-red-200'
+                    ? 'bg-yellow-900/20 border border-yellow-500/50 text-yellow-200'
+                    : 'bg-red-900/20 border border-red-500/50 text-red-200'
                     }`}>
                     <AlertTriangle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                     <div>
@@ -244,6 +251,20 @@ export default function Prediction() {
                                     <div className="text-xs text-slate-400 mb-1">MACD</div>
                                     <div className={`text-xl font-mono ${data.indicators.macd.histogram > 0 ? 'text-green-400' : 'text-red-400'}`}>
                                         {data.indicators.macd.histogram.toFixed(2)}
+                                    </div>
+                                </div>
+
+                                <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                    <div className="text-xs text-slate-400 mb-1">EMA 9</div>
+                                    <div className={`text-lg font-mono ${data.currentPrice > data.indicators.ema9 ? 'text-green-400' : 'text-red-400'}`}>
+                                        ${data.indicators.ema9.toFixed(2)}
+                                    </div>
+                                </div>
+
+                                <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                    <div className="text-xs text-slate-400 mb-1">EMA 21</div>
+                                    <div className={`text-lg font-mono ${data.currentPrice > data.indicators.ema21 ? 'text-green-400' : 'text-red-400'}`}>
+                                        ${data.indicators.ema21.toFixed(2)}
                                     </div>
                                 </div>
 

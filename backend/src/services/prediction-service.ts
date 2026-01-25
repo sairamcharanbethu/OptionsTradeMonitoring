@@ -14,6 +14,8 @@ export interface TechnicalIndicators {
     };
     sma50: number;
     sma200: number;
+    ema9: number;
+    ema21: number;
     bollinger: {
         upper: number;
         lower: number;
@@ -54,16 +56,62 @@ export class PredictionService {
             );
 
             if (rows.length > 0) {
-                const hoursSinceFetch = Math.floor((Date.now() - new Date(rows[0].fetched_at).getTime()) / 1000 / 60 / 60);
-                console.log(`[PredictionService] Using cached historical data for ${upperSymbol} (cached ${hoursSinceFetch} hours ago)`);
+                const lastFetched = new Date(rows[0].fetched_at);
+                const hoursSinceFetch = Math.floor((Date.now() - lastFetched.getTime()) / 1000 / 60 / 60);
+                console.log(`[PredictionService] Found cached data for ${upperSymbol} (${hoursSinceFetch}h old)`);
+
                 historicalData = rows[0].data;
+                const questrade = (this.fastify as any).questrade;
+
+                // Incremental Update: If data is older than 4 hours, fetch only the missing "gap"
+                if (hoursSinceFetch >= 4) {
+                    console.log(`[PredictionService] Cache stale (${hoursSinceFetch}h). Performing incremental sync...`);
+                    try {
+                        const symbolId = await questrade.getSymbolId(upperSymbol);
+                        if (symbolId) {
+                            const lastDateInCache = new Date(historicalData[historicalData.length - 1].date);
+                            const nextDay = new Date(lastDateInCache);
+                            nextDay.setDate(nextDay.getDate() + 1);
+
+                            const now = new Date();
+
+                            if (nextDay < now) {
+                                const newCandles = await questrade.getHistoricalData(symbolId, nextDay, now, 'OneDay');
+                                if (newCandles && newCandles.length > 0) {
+                                    const mappedNew = newCandles.map((c: any) => ({
+                                        date: c.start.split('T')[0],
+                                        open: c.open,
+                                        high: c.high,
+                                        low: c.low,
+                                        close: c.close,
+                                        volume: c.volume
+                                    }));
+
+                                    // Merge and remove duplicates (by date)
+                                    const merged = [...historicalData, ...mappedNew];
+                                    const unique = Array.from(new Map(merged.map(item => [item.date, item])).values());
+                                    historicalData = unique.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+                                    // Update DB with merged set
+                                    await this.fastify.pg.query(
+                                        `UPDATE stock_history_cache SET data = $2, fetched_at = CURRENT_TIMESTAMP WHERE symbol = $1`,
+                                        [upperSymbol, JSON.stringify(historicalData)]
+                                    );
+                                    console.log(`[PredictionService] Incremental sync complete. Added ${mappedNew.length} new days.`);
+                                }
+                            }
+                        }
+                    } catch (syncErr: any) {
+                        console.warn(`[PredictionService] Incremental sync failed (falling back to cache): ${syncErr.message}`);
+                    }
+                }
             } else {
-                // Fetch fresh from Questrade
+                // Fetch fresh (Full 5 Years) from Questrade
                 const endDate = new Date();
                 const startDate = new Date();
-                startDate.setDate(endDate.getDate() - 730);
+                startDate.setDate(endDate.getDate() - 1825); // 5 Years
 
-                console.log(`[PredictionService] Fetching fresh Questrade historical data for ${upperSymbol}...`);
+                console.log(`[PredictionService] Bootstrapping 5-year history for ${upperSymbol}...`);
 
                 const questrade = (this.fastify as any).questrade;
                 const symbolId = await questrade.getSymbolId(upperSymbol);
@@ -75,7 +123,7 @@ export class PredictionService {
                 const candles = await questrade.getHistoricalData(symbolId, startDate, endDate, 'OneDay');
 
                 if (!candles || candles.length < 200) {
-                    throw new Error(`Insufficient data for ${upperSymbol} from Questrade. Need at least 200 days of history.`);
+                    throw new Error(`Insufficient data for ${upperSymbol} from Questrade. Need at least 200 days.`);
                 }
 
                 // Map Questrade candles to expected format
@@ -88,14 +136,14 @@ export class PredictionService {
                     volume: c.volume
                 }));
 
-                // Store in database (upsert for 30-day retention)
+                // Store in database with symbol_id
                 await this.fastify.pg.query(
-                    `INSERT INTO stock_history_cache (symbol, data, fetched_at) 
-                     VALUES ($1, $2, CURRENT_TIMESTAMP)
-                     ON CONFLICT (symbol) DO UPDATE SET data = $2, fetched_at = CURRENT_TIMESTAMP`,
-                    [upperSymbol, JSON.stringify(historicalData)]
+                    `INSERT INTO stock_history_cache (symbol, symbol_id, data, fetched_at) 
+                     VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                     ON CONFLICT (symbol) DO UPDATE SET symbol_id = $2, data = $3, fetched_at = CURRENT_TIMESTAMP`,
+                    [upperSymbol, symbolId, JSON.stringify(historicalData)]
                 );
-                console.log(`[PredictionService] Cached ${historicalData.length} days of history for ${upperSymbol} in database`);
+                console.log(`[PredictionService] Cached 5-year history for ${upperSymbol} in database`);
             }
 
             // 2. Run ML Prediction (Python)
@@ -114,6 +162,8 @@ export class PredictionService {
             const macd = this.calculateMACD(closes);
             const sma50 = this.calculateSMA(closes, 50);
             const sma200 = this.calculateSMA(closes, 200);
+            const ema9 = this.calculateEMA(closes, 9);
+            const ema21 = this.calculateEMA(closes, 21);
             const bollinger = this.calculateBollingerBands(closes);
 
             const indicators: TechnicalIndicators = {
@@ -121,6 +171,8 @@ export class PredictionService {
                 macd,
                 sma50,
                 sma200,
+                ema9,
+                ema21,
                 bollinger
             };
 
@@ -202,17 +254,20 @@ export class PredictionService {
         - Model Sentiment: ${mlResult.sentiment}
         - Key Drivers: RSI=${mlResult.features.rsi.toFixed(1)}, Recent Trend=${mlResult.features.trend_5.toFixed(3)}
         
-        2. TECHNICAL INDICATORS:
+        2. TECHNICAL INDICATORS & MOMENTUM:
         - RSI (14): ${indicators.rsi.toFixed(2)}
-        - MACD: ${indicators.macd.macd.toFixed(2)} (Signal: ${indicators.macd.signal.toFixed(2)})
+        - EMA 9 (Fast): $${indicators.ema9.toFixed(2)}
+        - EMA 21 (Med): $${indicators.ema21.toFixed(2)}
+        - EMA/Price Alignment: Price is ${price > indicators.ema9 ? 'above' : 'below'} EMA9.
         - SMA 50: $${indicators.sma50.toFixed(2)}
         - SMA 200: $${indicators.sma200.toFixed(2)}
         - Trend: Price is ${price > indicators.sma200 ? 'above' : 'below'} SMA200 (Long term) and ${price > indicators.sma50 ? 'above' : 'below'} SMA50 (Medium term).
-
-        TASK: Provide a final trading verdict (Buy/Sell/Hold) and synthesis.
-        - Weigh the ML probability heavily but verify with technicals.
-        - If ML is bullish (>55%) and Price > SMA200, it's a strong signal.
-        - If conflict (ML Bullish but Price < SMA200), suggest caution or 'Hold'.
+        
+        TASK: Provide a definitive trading verdict (Buy/Sell/Hold) and synthesis.
+        - The SMA200 is the "Institutional Floor". If price is above, favor Buy/Hold. If below, favor Sell/Hold.
+        - EMA Crossovers: If EMA 9 > EMA 21, momentum is bullish. If EMA 9 < EMA 21, it's bearish.
+        - If conflict (ML Bullish but Price < SMA200), remain cautious.
+        - Be decisive. If indicators align, don't just say "no clear signal".
         
         Format: JSON { "verdict": "Buy" | "Sell" | "Hold", "reasoning": "..." }
         `;

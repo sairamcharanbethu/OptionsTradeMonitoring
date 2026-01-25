@@ -448,7 +448,7 @@ export class MarketPoller {
         const triggerType = engineResult.triggerType || 'STOP_LOSS';
         const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
 
-        await this.fastify.pg.query(
+        const updateResult = await this.fastify.pg.query(
           `UPDATE positions 
              SET status = $1, 
              loss_avoided = $2,
@@ -456,6 +456,11 @@ export class MarketPoller {
              WHERE id = $3 AND status = 'OPEN'`,
           [newStatus, engineResult.lossAvoided, position.id]
         );
+
+        if (updateResult.rowCount === 0) {
+          // Already updated or state mismatch, skip AI alert
+          return;
+        }
 
         await this.fastify.pg.query(
           'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',

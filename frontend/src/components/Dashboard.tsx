@@ -202,7 +202,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     if (confirm('Are you sure you want to delete this position?')) {
       try {
         await api.deletePosition(id);
-        loadPositions(false);
+        // Immediate UI update: filter out the deleted position from current state
+        setPositions(prev => prev.filter(p => p.id !== id));
+        loadPositions(true); // Silent reload to refresh stats/other data
       } catch (err) {
         console.error(err);
         alert('Failed to delete position. Please try again.');
@@ -791,7 +793,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             </TableCell>
                             <TableCell>
                               <div className="text-xs">
-                                <div className="font-bold text-blue-600 dark:text-blue-400">{getDte(pos.expiration_date)}d</div>
+                                <div className={cn("font-bold", getDte(pos.expiration_date) < 7 ? "text-red-500 animate-pulse" : "text-blue-600 dark:text-blue-400")}>{getDte(pos.expiration_date)}d</div>
                                 <div className="opacity-70">In: ${Number(pos.entry_price).toFixed(2)}</div>
                                 <div className={cn("opacity-70 transition-colors duration-500 px-1 rounded", priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
                                   Now: ${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}
@@ -897,7 +899,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                                 </Badge>
                               </div>
                               <p className="text-[10px] text-muted-foreground">
-                                ${Number(pos.strike_price).toFixed(2)} • {parseLocalDate(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                ${Number(pos.strike_price).toFixed(2)} • <span className={cn(getDte(pos.expiration_date) < 7 && "text-red-500 font-bold")}>
+                                  {parseLocalDate(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                </span>
                               </p>
                             </div>
                             <div className="text-right">
