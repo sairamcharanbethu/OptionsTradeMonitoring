@@ -201,18 +201,31 @@ const start = async () => {
     });
 
     // Public WebSocket endpoint
-    fastify.get('/api/ws', { websocket: true }, (connection: any, req: any) => {
-      if (!connection || !connection.socket) {
-        fastify.log.error('[WebSocket] Connection object invalid or missing socket property.');
+    // Note: @fastify/websocket v10+ passes the socket directly, not connection.socket
+    fastify.get('/api/ws', { websocket: true }, (socket: any, req: any) => {
+      if (!socket) {
+        fastify.log.error('[WebSocket] Socket is null');
         return;
       }
 
-      connection.socket.on('message', (message: any) => {
+      fastify.log.info('[WebSocket] Client connected');
+
+      socket.on('message', (message: any) => {
         // Handle subscriptions from frontend if we want selective streaming
         // For now, we broadcast everything we have.
+        try {
+          const data = JSON.parse(message.toString());
+          fastify.log.info(`[WebSocket] Received: ${JSON.stringify(data)}`);
+        } catch (e) {
+          // Non-JSON message, ignore
+        }
       });
 
-      connection.socket.on('error', (err: any) => {
+      socket.on('close', () => {
+        fastify.log.info('[WebSocket] Client disconnected');
+      });
+
+      socket.on('error', (err: any) => {
         fastify.log.error(`[WebSocket] Client error: ${err.message}`);
       });
     });
