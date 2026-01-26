@@ -19,11 +19,25 @@ export async function liveAnalysisRoutes(fastify: FastifyInstance, options: Fast
                 return reply.code(404).send({ error: `Symbol ${symbol} not found` });
             }
 
-            // 2. Fetch 1-min candles for the last hour
+            // 2. Fetch 1-min candles for today's trading session
+            // Market hours: 9:30 AM - 4:00 PM ET
             const now = new Date();
-            const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+            const etOffset = -5; // EST is UTC-5 (adjust for daylight if needed)
+            const nowET = new Date(now.getTime() + (now.getTimezoneOffset() + etOffset * 60) * 60000);
 
-            const candles = await questrade.getHistoricalData(symbolId, oneHourAgo, now, 'OneMinute');
+            // Set start to 9:30 AM ET today (or yesterday if before market open)
+            const marketOpen = new Date(nowET);
+            marketOpen.setHours(9, 30, 0, 0);
+
+            // If we're before market open, use previous trading day
+            if (nowET < marketOpen) {
+                marketOpen.setDate(marketOpen.getDate() - 1);
+            }
+
+            // Convert back to UTC for API call
+            const startTime = new Date(marketOpen.getTime() - (now.getTimezoneOffset() + etOffset * 60) * 60000);
+
+            const candles = await questrade.getHistoricalData(symbolId, startTime, now, 'OneMinute');
 
             // 3. Return candles with calculated fields
             return {
