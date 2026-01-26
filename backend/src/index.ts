@@ -200,8 +200,6 @@ const start = async () => {
       // poller.onExternalPriceUpdate(quote); // TODO: Implement in MarketPoller
     });
 
-    fastify.decorate('streamer', streamer);
-
     // Public WebSocket endpoint
     fastify.get('/api/ws', { websocket: true }, (connection: any, req: any) => {
       if (!connection || !connection.socket) {
