@@ -222,7 +222,7 @@ const start = async () => {
 
     // Start background services
     poller.start();
-    streamer.start();
+    // streamer.start(); // Disabled: Subscriptions are now on-demand via Live Analysis only
 
     fastify.log.info(`Server listening on http://localhost:${port}`);
   } catch (err) {
