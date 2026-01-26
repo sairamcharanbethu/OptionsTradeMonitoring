@@ -2,9 +2,9 @@ name: Build and Deploy
 
 on:
   push:
-    branches: [ "main", "staging" ]
+    branches: ["main", "staging"]
   pull_request:
-    branches: [ "main", "staging" ]
+    branches: ["main", "staging"]
   workflow_dispatch:
 
 concurrency:
@@ -32,11 +32,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+          clean: true
+
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: "npm"
           cache-dependency-path: ${{ matrix.context }}/package-lock.json
 
       - name: Install dependencies and build
@@ -49,7 +51,7 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -57,11 +59,11 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Convert repository name to lowercase
         id: repo
         run: echo "lowercase=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
-      
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -70,7 +72,7 @@ jobs:
           tags: |
             type=sha
             type=raw,value=latest
-      
+
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -83,76 +85,87 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
+      - name: Cleanup workspace
+        if: always()
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE"/* "$GITHUB_WORKSPACE"/.* 2>/dev/null || true
+
   deploy:
     needs: build
     runs-on: self-hosted
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging') && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    
+
     steps:
-    - uses: actions/checkout@v4
-      with:
-        sparse-checkout: |
-          docker-compose.yml
-        sparse-checkout-cone-mode: false
+      - uses: actions/checkout@v4
+        with:
+          clean: true
+          sparse-checkout: |
+            docker-compose.yml
+          sparse-checkout-cone-mode: false
 
-    - name: Set deployment environment variables
-      id: set-env
-      run: |
-        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-          echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring" >> $GITHUB_ENV
-          echo "COMPOSE_PROJECT_NAME=options-monitor-prod" >> $GITHUB_ENV
-          echo "ENV_NAME=Production" >> $GITHUB_ENV
-          echo "PORT_BACKEND=3001" >> $GITHUB_ENV
-          echo "PORT_FRONTEND=8100" >> $GITHUB_ENV
-          echo "PORT_DB=5432" >> $GITHUB_ENV
-          echo "PORT_REDIS=6379" >> $GITHUB_ENV
-        else
-          echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging" >> $GITHUB_ENV
-          echo "COMPOSE_PROJECT_NAME=options-monitor-staging" >> $GITHUB_ENV
-          echo "ENV_NAME=Staging" >> $GITHUB_ENV
-          echo "PORT_BACKEND=30020" >> $GITHUB_ENV
-          echo "PORT_FRONTEND=8200" >> $GITHUB_ENV
-          echo "PORT_DB=5432" >> $GITHUB_ENV
-          echo "PORT_REDIS=46380" >> $GITHUB_ENV
-        fi
-
-    - name: Prepare SSH key
-      run: |
-        mkdir -p ~/.ssh
-        echo "${{ secrets.VPS_SSH_KEY }}" | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
-        chmod 600 ~/.ssh/deploy_key
-        ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
-
-    - name: Deploy
-      run: |
-        # Copy compose file
-        scp -i ~/.ssh/deploy_key docker-compose.yml ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_PATH }}/
-        
-        # Deploy via SSH
-        ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
-          set -e
-          cd ${{ env.DEPLOY_PATH }}
-          
-          [[ "${{ env.ENV_NAME }}" == "Staging" ]] && cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || true
-          
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          
-          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull backend frontend
-          
-          export PORT_BACKEND=${{ env.PORT_BACKEND }}
-          export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
-          export PORT_DB=${{ env.PORT_DB }}
-          export PORT_REDIS=${{ env.PORT_REDIS }}
-          
-          if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend db redis
+      - name: Set deployment environment variables
+        id: set-env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring" >> $GITHUB_ENV
+            echo "COMPOSE_PROJECT_NAME=options-monitor-prod" >> $GITHUB_ENV
+            echo "ENV_NAME=Production" >> $GITHUB_ENV
+            echo "PORT_BACKEND=3001" >> $GITHUB_ENV
+            echo "PORT_FRONTEND=8100" >> $GITHUB_ENV
+            echo "PORT_DB=5432" >> $GITHUB_ENV
+            echo "PORT_REDIS=6379" >> $GITHUB_ENV
           else
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db || true
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db || true
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --remove-orphans --no-deps backend frontend redis
+            echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging" >> $GITHUB_ENV
+            echo "COMPOSE_PROJECT_NAME=options-monitor-staging" >> $GITHUB_ENV
+            echo "ENV_NAME=Staging" >> $GITHUB_ENV
+            echo "PORT_BACKEND=30020" >> $GITHUB_ENV
+            echo "PORT_FRONTEND=8200" >> $GITHUB_ENV
+            echo "PORT_DB=5432" >> $GITHUB_ENV
+            echo "PORT_REDIS=46380" >> $GITHUB_ENV
           fi
-          
-          sleep 5
-          docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
-          docker image prune -f
-        DEPLOY_SCRIPT
+
+      - name: Prepare SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" | sed 's/\\n/\n/g' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: |
+          # Copy compose file
+          scp -i ~/.ssh/deploy_key docker-compose.yml ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_PATH }}/
+
+          # Deploy via SSH
+          ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
+            set -e
+            cd ${{ env.DEPLOY_PATH }}
+            
+            [[ "${{ env.ENV_NAME }}" == "Staging" ]] && cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || true
+            
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull backend frontend
+            
+            export PORT_BACKEND=${{ env.PORT_BACKEND }}
+            export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
+            export PORT_DB=${{ env.PORT_DB }}
+            export PORT_REDIS=${{ env.PORT_REDIS }}
+            
+            if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps backend frontend db redis
+            else
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db || true
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db || true
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --remove-orphans --no-deps backend frontend redis
+            fi
+            
+            sleep 5
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
+            docker image prune -f
+          DEPLOY_SCRIPT
+
+      - name: Cleanup workspace
+        if: always()
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE"/* "$GITHUB_WORKSPACE"/.* 2>/dev/null || true

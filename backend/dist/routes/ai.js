@@ -39,6 +39,13 @@ async function aiRoutes(fastify, options) {
         }
         catch (err) {
             fastify.log.error(err);
+            if (err.message?.includes('Too Many') || err.message?.includes('429') || err.message?.includes('Rate')) {
+                return reply.code(429).send({
+                    error: 'Rate Limited',
+                    message: 'Questrade API rate limit reached. Please wait a few minutes.',
+                    retryAfter: 60
+                });
+            }
             return reply.code(500).send({ error: err.message || 'AI Analysis Failed' });
         }
     });

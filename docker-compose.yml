@@ -34,6 +34,7 @@ services:
       - redis
     networks:
       - ssmedia_ssmedia_net
+      - default
 
   redis:
     image: redis:alpine
@@ -41,7 +42,7 @@ services:
     ports:
       - "${PORT_REDIS:-6379}:6379"
     networks:
-      - ssmedia_ssmedia_net
+      - default
 
   frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
@@ -50,8 +51,7 @@ services:
       - "${PORT_FRONTEND:-3000}:80"
     depends_on:
       - backend
-    networks:
-      - ssmedia_ssmedia_net
+    # No networks defined, joins default by default
 
 networks:
   ssmedia_ssmedia_net:

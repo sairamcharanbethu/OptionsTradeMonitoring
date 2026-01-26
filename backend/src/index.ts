@@ -9,6 +9,7 @@ import { marketDataRoutes } from './routes/market-data';
 import { marketRoutes } from './routes/market';
 import { aiRoutes } from './routes/ai';
 import { settingsRoutes } from './routes/settings';
+import { liveAnalysisRoutes } from './routes/live-analysis';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -22,9 +23,12 @@ declare module 'fastify' {
 
 const fastify = Fastify({
   logger: {
-    level: 'warn'
+    level: 'info',
+    // transport: {
+    //   target: 'pino-pretty', // Install pino-pretty for dev formatted logs
+    // }
   },
-  disableRequestLogging: true
+  disableRequestLogging: false
 });
 
 const testConnection = async (connectionString: string, label: string): Promise<boolean> => {
@@ -35,14 +39,14 @@ const testConnection = async (connectionString: string, label: string): Promise<
     ssl: isCloud ? { rejectUnauthorized: false } : undefined
   });
   try {
-    console.log(`[Database] Testing connection to ${label}...`);
+    fastify.log.info(`[Database] Testing connection to ${label}...`);
     await client.connect();
     await client.query('SELECT 1');
     await client.end();
-    console.log(`[Database] Success: Connected to ${label}`);
+    fastify.log.info(`[Database] Success: Connected to ${label}`);
     return true;
   } catch (err: any) {
-    console.error(`[Database] Failed to connect to ${label}: ${err.message}`);
+    fastify.log.error(`[Database] Failed to connect to ${label}: ${err.message}`);
     return false;
   }
 };
@@ -57,11 +61,11 @@ const start = async () => {
 
     if (!primarySuccess) {
       if (backupDbUrl) {
-        console.warn('[Database] Primary failed. Attempting Backup...');
+        fastify.log.warn('[Database] Primary failed. Attempting Backup...');
         const backupSuccess = await testConnection(backupDbUrl, 'Backup');
         if (backupSuccess) {
           activeDbUrl = backupDbUrl;
-          console.warn('[Database] SWITCHED TO BACKUP DATABASE.');
+          fastify.log.warn('[Database] SWITCHED TO BACKUP DATABASE.');
         } else {
           throw new Error('Both Primary and Backup databases failed.');
         }
@@ -71,7 +75,7 @@ const start = async () => {
     }
 
     // Log final choice (masking creds)
-    console.log(`[System] Active Database Host: ${activeDbUrl.includes('@') ? activeDbUrl.split('@')[1] : 'localhost'}`);
+    fastify.log.info(`[System] Active Database Host: ${activeDbUrl.includes('@') ? activeDbUrl.split('@')[1] : 'localhost'}`);
 
     await fastify.register(postgres, {
       connectionString: activeDbUrl,
@@ -148,6 +152,7 @@ const start = async () => {
     fastify.register(marketRoutes, { prefix: '/api/market' });
     fastify.register(aiRoutes, { prefix: '/api/ai' });
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
+    fastify.register(liveAnalysisRoutes, { prefix: '/api/live-analysis' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
@@ -167,13 +172,72 @@ const start = async () => {
     const poller = new MarketPoller(fastify);
     fastify.decorate('poller', poller);
 
+    // --- WebSocket & Streaming Setup ---
+    await fastify.register(import('@fastify/websocket'));
+    const { redis } = await import('./lib/redis');
+
+    const { QuestradeStreamService } = await import('./services/questrade-stream-service');
+    const streamer = new QuestradeStreamService(fastify);
+    fastify.decorate('streamer', streamer);
+
+    // Broadcast real-time quotes to all connected frontend clients
+    streamer.on('quote', async (quote) => {
+      // Enrich with Symbol if missing
+      if (!quote.symbol && quote.symbolId) {
+        const ticker = await redis.get(`SYMBOL_NAME:${quote.symbolId}`);
+        if (ticker) quote.symbol = ticker;
+      }
+
+      if (fastify.websocketServer) {
+        fastify.websocketServer.clients.forEach((client: any) => {
+          if (client.readyState === 1) { // WebSocket.OPEN
+            client.send(JSON.stringify({ type: 'PRICE_UPDATE', data: quote }));
+          }
+        });
+      }
+
+      // Feed data into Poller for Stop Loss checks (Optimization: Don't wait for poll cycle)
+      // poller.onExternalPriceUpdate(quote); // TODO: Implement in MarketPoller
+    });
+
+    // Public WebSocket endpoint
+    // Note: @fastify/websocket v10+ passes the socket directly, not connection.socket
+    fastify.get('/api/ws', { websocket: true }, (socket: any, req: any) => {
+      if (!socket) {
+        fastify.log.error('[WebSocket] Socket is null');
+        return;
+      }
+
+      fastify.log.info('[WebSocket] Client connected');
+
+      socket.on('message', (message: any) => {
+        // Handle subscriptions from frontend if we want selective streaming
+        // For now, we broadcast everything we have.
+        try {
+          const data = JSON.parse(message.toString());
+          fastify.log.info(`[WebSocket] Received: ${JSON.stringify(data)}`);
+        } catch (e) {
+          // Non-JSON message, ignore
+        }
+      });
+
+      socket.on('close', () => {
+        fastify.log.info('[WebSocket] Client disconnected');
+      });
+
+      socket.on('error', (err: any) => {
+        fastify.log.error(`[WebSocket] Client error: ${err.message}`);
+      });
+    });
+
     const port = Number(process.env.PORT) || 3001;
     await fastify.listen({ port, host: '0.0.0.0' });
 
-    // Start the background cycle
+    // Start background services
     poller.start();
+    // streamer.start(); // Disabled: Subscriptions are now on-demand via Live Analysis only
 
-    console.log(`Server listening on http://localhost:${port}`);
+    fastify.log.info(`Server listening on http://localhost:${port}`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

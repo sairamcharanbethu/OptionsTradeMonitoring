@@ -95,7 +95,7 @@ export class QuestradeService {
         return !!token;
     }
 
-    private async getActiveToken(): Promise<QuestradeToken | null> {
+    async getActiveToken(): Promise<QuestradeToken | null> {
         // 1. Check local memory first (fastest)
         if (this.token && this.token.expires_at > Date.now() + 30000) {
             return this.token;
@@ -144,6 +144,10 @@ export class QuestradeService {
         } finally {
             await redis.del(LOCK_KEY);
         }
+    }
+
+    async refreshToken(): Promise<QuestradeToken> {
+        return await this.performRefresh();
     }
 
     private async performRefresh(): Promise<QuestradeToken> {

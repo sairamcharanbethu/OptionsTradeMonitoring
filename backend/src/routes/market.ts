@@ -11,11 +11,13 @@ export async function marketRoutes(fastify: FastifyInstance, options: FastifyPlu
             }
 
             const isOpen = poller.isMarketOpen();
+            const streamer = (fastify as any).streamer;
 
             return {
                 open: isOpen,
                 timezone: 'America/New_York',
-                marketHours: '9:30 AM - 4:15 PM ET, Mon-Fri'
+                marketHours: '9:30 AM - 4:15 PM ET, Mon-Fri',
+                connectionStatus: streamer && streamer.isSocketConnected ? 'CONNECTED' : 'DISCONNECTED'
             };
         } catch (err: any) {
             fastify.log.error(err);
