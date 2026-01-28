@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { api, Position, User } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
-import { usePositions, usePortfolioStats, useMarketStatus, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { usePositions, usePortfolioStats, useMarketStatus, useClosedPositions, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import {
   Card,
@@ -59,7 +59,9 @@ import {
   Info,
   Trophy,
   Percent,
-  PieChart as PieChartIcon
+  PieChart as PieChartIcon,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import {
   AreaChart,
@@ -112,6 +114,11 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   // Briefing state
   const [portfolioBriefing, setPortfolioBriefing] = useState<{ briefing: string; discord_message: string } | null>(null);
   const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false);
+
+  // History pagination - server-side
+  const [historyPage, setHistoryPage] = useState(1);
+  const HISTORY_PAGE_SIZE = 10;
+  const { data: closedHistory, refetch: refetchClosedHistory } = useClosedPositions(historyPage, HISTORY_PAGE_SIZE);
 
   // WebSocket Integration
   const { lastMessage } = useWebSocket();
@@ -636,10 +643,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {positions.filter(p => p.status === 'CLOSED').length === 0 ? (
+                    {!closedHistory || closedHistory.positions.length === 0 ? (
                       <tr><td colSpan={6} className="text-center py-8 text-muted-foreground">No history available.</td></tr>
                     ) : (
-                      positions.filter(p => p.status === 'CLOSED').map((pos) => (
+                      closedHistory.positions.map((pos) => (
                         <tr key={pos.id} className="border-b hover:bg-muted/50 transition-colors">
                           <td className="px-4 py-3">
                             <div className="font-bold">{pos.symbol}</div>
@@ -659,7 +666,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                             <span className="text-blue-500 font-medium text-xs">${Number(pos.loss_avoided || 0).toFixed(2)}</span>
                           </td>
                           <td className="px-4 py-3">
-                            <Button variant="ghost" size="sm" className="h-7 text-[10px] transition-opacity hover:bg-primary/10 hover:text-primary" onClick={() => api.reopenPosition(pos.id).then(() => refetchPositions())}>
+                            <Button variant="ghost" size="sm" className="h-7 text-[10px] transition-opacity hover:bg-primary/10 hover:text-primary" onClick={() => api.reopenPosition(pos.id).then(() => { refetchPositions(); refetchClosedHistory(); })}>
                               <RefreshCw className="h-3 w-3 mr-1" /> Reopen
                             </Button>
                           </td>
@@ -669,6 +676,36 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   </tbody>
                 </table>
               </div>
+              {closedHistory && closedHistory.totalPages > 1 && (
+                <div className="flex items-center justify-between px-4 py-3 border-t">
+                  <span className="text-xs text-muted-foreground">
+                    Showing {(historyPage - 1) * HISTORY_PAGE_SIZE + 1}-{Math.min(historyPage * HISTORY_PAGE_SIZE, closedHistory.total)} of {closedHistory.total}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
+                      disabled={historyPage === 1}
+                      className="h-8 w-8 p-0"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <span className="text-sm font-medium">
+                      {historyPage} / {closedHistory.totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setHistoryPage(p => Math.min(closedHistory.totalPages, p + 1))}
+                      disabled={historyPage === closedHistory.totalPages}
+                      className="h-8 w-8 p-0"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

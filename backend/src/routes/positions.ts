@@ -121,6 +121,61 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     return rows;
   });
 
+  // GET paginated closed positions (history)
+  fastify.get('/history', {
+    schema: {
+      tags: ['Positions'],
+      summary: 'Get closed positions (paginated)',
+      description: 'Retrieve closed positions with pagination support. More efficient for large history.',
+      security: [{ bearerAuth: [] }],
+      querystring: {
+        type: 'object',
+        properties: {
+          page: { type: 'integer', minimum: 1, default: 1, description: 'Page number (1-indexed)' },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 10, description: 'Items per page' }
+        }
+      },
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            positions: { type: 'array', items: positionResponseSchema },
+            total: { type: 'integer', description: 'Total number of closed positions' },
+            page: { type: 'integer' },
+            limit: { type: 'integer' },
+            totalPages: { type: 'integer' }
+          }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    const { page = 1, limit = 10 } = request.query as { page?: number; limit?: number };
+    const offset = (page - 1) * limit;
+
+    // Get total count
+    const { rows: countRows } = await fastify.pg.query(
+      'SELECT COUNT(*) as total FROM positions WHERE user_id = $1 AND status = $2',
+      [userId, 'CLOSED']
+    );
+    const total = parseInt(countRows[0].total);
+    const totalPages = Math.ceil(total / limit);
+
+    // Get paginated data
+    const { rows } = await fastify.pg.query(
+      'SELECT * FROM positions WHERE user_id = $1 AND status = $2 ORDER BY updated_at DESC LIMIT $3 OFFSET $4',
+      [userId, 'CLOSED', limit, offset]
+    );
+
+    return {
+      positions: rows,
+      total,
+      page,
+      limit,
+      totalPages
+    };
+  });
+
   // GET lightweight price/greek updates for active positions
   fastify.get('/updates', {
     schema: {
@@ -601,12 +656,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
          RETURNING *`,
         [newHigh, newStopTrigger, id]
       );
-      
+
       await client.query('COMMIT');
 
       // 4. Trigger immediate sync
       try {
-         (fastify as any).poller.syncPrice(pos.symbol);
+        (fastify as any).poller.syncPrice(pos.symbol);
       } catch (err: any) {
         fastify.log.error({ err }, 'Failed to trigger immediate sync on reopen');
       }
@@ -800,7 +855,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     const client = await fastify.pg.connect();
     try {
       await client.query('BEGIN');
-      
+
       // Manually clean up dependencies 
       console.log(`[Bulk Delete] Deleting IDs: ${ids.join(', ')} for user ${userId}`);
       await client.query('DELETE FROM alerts WHERE position_id = ANY($1)', [ids]);
@@ -810,7 +865,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
         'DELETE FROM positions WHERE id = ANY($1) AND user_id = $2',
         [ids, userId]
       );
-      
+
       await client.query('COMMIT');
 
       // Invalidate cache
@@ -869,7 +924,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       // Manual Cascade
       await client.query('DELETE FROM alerts WHERE position_id = $1', [id]);
       await client.query('DELETE FROM price_history WHERE position_id = $1', [id]);
-      
+
       await client.query('DELETE FROM positions WHERE id = $1 AND user_id = $2', [id, userId]);
 
       await client.query('COMMIT');

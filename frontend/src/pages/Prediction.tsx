@@ -5,9 +5,26 @@ import {
     ReferenceLine, Legend
 } from 'recharts';
 
-import { Loader2, TrendingUp, TrendingDown, AlignJustify, BrainCircuit, Activity, Clock, AlertTriangle } from 'lucide-react';
+import { Loader2, TrendingUp, TrendingDown, AlignJustify, BrainCircuit, Activity, Clock, AlertTriangle, Newspaper } from 'lucide-react';
 
 import { api } from '@/lib/api';
+
+interface NewsHeadline {
+    title: string;
+    score: number;
+    sentiment: 'Bullish' | 'Bearish' | 'Neutral';
+    published: number;
+}
+
+interface NewsSentiment {
+    available: boolean;
+    aggregate_score: number;
+    sentiment: 'Bullish' | 'Bearish' | 'Neutral';
+    headline_count: number;
+    headlines: NewsHeadline[];
+    error?: string;
+    message?: string;
+}
 
 interface PredictionData {
     symbol: string;
@@ -22,6 +39,7 @@ interface PredictionData {
         ema21: number;
         bollinger: { upper: number; lower: number; middle: number };
     };
+    newsSentiment?: NewsSentiment;
     aiAnalysis: {
         verdict: 'Buy' | 'Sell' | 'Hold';
         reasoning: string;
@@ -231,7 +249,70 @@ export default function Prediction() {
                             </p>
                         </div>
 
-                        {/* Technical Indicators Card */}
+                        {/* News Sentiment Card */}
+                        {data.newsSentiment && data.newsSentiment.available && (
+                            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 shadow-xl">
+                                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-amber-300">
+                                    <Newspaper className="w-5 h-5" /> News Sentiment
+                                </h3>
+
+                                {/* Aggregate Score */}
+                                <div className="mb-4 p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs text-slate-400">Overall Sentiment</span>
+                                        <span className={`text-lg font-bold ${data.newsSentiment.sentiment === 'Bullish' ? 'text-green-400' :
+                                                data.newsSentiment.sentiment === 'Bearish' ? 'text-red-400' :
+                                                    'text-yellow-400'
+                                            }`}>
+                                            {data.newsSentiment.sentiment}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2">
+                                        <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                            <span>Bearish</span>
+                                            <span>Score: {data.newsSentiment.aggregate_score.toFixed(2)}</span>
+                                            <span>Bullish</span>
+                                        </div>
+                                        {/* Visual sentiment bar */}
+                                        <div className="relative h-2 bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 rounded-full overflow-hidden">
+                                            <div
+                                                className="absolute top-0 bottom-0 w-3 bg-white border-2 border-slate-800 rounded-full shadow-lg transform -translate-x-1/2"
+                                                style={{ left: `${((data.newsSentiment.aggregate_score + 1) / 2) * 100}%` }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Headlines List */}
+                                {data.newsSentiment.headlines.length > 0 && (
+                                    <div className="space-y-2">
+                                        <div className="text-xs text-slate-400 font-medium">
+                                            Recent Headlines ({data.newsSentiment.headline_count})
+                                        </div>
+                                        {data.newsSentiment.headlines.slice(0, 5).map((headline, idx) => (
+                                            <div key={idx} className="p-2 bg-slate-900/30 rounded border-l-2 transition-colors hover:bg-slate-900/50"
+                                                style={{
+                                                    borderLeftColor: headline.sentiment === 'Bullish' ? '#4ade80' :
+                                                        headline.sentiment === 'Bearish' ? '#f87171' : '#facc15'
+                                                }}>
+                                                <p className="text-xs text-slate-300 leading-snug line-clamp-2">{headline.title}</p>
+                                                <div className="flex justify-between items-center mt-1">
+                                                    <span className={`text-[10px] font-medium ${headline.sentiment === 'Bullish' ? 'text-green-400' :
+                                                            headline.sentiment === 'Bearish' ? 'text-red-400' :
+                                                                'text-yellow-400'
+                                                        }`}>
+                                                        {headline.sentiment}
+                                                    </span>
+                                                    <span className="text-[10px] text-slate-500 font-mono">
+                                                        {headline.score > 0 ? '+' : ''}{headline.score.toFixed(2)}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 shadow-xl">
                             <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-cyan-300">
                                 <Activity className="w-5 h-5" /> Technicals

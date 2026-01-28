@@ -23,11 +23,29 @@ export interface TechnicalIndicators {
     };
 }
 
+export interface NewsHeadline {
+    title: string;
+    score: number;
+    sentiment: 'Bullish' | 'Bearish' | 'Neutral';
+    published: number;
+}
+
+export interface NewsAnalysis {
+    available: boolean;
+    aggregate_score: number;
+    sentiment: 'Bullish' | 'Bearish' | 'Neutral';
+    headline_count: number;
+    headlines: NewsHeadline[];
+    error?: string;
+    message?: string;
+}
+
 export interface PredictionResult {
     symbol: string;
     currentPrice: number;
     history: { date: string; close: number }[];
     indicators: TechnicalIndicators;
+    newsSentiment?: NewsAnalysis;
     aiAnalysis: {
         verdict: 'Buy' | 'Sell' | 'Hold';
         reasoning: string;
@@ -146,11 +164,11 @@ export class PredictionService {
                 console.log(`[PredictionService] Cached 5-year history for ${upperSymbol} in database`);
             }
 
-            // 2. Run ML Prediction (Python)
+            // 2. Run ML Prediction (Python) - pass symbol for news sentiment
             // Assuming script is at src/scripts/predict_stock.py and we are running from dist/ or src/
             const scriptPath = path.resolve(__dirname, '../scripts/predict_stock.py');
 
-            const mlResult = await this.runPythonScript(scriptPath, historicalData);
+            const mlResult = await this.runPythonScript(scriptPath, { symbol: upperSymbol, data: historicalData });
 
             // 3. Technical Indicators (Still useful to return for frontend charting)
             // Re-sort for our calc if needed (Python handled sorting too)
@@ -184,6 +202,7 @@ export class PredictionService {
                 currentPrice,
                 history: prices.slice(-180), // Return last 180 days for chart
                 indicators,
+                newsSentiment: mlResult.news_analysis,
                 aiAnalysis
             };
 
@@ -195,7 +214,7 @@ export class PredictionService {
         }
     }
 
-    private async runPythonScript(scriptPath: string, data: any[]): Promise<any> {
+    private async runPythonScript(scriptPath: string, data: any): Promise<any> {
         return new Promise((resolve, reject) => {
             // Environment-aware python command
             const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
@@ -244,13 +263,31 @@ export class PredictionService {
     }
 
     private async getAIAnalysis(symbol: string, price: number, indicators: TechnicalIndicators, mlResult: any) {
+        // Build news sentiment section if available
+        let newsSentimentSection = '';
+        if (mlResult.news_analysis && mlResult.news_analysis.available) {
+            const news = mlResult.news_analysis;
+            const topHeadlines = (news.headlines || []).slice(0, 3).map((h: any) =>
+                `  - "${h.title}" (${h.sentiment}, score: ${h.score})`
+            ).join('\n');
+
+            newsSentimentSection = `
+        3. NEWS SENTIMENT ANALYSIS (VADER):
+        - Aggregate Score: ${news.aggregate_score} (range: -1 bearish to +1 bullish)
+        - Overall News Sentiment: ${news.sentiment}
+        - Headlines Analyzed: ${news.headline_count}
+        ${topHeadlines ? `- Top Headlines:\n${topHeadlines}` : ''}
+        `;
+        }
+
         const prompt = `
-        Analyze this stock combining Technical Analysis and Machine Learning predictions.
+        Analyze this stock combining Technical Analysis, Machine Learning predictions, and News Sentiment.
         
         ASSET: ${symbol} at $${price.toFixed(2)}
 
-        1. MACHINE LEARNING MODEL (Random Forest Simulation):
+        1. MACHINE LEARNING MODEL (Random Forest):
         - Probability of Up-trend: ${(mlResult.prediction_probability_up * 100).toFixed(1)}%
+        - Combined Score (ML + News): ${((mlResult.combined_score || mlResult.prediction_probability_up) * 100).toFixed(1)}%
         - Model Sentiment: ${mlResult.sentiment}
         - Key Drivers: RSI=${mlResult.features.rsi.toFixed(1)}, Recent Trend=${mlResult.features.trend_5.toFixed(3)}
         
@@ -262,10 +299,11 @@ export class PredictionService {
         - SMA 50: $${indicators.sma50.toFixed(2)}
         - SMA 200: $${indicators.sma200.toFixed(2)}
         - Trend: Price is ${price > indicators.sma200 ? 'above' : 'below'} SMA200 (Long term) and ${price > indicators.sma50 ? 'above' : 'below'} SMA50 (Medium term).
-        
+        ${newsSentimentSection}
         TASK: Provide a definitive trading verdict (Buy/Sell/Hold) and synthesis.
         - The SMA200 is the "Institutional Floor". If price is above, favor Buy/Hold. If below, favor Sell/Hold.
         - EMA Crossovers: If EMA 9 > EMA 21, momentum is bullish. If EMA 9 < EMA 21, it's bearish.
+        - NEWS SENTIMENT: If news is strongly bullish/bearish, factor this into your recommendation.
         - If conflict (ML Bullish but Price < SMA200), remain cautious.
         - Be decisive. If indicators align, don't just say "no clear signal".
         
