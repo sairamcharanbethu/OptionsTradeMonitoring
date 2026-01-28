@@ -26,6 +26,32 @@ interface NewsSentiment {
     message?: string;
 }
 
+interface MarketIndicators {
+    available: boolean;
+    vix?: number;
+    vix_level?: string;
+    fear_greed?: {
+        value: number;
+        label: string;
+    };
+    fifty_two_week?: {
+        high: number;
+        low: number;
+        current: number;
+        distance_from_high_pct: number;
+        distance_from_low_pct: number;
+        position_in_range: number;
+    };
+    analyst_targets?: {
+        mean_target: number;
+        high_target?: number;
+        low_target?: number;
+        num_analysts: number;
+        recommendation: string;
+        upside_pct: number;
+    };
+}
+
 interface PredictionData {
     symbol: string;
     currentPrice: number;
@@ -40,6 +66,7 @@ interface PredictionData {
         bollinger: { upper: number; lower: number; middle: number };
     };
     newsSentiment?: NewsSentiment;
+    marketIndicators?: MarketIndicators;
     aiAnalysis: {
         verdict: 'Buy' | 'Sell' | 'Hold';
         reasoning: string;
@@ -261,8 +288,8 @@ export default function Prediction() {
                                     <div className="flex justify-between items-center">
                                         <span className="text-xs text-slate-400">Overall Sentiment</span>
                                         <span className={`text-lg font-bold ${data.newsSentiment.sentiment === 'Bullish' ? 'text-green-400' :
-                                                data.newsSentiment.sentiment === 'Bearish' ? 'text-red-400' :
-                                                    'text-yellow-400'
+                                            data.newsSentiment.sentiment === 'Bearish' ? 'text-red-400' :
+                                                'text-yellow-400'
                                             }`}>
                                             {data.newsSentiment.sentiment}
                                         </span>
@@ -298,8 +325,8 @@ export default function Prediction() {
                                                 <p className="text-xs text-slate-300 leading-snug line-clamp-2">{headline.title}</p>
                                                 <div className="flex justify-between items-center mt-1">
                                                     <span className={`text-[10px] font-medium ${headline.sentiment === 'Bullish' ? 'text-green-400' :
-                                                            headline.sentiment === 'Bearish' ? 'text-red-400' :
-                                                                'text-yellow-400'
+                                                        headline.sentiment === 'Bearish' ? 'text-red-400' :
+                                                            'text-yellow-400'
                                                         }`}>
                                                         {headline.sentiment}
                                                     </span>
@@ -311,6 +338,108 @@ export default function Prediction() {
                                         ))}
                                     </div>
                                 )}
+                            </div>
+                        )}
+
+                        {/* Market Indicators Card */}
+                        {data.marketIndicators && data.marketIndicators.available && (
+                            <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 shadow-xl">
+                                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-emerald-300">
+                                    <Activity className="w-5 h-5" /> Market Sentiment
+                                </h3>
+
+                                <div className="space-y-4">
+                                    {/* VIX */}
+                                    {data.marketIndicators.vix && (
+                                        <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                            <div className="flex justify-between items-center">
+                                                <span className="text-xs text-slate-400">VIX (Fear Index)</span>
+                                                <span className={`text-lg font-bold ${data.marketIndicators.vix < 15 ? 'text-green-400' :
+                                                        data.marketIndicators.vix < 20 ? 'text-yellow-400' :
+                                                            data.marketIndicators.vix < 30 ? 'text-orange-400' :
+                                                                'text-red-400'
+                                                    }`}>
+                                                    {data.marketIndicators.vix.toFixed(1)}
+                                                </span>
+                                            </div>
+                                            <div className="text-xs text-slate-500 mt-1">{data.marketIndicators.vix_level}</div>
+                                        </div>
+                                    )}
+
+                                    {/* Fear & Greed */}
+                                    {data.marketIndicators.fear_greed && (
+                                        <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                            <div className="flex justify-between items-center mb-2">
+                                                <span className="text-xs text-slate-400">Fear & Greed</span>
+                                                <span className={`text-sm font-medium ${data.marketIndicators.fear_greed.value >= 75 ? 'text-green-400' :
+                                                        data.marketIndicators.fear_greed.value >= 55 ? 'text-lime-400' :
+                                                            data.marketIndicators.fear_greed.value >= 45 ? 'text-yellow-400' :
+                                                                data.marketIndicators.fear_greed.value >= 25 ? 'text-orange-400' :
+                                                                    'text-red-400'
+                                                    }`}>
+                                                    {data.marketIndicators.fear_greed.value}/100 ({data.marketIndicators.fear_greed.label})
+                                                </span>
+                                            </div>
+                                            <div className="relative h-2 bg-gradient-to-r from-red-500 via-yellow-500 to-green-500 rounded-full">
+                                                <div
+                                                    className="absolute top-0 bottom-0 w-2 bg-white border border-slate-800 rounded-full shadow transform -translate-x-1/2"
+                                                    style={{ left: `${data.marketIndicators.fear_greed.value}%` }}
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* 52-Week Range */}
+                                    {data.marketIndicators.fifty_two_week && (
+                                        <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                            <div className="flex justify-between text-xs text-slate-400 mb-1">
+                                                <span>52W Low: ${data.marketIndicators.fifty_two_week.low.toFixed(2)}</span>
+                                                <span>52W High: ${data.marketIndicators.fifty_two_week.high.toFixed(2)}</span>
+                                            </div>
+                                            <div className="relative h-2 bg-slate-700 rounded-full mb-2">
+                                                <div
+                                                    className="absolute top-0 bottom-0 w-2 bg-blue-500 rounded-full shadow-lg shadow-blue-500/50 transform -translate-x-1/2"
+                                                    style={{ left: `${Math.min(100, Math.max(0, data.marketIndicators.fifty_two_week.position_in_range))}%` }}
+                                                />
+                                            </div>
+                                            <div className="text-center text-xs text-slate-400">
+                                                {data.marketIndicators.fifty_two_week.distance_from_high_pct.toFixed(1)}% from 52W high
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Analyst Targets */}
+                                    {data.marketIndicators.analyst_targets && (
+                                        <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-700/50">
+                                            <div className="flex justify-between items-center mb-1">
+                                                <span className="text-xs text-slate-400">Analyst Target</span>
+                                                <span className={`text-sm font-bold ${data.marketIndicators.analyst_targets.upside_pct > 10 ? 'text-green-400' :
+                                                        data.marketIndicators.analyst_targets.upside_pct > 0 ? 'text-lime-400' :
+                                                            data.marketIndicators.analyst_targets.upside_pct > -10 ? 'text-yellow-400' :
+                                                                'text-red-400'
+                                                    }`}>
+                                                    ${data.marketIndicators.analyst_targets.mean_target.toFixed(2)}
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between text-xs">
+                                                <span className={`font-medium uppercase ${data.marketIndicators.analyst_targets.recommendation === 'buy' ||
+                                                        data.marketIndicators.analyst_targets.recommendation === 'strong_buy' ? 'text-green-400' :
+                                                        data.marketIndicators.analyst_targets.recommendation === 'hold' ? 'text-yellow-400' :
+                                                            'text-red-400'
+                                                    }`}>
+                                                    {data.marketIndicators.analyst_targets.recommendation.replace('_', ' ')}
+                                                </span>
+                                                <span className="text-slate-500">
+                                                    {data.marketIndicators.analyst_targets.upside_pct > 0 ? '+' : ''}
+                                                    {data.marketIndicators.analyst_targets.upside_pct.toFixed(1)}% upside
+                                                </span>
+                                            </div>
+                                            <div className="text-xs text-slate-600 mt-1">
+                                                Based on {data.marketIndicators.analyst_targets.num_analysts} analysts
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         )}
                         <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-6 shadow-xl">

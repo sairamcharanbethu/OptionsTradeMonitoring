@@ -113,6 +113,118 @@ def fetch_news_sentiment(symbol):
             "headlines": []
         }
 
+def fetch_market_indicators(symbol):
+    """
+    Fetch market-wide and stock-specific indicators:
+    - VIX (market fear)
+    - 52-week high/low distance
+    - Analyst price targets
+    - Fear & Greed index (approximated from VIX)
+    """
+    if not HAS_SENTIMENT:
+        return {"available": False, "error": "yfinance not installed"}
+    
+    result = {
+        "available": True,
+        "vix": None,
+        "vix_level": "Unknown",
+        "fifty_two_week": None,
+        "analyst_targets": None,
+        "fear_greed": None
+    }
+    
+    try:
+        # 1. Fetch VIX
+        try:
+            vix_ticker = yf.Ticker("^VIX")
+            vix_data = vix_ticker.history(period="1d")
+            if not vix_data.empty:
+                vix_value = float(vix_data['Close'].iloc[-1])
+                result["vix"] = round(vix_value, 2)
+                
+                # Classify VIX level
+                if vix_value < 15:
+                    result["vix_level"] = "Low (Complacent)"
+                elif vix_value < 20:
+                    result["vix_level"] = "Normal"
+                elif vix_value < 30:
+                    result["vix_level"] = "Elevated (Caution)"
+                else:
+                    result["vix_level"] = "High (Fear)"
+                
+                # Approximate Fear & Greed from VIX (inverse relationship)
+                # VIX 10 = Extreme Greed (100), VIX 40 = Extreme Fear (0)
+                fear_greed = max(0, min(100, int(100 - ((vix_value - 10) / 30) * 100)))
+                if fear_greed >= 75:
+                    fear_greed_label = "Extreme Greed"
+                elif fear_greed >= 55:
+                    fear_greed_label = "Greed"
+                elif fear_greed >= 45:
+                    fear_greed_label = "Neutral"
+                elif fear_greed >= 25:
+                    fear_greed_label = "Fear"
+                else:
+                    fear_greed_label = "Extreme Fear"
+                
+                result["fear_greed"] = {
+                    "value": fear_greed,
+                    "label": fear_greed_label
+                }
+        except Exception as vix_err:
+            result["vix_error"] = str(vix_err)
+        
+        # 2. Fetch 52-week high/low and analyst targets for the stock
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            
+            # 52-week high/low
+            high_52 = info.get('fiftyTwoWeekHigh')
+            low_52 = info.get('fiftyTwoWeekLow')
+            current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+            
+            if high_52 and low_52 and current_price:
+                range_52 = high_52 - low_52
+                distance_from_high = ((high_52 - current_price) / high_52) * 100
+                distance_from_low = ((current_price - low_52) / low_52) * 100
+                position_in_range = ((current_price - low_52) / range_52) * 100 if range_52 > 0 else 50
+                
+                result["fifty_two_week"] = {
+                    "high": round(high_52, 2),
+                    "low": round(low_52, 2),
+                    "current": round(current_price, 2),
+                    "distance_from_high_pct": round(distance_from_high, 1),
+                    "distance_from_low_pct": round(distance_from_low, 1),
+                    "position_in_range": round(position_in_range, 1)
+                }
+            
+            # Analyst price targets
+            target_mean = info.get('targetMeanPrice')
+            target_high = info.get('targetHighPrice')
+            target_low = info.get('targetLowPrice')
+            num_analysts = info.get('numberOfAnalystOpinions', 0)
+            recommendation = info.get('recommendationKey', 'none')
+            
+            if target_mean and current_price:
+                upside = ((target_mean - current_price) / current_price) * 100
+                result["analyst_targets"] = {
+                    "mean_target": round(target_mean, 2),
+                    "high_target": round(target_high, 2) if target_high else None,
+                    "low_target": round(target_low, 2) if target_low else None,
+                    "num_analysts": num_analysts,
+                    "recommendation": recommendation,
+                    "upside_pct": round(upside, 1)
+                }
+                
+        except Exception as stock_err:
+            result["stock_error"] = str(stock_err)
+            
+    except Exception as e:
+        result["available"] = False
+        result["error"] = str(e)
+    
+    return result
+
 def process_and_predict():
     try:
         # Read JSON from stdin
@@ -128,6 +240,9 @@ def process_and_predict():
         
         # Fetch news sentiment
         news_sentiment = fetch_news_sentiment(symbol)
+        
+        # Fetch market indicators (VIX, 52-week, analyst targets, Fear & Greed)
+        market_indicators = fetch_market_indicators(symbol)
         
         # Convert to DataFrame
         df = pd.DataFrame(price_data)
@@ -222,7 +337,8 @@ def process_and_predict():
                 "trend_5": float(test['Trend_5'].iloc[0]),
                 "news_sentiment": sentiment_score
             },
-            "news_analysis": news_sentiment
+            "news_analysis": news_sentiment,
+            "market_indicators": market_indicators
         }
         
         print(json.dumps(result))

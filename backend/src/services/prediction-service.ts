@@ -40,12 +40,40 @@ export interface NewsAnalysis {
     message?: string;
 }
 
+export interface MarketIndicators {
+    available: boolean;
+    vix?: number;
+    vix_level?: string;
+    fear_greed?: {
+        value: number;
+        label: string;
+    };
+    fifty_two_week?: {
+        high: number;
+        low: number;
+        current: number;
+        distance_from_high_pct: number;
+        distance_from_low_pct: number;
+        position_in_range: number;
+    };
+    analyst_targets?: {
+        mean_target: number;
+        high_target?: number;
+        low_target?: number;
+        num_analysts: number;
+        recommendation: string;
+        upside_pct: number;
+    };
+    error?: string;
+}
+
 export interface PredictionResult {
     symbol: string;
     currentPrice: number;
     history: { date: string; close: number }[];
     indicators: TechnicalIndicators;
     newsSentiment?: NewsAnalysis;
+    marketIndicators?: MarketIndicators;
     aiAnalysis: {
         verdict: 'Buy' | 'Sell' | 'Hold';
         reasoning: string;
@@ -203,6 +231,7 @@ export class PredictionService {
                 history: prices.slice(-180), // Return last 180 days for chart
                 indicators,
                 newsSentiment: mlResult.news_analysis,
+                marketIndicators: mlResult.market_indicators,
                 aiAnalysis
             };
 
@@ -280,8 +309,28 @@ export class PredictionService {
         `;
         }
 
+        // Build market indicators section if available
+        let marketIndicatorsSection = '';
+        if (mlResult.market_indicators && mlResult.market_indicators.available) {
+            const mkt = mlResult.market_indicators;
+            const vixInfo = mkt.vix ? `VIX: ${mkt.vix} (${mkt.vix_level})` : '';
+            const fearGreed = mkt.fear_greed ? `Fear & Greed: ${mkt.fear_greed.value}/100 (${mkt.fear_greed.label})` : '';
+            const fiftyTwo = mkt.fifty_two_week ?
+                `52-Week Position: ${mkt.fifty_two_week.position_in_range.toFixed(0)}% (${mkt.fifty_two_week.distance_from_high_pct.toFixed(1)}% from high)` : '';
+            const analyst = mkt.analyst_targets ?
+                `Analyst Target: $${mkt.analyst_targets.mean_target} (${mkt.analyst_targets.upside_pct > 0 ? '+' : ''}${mkt.analyst_targets.upside_pct.toFixed(1)}% upside) - ${mkt.analyst_targets.recommendation.toUpperCase()} (${mkt.analyst_targets.num_analysts} analysts)` : '';
+
+            marketIndicatorsSection = `
+        4. MARKET SENTIMENT & CONTEXT:
+        - ${vixInfo}
+        - ${fearGreed}
+        - ${fiftyTwo}
+        - ${analyst}
+        `;
+        }
+
         const prompt = `
-        Analyze this stock combining Technical Analysis, Machine Learning predictions, and News Sentiment.
+        Analyze this stock combining Technical Analysis, ML predictions, News Sentiment, and Market Context.
         
         ASSET: ${symbol} at $${price.toFixed(2)}
 
@@ -299,11 +348,14 @@ export class PredictionService {
         - SMA 50: $${indicators.sma50.toFixed(2)}
         - SMA 200: $${indicators.sma200.toFixed(2)}
         - Trend: Price is ${price > indicators.sma200 ? 'above' : 'below'} SMA200 (Long term) and ${price > indicators.sma50 ? 'above' : 'below'} SMA50 (Medium term).
-        ${newsSentimentSection}
+        ${newsSentimentSection}${marketIndicatorsSection}
         TASK: Provide a definitive trading verdict (Buy/Sell/Hold) and synthesis.
         - The SMA200 is the "Institutional Floor". If price is above, favor Buy/Hold. If below, favor Sell/Hold.
         - EMA Crossovers: If EMA 9 > EMA 21, momentum is bullish. If EMA 9 < EMA 21, it's bearish.
         - NEWS SENTIMENT: If news is strongly bullish/bearish, factor this into your recommendation.
+        - VIX/FEAR & GREED: Extreme fear = potential contrarian buy, extreme greed = caution.
+        - 52-WEEK POSITION: Near 52-week low may signal value, near high may signal resistance.
+        - ANALYST TARGETS: Consider upside/downside potential vs current price.
         - If conflict (ML Bullish but Price < SMA200), remain cautious.
         - Be decisive. If indicators align, don't just say "no clear signal".
         
