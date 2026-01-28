@@ -57,7 +57,11 @@ def fetch_news_sentiment(symbol):
         
         # Process up to 10 most recent headlines
         for item in news[:10]:
-            title = item.get('title', '')
+            # yfinance returns nested structure: item['content']['title']
+            content = item.get('content', item)  # Handle both old and new API format
+            title = content.get('title', '') if isinstance(content, dict) else item.get('title', '')
+            published = content.get('pubDate', item.get('providerPublishTime', 0)) if isinstance(content, dict) else item.get('providerPublishTime', 0)
+            
             if title:
                 scores = analyzer.polarity_scores(title)
                 compound = scores['compound']
@@ -75,7 +79,7 @@ def fetch_news_sentiment(symbol):
                     "title": title[:120],  # Truncate long titles
                     "score": round(compound, 3),
                     "sentiment": sent_label,
-                    "published": item.get('providerPublishTime', 0)
+                    "published": published
                 })
         
         # Calculate aggregate sentiment
