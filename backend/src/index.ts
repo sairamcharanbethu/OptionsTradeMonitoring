@@ -8,6 +8,7 @@ import { positionRoutes } from './routes/positions';
 import { marketDataRoutes } from './routes/market-data';
 import { marketRoutes } from './routes/market';
 import { aiRoutes } from './routes/ai';
+import { mlRoutes } from './routes/ml';
 import { settingsRoutes } from './routes/settings';
 import { liveAnalysisRoutes } from './routes/live-analysis';
 import jwt from '@fastify/jwt';
@@ -151,6 +152,7 @@ const start = async () => {
     fastify.register(marketDataRoutes, { prefix: '/api/market-data' });
     fastify.register(marketRoutes, { prefix: '/api/market' });
     fastify.register(aiRoutes, { prefix: '/api/ai' });
+    fastify.register(mlRoutes, { prefix: '/api/v1/ml' });
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
     fastify.register(liveAnalysisRoutes, { prefix: '/api/live-analysis' });
 
