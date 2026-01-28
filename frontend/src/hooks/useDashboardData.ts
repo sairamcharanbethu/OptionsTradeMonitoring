@@ -8,6 +8,7 @@ export const QUERY_KEYS = {
     portfolioStats: ['portfolioStats'],
     marketStatus: ['marketStatus'],
     briefing: ['briefing'],
+    history: (page: number, limit: number) => ['positionHistory', page, limit],
 };
 
 export function usePositions(refreshInterval = 30000) {
@@ -16,6 +17,14 @@ export function usePositions(refreshInterval = 30000) {
         queryFn: () => api.getPositions(),
         refetchInterval: refreshInterval,
         staleTime: 10000,
+    });
+}
+
+export function useClosedPositions(page: number = 1, limit: number = 10) {
+    return useQuery({
+        queryKey: QUERY_KEYS.history(page, limit),
+        queryFn: () => api.getClosedPositions(page, limit),
+        staleTime: 30000, // Cache for 30 seconds
     });
 }
 

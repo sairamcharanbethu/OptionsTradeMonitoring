@@ -227,6 +227,33 @@ export const api = {
     }));
   },
 
+  async getClosedPositions(page: number = 1, limit: number = 10): Promise<{ positions: Position[]; total: number; page: number; limit: number; totalPages: number }> {
+    const res = await authFetch(`${API_BASE}/positions/history?page=${page}&limit=${limit}`);
+    if (!res.ok) throw new Error('Failed to fetch closed positions');
+    const data = await res.json();
+
+    return {
+      ...data,
+      positions: data.positions.map((pos: any) => ({
+        ...pos,
+        strike_price: Number(pos.strike_price),
+        entry_price: Number(pos.entry_price),
+        stop_loss_trigger: pos.stop_loss_trigger != null ? Number(pos.stop_loss_trigger) : undefined,
+        take_profit_trigger: pos.take_profit_trigger != null ? Number(pos.take_profit_trigger) : undefined,
+        trailing_high_price: pos.trailing_high_price != null ? Number(pos.trailing_high_price) : undefined,
+        current_price: pos.current_price != null ? Number(pos.current_price) : undefined,
+        realized_pnl: pos.realized_pnl != null ? Number(pos.realized_pnl) : undefined,
+        loss_avoided: pos.loss_avoided != null ? Number(pos.loss_avoided) : undefined,
+        delta: pos.delta != null ? Number(pos.delta) : undefined,
+        theta: pos.theta != null ? Number(pos.theta) : undefined,
+        gamma: pos.gamma != null ? Number(pos.gamma) : undefined,
+        vega: pos.vega != null ? Number(pos.vega) : undefined,
+        iv: pos.iv != null ? Number(pos.iv) : undefined,
+        underlying_price: pos.underlying_price != null ? Number(pos.underlying_price) : undefined,
+      }))
+    };
+  },
+
   async getPositionUpdates(): Promise<Record<number, Partial<Position>>> {
     const res = await authFetch(`${API_BASE}/positions/updates?t=${Date.now()}`);
     if (!res.ok) throw new Error('Failed to fetch position updates');
