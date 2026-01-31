@@ -26,7 +26,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [openRouterKey, setOpenRouterKey] = useState('');
     const [model, setModel] = useState('mistral:7b-instruct-q4_K_M');
     const [briefingFrequency, setBriefingFrequency] = useState('disabled');
-    const [pollInterval, setPollInterval] = useState('60');
+    const [pollInterval, setPollInterval] = useState('60'); // Market Poll (Global)
+    const [positionPollInterval, setPositionPollInterval] = useState('2'); // Position Detail Poll (Local)
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -136,6 +137,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setModel(data.ai_model || 'mistral:7b-instruct-q4_K_M');
             setBriefingFrequency(data.briefing_frequency || 'disabled');
             setPollInterval(data.market_poll_interval || '60');
+            setPositionPollInterval(data.position_poll_interval || '2');
         } catch (err) {
             console.error(err);
         } finally {
@@ -196,8 +198,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 openrouter_key: openRouterKey,
                 ai_model: model,
                 briefing_frequency: briefingFrequency,
-                market_poll_interval: pollInterval
+                market_poll_interval: pollInterval,
+                position_poll_interval: positionPollInterval
             });
+            onUpdate(user); // Force refresh of parent if needed
             setOpen(false);
         } catch (err) {
             alert('Failed to save settings');
@@ -322,6 +326,30 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         {parseInt(pollInterval) < 30
                                             ? 'Caution: Fast polling may cause Yahoo Finance to block your IP.'
                                             : 'How often the server fetches fresh prices and Greeks.'}
+                                    </p>
+                                </div>
+
+                                <div className="grid gap-2">
+                                    <Label htmlFor="posPollInterval" className="flex items-center gap-2">
+                                        Position Detail Refresh Rate
+                                        {parseInt(positionPollInterval) < 2 && (
+                                            <Badge variant="destructive" className="text-[10px] h-5">Max Load</Badge>
+                                        )}
+                                    </Label>
+                                    <Select value={positionPollInterval} onValueChange={setPositionPollInterval}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Interval" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="2">Every 2 seconds (Default)</SelectItem>
+                                            <SelectItem value="5">Every 5 seconds</SelectItem>
+                                            <SelectItem value="10">Every 10 seconds</SelectItem>
+                                            <SelectItem value="30">Every 30 seconds</SelectItem>
+                                            <SelectItem value="0">Manual Only (Disabled)</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-[10px] text-muted-foreground">
+                                        How often an individual Position page auto-refreshes data while open.
                                     </p>
                                 </div>
 

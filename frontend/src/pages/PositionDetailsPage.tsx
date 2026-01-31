@@ -18,6 +18,9 @@ export default function PositionDetailsPage() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+    const [updater, setUpdater] = useState<number>(0); // Force re-render for timer
+    const pollIntervalRef = React.useRef<any>(null);
 
     // Close Logic
     const [isClosing, setIsClosing] = useState(false);
@@ -35,12 +38,38 @@ export default function PositionDetailsPage() {
     useEffect(() => {
         if (!id) return;
         loadPosition(id);
+
+        // dedicated polling
+        const startPolling = async () => {
+            try {
+                const settings = await api.getSettings();
+                const intervalSeconds = parseInt(settings.position_poll_interval || '2');
+
+                if (intervalSeconds > 0) {
+                    pollIntervalRef.current = setInterval(async () => {
+                        await handleRefresh(true);
+                    }, intervalSeconds * 1000);
+                }
+            } catch (err) {
+                console.error("Failed to load settings for polling", err);
+            }
+        };
+        startPolling();
+
+        // Timer for UI "ago" update
+        const timer = setInterval(() => setUpdater(prev => prev + 1), 1000);
+
+        return () => {
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+            clearInterval(timer);
+        };
     }, [id]);
 
     useEffect(() => {
         if (position) {
             setSalePrice(position.current_price?.toString() || '');
             setSaleQty(position.quantity?.toString() || '');
+            setLastUpdated(new Date());
         }
     }, [position]);
 
@@ -48,15 +77,10 @@ export default function PositionDetailsPage() {
         try {
             setLoading(true);
             const allPositions = await api.getPositions(); // Ideally we'd have a getPositionById API
-            // But getPositions is filtered by user already, so it's safe.
-            // We can also use filter. 
-            // NOTE: api.getPositions returns all positions.
             const match = allPositions.find(p => p.id.toString() === posId);
             if (match) {
                 setPosition(match);
             } else {
-                // Try fetching closed?
-                // For now assuming active or recently closed in list
                 setError('Position not found');
             }
         } catch (err: any) {
@@ -66,16 +90,17 @@ export default function PositionDetailsPage() {
         }
     };
 
-    const handleRefresh = async () => {
+    const handleRefresh = async (silent = false) => {
         if (!position) return;
-        setRefreshing(true);
+        if (!silent) setRefreshing(true);
         try {
             await api.syncPosition(position.id);
             await loadPosition(position.id.toString());
+            setLastUpdated(new Date());
         } catch (err) {
             console.error('Failed to refresh position:', err);
         } finally {
-            setRefreshing(false);
+            if (!silent) setRefreshing(false);
         }
     };
 
@@ -97,6 +122,7 @@ export default function PositionDetailsPage() {
         if (!position) return;
         const price = parseFloat(salePrice);
         const qty = parseInt(saleQty);
+
 
         if (isNaN(price) || price <= 0) {
             setCloseError('Please enter a valid sale price.');
@@ -174,6 +200,9 @@ export default function PositionDetailsPage() {
                         <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="text-sm px-2 py-0.5 sm:px-3 sm:py-1">
                             {position.option_type} ${position.strike_price}
                         </Badge>
+                        <Badge variant="outline" className="text-xs font-mono ml-2">
+                            Updated {Math.floor((new Date().getTime() - lastUpdated.getTime()) / 1000)}s ago
+                        </Badge>
                         <Badge variant="outline" className={cn("text-sm px-2 py-0.5 sm:px-3 sm:py-1 font-bold", isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50')}>
                             {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
                         </Badge>
@@ -188,7 +217,7 @@ export default function PositionDetailsPage() {
                         variant="outline"
                         size="icon"
                         className="h-10 w-10 shrink-0"
-                        onClick={handleRefresh}
+                        onClick={() => handleRefresh(false)}
                         disabled={refreshing}
                         title="Force Refresh Data"
                     >
