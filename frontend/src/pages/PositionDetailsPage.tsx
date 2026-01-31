@@ -91,12 +91,15 @@ export default function PositionDetailsPage() {
     };
 
     const handleRefresh = async (silent = false) => {
-        if (!position) return;
+        // Fix: Use stable ID from params to avoid stale closure in polling
+        const targetId = position?.id || (id ? Number(id) : undefined);
+        if (!targetId) return;
+
         if (!silent) setRefreshing(true);
         try {
-            await api.syncPosition(position.id);
-            await loadPosition(position.id.toString());
-            setLastUpdated(new Date());
+            await api.syncPosition(targetId);
+            await loadPosition(targetId.toString());
+            // lastUpdated updated by effect
         } catch (err) {
             console.error('Failed to refresh position:', err);
         } finally {
