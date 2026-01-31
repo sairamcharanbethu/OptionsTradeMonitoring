@@ -276,27 +276,29 @@ export default function PositionDetailsPage() {
                         {/* Risk Management */}
                         <div className="p-6 rounded-xl border bg-card shadow-sm space-y-4">
                             <div className="flex items-center gap-2 font-semibold">
-                                <ShieldAlert className="h-5 w-5 text-orange-500" /> Active Risk Controls
+                                <ShieldAlert className="h-5 w-5 text-orange-500" /> Active Risk Controls (Auto-Analysis)
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="p-3 bg-background rounded-lg border">
                                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                                        <TrendingDown className="h-3.5 w-3.5" /> Stop Loss
+                                        <TrendingDown className="h-3.5 w-3.5" /> Suggested Stop Loss
                                     </div>
-                                    <div className="text-lg font-mono font-bold">{formatCurrency(position.stop_loss_trigger)}</div>
+                                    <div className="text-lg font-mono font-bold text-red-600">
+                                        {position.suggested_stop_loss ? formatCurrency(position.suggested_stop_loss) : '-'}
+                                    </div>
                                 </div>
                                 <div className="p-3 bg-background rounded-lg border">
                                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                                        <Target className="h-3.5 w-3.5" /> Take Profit
+                                        <Target className="h-3.5 w-3.5" /> Suggested Take Profit
                                     </div>
-                                    <div className="text-lg font-mono font-bold">{formatCurrency(position.take_profit_trigger)}</div>
-                                </div>
-                                <div className="p-3 bg-background rounded-lg border">
-                                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                                        <TrendingUp className="h-3.5 w-3.5" /> Trailing
+                                    <div className="text-lg font-mono font-bold text-green-600">
+                                        {position.suggested_take_profit_1 ? formatCurrency(position.suggested_take_profit_1) : '-'}
+                                        {position.suggested_take_profit_2 &&
+                                            <span className="text-xs text-muted-foreground ml-2 font-normal">
+                                                (L2: {formatCurrency(position.suggested_take_profit_2)})
+                                            </span>
+                                        }
                                     </div>
-                                    <div className="text-lg font-mono font-bold text-blue-600">{position.trailing_stop_loss_pct ? `${position.trailing_stop_loss_pct}%` : '-'}</div>
-                                    {position.trailing_high_price && <div className="text-[10px] text-muted-foreground">High: {formatCurrency(position.trailing_high_price)}</div>}
                                 </div>
                             </div>
                         </div>
@@ -405,12 +407,12 @@ export default function PositionDetailsPage() {
                 </TabsContent>
 
                 {/* SIMULATIONS TAB */}
-                <TabsContent value="sims" className="space-y-6">
-                    <div className="p-6 bg-card rounded-xl border shadow-sm">
-                        <div className="flex items-center justify-between mb-6">
-                            <h3 className="text-lg font-semibold flex items-center gap-2">
-                                <Activity className="h-5 w-5 text-blue-500" />
-                                Interactive PnL Simulation
+                <TabsContent value="sims" className="space-y-4 pt-4">
+                    <div className="p-4 bg-muted/30 rounded-lg border space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-semibold flex items-center gap-2">
+                                <Activity className="h-4 w-4 text-blue-500" />
+                                PnL Simulation (What-If)
                             </h3>
                             <div className="flex items-center gap-2">
                                 <div className="flex border rounded-md overflow-hidden bg-background">
@@ -434,26 +436,181 @@ export default function PositionDetailsPage() {
                                     </Button>
                                 </div>
                                 {position.underlying_price && (
-                                    <Badge variant="outline" className="text-xs">
+                                    <Badge variant="outline" className="text-[10px]">
                                         Ref Price: ${position.underlying_price.toFixed(2)}
                                     </Badge>
                                 )}
                             </div>
                         </div>
+                        <p className="text-[11px] text-muted-foreground leading-snug">
+                            {simViewMode === 'table'
+                                ? "Estimates potential returns based on stock price movements using Delta, Gamma, and Theta."
+                                : "Profit Zone visualization. X-axis is stock move, Y-axis is days to expiration (Top=Now, Bottom=Exp)."}
+                        </p>
 
-                        {/* Insert Simulation Logic Here (Reuse from Dialog) */}
-                        <div className="opacity-80">
-                            {/* For brevity, simplified simulation view or reusing components */}
-                            <p className="text-center py-10 text-muted-foreground">
-                                Simulation view matches the dashboard functionality.
-                                (Implementation matches the dialog logic)
-                            </p>
-                            {/* 
-                                Ideally, we extract the simulation table/heatmap into a 
-                                separate component <SimulationPanel position={position} /> 
-                                to avoid code duplication.
-                            */}
+                        {position.delta == null && (
+                            <div className="py-8 text-center text-sm text-muted-foreground">
+                                Greeks are required for simulation. Please refresh the position.
+                            </div>
+                        )}
+
+                        {position.delta != null && position.underlying_price == null && (
+                            <div className="py-8 text-center text-sm text-muted-foreground">
+                                Underlying price is required for simulation. Please refresh the position to fetch market data.
+                            </div>
+                        )}
+
+                        {position.delta != null && position.underlying_price != null && (
+                            <>
+                                {simViewMode === 'table' ? (
+                                    <div className="rounded-md border overflow-hidden">
+                                        <table className="w-full text-xs text-left border-collapse">
+                                            <thead className="bg-muted/50">
+                                                <tr>
+                                                    <th className="p-2 border-b">Stock Move</th>
+                                                    <th className="p-2 border-b">New Option Price</th>
+                                                    <th className="p-2 border-b text-right">Estimated PnL</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {[-15, -10, -5, -2, 0, 2, 5, 10, 15].map((pct) => {
+                                                    const stockPrice = position.underlying_price!;
+                                                    const dS = stockPrice * (pct / 100);
+                                                    const deltaEffect = (position.delta || 0) * dS;
+                                                    const gammaEffect = 0.5 * (position.gamma || 0) * Math.pow(dS, 2);
+                                                    const estOptionPrice = Math.max(0.01, (position.current_price || 0) + deltaEffect + gammaEffect);
+                                                    const estMarketValue = estOptionPrice * (position.quantity || 1) * 100;
+                                                    const estPnl = estMarketValue - (position.entry_price * (position.quantity || 1) * 100);
+                                                    const estPnlPct = (estOptionPrice - position.entry_price) / position.entry_price * 100;
+
+                                                    return (
+                                                        <tr key={pct} className={pct === 0 ? 'bg-primary/10 font-medium' : 'hover:bg-muted/20'}>
+                                                            <td className="p-2 border-b">
+                                                                <div className="flex items-center gap-1">
+                                                                    {pct > 0 ? <TrendingUp className="h-3 w-3 text-green-500" /> : pct < 0 ? <TrendingDown className="h-3 w-3 text-red-500" /> : null}
+                                                                    {pct === 0 ? 'Current Price' : `${pct > 0 ? '+' : ''}${pct}% ($${(stockPrice + dS).toFixed(2)})`}
+                                                                </div>
+                                                            </td>
+                                                            <td className="p-2 border-b font-mono">
+                                                                ${estOptionPrice.toFixed(2)}
+                                                            </td>
+                                                            <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                {estPnl >= 0 ? '+' : ''}${estPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                                                                <span className="text-[10px] ml-1 opacity-70">
+                                                                    ({estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(1)}%)
+                                                                </span>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        <div className="grid grid-cols-8 gap-1 text-[9px] font-bold text-center text-muted-foreground mb-1">
+                                            <div>DTE</div>
+                                            {[-10, -5, -2, 0, 2, 5, 10].map(p => <div key={p}>{p}%</div>)}
+                                        </div>
+                                        {(function () {
+                                            const dte = Math.ceil((parseLocalDate(position.expiration_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+                                            const timePoints = [dte, Math.floor(dte * 0.75), Math.floor(dte * 0.5), Math.floor(dte * 0.25), 0];
+
+                                            return timePoints.map((d) => (
+                                                <div key={d} className="grid grid-cols-8 gap-1">
+                                                    <div className="flex items-center justify-center text-[10px] font-mono text-muted-foreground border-r">{d}d</div>
+                                                    {[-10, -5, -2, 0, 2, 5, 10].map((pct) => {
+                                                        const stockPrice = position.underlying_price!;
+                                                        const dS = stockPrice * (pct / 100);
+                                                        const deltaEffect = (position.delta || 0) * dS;
+                                                        const gammaEffect = 0.5 * (position.gamma || 0) * Math.pow(dS, 2);
+
+                                                        const timePassed = dte - d;
+                                                        const thetaEffect = (position.theta || 0) * timePassed;
+
+                                                        const estOptionPrice = Math.max(0.01, (position.current_price || 0) + deltaEffect + gammaEffect + thetaEffect);
+                                                        const estPnlPct = (estOptionPrice - position.entry_price) / position.entry_price * 100;
+
+                                                        const intensity = Math.min(Math.abs(estPnlPct) / 50, 1);
+                                                        const opacity = 0.1 + (intensity * 0.8);
+
+                                                        return (
+                                                            <div
+                                                                key={pct}
+                                                                className={`h-9 flex flex-col items-center justify-center rounded text-[8px] sm:text-[9px] font-mono border border-black/5 transition-premium hover:ring-1 hover:ring-primary`}
+                                                                style={{
+                                                                    backgroundColor: estPnlPct >= 0 ? `rgba(34, 197, 94, ${opacity})` : `rgba(239, 68, 68, ${opacity})`,
+                                                                    color: opacity > 0.6 ? 'white' : 'inherit'
+                                                                }}
+                                                                title={`Stock: ${(stockPrice + dS).toFixed(2)} (${pct}%) | PnL: ${estPnlPct.toFixed(1)}%`}
+                                                            >
+                                                                {estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(0)}%
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ));
+                                        })()}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+                </TabsContent>
+
+                <TabsContent value="ai" className="space-y-4 pt-4">
+                    <div className="p-6 bg-card rounded-xl border space-y-4 shadow-sm">
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-lg font-semibold flex items-center gap-2">
+                                <BrainCircuit className="h-5 w-5 text-purple-600" />
+                                AI Strategy Insights
+                            </h3>
+                            <Button
+                                onClick={handleAnalyze}
+                                disabled={analysisLoading}
+                                size="sm"
+                                className="bg-purple-600 hover:bg-purple-700 text-white"
+                            >
+                                {analysisLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BrainCircuit className="mr-2 h-4 w-4" />}
+                                Generate Analysis
+                            </Button>
                         </div>
+
+                        {!analysis ? (
+                            <div className="text-center py-12 px-4 border-2 border-dashed rounded-lg">
+                                <div className="bg-purple-50 dark:bg-purple-900/10 p-3 rounded-full w-fit mx-auto mb-3">
+                                    <BrainCircuit className="h-6 w-6 text-purple-600" />
+                                </div>
+                                <h4 className="text-base font-medium mb-1">No Analysis Generated</h4>
+                                <p className="text-sm text-muted-foreground mb-4">
+                                    Tap the button above to have our AI analyze this position's technicals and risk profile.
+                                </p>
+                                <Button variant="outline" onClick={handleAnalyze} disabled={analysisLoading}>
+                                    Generate Now
+                                </Button>
+                            </div>
+                        ) : (
+                            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm font-medium text-muted-foreground">Verdict:</span>
+                                    <Badge
+                                        variant={
+                                            analysis.verdict === 'Bullish' ? 'default' :
+                                                analysis.verdict === 'Bearish' ? 'destructive' :
+                                                    'secondary'
+                                        }
+                                        className="uppercase tracking-wider"
+                                    >
+                                        {analysis.verdict}
+                                    </Badge>
+                                </div>
+                                <div className="prose prose-sm dark:prose-invert max-w-none bg-muted/30 p-4 rounded-lg border">
+                                    <p className="whitespace-pre-wrap leading-relaxed">
+                                        {analysis.text}
+                                    </p>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </TabsContent>
 
