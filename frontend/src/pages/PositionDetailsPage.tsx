@@ -73,9 +73,9 @@ export default function PositionDetailsPage() {
         }
     }, [position]);
 
-    const loadPosition = async (posId: string) => {
+    const loadPosition = async (posId: string, silent = false) => {
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             const allPositions = await api.getPositions(); // Ideally we'd have a getPositionById API
             const match = allPositions.find(p => p.id.toString() === posId);
             if (match) {
@@ -86,7 +86,7 @@ export default function PositionDetailsPage() {
         } catch (err: any) {
             setError(err.message || 'Failed to load position');
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     };
 
@@ -98,7 +98,7 @@ export default function PositionDetailsPage() {
         if (!silent) setRefreshing(true);
         try {
             await api.syncPosition(targetId);
-            await loadPosition(targetId.toString());
+            await loadPosition(targetId.toString(), silent);
             // lastUpdated updated by effect
         } catch (err) {
             console.error('Failed to refresh position:', err);
