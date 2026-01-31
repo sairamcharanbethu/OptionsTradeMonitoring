@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.positionRoutes = positionRoutes;
 const zod_1 = require("zod");
 const redis_1 = require("../lib/redis");
+const analysis_service_1 = require("../services/analysis-service");
 const PositionSchema = zod_1.z.object({
     symbol: zod_1.z.string(),
     option_type: zod_1.z.enum(['CALL', 'PUT']),
@@ -55,7 +56,13 @@ const positionResponseSchema = {
         iv: { type: 'number', nullable: true },
         underlying_price: { type: 'number', nullable: true },
         created_at: { type: 'string', format: 'date-time' },
-        updated_at: { type: 'string', format: 'date-time' }
+        updated_at: { type: 'string', format: 'date-time' },
+        analyzed_support: { type: 'number', nullable: true },
+        analyzed_resistance: { type: 'number', nullable: true },
+        suggested_stop_loss: { type: 'number', nullable: true },
+        suggested_take_profit_1: { type: 'number', nullable: true },
+        suggested_take_profit_2: { type: 'number', nullable: true },
+        analysis_data: { type: 'object', nullable: true, additionalProperties: true }
     }
 };
 const errorSchema = {
@@ -86,6 +93,7 @@ const statsResponseSchema = {
 };
 async function positionRoutes(fastify, options) {
     fastify.addHook('onRequest', fastify.authenticate);
+    const analysisService = new analysis_service_1.AnalysisService(fastify);
     // GET all positions (including analytics if closed)
     fastify.get('/', {
         schema: {
@@ -111,6 +119,51 @@ async function positionRoutes(fastify, options) {
         // Set cache (60 seconds)
         await redis_1.redis.set(CACHE_KEY, JSON.stringify(rows), 60);
         return rows;
+    });
+    // GET paginated closed positions (history)
+    fastify.get('/history', {
+        schema: {
+            tags: ['Positions'],
+            summary: 'Get closed positions (paginated)',
+            description: 'Retrieve closed positions with pagination support. More efficient for large history.',
+            security: [{ bearerAuth: [] }],
+            querystring: {
+                type: 'object',
+                properties: {
+                    page: { type: 'integer', minimum: 1, default: 1, description: 'Page number (1-indexed)' },
+                    limit: { type: 'integer', minimum: 1, maximum: 100, default: 10, description: 'Items per page' }
+                }
+            },
+            response: {
+                200: {
+                    type: 'object',
+                    properties: {
+                        positions: { type: 'array', items: positionResponseSchema },
+                        total: { type: 'integer', description: 'Total number of closed positions' },
+                        page: { type: 'integer' },
+                        limit: { type: 'integer' },
+                        totalPages: { type: 'integer' }
+                    }
+                }
+            }
+        }
+    }, async (request, reply) => {
+        const { id: userId } = request.user;
+        const { page = 1, limit = 10 } = request.query;
+        const offset = (page - 1) * limit;
+        // Get total count
+        const { rows: countRows } = await fastify.pg.query('SELECT COUNT(*) as total FROM positions WHERE user_id = $1 AND status = $2', [userId, 'CLOSED']);
+        const total = parseInt(countRows[0].total);
+        const totalPages = Math.ceil(total / limit);
+        // Get paginated data
+        const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE user_id = $1 AND status = $2 ORDER BY updated_at DESC LIMIT $3 OFFSET $4', [userId, 'CLOSED', limit, offset]);
+        return {
+            positions: rows,
+            total,
+            page,
+            limit,
+            totalPages
+        };
     });
     // GET lightweight price/greek updates for active positions
     fastify.get('/updates', {
@@ -359,18 +412,32 @@ async function positionRoutes(fastify, options) {
             stopLossTrigger = body.entry_price * (1 - body.trailing_stop_loss_pct / 100);
         }
         const { id: userId } = request.user;
+        // Perform Analysis
+        let analysis = {};
+        try {
+            analysis = await analysisService.analyzePosition(body);
+            // If suggested Stop Loss found and user didn't provide one, maybe we could use it?
+            // But for now we just store it.
+        }
+        catch (err) {
+            fastify.log.error(`Analysis failed during create: ${err.message}`);
+        }
         const query = `
       INSERT INTO positions (
         user_id, symbol, option_type, strike_price, expiration_date, 
         entry_price, quantity, stop_loss_trigger, take_profit_trigger,
-        trailing_high_price, trailing_stop_loss_pct
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        trailing_high_price, trailing_stop_loss_pct,
+        analyzed_support, analyzed_resistance, suggested_stop_loss, 
+        suggested_take_profit_1, suggested_take_profit_2, analysis_data
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `;
         const values = [
             userId, body.symbol, body.option_type, body.strike_price, body.expiration_date,
             body.entry_price, body.quantity, stopLossTrigger, body.take_profit_trigger,
-            trailingHigh, body.trailing_stop_loss_pct
+            trailingHigh, body.trailing_stop_loss_pct,
+            analysis.support || null, analysis.resistance || null, analysis.stopLoss || null,
+            analysis.takeProfit1 || null, analysis.takeProfit2 || null, JSON.stringify(analysis.confidences || {})
         ];
         const { rows } = await fastify.pg.query(query, values);
         const newPosition = rows[0];

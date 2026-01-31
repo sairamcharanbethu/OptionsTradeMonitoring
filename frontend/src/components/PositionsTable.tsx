@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
     Table,
     TableBody,
@@ -48,7 +49,7 @@ interface PositionsTableProps {
     onToggleSelection: (id: number) => void;
     onToggleSelectAll: () => void;
     onClearFilters: () => void;
-    onViewDetails: (pos: Position) => void;
+    // onViewDetails removed, internal navigation used
     onEdit: (pos: Position) => void;
     onDelete: (id: number) => void;
 }
@@ -66,10 +67,12 @@ export function PositionsTable({
     onToggleSelection,
     onToggleSelectAll,
     onClearFilters,
-    onViewDetails,
+    // onViewDetails,
     onEdit,
     onDelete
 }: PositionsTableProps) {
+    const navigate = useNavigate();
+
     return (
         <>
             {/* Desktop View Table */}
@@ -195,7 +198,7 @@ export function PositionsTable({
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <div className="flex justify-end gap-1">
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => onViewDetails(pos)}>
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => navigate(`/positions/${pos.id}`)}>
                                                 <Info className="h-4 w-4" />
                                             </Button>
                                             <DropdownMenu>
@@ -288,7 +291,7 @@ export function PositionsTable({
                                         <Badge variant="destructive" className="text-[9px] animate-pulse">{pos.status === 'STOP_TRIGGERED' ? 'STOPPED' : 'PROFIT'}</Badge>
                                     )}
                                     <div className="flex gap-2">
-                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => onViewDetails(pos)}>
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => navigate(`/positions/${pos.id}`)}>
                                             <Info className="h-4 w-4" />
                                         </Button>
                                         <DropdownMenu>

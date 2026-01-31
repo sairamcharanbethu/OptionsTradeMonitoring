@@ -27,7 +27,14 @@ export interface Position {
   gamma?: number;
   vega?: number;
   iv?: number;
+
   underlying_price?: number;
+  analyzed_support?: number;
+  analyzed_resistance?: number;
+  suggested_stop_loss?: number;
+  suggested_take_profit_1?: number;
+  suggested_take_profit_2?: number;
+  analysis_data?: any;
 }
 
 const API_BASE = '/api';
@@ -224,6 +231,12 @@ export const api = {
       vega: pos.vega != null ? Number(pos.vega) : undefined,
       iv: pos.iv != null ? Number(pos.iv) : undefined,
       underlying_price: pos.underlying_price != null ? Number(pos.underlying_price) : undefined,
+      analyzed_support: pos.analyzed_support != null ? Number(pos.analyzed_support) : undefined,
+      analyzed_resistance: pos.analyzed_resistance != null ? Number(pos.analyzed_resistance) : undefined,
+      suggested_stop_loss: pos.suggested_stop_loss != null ? Number(pos.suggested_stop_loss) : undefined,
+      suggested_take_profit_1: pos.suggested_take_profit_1 != null ? Number(pos.suggested_take_profit_1) : undefined,
+      suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
+      analysis_data: pos.analysis_data || undefined,
     }));
   },
 
@@ -250,6 +263,12 @@ export const api = {
         vega: pos.vega != null ? Number(pos.vega) : undefined,
         iv: pos.iv != null ? Number(pos.iv) : undefined,
         underlying_price: pos.underlying_price != null ? Number(pos.underlying_price) : undefined,
+        analyzed_support: pos.analyzed_support != null ? Number(pos.analyzed_support) : undefined,
+        analyzed_resistance: pos.analyzed_resistance != null ? Number(pos.analyzed_resistance) : undefined,
+        suggested_stop_loss: pos.suggested_stop_loss != null ? Number(pos.suggested_stop_loss) : undefined,
+        suggested_take_profit_1: pos.suggested_take_profit_1 != null ? Number(pos.suggested_take_profit_1) : undefined,
+        suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
+        analysis_data: pos.analysis_data || undefined,
       }))
     };
   },

@@ -5,7 +5,9 @@ import { api, User } from './lib/api';
 import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Button } from './components/ui/button';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { LogOut, User as UserIcon, Loader2 } from 'lucide-react';
+import PositionDetailsPage from './pages/PositionDetailsPage';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -68,7 +70,12 @@ function App() {
           </div>
         </header>
         <main>
-          <Dashboard user={user} onUserUpdate={setUser} />
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
+              <Route path="/positions/:id" element={<PositionDetailsPage />} />
+            </Routes>
+          </BrowserRouter>
         </main>
       </div>
     </ThemeProvider>

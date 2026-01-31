@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 import { redis } from '../lib/redis';
+import { AnalysisService } from '../services/analysis-service';
 
 const PositionSchema = z.object({
   symbol: z.string(),
@@ -56,7 +57,13 @@ const positionResponseSchema = {
     iv: { type: 'number', nullable: true },
     underlying_price: { type: 'number', nullable: true },
     created_at: { type: 'string', format: 'date-time' },
-    updated_at: { type: 'string', format: 'date-time' }
+    updated_at: { type: 'string', format: 'date-time' },
+    analyzed_support: { type: 'number', nullable: true },
+    analyzed_resistance: { type: 'number', nullable: true },
+    suggested_stop_loss: { type: 'number', nullable: true },
+    suggested_take_profit_1: { type: 'number', nullable: true },
+    suggested_take_profit_2: { type: 'number', nullable: true },
+    analysis_data: { type: 'object', nullable: true, additionalProperties: true }
   }
 };
 
@@ -90,6 +97,7 @@ const statsResponseSchema = {
 
 export async function positionRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
+  const analysisService = new AnalysisService(fastify);
 
   // GET all positions (including analytics if closed)
   fastify.get('/', {
@@ -449,18 +457,34 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
     const { id: userId } = (request as any).user;
 
+
+
+    // Perform Analysis
+    let analysis: any = {};
+    try {
+      analysis = await analysisService.analyzePosition(body);
+      // If suggested Stop Loss found and user didn't provide one, maybe we could use it?
+      // But for now we just store it.
+    } catch (err: any) {
+      fastify.log.error(`Analysis failed during create: ${err.message}`);
+    }
+
     const query = `
       INSERT INTO positions (
         user_id, symbol, option_type, strike_price, expiration_date, 
         entry_price, quantity, stop_loss_trigger, take_profit_trigger,
-        trailing_high_price, trailing_stop_loss_pct
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        trailing_high_price, trailing_stop_loss_pct,
+        analyzed_support, analyzed_resistance, suggested_stop_loss, 
+        suggested_take_profit_1, suggested_take_profit_2, analysis_data
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `;
     const values = [
       userId, body.symbol, body.option_type, body.strike_price, body.expiration_date,
       body.entry_price, body.quantity, stopLossTrigger, body.take_profit_trigger,
-      trailingHigh, body.trailing_stop_loss_pct
+      trailingHigh, body.trailing_stop_loss_pct,
+      analysis.support || null, analysis.resistance || null, analysis.stopLoss || null,
+      analysis.takeProfit1 || null, analysis.takeProfit2 || null, JSON.stringify(analysis.confidences || {})
     ];
 
     const { rows } = await fastify.pg.query(query, values);

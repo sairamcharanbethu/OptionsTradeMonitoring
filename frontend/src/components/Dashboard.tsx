@@ -78,7 +78,7 @@ import {
 
 import UserManagement from './UserManagement';
 import PositionForm from './PositionForm';
-import PositionDetailsDialog from './PositionDetailsDialog';
+
 import SettingsDialog from './SettingsDialog';
 import Prediction from '@/pages/Prediction';
 import LiveAnalysis from '@/pages/LiveAnalysis';
@@ -101,8 +101,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const [activeTab, setActiveTab] = useState('overview');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
-  const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
-  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+
   const [tickerFilter, setTickerFilter] = useState('');
   const [debouncedTicker, setDebouncedTicker] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: 'symbol' | 'dte' | 'pnl', direction: 'asc' | 'desc' } | null>({ key: 'dte', direction: 'asc' });
@@ -241,10 +240,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     setIsDialogOpen(true);
   };
 
-  const handleViewDetails = (pos: Position) => {
-    setSelectedPosition(pos);
-    setIsDetailsOpen(true);
-  };
+
 
   const handleDelete = async (id: number) => {
     if (confirm('Are you sure you want to delete this position?')) {
@@ -443,15 +439,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
           </div>
         </div>
 
-        {/* Details Modal */}
-        {selectedPosition && (
-          <PositionDetailsDialog
-            position={selectedPosition}
-            open={isDetailsOpen}
-            onOpenChange={setIsDetailsOpen}
-            onCloseUpdate={() => refetchPositions()}
-          />
-        )}
+        {/* Details Modal removed - now using separate page */}
 
         <TabsContent value="overview" className="space-y-8 mt-0">
           {/* Stats Cards Row */}
@@ -613,7 +601,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                     setDebouncedTicker('');
                     setStatusFilter('ALL');
                   }}
-                  onViewDetails={handleViewDetails}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                 />

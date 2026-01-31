@@ -47,6 +47,7 @@ const market_data_1 = require("./routes/market-data");
 const market_1 = require("./routes/market");
 const ai_1 = require("./routes/ai");
 const settings_1 = require("./routes/settings");
+const live_analysis_1 = require("./routes/live-analysis");
 const jwt_1 = __importDefault(require("@fastify/jwt"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = require("./routes/admin");
@@ -172,6 +173,7 @@ const start = async () => {
         fastify.register(market_1.marketRoutes, { prefix: '/api/market' });
         fastify.register(ai_1.aiRoutes, { prefix: '/api/ai' });
         fastify.register(settings_1.settingsRoutes, { prefix: '/api/settings' });
+        fastify.register(live_analysis_1.liveAnalysisRoutes, { prefix: '/api/live-analysis' });
         fastify.get('/health', async () => {
             return { status: 'ok' };
         });
@@ -191,6 +193,7 @@ const start = async () => {
         const { redis } = await Promise.resolve().then(() => __importStar(require('./lib/redis')));
         const { QuestradeStreamService } = await Promise.resolve().then(() => __importStar(require('./services/questrade-stream-service')));
         const streamer = new QuestradeStreamService(fastify);
+        fastify.decorate('streamer', streamer);
         // Broadcast real-time quotes to all connected frontend clients
         streamer.on('quote', async (quote) => {
             // Enrich with Symbol if missing
@@ -209,19 +212,37 @@ const start = async () => {
             // Feed data into Poller for Stop Loss checks (Optimization: Don't wait for poll cycle)
             // poller.onExternalPriceUpdate(quote); // TODO: Implement in MarketPoller
         });
-        fastify.decorate('streamer', streamer);
         // Public WebSocket endpoint
-        fastify.get('/api/ws', { websocket: true }, (connection, req) => {
-            connection.socket.on('message', (message) => {
+        // Note: @fastify/websocket v10+ passes the socket directly, not connection.socket
+        fastify.get('/api/ws', { websocket: true }, (socket, req) => {
+            if (!socket) {
+                fastify.log.error('[WebSocket] Socket is null');
+                return;
+            }
+            fastify.log.info('[WebSocket] Client connected');
+            socket.on('message', (message) => {
                 // Handle subscriptions from frontend if we want selective streaming
                 // For now, we broadcast everything we have.
+                try {
+                    const data = JSON.parse(message.toString());
+                    fastify.log.info(`[WebSocket] Received: ${JSON.stringify(data)}`);
+                }
+                catch (e) {
+                    // Non-JSON message, ignore
+                }
+            });
+            socket.on('close', () => {
+                fastify.log.info('[WebSocket] Client disconnected');
+            });
+            socket.on('error', (err) => {
+                fastify.log.error(`[WebSocket] Client error: ${err.message}`);
             });
         });
         const port = Number(process.env.PORT) || 3001;
         await fastify.listen({ port, host: '0.0.0.0' });
         // Start background services
         poller.start();
-        streamer.start();
+        // streamer.start(); // Disabled: Subscriptions are now on-demand via Live Analysis only
         fastify.log.info(`Server listening on http://localhost:${port}`);
     }
     catch (err) {
