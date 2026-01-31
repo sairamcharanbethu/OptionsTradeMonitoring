@@ -35,6 +35,8 @@ export default function PositionDetailsPage() {
     const [analysis, setAnalysis] = useState<{ verdict: string, text: string } | null>(null);
     const [analysisLoading, setAnalysisLoading] = useState(false);
 
+    const [marketStatus, setMarketStatus] = useState<{ open: boolean, reason?: string } | null>(null);
+
     useEffect(() => {
         if (!id) return;
         loadPosition(id);
@@ -42,7 +44,18 @@ export default function PositionDetailsPage() {
         // dedicated polling
         const startPolling = async () => {
             try {
-                const settings = await api.getSettings();
+                const [settings, status] = await Promise.all([
+                    api.getSettings(),
+                    api.getMarketStatus()
+                ]);
+
+                setMarketStatus({ open: status.open, reason: status.open ? undefined : "Market Closed" });
+
+                if (!status.open) {
+                    console.log("Market is closed. Auto-refresh paused.");
+                    return;
+                }
+
                 const intervalSeconds = parseInt(settings.position_poll_interval || '2');
 
                 if (intervalSeconds > 0) {
@@ -51,10 +64,11 @@ export default function PositionDetailsPage() {
                     }, intervalSeconds * 1000);
                 }
             } catch (err) {
-                console.error("Failed to load settings for polling", err);
+                console.error("Failed to load settings/status for polling", err);
             }
         };
         startPolling();
+
 
         // Timer for UI "ago" update
         const timer = setInterval(() => setUpdater(prev => prev + 1), 1000);
@@ -206,6 +220,11 @@ export default function PositionDetailsPage() {
                         <Badge variant="outline" className="text-xs font-mono ml-2">
                             Updated {Math.floor((new Date().getTime() - lastUpdated.getTime()) / 1000)}s ago
                         </Badge>
+                        {marketStatus && !marketStatus.open && (
+                            <Badge variant="secondary" className="text-xs ml-2 bg-yellow-100 text-yellow-800 border-yellow-200">
+                                {marketStatus.reason}
+                            </Badge>
+                        )}
                         <Badge variant="outline" className={cn("text-sm px-2 py-0.5 sm:px-3 sm:py-1 font-bold", isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50')}>
                             {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
                         </Badge>
