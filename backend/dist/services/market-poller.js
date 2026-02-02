@@ -13,9 +13,11 @@ class MarketPoller {
     aiService;
     currentIntervalSeconds = 60; // Default 1 min
     timerId = null;
-    constructor(fastify) {
+    redisClient;
+    constructor(fastify, redisClient) {
         this.fastify = fastify;
         this.aiService = new ai_service_1.AIService(fastify);
+        this.redisClient = redisClient || redis_1.redis;
     }
     LOCK_KEY = 'MARKET_POLLER_LEADER';
     async start() {
@@ -27,7 +29,7 @@ class MarketPoller {
             }
         }
         catch (err) {
-            console.error('[MarketPoller] Failed to load poll interval from DB:', err);
+            this.fastify.log.error(`[MarketPoller] Failed to load poll interval from DB: ${err}`);
         }
         // Start recursive loop
         this.scheduleNextPoll();
@@ -41,18 +43,18 @@ class MarketPoller {
                 // Distributed Lock Check
                 // Attempt to acquire lock for slightly longer than the interval
                 const lockDuration = this.currentIntervalSeconds + 5;
-                const acquired = await redis_1.redis.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
+                const acquired = await this.redisClient.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
                 if (acquired) {
                     await this.poll();
                     // Keep lock alive if poll took time? The EX is set on acquire.
                     // Ideally we extend it during long polls, but for now this is sufficient for leadership election.
                 }
                 else {
-                    // console.log('[MarketPoller] Standby (Lock held by another instance).');
+                    // this.fastify.log.debug('[MarketPoller] Standby (Lock held by another instance).');
                 }
             }
             catch (err) {
-                console.error('[MarketPoller] Error during poll execution:', err);
+                this.fastify.log.error(`[MarketPoller] Error during poll execution: ${err}`);
             }
             finally {
                 this.scheduleNextPoll();
@@ -60,7 +62,7 @@ class MarketPoller {
         }, this.currentIntervalSeconds * 1000);
     }
     updateInterval(seconds) {
-        console.log(`[MarketPoller] Updating poll interval to: ${seconds}s`);
+        this.fastify.log.info(`[MarketPoller] Updating poll interval to: ${seconds}s`);
         this.currentIntervalSeconds = seconds;
         this.scheduleNextPoll(); // Reschedule immediately
     }
@@ -84,18 +86,18 @@ class MarketPoller {
     startBriefingJob() {
         // Default to 8:30 AM ET
         const schedule = process.env.MORNING_BRIEFING_SCHEDULE || '30 8 * * *';
-        console.log(`[MarketPoller] Starting morning briefing job with schedule: ${schedule}`);
+        this.fastify.log.info(`[MarketPoller] Starting morning briefing job with schedule: ${schedule}`);
         node_cron_1.default.schedule(schedule, async () => {
             try {
                 await this.sendMorningBriefings();
             }
             catch (err) {
-                console.error('[MarketPoller] Error during morning briefing execution:', err);
+                this.fastify.log.error(`[MarketPoller] Error during morning briefing execution: ${err}`);
             }
         });
     }
     async sendMorningBriefings(ignoreFrequency = false) {
-        console.log(`[MarketPoller] Executing morning briefings (ignoreFrequency: ${ignoreFrequency})...`);
+        this.fastify.log.info(`[MarketPoller] Executing morning briefings (ignoreFrequency: ${ignoreFrequency})...`);
         const { rows: users } = await this.fastify.pg.query('SELECT DISTINCT p.user_id, u.username FROM positions p JOIN users u ON p.user_id = u.id');
         for (const { user_id: userId, username } of users) {
             try {
@@ -116,13 +118,13 @@ class MarketPoller {
                 if (positions.length === 0)
                     continue;
                 // 4. Generate AI briefing
-                console.log(`[MarketPoller] Generating briefing for user ${userId}...`);
+                this.fastify.log.info(`[MarketPoller] Generating briefing for user ${userId}...`);
                 const briefingData = await this.aiService.generateBriefing(positions);
                 // 5. Notify N8n
                 await this.notifyN8nBriefing(userId, username, briefingData.briefing, briefingData.discord_message);
             }
             catch (err) {
-                console.error(`[MarketPoller] Failed to send briefing for user ${userId}:`, err);
+                this.fastify.log.error(`[MarketPoller] Failed to send briefing for user ${userId}: ${err}`);
             }
         }
     }
@@ -164,10 +166,10 @@ class MarketPoller {
                     timestamp: new Date().toISOString()
                 })
             });
-            console.log(`[MarketPoller] Briefing sent to n8n for user ${userId}`);
+            this.fastify.log.info(`[MarketPoller] Briefing sent to n8n for user ${userId}`);
         }
         catch (err) {
-            console.error(`[MarketPoller] Failed to notify n8n for briefing (user ${userId}):`, err.message);
+            this.fastify.log.error(`[MarketPoller] Failed to notify n8n for briefing (user ${userId}):`, err.message);
         }
     }
     constructOSITicker(symbol, strike, type, expiration) {
@@ -187,7 +189,7 @@ class MarketPoller {
         }
         const parts = dateStr.split('-');
         if (parts.length !== 3) {
-            console.warn(`[MarketPoller] Invalid expiration date format: ${expiration}`);
+            this.fastify.log.warn(`[MarketPoller] Invalid expiration date format: ${expiration}`);
             return `${symbol.toUpperCase()}XXXXXX${type === 'CALL' ? 'C' : 'P'}${Math.round(strike * 1000).toString().padStart(8, '0')}`;
         }
         const YY = parts[0].slice(-2);
@@ -205,20 +207,20 @@ class MarketPoller {
             // We can STILL cache the symbolId for the ticker (it never changes for a specific option)
             const SYMBOL_ID_CACHE_KEY = `SYMBOL_ID:${ticker}`;
             let symbolId = null;
-            const cachedId = await redis_1.redis.get(SYMBOL_ID_CACHE_KEY);
+            const cachedId = await this.redisClient.get(SYMBOL_ID_CACHE_KEY);
             if (cachedId) {
                 symbolId = parseInt(cachedId, 10);
             }
             else {
-                console.log(`[MarketPoller] Resolving Questrade Symbol ID for ${ticker}...`);
+                this.fastify.log.info(`[MarketPoller] Resolving Questrade Symbol ID for ${ticker}...`);
                 symbolId = await questrade.getSymbolId(ticker);
                 if (symbolId) {
-                    await redis_1.redis.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
-                    await redis_1.redis.set(`SYMBOL_NAME:${symbolId}`, ticker, 86400);
+                    await this.redisClient.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
+                    await this.redisClient.set(`SYMBOL_NAME:${symbolId}`, ticker, 86400);
                 }
             }
             if (!symbolId) {
-                console.warn(`[MarketPoller] Could not resolve symbol ID for ${ticker} on Questrade.`);
+                this.fastify.log.warn(`[MarketPoller] Could not resolve symbol ID for ${ticker} on Questrade.`);
                 return null;
             }
             // 2. Get Quote from Questrade (FRESH EVERY TIME)
@@ -261,32 +263,32 @@ class MarketPoller {
             return result;
         }
         catch (err) {
-            console.error(`[MarketPoller] Questrade fetch failed for ${ticker}:`, err.message);
+            this.fastify.log.error(`[MarketPoller] Questrade fetch failed for ${ticker}:`, err.message);
             return null;
         }
     }
     async syncPrice(symbol, skipCache = false) {
-        console.log(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
+        this.fastify.log.info(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
         const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'", [symbol]);
         if (positions.length === 0) {
-            console.log(`[MarketPoller] No active or triggered positions found for ${symbol}.`);
+            this.fastify.log.info(`[MarketPoller] No active or triggered positions found for ${symbol}.`);
             return null;
         }
         let lastFetchedPrice = null;
         for (const position of positions) {
             const data = await this.getOptionPremium(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date, skipCache);
             if (data && data.price !== null) {
-                // console.log(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
-                console.log(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${data.underlying_price} Greeks:`, data.greeks);
+                // this.fastify.log.debug(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
+                this.fastify.log.info(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${data.underlying_price} Greeks:`, data.greeks);
                 await this.processUpdate(position, data.price, data.greeks, data.iv, data.underlying_price);
                 lastFetchedPrice = data.price;
             }
         }
         if (lastFetchedPrice !== null) {
-            console.log(`[MarketPoller] TARGETED Sync for ${symbol} completed successfully.`);
+            this.fastify.log.info(`[MarketPoller] TARGETED Sync for ${symbol} completed successfully.`);
         }
         else {
-            console.warn(`[MarketPoller] TARGETED Sync for ${symbol} failed or no positions were updated.`);
+            this.fastify.log.warn(`[MarketPoller] TARGETED Sync for ${symbol} failed or no positions were updated.`);
         }
         return lastFetchedPrice;
     }
@@ -315,21 +317,21 @@ class MarketPoller {
         return currentTimeMinutes >= marketOpenMinutes && currentTimeMinutes <= marketCloseMinutes;
     }
     async poll(force = false) {
-        console.log(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
+        this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
         const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'");
         if (positions.length === 0) {
-            console.log('[MarketPoller] No active positions to poll.');
+            this.fastify.log.info('[MarketPoller] No active positions to poll.');
             return;
         }
-        const symbols = [...new Set(positions.map(p => p.symbol))];
+        const symbols = [...new Set(positions.map((p) => p.symbol))];
         const isMarketOpen = this.isMarketOpen();
         if (!force && !isMarketOpen) {
-            console.log('[MarketPoller] Market is closed. Will only perform housekeeping (auto-expiry).');
+            this.fastify.log.info('[MarketPoller] Market is closed. Will only perform housekeeping (auto-expiry).');
         }
         for (const symbol of symbols) {
             // 1. Auto-Close Expired Logic
             // Check for expired positions for this symbol first
-            const symbolPositions = positions.filter(p => p.symbol === symbol);
+            const symbolPositions = positions.filter((p) => p.symbol === symbol);
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             for (const pos of symbolPositions) {
@@ -337,7 +339,7 @@ class MarketPoller {
                 expDate.setHours(0, 0, 0, 0);
                 // Standard comparison: If expiration date is strictly less than today (yesterday or earlier), it's expired.
                 if (expDate < today) {
-                    console.log(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
+                    this.fastify.log.info(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
                     // Close with 0 PnL
                     await this.fastify.pg.query(`UPDATE positions 
                  SET status = 'CLOSED', 
@@ -352,11 +354,11 @@ class MarketPoller {
             }
             // 2. Price Sync (Only if Market Open or Forced)
             // Filter out positions we just closed
-            const activePositions = symbolPositions.filter(p => p.status !== 'CLOSED');
+            const activePositions = symbolPositions.filter((p) => p.status !== 'CLOSED');
             if ((force || isMarketOpen) && activePositions.length > 0) {
                 await this.syncPrice(symbol, force);
                 // Stay within limits, sequential delay
-                await new Promise(resolve => setTimeout(resolve, 5000));
+                await new Promise(resolve => setTimeout(() => resolve(), 5000));
             }
         }
     }
@@ -425,7 +427,7 @@ class MarketPoller {
                     });
                 }
                 catch (err) {
-                    console.error('[MarketPoller] AI Summary generation failed:', err);
+                    this.fastify.log.error(`[MarketPoller] AI Summary generation failed: ${err}`);
                 }
                 // Calculate realized PnL
                 const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
@@ -471,7 +473,7 @@ class MarketPoller {
             });
         }
         catch (err) {
-            console.error('[MarketPoller] Failed to notify n8n:', err.message);
+            this.fastify.log.error('[MarketPoller] Failed to notify n8n:', err.message);
         }
     }
 }

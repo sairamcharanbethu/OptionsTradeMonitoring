@@ -11,10 +11,23 @@ async function marketRoutes(fastify, options) {
                 return reply.code(500).send({ error: 'Market poller not initialized' });
             }
             const isOpen = poller.isMarketOpen();
+            const questrade = fastify.questrade;
+            // Check if Questrade credentials are configured and valid
+            let connectionStatus = 'DISCONNECTED';
+            if (questrade) {
+                try {
+                    const token = await questrade.getActiveToken();
+                    connectionStatus = token ? 'CONNECTED' : 'DISCONNECTED';
+                }
+                catch (e) {
+                    connectionStatus = 'DISCONNECTED';
+                }
+            }
             return {
                 open: isOpen,
                 timezone: 'America/New_York',
-                marketHours: '9:30 AM - 4:15 PM ET, Mon-Fri'
+                marketHours: '9:30 AM - 4:15 PM ET, Mon-Fri',
+                connectionStatus
             };
         }
         catch (err) {

@@ -24,8 +24,10 @@ export class QuestradeService {
         try {
             // Get the most recent refresh token regardless of user_id, 
             // similar to how MarketPoller fetches poll interval.
+            const tokenKey = process.env.QUESTRADE_TOKEN_KEY || 'questrade_refresh_token';
             const { rows } = await this.fastify.pg.query(
-                "SELECT value FROM settings WHERE key = 'questrade_refresh_token' ORDER BY updated_at DESC LIMIT 1"
+                "SELECT value FROM settings WHERE key = $1 ORDER BY updated_at DESC LIMIT 1",
+                [tokenKey]
             );
             return rows.length > 0 ? rows[0].value : null;
         } catch (err) {
@@ -37,11 +39,12 @@ export class QuestradeService {
     private async saveTokenToDb(refreshToken: string) {
         try {
             // Use user_id 1 as default/primary
+            const tokenKey = process.env.QUESTRADE_TOKEN_KEY || 'questrade_refresh_token';
             await this.fastify.pg.query(
                 `INSERT INTO settings (user_id, key, value, updated_at) 
-                 VALUES (1, 'questrade_refresh_token', $1, CURRENT_TIMESTAMP)
-                 ON CONFLICT (user_id, key) DO UPDATE SET value = $1, updated_at = CURRENT_TIMESTAMP`,
-                [refreshToken]
+                 VALUES (1, $1, $2, CURRENT_TIMESTAMP)
+                 ON CONFLICT (user_id, key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP`,
+                [tokenKey, refreshToken]
             );
         } catch (err) {
             console.error('[QuestradeService] Failed to save token to DB, attempting migration...', err);

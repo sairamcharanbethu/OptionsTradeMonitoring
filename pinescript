@@ -1,0 +1,263 @@
+//@version=5
+strategy("Ultimate Options Strategy (Unified)", overlay=true, margin_long=100, margin_short=100)
+// -------------------------------------------------------------------------
+// INPUTS
+// -------------------------------------------------------------------------
+// --- 1. STRATEGY SETTINGS ---
+grp_strat = "Strategy Settings"
+fastLen   = input.int(9, "Fast EMA", group=grp_strat)
+slowLen   = input.int(21, "Slow EMA", group=grp_strat)
+useVol    = input.bool(true, "Vol Filter", group=grp_strat)
+showRe    = input.bool(true, "Show Trend Re-Entries", group=grp_strat) // NEW
+// --- 2. CONFIDENCE ALGOS ---
+grp_algo  = "Confidence Algorithms"
+useHma    = input.bool(true, "Use Hull MA", group=grp_algo)
+hmaLen    = input.int(55, "Hull MA Len", group=grp_algo)
+useSuper  = input.bool(true, "Use Supertrend", group=grp_algo)
+stFactor  = input.float(3.0, "Supertrend Factor", group=grp_algo)
+stLen     = input.int(10, "Supertrend ATR", group=grp_algo)
+// --- 3. MULTI-TF SCANNER ---
+grp_scan  = "Multi-TF Scanner"
+showScan  = input.bool(true, "Show Scanner Panel (Chart must be 1m-15m)", group=grp_scan)
+scanTf1   = "1"
+scanTf2   = "2"
+scanTf3   = "3"
+scanTf5   = "5"
+scanTf10  = "10"
+scanTf15  = "15"
+// --- 4. FILTERS ---
+grp_filt  = "Filters (VIX / RSI / MACD)"
+useVix    = input.bool(true, "Use VIX Filter (Disable if no VIX data)", group=grp_filt)
+vixSym    = input.string("VIX", "VIX Symbol", group=grp_filt)
+vixMax    = input.float(20, "VIX Panic Lvl", group=grp_filt)
+vixMin    = input.float(15, "VIX Calm Lvl", group=grp_filt)
+useRsi    = input.bool(true, "Use RSI", group=grp_filt)
+rsiLen    = input.int(14, "RSI Len", group=grp_filt)
+useMacd   = input.bool(false, "Use MACD Filter", group=grp_filt)
+// --- 5. VISUALS ---
+grp_vis   = "Visuals"
+showSr    = input.bool(true, "Show Local S/R", group=grp_vis)
+showMaj   = input.bool(true, "Show Major S/R", group=grp_vis)
+majTf     = input.timeframe("D", "Major TF", group=grp_vis)
+showFvg   = input.bool(true, "Show FVG", group=grp_vis)
+// -------------------------------------------------------------------------
+// HELPER FUNCTIONS (MUST BE GLOBAL)
+// -------------------------------------------------------------------------
+// Helper for Trend (1=Bull, -1=Bear, 0=None)
+getTrend(tf) =>
+    f = request.security(syminfo.tickerid, tf, ta.ema(close, fastLen), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+    s = request.security(syminfo.tickerid, tf, ta.ema(close, slowLen), lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+    // Handle NA safely using nz
+    nz(f) > nz(s) ? 1 : -1
+// Helper to clean array lines/labels
+clean(arrL, arrLbl) =>
+    if array.size(arrL) > 2
+        line.delete(array.shift(arrL))
+        label.delete(array.shift(arrLbl))
+// -------------------------------------------------------------------------
+// CALCULATIONS - PART 1: BASE INDICATORS
+// -------------------------------------------------------------------------
+// EMAs
+fastEma = ta.ema(close, fastLen)
+slowEma = ta.ema(close, slowLen)
+emaBull = fastEma > slowEma
+// Hull MA
+hmaVal  = ta.hma(close, hmaLen)
+hmaBull = close > hmaVal
+plot(useHma ? hmaVal : na, "Hull MA", color=hmaBull ? color.blue : color.maroon, linewidth=2)
+// Supertrend
+[stVal, stDir] = ta.supertrend(stFactor, stLen)
+stBull  = stDir < 0
+plot(useSuper ? stVal : na, "Supertrend", color=stBull ? color.lime : color.red, linewidth=1, style=plot.style_circles)
+// RSI & MACD
+rsiVal  = ta.rsi(close, rsiLen)
+[macdLine, sigLine, _] = ta.macd(close, 12, 26, 9)
+// Vol
+avgVol  = ta.sma(volume, 20)
+// VIX (Robust Data Fetching)
+vixRaw     = request.security(vixSym, timeframe.period, close, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+bool hasVix = not na(vixRaw) 
+vixNow     = nz(vixRaw, 0) 
+vixEmaVal  = ta.ema(vixNow, 9)
+vixSlowVal = ta.ema(vixNow, 21)
+vixIsCalm  = (not hasVix) or (vixNow < vixMin and vixEmaVal < vixSlowVal)
+vixIsPanic = (hasVix) and (vixNow > vixMax and vixEmaVal > vixSlowVal)
+// -------------------------------------------------------------------------
+// CALCULATIONS - PART 2: MULTI-TF SCANNER
+// -------------------------------------------------------------------------
+t1 = getTrend(scanTf1)
+t2 = getTrend(scanTf2)
+t3 = getTrend(scanTf3)
+t5 = getTrend(scanTf5)
+t10 = getTrend(scanTf10)
+t15 = getTrend(scanTf15)
+tfScore = t1 + t2 + t3 + t5 + t10 + t15 
+// -------------------------------------------------------------------------
+// CALCULATIONS - PART 3: CONFIDENCE SCORE
+// -------------------------------------------------------------------------
+// Base Score (50%)
+baseBull = 0
+if emaBull and (not useVol or volume > avgVol) and (not useRsi or rsiVal > 50) and (not useMacd or macdLine > sigLine)
+    baseBull := 50
+baseBear = 0
+if not emaBull and (not useVol or volume > avgVol) and (not useRsi or rsiVal < 50) and (not useMacd or macdLine < sigLine)
+    baseBear := 50
+// Algo Score (50%)
+algoBull = 0
+if hmaBull
+    algoBull += 25
+if stBull
+    algoBull += 25
+    
+algoBear = 0
+if not hmaBull
+    algoBear += 25
+if not stBull
+    algoBear += 25
+totalBullConf = baseBull + algoBull
+totalBearConf = baseBear + algoBear
+// -------------------------------------------------------------------------
+// LOGIC: MASTER SIGNAL
+// -------------------------------------------------------------------------
+// 1. Scanner Filter
+scanBull = tfScore >= 4  
+scanBear = tfScore <= -4 
+// 2. VIX Filter (Safe)
+vixOkL = not useVix or vixIsCalm or (hasVix and vixNow < 25) 
+vixOkS = not useVix or vixIsPanic or (hasVix and vixNow > 15)
+// 3. Entry Signal (PRIMARY - Cross)
+crossUp   = ta.crossover(fastEma, slowEma)
+crossDown = ta.crossunder(fastEma, slowEma)
+longCond  = crossUp and totalBullConf >= 75 and scanBull and vixOkL
+shortCond = crossDown and totalBearConf >= 75 and scanBear and vixOkS
+atrVal = ta.atr(14)
+safeAtr = nz(atrVal, close*0.01)
+// 4. Re-Entry Signal (CONTINUATION)
+// Logic: Trend is UP, Conf is HIGH, Price DIPPED and is now Crossing Back UP over FastEMA
+reBuy  = showRe and emaBull and totalBullConf >= 75 and scanBull and ta.crossover(close, fastEma) and close > slowEma
+reSell = showRe and (not emaBull) and totalBearConf >= 75 and scanBear and ta.crossunder(close, fastEma) and close < slowEma
+// EXECUTION
+// Primary Long
+if longCond
+    strategy.entry("Long", strategy.long)
+    strategy.exit("ExitL", "Long", stop=close - safeAtr*1.5, limit=close + safeAtr*2.5)
+    label.new(bar_index, low, "MASTER BUY\nConf: " + str.tostring(totalBullConf) + "%", color=color.green, textcolor=color.white, style=label.style_label_up, yloc=yloc.belowbar)
+    alert("MASTER LONG", alert.freq_once_per_bar)
+// Re-Entry Long
+if reBuy
+    strategy.entry("ReLong", strategy.long)
+    strategy.exit("ExitReL", "ReLong", stop=close - safeAtr*1.5, limit=close + safeAtr*2.5)
+    label.new(bar_index, low, "RE-ENTRY\nConf: " + str.tostring(totalBullConf) + "%", color=color.teal, textcolor=color.white, style=label.style_label_up, yloc=yloc.belowbar, size=size.small)
+    alert("MASTER LONG RE-ENTRY", alert.freq_once_per_bar)
+// Primary Short
+if shortCond
+    strategy.entry("Short", strategy.short)
+    strategy.exit("ExitS", "Short", stop=close + safeAtr*1.5, limit=close + safeAtr*2.5)
+    label.new(bar_index, high, "MASTER SELL\nConf: " + str.tostring(totalBearConf) + "%", color=color.red, textcolor=color.white, style=label.style_label_down, yloc=yloc.abovebar)
+    alert("MASTER SHORT", alert.freq_once_per_bar)
+// Re-Entry Short
+if reSell
+    strategy.entry("ReShort", strategy.short)
+    strategy.exit("ExitReS", "ReShort", stop=close + safeAtr*1.5, limit=close + safeAtr*2.5)
+    label.new(bar_index, high, "RE-ENTRY\nConf: " + str.tostring(totalBearConf) + "%", color=color.orange, textcolor=color.white, style=label.style_label_down, yloc=yloc.abovebar, size=size.small)
+    alert("MASTER SHORT RE-ENTRY", alert.freq_once_per_bar)
+// -------------------------------------------------------------------------
+// VISUALS
+// -------------------------------------------------------------------------
+plot(fastEma, "Fast", color=color.lime)
+plot(slowEma, "Slow", color=color.orange)
+bgcolor(emaBull ? color.new(color.green, 95) : color.new(color.red, 95))
+// S/R Lines
+pHigh = ta.pivothigh(high, 7, 7)
+pLow = ta.pivotlow(low, 7, 7)
+if showSr and not na(pHigh)
+    line.new(bar_index[7], pHigh, bar_index, pHigh, color=color.red)
+if showSr and not na(pLow)
+    line.new(bar_index[7], pLow, bar_index, pLow, color=color.green)
+// Major S/R
+majH = request.security(syminfo.tickerid, majTf, high, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+majL = request.security(syminfo.tickerid, majTf, low, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+if showMaj
+    mPH = ta.pivothigh(majH, 7, 7)
+    mPL = ta.pivotlow(majL, 7, 7)
+    
+    var line[] ml = array.new_line(0)
+    var label[] mll = array.new_label(0)
+    
+    if not na(mPH)
+        array.push(ml, line.new(bar_index-10, mPH, bar_index+10, mPH, color=color.maroon, width=2, extend=extend.right))
+        array.push(mll, label.new(bar_index+10, mPH, "Major Res ("+majTf+")", color=color.maroon, textcolor=color.white, style=label.style_label_left, size=size.small))
+        clean(ml, mll)
+    if not na(mPL)
+        array.push(ml, line.new(bar_index-10, mPL, bar_index+10, mPL, color=color.teal, width=2, extend=extend.right))
+        array.push(mll, label.new(bar_index+10, mPL, "Major Sup ("+majTf+")", color=color.teal, textcolor=color.white, style=label.style_label_left, size=size.small))
+        clean(ml, mll)
+    
+    if barstate.islast and array.size(mll) > 0
+        for i = 0 to array.size(mll) - 1
+            label.set_x(array.get(mll, i), bar_index + 10)
+// FVG
+if showFvg
+    bc = low > high[2] and close[1] > open[1] and (high[1]-low[2]) > safeAtr*0.3
+    if bc
+        box.new(bar_index[1], low, bar_index+20, high[2], border_color=color.green, bgcolor=color.new(color.green,90))
+    sc = high < low[2] and close[1] < open[1] and (low[2]-high[1]) > safeAtr*0.3
+    if sc
+        box.new(bar_index[1], low[2], bar_index+20, high, border_color=color.red, bgcolor=color.new(color.red,90))
+// -------------------------------------------------------------------------
+// UNIFIED DASHBOARD
+// -------------------------------------------------------------------------
+var table dash = table.new(position.bottom_right, 4, 8, bgcolor=color.new(color.black, 40))
+if barstate.islast and showScan
+    table.cell(dash, 0, 0, "ALGOS", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 1, 0, "STATUS", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 2, 0, "SCANNER", bgcolor=color.gray, text_color=color.white)
+    table.cell(dash, 3, 0, "TREND", bgcolor=color.gray, text_color=color.white)
+    
+    // Hull MA
+    table.cell(dash, 0, 1, "Hull MA", text_color=color.white)
+    table.cell(dash, 1, 1, hmaBull?"BULL":"BEAR", bgcolor=hmaBull?color.green:color.red, text_color=color.white)
+    table.cell(dash, 2, 1, "1 min", text_color=color.white)
+    table.cell(dash, 3, 1, t1>0?"UP":"DN", bgcolor=t1>0?color.green:color.red, text_color=color.white)
+    // Supertrend
+    table.cell(dash, 0, 2, "Supertrend", text_color=color.white)
+    table.cell(dash, 1, 2, stBull?"BULL":"BEAR", bgcolor=stBull?color.green:color.red, text_color=color.white)
+    table.cell(dash, 2, 2, "2 min", text_color=color.white)
+    table.cell(dash, 3, 2, t2>0?"UP":"DN", bgcolor=t2>0?color.green:color.red, text_color=color.white)
+    // VIX
+    table.cell(dash, 0, 3, "VIX", text_color=color.white)
+    string vixTxt = hasVix ? (vixIsCalm?"CALM":(vixIsPanic?"PANIC":"NORM")) : "NO DATA"
+    color vixCol = hasVix ? (vixIsCalm?color.green:(vixIsPanic?color.red:color.gray)) : color.gray
+    table.cell(dash, 1, 3, vixTxt, bgcolor=vixCol, text_color=color.white)
+    table.cell(dash, 2, 3, "3 min", text_color=color.white)
+    table.cell(dash, 3, 3, t3>0?"UP":"DN", bgcolor=t3>0?color.green:color.red, text_color=color.white)
+    // RSI
+    table.cell(dash, 0, 4, "RSI", text_color=color.white)
+    table.cell(dash, 1, 4, str.tostring(rsiVal, "#.#"), bgcolor=rsiVal>50?color.green:color.red, text_color=color.white)
+    table.cell(dash, 2, 4, "5 min", text_color=color.white)
+    table.cell(dash, 3, 4, t5>0?"UP":"DN", bgcolor=t5>0?color.green:color.red, text_color=color.white)
+    // Confidence
+    table.cell(dash, 0, 5, "CONFIDENCE", text_color=color.white)
+    conf = math.max(totalBullConf, totalBearConf)
+    table.cell(dash, 1, 5, str.tostring(conf)+"%", bgcolor=conf>=75?color.lime:color.gray, text_color=color.white)
+    table.cell(dash, 2, 5, "10 min", text_color=color.white)
+    table.cell(dash, 3, 5, t10>0?"UP":"DN", bgcolor=t10>0?color.green:color.red, text_color=color.white)
+    // 15m
+    table.cell(dash, 2, 6, "15 min", text_color=color.white)
+    table.cell(dash, 3, 6, t15>0?"UP":"DN", bgcolor=t15>0?color.green:color.red, text_color=color.white)
+    // MASTER SIGNAL
+    table.cell(dash, 0, 7, "MASTER SIGNAL", text_color=color.white, bgcolor=color.blue)
+    string sigT = "WAIT"
+    color sigC = color.gray
+    if longCond
+        sigT := "BUY CALL"
+        sigC := color.lime
+    else if shortCond
+        sigT := "BUY PUT"
+        sigC := color.maroon
+        
+    table.cell(dash, 1, 7, sigT, text_color=color.white, bgcolor=sigC)
+    
+    // Scanner
+    table.cell(dash, 2, 7, "SCAN METER", text_color=color.white, bgcolor=color.blue)
+    table.cell(dash, 3, 7, str.tostring(tfScore)+"/6", text_color=color.white, bgcolor=tfScore>=4?color.lime:(tfScore<=-4?color.red:color.gray))

@@ -26,7 +26,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [openRouterKey, setOpenRouterKey] = useState('');
     const [model, setModel] = useState('mistral:7b-instruct-q4_K_M');
     const [briefingFrequency, setBriefingFrequency] = useState('disabled');
-    const [pollInterval, setPollInterval] = useState('60');
+    const [pollInterval, setPollInterval] = useState('60'); // Market Poll (Global)
+    const [positionPollInterval, setPositionPollInterval] = useState('2'); // Position Detail Poll (Local)
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -136,6 +137,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setModel(data.ai_model || 'mistral:7b-instruct-q4_K_M');
             setBriefingFrequency(data.briefing_frequency || 'disabled');
             setPollInterval(data.market_poll_interval || '60');
+            setPositionPollInterval(data.position_poll_interval || '2');
         } catch (err) {
             console.error(err);
         } finally {
@@ -196,8 +198,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 openrouter_key: openRouterKey,
                 ai_model: model,
                 briefing_frequency: briefingFrequency,
-                market_poll_interval: pollInterval
+                market_poll_interval: pollInterval,
+                position_poll_interval: positionPollInterval
             });
+            onUpdate(user); // Force refresh of parent if needed
             setOpen(false);
         } catch (err) {
             alert('Failed to save settings');
@@ -213,133 +217,167 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                     <Settings className="h-5 w-5 text-muted-foreground" />
                 </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
-                <DialogHeader>
+            <DialogContent className="sm:max-w-4xl max-h-[90vh] h-[600px] flex flex-col p-0 gap-0 overflow-hidden">
+                <DialogHeader className="p-6 pb-4 border-b shrink-0">
                     <DialogTitle>Settings</DialogTitle>
                     <DialogDescription>
                         Manage your application preferences and account security.
                     </DialogDescription>
                 </DialogHeader>
 
-                <Tabs defaultValue="ai" className="w-full">
-                    <TabsList className="grid w-full grid-cols-3 mb-4">
-                        <TabsTrigger value="ai">AI Setup</TabsTrigger>
-                        <TabsTrigger value="integrations">Integrations</TabsTrigger>
-                        <TabsTrigger value="account">Account</TabsTrigger>
+                <Tabs defaultValue="ai" orientation="vertical" className="flex-1 flex overflow-hidden">
+                    <TabsList className="flex-col w-64 justify-start rounded-none border-r h-full bg-muted/30 p-2 space-y-1">
+                        <TabsTrigger value="ai" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
+                            AI Configuration
+                        </TabsTrigger>
+                        <TabsTrigger value="integrations" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
+                            Integrations
+                        </TabsTrigger>
+                        <TabsTrigger value="account" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
+                            Account & Security
+                        </TabsTrigger>
                     </TabsList>
 
-                    <TabsContent value="ai">
-                        {loading ? (
-                            <div className="flex justify-center py-8">
-                                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                    <div className="flex-1 overflow-y-auto p-6">
+                        <TabsContent value="ai" className="m-0 space-y-6">
+                            <div>
+                                <h3 className="text-lg font-medium">AI Configuration</h3>
+                                <p className="text-sm text-muted-foreground">Configure the AI provider and model settings.</p>
                             </div>
-                        ) : (
-                            <div className="grid gap-6 py-2">
-                                <section className="space-y-4">
-                                    <div className="grid gap-4">
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="provider">AI Provider</Label>
-                                            <Select value={provider} onValueChange={setProvider}>
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="Select Provider" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="ollama">Local Ollama</SelectItem>
-                                                    <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
+                            <div className="grid gap-6">
+                                <div className="grid gap-2">
+                                    <Label htmlFor="provider">AI Provider</Label>
+                                    <Select value={provider} onValueChange={setProvider}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Provider" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="ollama">Local Ollama</SelectItem>
+                                            <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
 
-                                        {provider === 'openrouter' && (
-                                            <div className="grid gap-2 animate-in fade-in slide-in-from-top-2">
-                                                <Label htmlFor="key">OpenRouter API Key</Label>
-                                                <Input
-                                                    id="key"
-                                                    type="password"
-                                                    value={openRouterKey}
-                                                    onChange={(e) => setOpenRouterKey(e.target.value)}
-                                                    placeholder="sk-or-..."
-                                                />
-                                            </div>
+                                {provider === 'openrouter' && (
+                                    <div className="grid gap-2 animate-in fade-in slide-in-from-top-2">
+                                        <Label htmlFor="key">OpenRouter API Key</Label>
+                                        <Input
+                                            id="key"
+                                            type="password"
+                                            value={openRouterKey}
+                                            onChange={(e) => setOpenRouterKey(e.target.value)}
+                                            placeholder="sk-or-..."
+                                        />
+                                    </div>
+                                )}
+
+                                <div className="grid gap-2">
+                                    <Label htmlFor="model">Model Name</Label>
+                                    <Input
+                                        id="model"
+                                        value={model}
+                                        onChange={(e) => setModel(e.target.value)}
+                                        placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3-haiku'}
+                                    />
+                                </div>
+
+                                <div className="grid gap-2">
+                                    <Label htmlFor="frequency">Morning Briefing Frequency</Label>
+                                    <Select value={briefingFrequency} onValueChange={setBriefingFrequency}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Frequency" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="disabled">Disabled</SelectItem>
+                                            <SelectItem value="daily">Daily (Mon-Sun)</SelectItem>
+                                            <SelectItem value="every_2_days">Every 2 Days</SelectItem>
+                                            <SelectItem value="monday">Every Monday</SelectItem>
+                                            <SelectItem value="friday">Every Friday</SelectItem>
+                                            <SelectItem value="weekly">Weekly (Monday)</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-[10px] text-muted-foreground">
+                                        AI-generated portfolio summary sent to Discord at 8:30 AM ET.
+                                    </p>
+                                </div>
+
+                                <div className="grid gap-2 pt-4 border-t">
+                                    <Label htmlFor="pollInterval" className="flex items-center gap-2">
+                                        Market Poll Interval
+                                        {parseInt(pollInterval) < 30 && (
+                                            <Badge variant="destructive" className="text-[10px] h-5">High Risk</Badge>
                                         )}
+                                    </Label>
+                                    <Select value={pollInterval} onValueChange={setPollInterval}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Interval" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="1">Every 1 second (Ultra-Aggressive)</SelectItem>
+                                            <SelectItem value="5">Every 5 seconds</SelectItem>
+                                            <SelectItem value="10">Every 10 seconds</SelectItem>
+                                            <SelectItem value="30">Every 30 seconds</SelectItem>
+                                            <SelectItem value="60">Every 1 minute (Recommended)</SelectItem>
+                                            <SelectItem value="300">Every 5 minutes</SelectItem>
+                                            <SelectItem value="900">Every 15 minutes</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className={`text-[10px] ${parseInt(pollInterval) < 30 ? 'text-destructive font-bold' : 'text-muted-foreground'}`}>
+                                        {parseInt(pollInterval) < 30
+                                            ? 'Caution: Fast polling may cause Yahoo Finance to block your IP.'
+                                            : 'How often the server fetches fresh prices and Greeks.'}
+                                    </p>
+                                </div>
 
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="model">Model Name</Label>
-                                            <Input
-                                                id="model"
-                                                value={model}
-                                                onChange={(e) => setModel(e.target.value)}
-                                                placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3-haiku'}
-                                            />
-                                        </div>
+                                <div className="grid gap-2">
+                                    <Label htmlFor="posPollInterval" className="flex items-center gap-2">
+                                        Position Detail Refresh Rate
+                                        {parseInt(positionPollInterval) < 2 && (
+                                            <Badge variant="destructive" className="text-[10px] h-5">Max Load</Badge>
+                                        )}
+                                    </Label>
+                                    <Select value={positionPollInterval} onValueChange={setPositionPollInterval}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Interval" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="2">Every 2 seconds (Default)</SelectItem>
+                                            <SelectItem value="5">Every 5 seconds</SelectItem>
+                                            <SelectItem value="10">Every 10 seconds</SelectItem>
+                                            <SelectItem value="30">Every 30 seconds</SelectItem>
+                                            <SelectItem value="0">Manual Only (Disabled)</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <p className="text-[10px] text-muted-foreground">
+                                        How often an individual Position page auto-refreshes data while open.
+                                    </p>
+                                </div>
 
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="frequency">Morning Briefing Frequency</Label>
-                                            <Select value={briefingFrequency} onValueChange={setBriefingFrequency}>
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="Select Frequency" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="disabled">Disabled</SelectItem>
-                                                    <SelectItem value="daily">Daily (Mon-Sun)</SelectItem>
-                                                    <SelectItem value="every_2_days">Every 2 Days</SelectItem>
-                                                    <SelectItem value="monday">Every Monday</SelectItem>
-                                                    <SelectItem value="friday">Every Friday</SelectItem>
-                                                    <SelectItem value="weekly">Weekly (Monday)</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                            <p className="text-[10px] text-muted-foreground">
-                                                AI-generated portfolio summary sent to Discord at 8:30 AM ET.
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <div className="grid gap-2 pt-2 border-t mt-4">
-                                        <Label htmlFor="pollInterval" className="flex items-center gap-2">
-                                            Market Poll Interval
-                                            {parseInt(pollInterval) < 30 && (
-                                                <Badge variant="destructive" className="text-[8px] h-4">High Risk</Badge>
-                                            )}
-                                        </Label>
-                                        <Select value={pollInterval} onValueChange={setPollInterval}>
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="Select Interval" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="1">Every 1 second (Ultra-Aggressive)</SelectItem>
-                                                <SelectItem value="5">Every 5 seconds</SelectItem>
-                                                <SelectItem value="10">Every 10 seconds</SelectItem>
-                                                <SelectItem value="30">Every 30 seconds</SelectItem>
-                                                <SelectItem value="60">Every 1 minute (Recommended)</SelectItem>
-                                                <SelectItem value="300">Every 5 minutes</SelectItem>
-                                                <SelectItem value="900">Every 15 minutes</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                        <p className={`text-[10px] ${parseInt(pollInterval) < 30 ? 'text-destructive font-bold' : 'text-muted-foreground'}`}>
-                                            {parseInt(pollInterval) < 30
-                                                ? 'Caution: Fast polling may cause Yahoo Finance to block your IP.'
-                                                : 'How often the server fetches fresh prices and Greeks.'}
-                                        </p>
-                                    </div>
-                                    <Button className="w-full mt-2" onClick={handleSaveSettings} disabled={saving || loading}>
-                                        {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                        Save AI Configuration
-                                    </Button>
-                                </section>
+                                <Button className="w-full sm:w-auto" onClick={handleSaveSettings} disabled={saving || loading}>
+                                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    Save Configuration
+                                </Button>
                             </div>
-                        )}
-                    </TabsContent>
+                        </TabsContent>
 
-                    <TabsContent value="integrations">
-                        <div className="grid gap-6 py-2">
-                            <section className="space-y-4">
-                                <div className="flex items-center justify-between">
-                                    <h3 className="text-sm font-semibold">Brokerage (Questrade)</h3>
-                                    <Badge variant={qtSaved ? "outline" : "secondary"}>
-                                        {qtSaved ? "Configured" : "Not Linked"}
+                        <TabsContent value="integrations" className="m-0 space-y-6">
+                            <div>
+                                <h3 className="text-lg font-medium">Integrations</h3>
+                                <p className="text-sm text-muted-foreground">Manage connections to external services.</p>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between p-4 border rounded-lg bg-card">
+                                    <div className="space-y-1">
+                                        <h4 className="font-medium">Questrade Brokerage</h4>
+                                        <p className="text-sm text-muted-foreground">Connect your Questrade account for real-time data.</p>
+                                    </div>
+                                    <Badge variant={qtSaved ? "default" : "secondary"}>
+                                        {qtSaved ? "Connected" : "Not Linked"}
                                     </Badge>
                                 </div>
 
-                                <div className="grid gap-4 p-4 border rounded-lg bg-muted/30">
+                                <div className="grid gap-4 p-6 border rounded-lg bg-muted/30">
                                     <div className="grid gap-2">
                                         <Label htmlFor="qt-client">Consumer Key (Client ID)</Label>
                                         <Input
@@ -367,24 +405,22 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         This will redirect you to Questrade to authorize this application.
                                     </p>
                                 </div>
+                            </div>
+                        </TabsContent>
 
-                                <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded text-[11px] text-blue-200">
-                                    <strong>Note:</strong> Replacing Yahoo Finance with Questrade provides
-                                    real-time (or delayed) data from a licensed broker.
-                                </div>
-                            </section>
-                        </div>
-                    </TabsContent>
+                        <TabsContent value="account" className="m-0 space-y-8">
+                            <div>
+                                <h3 className="text-lg font-medium">Account & Security</h3>
+                                <p className="text-sm text-muted-foreground">Update your profile and password.</p>
+                            </div>
 
-                    <TabsContent value="account">
-                        <div className="grid gap-6 py-2 overflow-y-auto max-h-[400px] pr-1">
                             {/* Update Username */}
                             <section className="space-y-4">
                                 <h3 className="text-sm font-semibold flex items-center gap-2">
                                     <UserIcon className="h-4 w-4" />
                                     Profile Information
                                 </h3>
-                                <div className="grid gap-2">
+                                <div className="grid gap-2 p-4 border rounded-lg">
                                     <Label htmlFor="username">Username</Label>
                                     <div className="flex gap-2">
                                         <Input
@@ -394,7 +430,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         />
                                         <Button
                                             variant="secondary"
-                                            size="sm"
                                             onClick={handleUsernameChange}
                                             disabled={updatingProfile || username === user.username}
                                         >
@@ -406,15 +441,13 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 </div>
                             </section>
 
-                            <div className="h-px bg-border my-2" />
-
                             {/* Update Password */}
                             <section className="space-y-4">
                                 <h3 className="text-sm font-semibold flex items-center gap-2">
                                     <Save className="h-4 w-4" />
-                                    Security & Password
+                                    Change Password
                                 </h3>
-                                <div className="grid gap-4">
+                                <div className="grid gap-4 p-4 border rounded-lg">
                                     <div className="grid gap-2">
                                         <Label htmlFor="current">Current Password</Label>
                                         <Input
@@ -436,7 +469,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     {pwError && <p className="text-xs text-destructive">{pwError}</p>}
                                     {pwSuccess && <p className="text-xs text-green-500 font-medium">{pwSuccess}</p>}
                                     <Button
-                                        variant="secondary"
+                                        variant="outline"
                                         className="w-full"
                                         onClick={handlePasswordChange}
                                         disabled={changing}
@@ -446,8 +479,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </Button>
                                 </div>
                             </section>
-                        </div>
-                    </TabsContent>
+                        </TabsContent>
+                    </div>
                 </Tabs>
             </DialogContent>
         </Dialog>

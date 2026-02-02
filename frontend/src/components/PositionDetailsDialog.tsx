@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw, Activity, CheckCircle2, DollarSign, Hash, XCircle, LayoutGrid, List } from 'lucide-react';
+import { BrainCircuit, Info, Loader2, TrendingUp, TrendingDown, Target, ShieldAlert, Clock, Calendar, RefreshCw, Activity, CheckCircle2, DollarSign, Hash, XCircle, LayoutGrid, List, LineChart } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -156,7 +156,8 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                     <TabsList className="flex flex-wrap h-auto p-1 bg-muted/50 rounded-lg gap-1">
                         <TabsTrigger value="details" className="flex-1 min-w-[120px] text-xs py-2">Details & Greeks</TabsTrigger>
                         <TabsTrigger value="sims" className="flex-1 min-w-[100px] text-xs py-2">Simulations</TabsTrigger>
-                        <TabsTrigger value="ai" className="flex-1 min-w-[100px] text-xs py-2">AI Analysis</TabsTrigger>
+                        <TabsTrigger value="technical" className="flex-1 min-w-[100px] text-xs py-2">Auto-Analysis</TabsTrigger>
+                        <TabsTrigger value="ai" className="flex-1 min-w-[100px] text-xs py-2">AI Chat</TabsTrigger>
                         <TabsTrigger value="close" className="flex-1 min-w-[100px] text-xs py-2 text-red-600 dark:text-red-400 font-bold">Close Trade</TabsTrigger>
                     </TabsList>
 
@@ -412,6 +413,79 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                         </div>
                                     )}
                                 </>
+                            )}
+                        </div>
+                    </TabsContent>
+
+                    <TabsContent value="technical" className="space-y-4 py-4">
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                                <LineChart className="h-4 w-4" /> Technical Analysis (Auto-Generated)
+                            </div>
+
+                            {!position.suggested_stop_loss && (
+                                <div className="p-4 rounded-lg bg-muted/50 text-center text-sm text-muted-foreground">
+                                    No technical analysis data available for this position.
+                                </div>
+                            )}
+
+                            {position.suggested_stop_loss && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="space-y-3">
+                                        <div className="p-3 rounded-lg border bg-card space-y-2">
+                                            <div className="text-xs font-semibold uppercase text-muted-foreground">Suggested Exits</div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <div className="bg-red-50 dark:bg-red-900/10 p-2 rounded border border-red-100 dark:border-red-900/30">
+                                                    <div className="text-[10px] text-red-600 font-bold uppercase">Stop Loss</div>
+                                                    <div className="font-mono font-bold text-base">{formatCurrency(position.suggested_stop_loss)}</div>
+                                                </div>
+                                                <div className="bg-green-50 dark:bg-green-900/10 p-2 rounded border border-green-100 dark:border-green-900/30">
+                                                    <div className="text-[10px] text-green-600 font-bold uppercase">Take Profit (L1)</div>
+                                                    <div className="font-mono font-bold text-base">{formatCurrency(position.suggested_take_profit_1)}</div>
+                                                </div>
+                                                <div className="col-span-2 bg-green-50 dark:bg-green-900/10 p-2 rounded border border-green-100 dark:border-green-900/30 flex justify-between items-center">
+                                                    <div className="text-[10px] text-green-600 font-bold uppercase">Take Profit (L2)</div>
+                                                    <div className="font-mono font-bold text-base">{formatCurrency(position.suggested_take_profit_2)}</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        <div className="p-3 rounded-lg border bg-card space-y-2">
+                                            <div className="text-xs font-semibold uppercase text-muted-foreground">Market Structure</div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <div className="bg-orange-50 dark:bg-orange-900/10 p-2 rounded border border-orange-100 dark:border-orange-900/30">
+                                                    <div className="text-[10px] text-orange-600 font-bold uppercase">Resistance</div>
+                                                    <div className="font-mono font-bold text-base">{formatCurrency(position.analyzed_resistance)}</div>
+                                                </div>
+                                                <div className="bg-blue-50 dark:bg-blue-900/10 p-2 rounded border border-blue-100 dark:border-blue-900/30">
+                                                    <div className="text-[10px] text-blue-600 font-bold uppercase">Support</div>
+                                                    <div className="font-mono font-bold text-base">{formatCurrency(position.analyzed_support)}</div>
+                                                </div>
+                                            </div>
+                                            {position.analysis_data && (
+                                                <div className="pt-2 border-t mt-2">
+                                                    <div className="text-[10px] text-muted-foreground mb-1 uppercase font-bold">Indicators</div>
+                                                    <div className="grid grid-cols-2 gap-1 text-xs">
+                                                        <div className="flex justify-between">
+                                                            <span className="text-muted-foreground">EMA (9):</span>
+                                                            <span className="font-mono">{position.analysis_data.ema9 ? formatCurrency(position.analysis_data.ema9) : '-'}</span>
+                                                        </div>
+                                                        <div className="flex justify-between">
+                                                            <span className="text-muted-foreground">EMA (21):</span>
+                                                            <span className="font-mono">{position.analysis_data.ema21 ? formatCurrency(position.analysis_data.ema21) : '-'}</span>
+                                                        </div>
+                                                        <div className="flex justify-between">
+                                                            <span className="text-muted-foreground">ATR:</span>
+                                                            <span className="font-mono">{position.analysis_data.atr ? formatCurrency(position.analysis_data.atr) : '-'}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
                             )}
                         </div>
                     </TabsContent>
