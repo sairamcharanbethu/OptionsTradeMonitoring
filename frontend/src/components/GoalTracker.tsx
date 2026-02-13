@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, Goal, GoalEntry, GoalInsights } from '@/lib/api';
 import { useGoals, useGoalEntries, useGoalInsights, GOAL_QUERY_KEYS } from '@/hooks/useGoalData';
@@ -116,6 +116,17 @@ function GoalFormDialog({
     const [endDate, setEndDate] = useState(goal?.end_date?.split('T')[0] || new Date().getFullYear() + '-12-31');
     const [saving, setSaving] = useState(false);
 
+    // Reset form when dialog opens or goal changes
+    useEffect(() => {
+        if (open) {
+            setName(goal?.name || '');
+            setTargetAmount(goal?.target_amount?.toString() || '');
+            setStartDate(goal?.start_date?.split('T')[0] || new Date().getFullYear() + '-01-01');
+            setEndDate(goal?.end_date?.split('T')[0] || new Date().getFullYear() + '-12-31');
+            setSaving(false);
+        }
+    }, [open, goal]);
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
@@ -190,6 +201,16 @@ function AddEntryDialog({
     const [amount, setAmount] = useState(editEntry?.amount?.toString() || '');
     const [notes, setNotes] = useState(editEntry?.notes || '');
     const [saving, setSaving] = useState(false);
+
+    // Reset form when dialog opens or entry changes
+    useEffect(() => {
+        if (open) {
+            setEntryDate(editEntry?.entry_date?.split('T')[0] || format(new Date(), 'yyyy-MM-dd'));
+            setAmount(editEntry?.amount?.toString() || '');
+            setNotes(editEntry?.notes || '');
+            setSaving(false);
+        }
+    }, [open, editEntry]);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
