@@ -26,6 +26,61 @@ import {
     Line, ComposedChart
 } from 'recharts';
 
+// ─── US Trading-Day Helpers (matches backend) ───
+function getUSMarketHolidays(year: number): Set<string> {
+    const holidays = new Set<string>();
+    const add = (m: number, d: number) => {
+        let dt = new Date(year, m - 1, d);
+        if (dt.getDay() === 6) dt = new Date(year, m - 1, d - 1);
+        if (dt.getDay() === 0) dt = new Date(year, m - 1, d + 1);
+        holidays.add(dt.toISOString().split('T')[0]);
+    };
+    add(1, 1); add(6, 19); add(7, 4); add(12, 25);
+
+    const nthWeekday = (month: number, wd: number, n: number) => {
+        const first = new Date(year, month - 1, 1);
+        let d = 1 + ((wd - first.getDay() + 7) % 7) + (n - 1) * 7;
+        return new Date(year, month - 1, d);
+    };
+    const lastWeekday = (month: number, wd: number) => {
+        const last = new Date(year, month, 0);
+        return new Date(year, month - 1, last.getDate() - ((last.getDay() - wd + 7) % 7));
+    };
+
+    [nthWeekday(1, 1, 3), nthWeekday(2, 1, 3), lastWeekday(5, 1),
+    nthWeekday(9, 1, 1), nthWeekday(11, 4, 4)].forEach(d =>
+        holidays.add(d.toISOString().split('T')[0])
+    );
+
+    // Good Friday
+    const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+    const dd = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - dd - g + 15) % 30;
+    const i = Math.floor(c / 4), k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7, mm = Math.floor((a + 11 * h + 22 * l) / 451);
+    const mo = Math.floor((h + l - 7 * mm + 114) / 31), dy = ((h + l - 7 * mm + 114) % 31) + 1;
+    const gf = new Date(year, mo - 1, dy); gf.setDate(gf.getDate() - 2);
+    holidays.add(gf.toISOString().split('T')[0]);
+
+    return holidays;
+}
+
+function tradingDaysBetween(from: Date, to: Date): number {
+    if (to <= from) return 0;
+    const holidays = new Set<string>();
+    for (let y = from.getFullYear(); y <= to.getFullYear(); y++)
+        getUSMarketHolidays(y).forEach(h => holidays.add(h));
+    let count = 0;
+    const cursor = new Date(from); cursor.setHours(0, 0, 0, 0);
+    const end = new Date(to); end.setHours(0, 0, 0, 0);
+    while (cursor < end) {
+        const dow = cursor.getDay();
+        if (dow !== 0 && dow !== 6 && !holidays.has(cursor.toISOString().split('T')[0])) count++;
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return count;
+}
+
 // ─── Status Badge Component ───
 function StatusBadge({ status }: { status: string }) {
     const config: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
@@ -247,15 +302,15 @@ export default function GoalTracker() {
         const targetAmount = Number(activeGoal.target_amount);
         const startDate = new Date(activeGoal.start_date);
         const endDate = new Date(activeGoal.end_date);
-        const totalDays = Math.max(1, (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
-        const dailyIdeal = targetAmount / totalDays;
+        const totalTradingDays = Math.max(1, tradingDaysBetween(startDate, endDate));
+        const dailyIdeal = targetAmount / totalTradingDays;
 
         let cumulative = 0;
         return sorted.map(entry => {
             cumulative += Number(entry.amount);
             const entryDate = new Date(entry.entry_date);
-            const dayNumber = Math.max(0, (entryDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
-            const idealAtDay = dailyIdeal * dayNumber;
+            const tradingDaysElapsed = tradingDaysBetween(startDate, entryDate);
+            const idealAtDay = dailyIdeal * tradingDaysElapsed;
 
             return {
                 date: format(parseISO(entry.entry_date), 'MMM d'),

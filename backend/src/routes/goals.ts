@@ -1,5 +1,114 @@
 import { FastifyInstance } from 'fastify';
 
+// ─── US Trading-Day Helpers ───
+// Returns true if a date is a US market holiday (NYSE observed calendar).
+function getUSMarketHolidays(year: number): Set<string> {
+    const holidays = new Set<string>();
+
+    const add = (m: number, d: number) => {
+        let dt = new Date(year, m - 1, d);
+        // If Saturday, observe Friday; if Sunday, observe Monday
+        if (dt.getDay() === 6) dt = new Date(year, m - 1, d - 1);
+        if (dt.getDay() === 0) dt = new Date(year, m - 1, d + 1);
+        holidays.add(dt.toISOString().split('T')[0]);
+    };
+
+    // Fixed-date holidays
+    add(1, 1);   // New Year's Day
+    add(6, 19);  // Juneteenth
+    add(7, 4);   // Independence Day
+    add(12, 25); // Christmas Day
+
+    // Nth-weekday holidays
+    const nthWeekday = (month: number, weekday: number, n: number): Date => {
+        const first = new Date(year, month - 1, 1);
+        let day = 1 + ((weekday - first.getDay() + 7) % 7);
+        day += (n - 1) * 7;
+        return new Date(year, month - 1, day);
+    };
+
+    // Last weekday of month
+    const lastWeekday = (month: number, weekday: number): Date => {
+        const last = new Date(year, month, 0); // last day of month
+        let day = last.getDate() - ((last.getDay() - weekday + 7) % 7);
+        return new Date(year, month - 1, day);
+    };
+
+    // MLK Day: 3rd Monday of January
+    const mlk = nthWeekday(1, 1, 3);
+    holidays.add(mlk.toISOString().split('T')[0]);
+
+    // Presidents' Day: 3rd Monday of February
+    const pres = nthWeekday(2, 1, 3);
+    holidays.add(pres.toISOString().split('T')[0]);
+
+    // Memorial Day: Last Monday of May
+    const mem = lastWeekday(5, 1);
+    holidays.add(mem.toISOString().split('T')[0]);
+
+    // Labor Day: 1st Monday of September
+    const labor = nthWeekday(9, 1, 1);
+    holidays.add(labor.toISOString().split('T')[0]);
+
+    // Thanksgiving: 4th Thursday of November
+    const thanks = nthWeekday(11, 4, 4);
+    holidays.add(thanks.toISOString().split('T')[0]);
+
+    // Good Friday: 2 days before Easter Sunday
+    const easterSunday = computeEaster(year);
+    const goodFriday = new Date(easterSunday);
+    goodFriday.setDate(goodFriday.getDate() - 2);
+    holidays.add(goodFriday.toISOString().split('T')[0]);
+
+    return holidays;
+}
+
+// Anonymous Gregorian Easter (Meeus algorithm)
+function computeEaster(year: number): Date {
+    const a = year % 19;
+    const b = Math.floor(year / 100);
+    const c = year % 100;
+    const d = Math.floor(b / 4);
+    const e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4);
+    const k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const month = Math.floor((h + l - 7 * m + 114) / 31);
+    const day = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(year, month - 1, day);
+}
+
+// Count trading days between two dates (inclusive of start, exclusive of end)
+function tradingDaysBetween(from: Date, to: Date): number {
+    if (to <= from) return 0;
+
+    // Collect holidays for all years in range
+    const holidays = new Set<string>();
+    for (let y = from.getFullYear(); y <= to.getFullYear(); y++) {
+        getUSMarketHolidays(y).forEach(h => holidays.add(h));
+    }
+
+    let count = 0;
+    const cursor = new Date(from);
+    cursor.setHours(0, 0, 0, 0);
+    const end = new Date(to);
+    end.setHours(0, 0, 0, 0);
+
+    while (cursor < end) {
+        const dow = cursor.getDay();
+        if (dow !== 0 && dow !== 6) {
+            const key = cursor.toISOString().split('T')[0];
+            if (!holidays.has(key)) count++;
+        }
+        cursor.setDate(cursor.getDate() + 1);
+    }
+    return count;
+}
+
 export async function goalRoutes(fastify: FastifyInstance) {
     fastify.addHook('onRequest', fastify.authenticate);
 
@@ -212,10 +321,11 @@ export async function goalRoutes(fastify: FastifyInstance) {
             const startDate = new Date(goal.start_date);
             const endDate = new Date(goal.end_date);
 
-            const msPerDay = 1000 * 60 * 60 * 24;
-            const daysTotal = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / msPerDay));
-            const daysElapsed = Math.max(1, Math.ceil((Math.min(now.getTime(), endDate.getTime()) - startDate.getTime()) / msPerDay));
-            const daysRemaining = Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / msPerDay));
+            // Use US trading days instead of calendar days
+            const daysTotal = Math.max(1, tradingDaysBetween(startDate, endDate));
+            const effectiveNow = now < endDate ? now : endDate;
+            const daysElapsed = Math.max(1, tradingDaysBetween(startDate, effectiveNow));
+            const daysRemaining = Math.max(0, tradingDaysBetween(now, endDate));
 
             const percentComplete = Math.min(100, (totalEarned / targetAmount) * 100);
             const dailyAverage = totalEarned / daysElapsed;
