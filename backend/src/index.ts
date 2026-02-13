@@ -9,6 +9,7 @@ import { marketDataRoutes } from './routes/market-data';
 import { marketRoutes } from './routes/market';
 import { aiRoutes } from './routes/ai';
 import { settingsRoutes } from './routes/settings';
+import { goalRoutes } from './routes/goals';
 import { liveAnalysisRoutes } from './routes/live-analysis';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
@@ -115,7 +116,8 @@ const start = async () => {
           { name: 'Settings', description: 'User settings' },
           { name: 'Admin', description: 'Admin operations' },
           { name: 'Market', description: 'Market data and status' },
-          { name: 'AI', description: 'AI-powered analysis' }
+          { name: 'AI', description: 'AI-powered analysis' },
+          { name: 'Goals', description: 'Goal tracking and earnings log' }
         ]
       }
     });
@@ -153,6 +155,7 @@ const start = async () => {
     fastify.register(aiRoutes, { prefix: '/api/ai' });
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
     fastify.register(liveAnalysisRoutes, { prefix: '/api/live-analysis' });
+    fastify.register(goalRoutes, { prefix: '/api/goals' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };

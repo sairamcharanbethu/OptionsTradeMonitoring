@@ -27,7 +27,14 @@ export interface Position {
   gamma?: number;
   vega?: number;
   iv?: number;
+
   underlying_price?: number;
+  analyzed_support?: number;
+  analyzed_resistance?: number;
+  suggested_stop_loss?: number;
+  suggested_take_profit_1?: number;
+  suggested_take_profit_2?: number;
+  analysis_data?: any;
 }
 
 const API_BASE = '/api';
@@ -224,6 +231,12 @@ export const api = {
       vega: pos.vega != null ? Number(pos.vega) : undefined,
       iv: pos.iv != null ? Number(pos.iv) : undefined,
       underlying_price: pos.underlying_price != null ? Number(pos.underlying_price) : undefined,
+      analyzed_support: pos.analyzed_support != null ? Number(pos.analyzed_support) : undefined,
+      analyzed_resistance: pos.analyzed_resistance != null ? Number(pos.analyzed_resistance) : undefined,
+      suggested_stop_loss: pos.suggested_stop_loss != null ? Number(pos.suggested_stop_loss) : undefined,
+      suggested_take_profit_1: pos.suggested_take_profit_1 != null ? Number(pos.suggested_take_profit_1) : undefined,
+      suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
+      analysis_data: pos.analysis_data || undefined,
     }));
   },
 
@@ -250,6 +263,12 @@ export const api = {
         vega: pos.vega != null ? Number(pos.vega) : undefined,
         iv: pos.iv != null ? Number(pos.iv) : undefined,
         underlying_price: pos.underlying_price != null ? Number(pos.underlying_price) : undefined,
+        analyzed_support: pos.analyzed_support != null ? Number(pos.analyzed_support) : undefined,
+        analyzed_resistance: pos.analyzed_resistance != null ? Number(pos.analyzed_resistance) : undefined,
+        suggested_stop_loss: pos.suggested_stop_loss != null ? Number(pos.suggested_stop_loss) : undefined,
+        suggested_take_profit_1: pos.suggested_take_profit_1 != null ? Number(pos.suggested_take_profit_1) : undefined,
+        suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
+        analysis_data: pos.analysis_data || undefined,
       }))
     };
   },
@@ -439,6 +458,123 @@ export const api = {
       body: JSON.stringify(settings)
     });
     if (!res.ok) throw new Error('Failed to update settings');
+  },
+
+  // ─── Goals ───
+  async getGoals(): Promise<Goal[]> {
+    const res = await authFetch(`${API_BASE}/goals`);
+    if (!res.ok) throw new Error('Failed to fetch goals');
+    return res.json();
+  },
+
+  async createGoal(data: { name: string; target_amount: number; start_date: string; end_date: string }): Promise<Goal> {
+    const res = await authFetch(`${API_BASE}/goals`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error('Failed to create goal');
+    return res.json();
+  },
+
+  async updateGoal(id: number, data: Partial<{ name: string; target_amount: number; start_date: string; end_date: string }>): Promise<Goal> {
+    const res = await authFetch(`${API_BASE}/goals/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error('Failed to update goal');
+    return res.json();
+  },
+
+  async deleteGoal(id: number): Promise<void> {
+    const res = await authFetch(`${API_BASE}/goals/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete goal');
+  },
+
+  async getGoalEntries(goalId: number): Promise<GoalEntry[]> {
+    const res = await authFetch(`${API_BASE}/goals/${goalId}/entries`);
+    if (!res.ok) throw new Error('Failed to fetch goal entries');
+    return res.json();
+  },
+
+  async addGoalEntry(goalId: number, data: { entry_date: string; amount: number; notes?: string }): Promise<GoalEntry> {
+    const res = await authFetch(`${API_BASE}/goals/${goalId}/entries`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to add entry');
+    }
+    return res.json();
+  },
+
+  async updateGoalEntry(goalId: number, entryId: number, data: Partial<{ entry_date: string; amount: number; notes: string }>): Promise<GoalEntry> {
+    const res = await authFetch(`${API_BASE}/goals/${goalId}/entries/${entryId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error('Failed to update entry');
+    return res.json();
+  },
+
+  async deleteGoalEntry(goalId: number, entryId: number): Promise<void> {
+    const res = await authFetch(`${API_BASE}/goals/${goalId}/entries/${entryId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Failed to delete entry');
+  },
+
+  async getGoalInsights(goalId: number): Promise<GoalInsights> {
+    const res = await authFetch(`${API_BASE}/goals/${goalId}/insights`);
+    if (!res.ok) throw new Error('Failed to fetch goal insights');
+    return res.json();
   }
 };
+
+export interface Goal {
+  id: number;
+  user_id: number;
+  name: string;
+  target_amount: number;
+  start_date: string;
+  end_date: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GoalEntry {
+  id: number;
+  goal_id: number;
+  entry_date: string;
+  amount: number;
+  notes?: string;
+  created_at: string;
+}
+
+export interface GoalInsights {
+  goalId: number;
+  goalName: string;
+  targetAmount: number;
+  totalEarned: number;
+  percentComplete: number;
+  daysTotal: number;
+  daysElapsed: number;
+  daysRemaining: number;
+  dailyAverage: number;
+  projectedTotal: number;
+  remainingPerDay: number;
+  expectedPercent: number;
+  progressDelta: number;
+  status: 'COMPLETED' | 'AHEAD' | 'ON_TRACK' | 'AT_RISK' | 'BEHIND';
+  // Streak
+  currentStreak: number;
+  longestStreak: number;
+  // Win Rate
+  totalEntries: number;
+  wins: number;
+  losses: number;
+  breakEven: number;
+  winRate: number;
+  avgWin: number;
+  avgLoss: number;
+  profitFactor: number | null;
+}
 

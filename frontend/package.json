@@ -1,6 +1,6 @@
 {
   "name": "options-monitoring-frontend",
-  "version": "1.2.7",
+  "version": "1.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -31,6 +31,7 @@
     "react-dom": "^19.2.3",
     "react-hook-form": "^7.69.0",
     "react-is": "^19.2.3",
+    "react-router-dom": "^6.30.3",
     "recharts": "^3.6.0",
     "tailwind-merge": "^3.4.0",
     "tailwindcss-animate": "^1.0.7",

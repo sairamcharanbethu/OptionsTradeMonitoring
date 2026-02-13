@@ -61,7 +61,8 @@ import {
   Percent,
   PieChart as PieChartIcon,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Target
 } from 'lucide-react';
 import {
   AreaChart,
@@ -78,10 +79,11 @@ import {
 
 import UserManagement from './UserManagement';
 import PositionForm from './PositionForm';
-import PositionDetailsDialog from './PositionDetailsDialog';
+
 import SettingsDialog from './SettingsDialog';
 import Prediction from '@/pages/Prediction';
 import LiveAnalysis from '@/pages/LiveAnalysis';
+import GoalTracker from './GoalTracker';
 import { StatsCard } from './StatsCard';
 import { PositionsTable } from './PositionsTable';
 import { cn, getDte, getPnL, getRoi } from '@/lib/utils';
@@ -101,8 +103,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const [activeTab, setActiveTab] = useState('overview');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
-  const [selectedPosition, setSelectedPosition] = useState<Position | null>(null);
-  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+
   const [tickerFilter, setTickerFilter] = useState('');
   const [debouncedTicker, setDebouncedTicker] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: 'symbol' | 'dte' | 'pnl', direction: 'asc' | 'desc' } | null>({ key: 'dte', direction: 'asc' });
@@ -241,10 +242,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     setIsDialogOpen(true);
   };
 
-  const handleViewDetails = (pos: Position) => {
-    setSelectedPosition(pos);
-    setIsDetailsOpen(true);
-  };
+
 
   const handleDelete = async (id: number) => {
     if (confirm('Are you sure you want to delete this position?')) {
@@ -385,6 +383,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             <TabsList className="hidden md:flex order-2 md:order-1">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
+              <TabsTrigger value="goals">Goals</TabsTrigger>
               <TabsTrigger value="live-analysis">Live Analysis</TabsTrigger>
               <TabsTrigger value="prediction">AI Prediction</TabsTrigger>
               {user.role === 'ADMIN' && (
@@ -399,6 +398,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 <SelectContent>
                   <SelectItem value="overview">Overview</SelectItem>
                   <SelectItem value="portfolio">Portfolio</SelectItem>
+                  <SelectItem value="goals">Goals</SelectItem>
                   <SelectItem value="live-analysis">Live Analysis</SelectItem>
                   <SelectItem value="prediction">AI Prediction</SelectItem>
                   {user.role === 'ADMIN' && (
@@ -443,15 +443,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
           </div>
         </div>
 
-        {/* Details Modal */}
-        {selectedPosition && (
-          <PositionDetailsDialog
-            position={selectedPosition}
-            open={isDetailsOpen}
-            onOpenChange={setIsDetailsOpen}
-            onCloseUpdate={() => refetchPositions()}
-          />
-        )}
+        {/* Details Modal removed - now using separate page */}
 
         <TabsContent value="overview" className="space-y-8 mt-0">
           {/* Stats Cards Row */}
@@ -613,7 +605,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                     setDebouncedTicker('');
                     setStatusFilter('ALL');
                   }}
-                  onViewDetails={handleViewDetails}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                 />
@@ -851,6 +842,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="goals" className="space-y-6 mt-0">
+          <GoalTracker />
         </TabsContent>
 
         <TabsContent value="live-analysis" className="mt-0">
