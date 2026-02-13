@@ -61,7 +61,8 @@ import {
   Percent,
   PieChart as PieChartIcon,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Target
 } from 'lucide-react';
 import {
   AreaChart,
@@ -82,6 +83,7 @@ import PositionForm from './PositionForm';
 import SettingsDialog from './SettingsDialog';
 import Prediction from '@/pages/Prediction';
 import LiveAnalysis from '@/pages/LiveAnalysis';
+import GoalTracker from './GoalTracker';
 import { StatsCard } from './StatsCard';
 import { PositionsTable } from './PositionsTable';
 import { cn, getDte, getPnL, getRoi } from '@/lib/utils';
@@ -381,6 +383,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             <TabsList className="hidden md:flex order-2 md:order-1">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
+              <TabsTrigger value="goals">Goals</TabsTrigger>
               <TabsTrigger value="live-analysis">Live Analysis</TabsTrigger>
               <TabsTrigger value="prediction">AI Prediction</TabsTrigger>
               {user.role === 'ADMIN' && (
@@ -395,6 +398,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 <SelectContent>
                   <SelectItem value="overview">Overview</SelectItem>
                   <SelectItem value="portfolio">Portfolio</SelectItem>
+                  <SelectItem value="goals">Goals</SelectItem>
                   <SelectItem value="live-analysis">Live Analysis</SelectItem>
                   <SelectItem value="prediction">AI Prediction</SelectItem>
                   {user.role === 'ADMIN' && (
@@ -838,6 +842,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="goals" className="space-y-6 mt-0">
+          <GoalTracker />
         </TabsContent>
 
         <TabsContent value="live-analysis" className="mt-0">
