@@ -18,7 +18,7 @@ import {
 import {
     Target, Plus, Trash2, Edit3, TrendingUp, TrendingDown,
     Calendar, DollarSign, Loader2, Rocket, AlertTriangle,
-    CheckCircle2, ArrowRight, Flame
+    CheckCircle2, ArrowRight, Flame, Trophy, BarChart3
 } from 'lucide-react';
 import {
     AreaChart, Area, ResponsiveContainer, XAxis, YAxis,
@@ -531,6 +531,103 @@ export default function GoalTracker() {
                             </CardContent>
                         </Card>
                     </div>
+
+                    {/* Streak Counter + Win Rate Row */}
+                    {insights && insights.totalEntries > 0 && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* Streak Counter */}
+                            <Card className="border-orange-500/20">
+                                <CardContent className="py-5">
+                                    <div className="flex items-start gap-4">
+                                        <div className="p-3 rounded-xl bg-orange-500/10">
+                                            <Flame className="h-7 w-7 text-orange-500" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Current Streak</p>
+                                            <div className="flex items-baseline gap-2">
+                                                <span className="text-3xl font-bold text-orange-500">
+                                                    {insights.currentStreak}
+                                                </span>
+                                                <span className="text-sm text-muted-foreground">
+                                                    profitable {insights.currentStreak === 1 ? 'day' : 'days'}
+                                                </span>
+                                            </div>
+                                            <div className="flex items-center gap-3 mt-2">
+                                                <div className="flex items-center gap-1.5">
+                                                    <Trophy className="h-3.5 w-3.5 text-yellow-500" />
+                                                    <span className="text-xs text-muted-foreground">
+                                                        Best: <span className="font-semibold text-foreground">{insights.longestStreak} days</span>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <p className="text-xs text-muted-foreground mt-2">
+                                                {insights.currentStreak >= insights.longestStreak && insights.currentStreak > 1
+                                                    ? '🔥 You\'re on your best streak ever!'
+                                                    : insights.currentStreak >= 5
+                                                        ? '🔥 Great run! Keep the momentum going.'
+                                                        : insights.currentStreak >= 3
+                                                            ? '💪 Solid streak building up!'
+                                                            : insights.currentStreak > 0
+                                                                ? 'Keep going — every day counts.'
+                                                                : 'Log a profitable day to start a streak!'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+
+                            {/* Win Rate */}
+                            <Card className="border-blue-500/20">
+                                <CardContent className="py-5">
+                                    <div className="flex items-start gap-4">
+                                        <div className="p-3 rounded-xl bg-blue-500/10">
+                                            <BarChart3 className="h-7 w-7 text-blue-500" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Win Rate</p>
+                                            <div className="flex items-baseline gap-2">
+                                                <span className={`text-3xl font-bold ${insights.winRate >= 50 ? 'text-green-500' : 'text-red-500'}`}>
+                                                    {insights.winRate.toFixed(1)}%
+                                                </span>
+                                                <span className="text-xs text-muted-foreground">
+                                                    {insights.wins}W – {insights.losses}L{insights.breakEven > 0 ? ` – ${insights.breakEven}BE` : ''}
+                                                </span>
+                                            </div>
+
+                                            {/* Win/Loss visual bar */}
+                                            <div className="flex h-2 w-full rounded-full overflow-hidden mt-2 bg-muted">
+                                                <div
+                                                    className="h-full bg-green-500 rounded-l-full transition-all"
+                                                    style={{ width: `${insights.totalEntries > 0 ? (insights.wins / insights.totalEntries) * 100 : 0}%` }}
+                                                />
+                                                <div
+                                                    className="h-full bg-red-500 rounded-r-full transition-all"
+                                                    style={{ width: `${insights.totalEntries > 0 ? (insights.losses / insights.totalEntries) * 100 : 0}%` }}
+                                                />
+                                            </div>
+
+                                            <div className="grid grid-cols-3 gap-2 mt-3">
+                                                <div>
+                                                    <p className="text-[10px] text-muted-foreground uppercase">Avg Win</p>
+                                                    <p className="text-xs font-bold text-green-500">+${insights.avgWin.toLocaleString()}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-[10px] text-muted-foreground uppercase">Avg Loss</p>
+                                                    <p className="text-xs font-bold text-red-500">-${insights.avgLoss.toLocaleString()}</p>
+                                                </div>
+                                                <div>
+                                                    <p className="text-[10px] text-muted-foreground uppercase">Profit Factor</p>
+                                                    <p className={`text-xs font-bold ${(insights.profitFactor ?? 0) >= 1 ? 'text-green-500' : 'text-red-500'}`}>
+                                                        {insights.profitFactor != null ? insights.profitFactor.toFixed(2) : '∞'}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </div>
+                    )}
 
                     {/* Cumulative Chart */}
                     {chartData.length > 0 && (

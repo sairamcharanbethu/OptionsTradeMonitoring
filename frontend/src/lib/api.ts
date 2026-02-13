@@ -564,5 +564,17 @@ export interface GoalInsights {
   expectedPercent: number;
   progressDelta: number;
   status: 'COMPLETED' | 'AHEAD' | 'ON_TRACK' | 'AT_RISK' | 'BEHIND';
+  // Streak
+  currentStreak: number;
+  longestStreak: number;
+  // Win Rate
+  totalEntries: number;
+  wins: number;
+  losses: number;
+  breakEven: number;
+  winRate: number;
+  avgWin: number;
+  avgLoss: number;
+  profitFactor: number | null;
 }
 

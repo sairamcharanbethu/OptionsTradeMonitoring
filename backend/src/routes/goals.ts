@@ -317,6 +317,44 @@ export async function goalRoutes(fastify: FastifyInstance) {
             const totalEarned = parseFloat(sumResult.rows[0].total_earned);
             const targetAmount = parseFloat(goal.target_amount);
 
+            // Fetch all entries for streak & win-rate calculations
+            const entriesResult = await (fastify as any).pg.query(
+                'SELECT amount FROM goal_entries WHERE goal_id = $1 ORDER BY entry_date ASC',
+                [goalId]
+            );
+            const amounts: number[] = entriesResult.rows.map((r: any) => parseFloat(r.amount));
+
+            // ── Streak calculation ──
+            let currentStreak = 0;
+            let longestStreak = 0;
+            let tempStreak = 0;
+            for (let i = 0; i < amounts.length; i++) {
+                if (amounts[i] > 0) {
+                    tempStreak++;
+                    longestStreak = Math.max(longestStreak, tempStreak);
+                } else {
+                    tempStreak = 0;
+                }
+            }
+            // Current streak = count backwards from the last entry
+            for (let i = amounts.length - 1; i >= 0; i--) {
+                if (amounts[i] > 0) {
+                    currentStreak++;
+                } else {
+                    break;
+                }
+            }
+
+            // ── Win rate calculation ──
+            const totalEntries = amounts.length;
+            const wins = amounts.filter(a => a > 0).length;
+            const losses = amounts.filter(a => a < 0).length;
+            const breakEven = amounts.filter(a => a === 0).length;
+            const winRate = totalEntries > 0 ? (wins / totalEntries) * 100 : 0;
+            const avgWin = wins > 0 ? amounts.filter(a => a > 0).reduce((s, a) => s + a, 0) / wins : 0;
+            const avgLoss = losses > 0 ? Math.abs(amounts.filter(a => a < 0).reduce((s, a) => s + a, 0)) / losses : 0;
+            const profitFactor = avgLoss > 0 ? (avgWin * wins) / (avgLoss * losses) : wins > 0 ? Infinity : 0;
+
             const now = new Date();
             const startDate = new Date(goal.start_date);
             const endDate = new Date(goal.end_date);
@@ -364,6 +402,18 @@ export async function goalRoutes(fastify: FastifyInstance) {
                 expectedPercent: Math.round(expectedPercent * 100) / 100,
                 progressDelta: Math.round(progressDelta * 100) / 100,
                 status,
+                // Streak
+                currentStreak,
+                longestStreak,
+                // Win Rate
+                totalEntries,
+                wins,
+                losses,
+                breakEven,
+                winRate: Math.round(winRate * 100) / 100,
+                avgWin: Math.round(avgWin * 100) / 100,
+                avgLoss: Math.round(avgLoss * 100) / 100,
+                profitFactor: profitFactor === Infinity ? null : Math.round(profitFactor * 100) / 100,
             };
         } catch (err) {
             fastify.log.error(err);
