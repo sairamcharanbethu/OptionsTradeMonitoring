@@ -9,11 +9,11 @@
 set -e
 
 # Config — update these if different
-DB_USER="n8n"
-DB_PASS="Lassi626!1995"
+DB_USER="${POSTGRES_USER:-n8n}"
+DB_PASS="${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD env var}"
 DB_HOST="n8n-postgres"
 DB_PORT="5432"
-DB_NAME="n8n"
+DB_NAME="${POSTGRES_DB:-n8n}"
 
 CONN="postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 
