@@ -5,15 +5,15 @@
 # Usage: chmod +x db/final-migrate.sh && ./db/final-migrate.sh
 
 # ─── Old Cloud DB ───
-OLD_HOST="140.245.28.181"
-OLD_PORT="5432"
-OLD_USER="appuser"
-OLD_PASS="Lassi626!1995"
-OLD_DB="appdb"
+OLD_HOST="${OLD_DB_HOST:?Set OLD_DB_HOST env var}"
+OLD_PORT="${OLD_DB_PORT:-5432}"
+OLD_USER="${OLD_DB_USER:?Set OLD_DB_USER env var}"
+OLD_PASS="${OLD_DB_PASS:?Set OLD_DB_PASS env var}"
+OLD_DB="${OLD_DB_NAME:?Set OLD_DB_NAME env var}"
 
 # ─── New DB ───
-NEW_USER="n8n"
-NEW_DB="n8n"
+NEW_USER="${POSTGRES_USER:-n8n}"
+NEW_DB="${POSTGRES_DB:-n8n}"
 CONTAINER="n8n-postgres"
 
 DUMP_FILE="/tmp/app_full_dump.sql"
