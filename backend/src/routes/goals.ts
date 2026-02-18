@@ -230,14 +230,21 @@ export async function goalRoutes(fastify: FastifyInstance) {
 
             const { rows } = await (fastify as any).pg.query(
                 `INSERT INTO goal_entries (goal_id, entry_date, amount, notes)
-         VALUES ($1, $2, $3, $4) RETURNING *`,
-                [goalId, entry_date, amount, notes || null]
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (goal_id, entry_date)
+                 DO UPDATE SET 
+                    amount = goal_entries.amount + EXCLUDED.amount,
+                    notes = CASE 
+                        WHEN goal_entries.notes IS NOT NULL AND goal_entries.notes <> '' 
+                        THEN goal_entries.notes || '; ' || EXCLUDED.notes
+                        ELSE EXCLUDED.notes
+                    END,
+                    updated_at = NOW()
+                 RETURNING *`,
+                [goalId, entry_date, amount, notes || '']
             );
             return reply.code(201).send(rows[0]);
         } catch (err: any) {
-            if (err.code === '23505') {
-                return reply.code(409).send({ error: 'An entry already exists for this date. Update it instead.' });
-            }
             fastify.log.error(err);
             return reply.code(500).send({ error: 'Failed to add entry' });
         }
@@ -360,10 +367,18 @@ export async function goalRoutes(fastify: FastifyInstance) {
             const endDate = new Date(goal.end_date);
 
             // Use US trading days instead of calendar days
-            const daysTotal = Math.max(1, tradingDaysBetween(startDate, endDate));
-            const effectiveNow = now < endDate ? now : endDate;
-            const daysElapsed = Math.max(1, tradingDaysBetween(startDate, effectiveNow));
-            const daysRemaining = Math.max(0, tradingDaysBetween(now, endDate));
+            // We want inclusive of start and end for total duration
+            const daysTotal = Math.max(1, tradingDaysBetween(startDate, new Date(endDate.getTime() + 86400000)));
+
+            // Effective now: if goal ended, cap at end date. If future, cap at now.
+            let effectiveNow = now < endDate ? now : endDate;
+            // For elapsed, we want to include "today" if we are in the middle of it.
+            // tradingDaysBetween is start-inclusive, end-exclusive. 
+            // So if strat=Today, Now=Today, diff=0. We want 1.
+            // So we add 1 day to effectiveNow.
+            const daysElapsed = Math.max(1, tradingDaysBetween(startDate, new Date(effectiveNow.getTime() + 86400000)));
+
+            const daysRemaining = Math.max(0, daysTotal - daysElapsed);
 
             const percentComplete = Math.min(100, (totalEarned / targetAmount) * 100);
             const dailyAverage = totalEarned / daysElapsed;
@@ -371,7 +386,7 @@ export async function goalRoutes(fastify: FastifyInstance) {
             const remainingPerDay = daysRemaining > 0 ? (targetAmount - totalEarned) / daysRemaining : 0;
 
             // Expected progress at this point (linear)
-            const expectedPercent = (daysElapsed / daysTotal) * 100;
+            const expectedPercent = Math.min(100, (daysElapsed / daysTotal) * 100);
             const progressDelta = percentComplete - expectedPercent; // positive = ahead, negative = behind
 
             let status: string;

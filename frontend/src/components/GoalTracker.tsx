@@ -329,12 +329,14 @@ export default function GoalTracker() {
         let cumulative = 0;
         return sorted.map(entry => {
             cumulative += Number(entry.amount);
-            const entryDate = new Date(entry.entry_date);
+            // Fix: split by T to ignore time/timezone, treat as YYYY-MM-DD local
+            const dateStr = String(entry.entry_date).split('T')[0];
+            const entryDate = parseISO(dateStr);
             const tradingDaysElapsed = tradingDaysBetween(startDate, entryDate);
             const idealAtDay = dailyIdeal * tradingDaysElapsed;
 
             return {
-                date: format(parseISO(entry.entry_date), 'MMM d'),
+                date: format(entryDate, 'MMM d'),
                 earned: Math.round(cumulative * 100) / 100,
                 ideal: Math.round(idealAtDay * 100) / 100,
             };
@@ -747,7 +749,7 @@ export default function GoalTracker() {
                                             {entries.map(entry => (
                                                 <tr key={entry.id} className="border-b hover:bg-muted/50 transition-colors">
                                                     <td className="px-4 py-3 font-medium">
-                                                        {format(parseISO(entry.entry_date), 'MMM d, yyyy')}
+                                                        {format(parseISO(String(entry.entry_date).split('T')[0]), 'MMM d, yyyy')}
                                                     </td>
                                                     <td className="px-4 py-3">
                                                         <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
