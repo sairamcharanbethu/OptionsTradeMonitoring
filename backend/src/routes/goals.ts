@@ -372,11 +372,10 @@ export async function goalRoutes(fastify: FastifyInstance) {
 
             // Effective now: if goal ended, cap at end date. If future, cap at now.
             let effectiveNow = now < endDate ? now : endDate;
-            // For elapsed, we want to include "today" if we are in the middle of it.
-            // tradingDaysBetween is start-inclusive, end-exclusive. 
-            // So if strat=Today, Now=Today, diff=0. We want 1.
-            // So we add 1 day to effectiveNow.
-            const daysElapsed = Math.max(1, tradingDaysBetween(startDate, new Date(effectiveNow.getTime() + 86400000)));
+            // Elapsed: Use exclusive of today (effectiveNow) to match user expectation of "completed days".
+            // If they want to include today, they can look at Projected. 
+            // This aligns "Daily Average" with "Past Performance".
+            const daysElapsed = Math.max(1, tradingDaysBetween(startDate, effectiveNow));
 
             const daysRemaining = Math.max(0, daysTotal - daysElapsed);
 
