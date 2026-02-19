@@ -329,9 +329,10 @@ export default function GoalTracker() {
         let cumulative = 0;
         return sorted.map(entry => {
             cumulative += Number(entry.amount);
-            // Fix: split by T to ignore time/timezone, treat as YYYY-MM-DD local
-            const dateStr = String(entry.entry_date).split('T')[0];
-            const entryDate = parseISO(dateStr);
+            // Fix: Parse UTC date components to Local to prevent timezone shift
+            const d = new Date(entry.entry_date);
+            const entryDate = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+
             const tradingDaysElapsed = tradingDaysBetween(startDate, entryDate);
             const idealAtDay = dailyIdeal * tradingDaysElapsed;
 
@@ -749,7 +750,11 @@ export default function GoalTracker() {
                                             {entries.map(entry => (
                                                 <tr key={entry.id} className="border-b hover:bg-muted/50 transition-colors">
                                                     <td className="px-4 py-3 font-medium">
-                                                        {format(parseISO(String(entry.entry_date).split('T')[0]), 'MMM d, yyyy')}
+                                                        {(() => {
+                                                            const d = new Date(entry.entry_date);
+                                                            const localDate = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+                                                            return format(localDate, 'MMM d, yyyy');
+                                                        })()}
                                                     </td>
                                                     <td className="px-4 py-3">
                                                         <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
