@@ -238,8 +238,7 @@ export async function goalRoutes(fastify: FastifyInstance) {
                         WHEN goal_entries.notes IS NOT NULL AND goal_entries.notes <> '' 
                         THEN goal_entries.notes || '; ' || EXCLUDED.notes
                         ELSE EXCLUDED.notes
-                    END,
-                    updated_at = NOW()
+                    END
                  RETURNING *`,
                 [goalId, entry_date, amount, notes || '']
             );
