@@ -377,7 +377,6 @@ export default function GoalTracker() {
                                     value={activeGoalId?.toString() || ''}
                                     onValueChange={v => setSelectedGoalId(parseInt(v))}
                                 >
-                                    <SelectTrigger className="h-9 w-[200px] text-xs">
                                         <SelectValue placeholder="Select a goal" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -390,434 +389,438 @@ export default function GoalTracker() {
                                 </Select>
                             )}
 
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => { setEditingGoal(undefined); setGoalDialogOpen(true); }}
-                                className="gap-1 text-xs"
-                            >
-                                <Plus className="h-3 w-3" />
-                                New Goal
-                            </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { setEditingGoal(undefined); setGoalDialogOpen(true); }}
+                            className="gap-1 text-xs sm:flex-none flex-1"
+                        >
+                            <Plus className="h-3 w-3" />
+                            New Goal
+                        </Button>
 
-                            {activeGoal && (
-                                <>
-                                    <Button
-                                        variant="outline"
-                                        size="icon"
-                                        className="h-9 w-9"
-                                        onClick={() => { setEditingGoal(activeGoal); setGoalDialogOpen(true); }}
-                                    >
-                                        <Edit3 className="h-3.5 w-3.5" />
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="icon"
-                                        className="h-9 w-9 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
-                                        onClick={handleDeleteGoal}
-                                    >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                    </Button>
-                                </>
-                            )}
-                        </div>
+                        {activeGoal && (
+                            <>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-9 w-9"
+                                    onClick={() => { setEditingGoal(activeGoal); setGoalDialogOpen(true); }}
+                                >
+                                    <Edit3 className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-9 w-9 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950"
+                                    onClick={handleDeleteGoal}
+                                >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                            </>
+                        )}
                     </div>
+                </div>
+            </CardContent>
+        </Card>
+
+            {
+        !activeGoal ? (
+            <Card>
+                <CardContent className="py-16 text-center">
+                    <Target className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
+                    <p className="text-lg font-semibold mb-2">No Goals Yet</p>
+                    <p className="text-sm text-muted-foreground mb-4">Set your first earnings goal and start tracking progress.</p>
+                    <Button onClick={() => { setEditingGoal(undefined); setGoalDialogOpen(true); }}>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Create Your First Goal
+                    </Button>
                 </CardContent>
             </Card>
+        ) : (
+        <>
+            {/* Progress Bar + Insights Row */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                {/* Big Progress Card */}
+                <Card className="lg:col-span-2">
+                    <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                            <CardTitle className="text-sm font-medium text-muted-foreground">
+                                Progress to {activeGoal.name}
+                            </CardTitle>
+                            {insights && <StatusBadge status={insights.status} />}
+                        </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        {insightsLoading ? (
+                            <div className="flex justify-center py-4">
+                                <Loader2 className="h-5 w-5 animate-spin" />
+                            </div>
+                        ) : insights ? (
+                            <>
+                                <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 sm:gap-4">
+                                    <div>
+                                        <span className="text-2xl sm:text-3xl font-bold" style={{ color: progressColor }}>
+                                            ${insights.totalEarned.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                        </span>
+                                        <span className="text-xs sm:text-sm text-muted-foreground ml-0 sm:ml-2 block sm:inline">
+                                            of ${insights.targetAmount.toLocaleString()}
+                                        </span>
+                                    </div>
+                                    <span className="text-xl sm:text-2xl font-bold self-start sm:self-auto" style={{ color: progressColor }}>
+                                        {insights.percentComplete.toFixed(1)}%
+                                    </span>
+                                </div>
 
-            {!activeGoal ? (
-                <Card>
-                    <CardContent className="py-16 text-center">
-                        <Target className="h-12 w-12 mx-auto text-muted-foreground/30 mb-4" />
-                        <p className="text-lg font-semibold mb-2">No Goals Yet</p>
-                        <p className="text-sm text-muted-foreground mb-4">Set your first earnings goal and start tracking progress.</p>
-                        <Button onClick={() => { setEditingGoal(undefined); setGoalDialogOpen(true); }}>
-                            <Plus className="h-4 w-4 mr-2" />
-                            Create Your First Goal
-                        </Button>
+                                {/* Progress Bar */}
+                                <div className="relative">
+                                    <div className="h-4 w-full bg-muted rounded-full overflow-hidden">
+                                        <div
+                                            className="h-full rounded-full transition-all duration-700 ease-out relative"
+                                            style={{
+                                                width: `${Math.min(100, progressPercent)}%`,
+                                                background: `linear-gradient(90deg, ${progressColor}cc, ${progressColor})`,
+                                            }}
+                                        >
+                                            <div className="absolute inset-0 bg-white/20 animate-pulse rounded-full" />
+                                        </div>
+                                    </div>
+                                    {/* Expected position marker */}
+                                    <div
+                                        className="absolute top-0 h-4 w-0.5 bg-foreground/40"
+                                        style={{ left: `${Math.min(100, insights.expectedPercent)}%` }}
+                                        title={`Expected: ${insights.expectedPercent.toFixed(1)}%`}
+                                    />
+                                </div>
+
+                                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                    <span>{format(parseISO(activeGoal.start_date), 'MMM d, yyyy')}</span>
+                                    <span className="flex items-center gap-1">
+                                        <div className="w-3 h-0.5 bg-foreground/40" /> Expected pace marker
+                                    </span>
+                                    <span>{format(parseISO(activeGoal.end_date), 'MMM d, yyyy')}</span>
+                                </div>
+                            </>
+                        ) : null}
                     </CardContent>
                 </Card>
-            ) : (
-                <>
-                    {/* Progress Bar + Insights Row */}
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                        {/* Big Progress Card */}
-                        <Card className="lg:col-span-2">
-                            <CardHeader className="pb-3">
-                                <div className="flex items-center justify-between">
-                                    <CardTitle className="text-sm font-medium text-muted-foreground">
-                                        Progress to {activeGoal.name}
-                                    </CardTitle>
-                                    {insights && <StatusBadge status={insights.status} />}
-                                </div>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                                {insightsLoading ? (
-                                    <div className="flex justify-center py-4">
-                                        <Loader2 className="h-5 w-5 animate-spin" />
-                                    </div>
-                                ) : insights ? (
-                                    <>
-                                        <div className="flex items-baseline justify-between">
-                                            <div>
-                                                <span className="text-3xl font-bold" style={{ color: progressColor }}>
-                                                    ${insights.totalEarned.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                                                </span>
-                                                <span className="text-sm text-muted-foreground ml-2">
-                                                    of ${insights.targetAmount.toLocaleString()}
-                                                </span>
-                                            </div>
-                                            <span className="text-2xl font-bold" style={{ color: progressColor }}>
-                                                {insights.percentComplete.toFixed(1)}%
-                                            </span>
-                                        </div>
 
-                                        {/* Progress Bar */}
-                                        <div className="relative">
-                                            <div className="h-4 w-full bg-muted rounded-full overflow-hidden">
-                                                <div
-                                                    className="h-full rounded-full transition-all duration-700 ease-out relative"
-                                                    style={{
-                                                        width: `${Math.min(100, progressPercent)}%`,
-                                                        background: `linear-gradient(90deg, ${progressColor}cc, ${progressColor})`,
-                                                    }}
-                                                >
-                                                    <div className="absolute inset-0 bg-white/20 animate-pulse rounded-full" />
-                                                </div>
-                                            </div>
-                                            {/* Expected position marker */}
-                                            <div
-                                                className="absolute top-0 h-4 w-0.5 bg-foreground/40"
-                                                style={{ left: `${Math.min(100, insights.expectedPercent)}%` }}
-                                                title={`Expected: ${insights.expectedPercent.toFixed(1)}%`}
-                                            />
-                                        </div>
-
-                                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                                            <span>{format(parseISO(activeGoal.start_date), 'MMM d, yyyy')}</span>
-                                            <span className="flex items-center gap-1">
-                                                <div className="w-3 h-0.5 bg-foreground/40" /> Expected pace marker
-                                            </span>
-                                            <span>{format(parseISO(activeGoal.end_date), 'MMM d, yyyy')}</span>
-                                        </div>
-                                    </>
-                                ) : null}
-                            </CardContent>
-                        </Card>
-
-                        {/* Pacing Insights Card */}
-                        <Card className="bg-gradient-to-br from-card to-muted/30">
-                            <CardHeader className="pb-2">
-                                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                                    <Flame className="h-4 w-4 text-orange-500" />
-                                    Pacing Insights
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-3">
-                                {insightsLoading ? (
-                                    <div className="flex justify-center py-6">
-                                        <Loader2 className="h-5 w-5 animate-spin" />
-                                    </div>
-                                ) : insights ? (
-                                    <>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            <div className="p-2.5 rounded-lg bg-background border">
-                                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Daily Avg</p>
-                                                <p className="text-sm font-bold">${insights.dailyAverage.toLocaleString()}</p>
-                                            </div>
-                                            <div className="p-2.5 rounded-lg bg-background border">
-                                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need/Day</p>
-                                                <p className="text-sm font-bold text-orange-500">${insights.remainingPerDay.toLocaleString()}</p>
-                                            </div>
-                                            <div className="p-2.5 rounded-lg bg-background border">
-                                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Projected</p>
-                                                <p className={`text-sm font-bold ${insights.projectedTotal >= insights.targetAmount ? 'text-green-500' : 'text-red-500'}`}>
-                                                    ${insights.projectedTotal.toLocaleString()}
-                                                </p>
-                                            </div>
-                                            <div className="p-2.5 rounded-lg bg-background border">
-                                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Days Left</p>
-                                                <p className="text-sm font-bold">{insights.daysRemaining}</p>
-                                            </div>
-                                        </div>
-
-                                        <div className="pt-2 border-t">
-                                            <p className="text-xs text-muted-foreground leading-relaxed">
-                                                {insights.status === 'COMPLETED' && '🎯 Congratulations! You\'ve reached your goal!'}
-                                                {insights.status === 'AHEAD' && `🚀 Great pace! You're ${insights.progressDelta.toFixed(1)}% ahead of schedule.`}
-                                                {insights.status === 'ON_TRACK' && `✅ You're on track. Keep averaging $${insights.dailyAverage.toLocaleString()}/day.`}
-                                                {insights.status === 'AT_RISK' && `⚠️ Slightly behind. Aim for $${insights.remainingPerDay.toLocaleString()}/day to catch up.`}
-                                                {insights.status === 'BEHIND' && `🔴 Behind by ${Math.abs(insights.progressDelta).toFixed(1)}%. Need $${insights.remainingPerDay.toLocaleString()}/day to recover.`}
-                                            </p>
-                                        </div>
-                                    </>
-                                ) : null}
-                            </CardContent>
-                        </Card>
-                    </div>
-
-                    {/* Streak Counter + Win Rate Row */}
-                    {insights && insights.totalEntries > 0 && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {/* Streak Counter */}
-                            <Card className="border-orange-500/20">
-                                <CardContent className="py-5">
-                                    <div className="flex items-start gap-4">
-                                        <div className="p-3 rounded-xl bg-orange-500/10">
-                                            <Flame className="h-7 w-7 text-orange-500" />
-                                        </div>
-                                        <div className="flex-1">
-                                            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Current Streak</p>
-                                            <div className="flex items-baseline gap-2">
-                                                <span className="text-3xl font-bold text-orange-500">
-                                                    {insights.currentStreak}
-                                                </span>
-                                                <span className="text-sm text-muted-foreground">
-                                                    profitable {insights.currentStreak === 1 ? 'day' : 'days'}
-                                                </span>
-                                            </div>
-                                            <div className="flex items-center gap-3 mt-2">
-                                                <div className="flex items-center gap-1.5">
-                                                    <Trophy className="h-3.5 w-3.5 text-yellow-500" />
-                                                    <span className="text-xs text-muted-foreground">
-                                                        Best: <span className="font-semibold text-foreground">{insights.longestStreak} days</span>
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <p className="text-xs text-muted-foreground mt-2">
-                                                {insights.currentStreak >= insights.longestStreak && insights.currentStreak > 1
-                                                    ? '🔥 You\'re on your best streak ever!'
-                                                    : insights.currentStreak >= 5
-                                                        ? '🔥 Great run! Keep the momentum going.'
-                                                        : insights.currentStreak >= 3
-                                                            ? '💪 Solid streak building up!'
-                                                            : insights.currentStreak > 0
-                                                                ? 'Keep going — every day counts.'
-                                                                : 'Log a profitable day to start a streak!'}
-                                            </p>
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-
-                            {/* Win Rate */}
-                            <Card className="border-blue-500/20">
-                                <CardContent className="py-5">
-                                    <div className="flex items-start gap-4">
-                                        <div className="p-3 rounded-xl bg-blue-500/10">
-                                            <BarChart3 className="h-7 w-7 text-blue-500" />
-                                        </div>
-                                        <div className="flex-1">
-                                            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Win Rate</p>
-                                            <div className="flex items-baseline gap-2">
-                                                <span className={`text-3xl font-bold ${insights.winRate >= 50 ? 'text-green-500' : 'text-red-500'}`}>
-                                                    {insights.winRate.toFixed(1)}%
-                                                </span>
-                                                <span className="text-xs text-muted-foreground">
-                                                    {insights.wins}W – {insights.losses}L{insights.breakEven > 0 ? ` – ${insights.breakEven}BE` : ''}
-                                                </span>
-                                            </div>
-
-                                            {/* Win/Loss visual bar */}
-                                            <div className="flex h-2 w-full rounded-full overflow-hidden mt-2 bg-muted">
-                                                <div
-                                                    className="h-full bg-green-500 rounded-l-full transition-all"
-                                                    style={{ width: `${insights.totalEntries > 0 ? (insights.wins / insights.totalEntries) * 100 : 0}%` }}
-                                                />
-                                                <div
-                                                    className="h-full bg-red-500 rounded-r-full transition-all"
-                                                    style={{ width: `${insights.totalEntries > 0 ? (insights.losses / insights.totalEntries) * 100 : 0}%` }}
-                                                />
-                                            </div>
-
-                                            <div className="grid grid-cols-3 gap-2 mt-3">
-                                                <div>
-                                                    <p className="text-[10px] text-muted-foreground uppercase">Avg Win</p>
-                                                    <p className="text-xs font-bold text-green-500">+${insights.avgWin.toLocaleString()}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-[10px] text-muted-foreground uppercase">Avg Loss</p>
-                                                    <p className="text-xs font-bold text-red-500">-${insights.avgLoss.toLocaleString()}</p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-[10px] text-muted-foreground uppercase">Profit Factor</p>
-                                                    <p className={`text-xs font-bold ${(insights.profitFactor ?? 0) >= 1 ? 'text-green-500' : 'text-red-500'}`}>
-                                                        {insights.profitFactor != null ? insights.profitFactor.toFixed(2) : '∞'}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        </div>
-                    )}
-
-                    {/* Cumulative Chart */}
-                    {chartData.length > 0 && (
-                        <Card>
-                            <CardHeader>
-                                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                                    <TrendingUp className="h-4 w-4 text-primary" />
-                                    Cumulative Earnings vs. Ideal Pace
-                                </CardTitle>
-                            </CardHeader>
-                            <CardContent className="h-[300px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <ComposedChart data={chartData}>
-                                        <defs>
-                                            <linearGradient id="earnedGradient" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor={progressColor} stopOpacity={0.3} />
-                                                <stop offset="95%" stopColor={progressColor} stopOpacity={0} />
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                                        <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
-                                        <RechartsTooltip
-                                            contentStyle={{
-                                                backgroundColor: 'hsl(var(--card))',
-                                                border: '1px solid hsl(var(--border))',
-                                                borderRadius: '8px',
-                                                fontSize: '12px'
-                                            }}
-                                            formatter={((value: number, name: string) => [
-                                                `$${value.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
-                                                name === 'earned' ? 'Actual' : 'Ideal Pace'
-                                            ]) as any}
-                                        />
-                                        <Area
-                                            type="monotone"
-                                            dataKey="earned"
-                                            stroke={progressColor}
-                                            strokeWidth={2}
-                                            fill="url(#earnedGradient)"
-                                        />
-                                        <Line
-                                            type="monotone"
-                                            dataKey="ideal"
-                                            stroke="#94a3b8"
-                                            strokeWidth={1.5}
-                                            strokeDasharray="6 3"
-                                            dot={false}
-                                        />
-                                    </ComposedChart>
-                                </ResponsiveContainer>
-                            </CardContent>
-                        </Card>
-                    )}
-
-                    {/* Entry Log */}
-                    <Card>
-                        <CardHeader>
-                            <div className="flex items-center justify-between">
-                                <CardTitle className="text-lg flex items-center gap-2">
-                                    <Calendar className="h-5 w-5 text-primary" />
-                                    Earnings Log
-                                </CardTitle>
-                                <Button
-                                    size="sm"
-                                    onClick={() => { setEditingEntry(undefined); setEntryDialogOpen(true); }}
-                                    className="gap-1 text-xs"
-                                >
-                                    <Plus className="h-3 w-3" />
-                                    Log Entry
-                                </Button>
+                {/* Pacing Insights Card */}
+                <Card className="bg-gradient-to-br from-card to-muted/30">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                            <Flame className="h-4 w-4 text-orange-500" />
+                            Pacing Insights
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        {insightsLoading ? (
+                            <div className="flex justify-center py-6">
+                                <Loader2 className="h-5 w-5 animate-spin" />
                             </div>
-                        </CardHeader>
-                        <CardContent className="p-0 sm:p-6">
-                            {entriesLoading ? (
-                                <div className="flex justify-center py-8">
-                                    <Loader2 className="h-5 w-5 animate-spin" />
+                        ) : insights ? (
+                            <>
+                                <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                                    <div className="p-2.5 rounded-lg bg-background border">
+                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Daily Avg</p>
+                                        <p className="text-sm font-bold">${insights.dailyAverage.toLocaleString()}</p>
+                                    </div>
+                                    <div className="p-2.5 rounded-lg bg-background border">
+                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need/Day</p>
+                                        <p className="text-sm font-bold text-orange-500">${insights.remainingPerDay.toLocaleString()}</p>
+                                    </div>
+                                    <div className="p-2.5 rounded-lg bg-background border">
+                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Projected</p>
+                                        <p className={`text-sm font-bold ${insights.projectedTotal >= insights.targetAmount ? 'text-green-500' : 'text-red-500'}`}>
+                                            ${insights.projectedTotal.toLocaleString()}
+                                        </p>
+                                    </div>
+                                    <div className="p-2.5 rounded-lg bg-background border">
+                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Days Left</p>
+                                        <p className="text-sm font-bold">{insights.daysRemaining}</p>
+                                    </div>
                                 </div>
-                            ) : entries.length === 0 ? (
-                                <div className="text-center py-10 text-muted-foreground">
-                                    <DollarSign className="h-8 w-8 mx-auto mb-2 opacity-30" />
-                                    <p className="text-sm">No entries yet. Start logging your daily earnings!</p>
+
+                                <div className="pt-2 border-t">
+                                    <p className="text-xs text-muted-foreground leading-relaxed">
+                                        {insights.status === 'COMPLETED' && '🎯 Congratulations! You\'ve reached your goal!'}
+                                        {insights.status === 'AHEAD' && `🚀 Great pace! You're ${insights.progressDelta.toFixed(1)}% ahead of schedule.`}
+                                        {insights.status === 'ON_TRACK' && `✅ You're on track. Keep averaging $${insights.dailyAverage.toLocaleString()}/day.`}
+                                        {insights.status === 'AT_RISK' && `⚠️ Slightly behind. Aim for $${insights.remainingPerDay.toLocaleString()}/day to catch up.`}
+                                        {insights.status === 'BEHIND' && `🔴 Behind by ${Math.abs(insights.progressDelta).toFixed(1)}%. Need $${insights.remainingPerDay.toLocaleString()}/day to recover.`}
+                                    </p>
                                 </div>
-                            ) : (
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
-                                            <tr>
-                                                <th className="px-4 py-3">Date</th>
-                                                <th className="px-4 py-3">Amount</th>
-                                                <th className="px-4 py-3 hidden sm:table-cell">Notes</th>
-                                                <th className="px-4 py-3 text-right">Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {entries.map(entry => (
-                                                <tr key={entry.id} className="border-b hover:bg-muted/50 transition-colors">
-                                                    <td className="px-4 py-3 font-medium">
-                                                        {(() => {
-                                                            const d = new Date(entry.entry_date);
-                                                            const localDate = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-                                                            return format(localDate, 'MMM d, yyyy');
-                                                        })()}
-                                                    </td>
-                                                    <td className="px-4 py-3">
-                                                        <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                                            {Number(entry.amount) >= 0 ? '+' : ''}${Number(entry.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                                                        </span>
-                                                    </td>
-                                                    <td className="px-4 py-3 hidden sm:table-cell text-xs text-muted-foreground truncate max-w-[200px]">
-                                                        {entry.notes || '—'}
-                                                    </td>
-                                                    <td className="px-4 py-3 text-right">
-                                                        <div className="flex items-center justify-end gap-1">
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-7 w-7"
-                                                                onClick={() => {
-                                                                    setEditingEntry(entry);
-                                                                    setEntryDialogOpen(true);
-                                                                }}
-                                                            >
-                                                                <Edit3 className="h-3 w-3" />
-                                                            </Button>
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                className="h-7 w-7 text-red-500 hover:text-red-700"
-                                                                onClick={() => handleDeleteEntry(entry.id)}
-                                                            >
-                                                                <Trash2 className="h-3 w-3" />
-                                                            </Button>
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
+                            </>
+                        ) : null}
+                    </CardContent>
+                </Card>
+            </div>
+
+            {/* Streak Counter + Win Rate Row */}
+            {insights && insights.totalEntries > 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Streak Counter */}
+                    <Card className="border-orange-500/20">
+                        <CardContent className="py-5">
+                            <div className="flex items-start gap-4">
+                                <div className="p-3 rounded-xl bg-orange-500/10">
+                                    <Flame className="h-7 w-7 text-orange-500" />
                                 </div>
-                            )}
+                                <div className="flex-1">
+                                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Current Streak</p>
+                                    <div className="flex items-baseline gap-2">
+                                        <span className="text-2xl sm:text-3xl font-bold text-orange-500">
+                                            {insights.currentStreak}
+                                        </span>
+                                        <span className="text-sm text-muted-foreground">
+                                            profitable {insights.currentStreak === 1 ? 'day' : 'days'}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-3 mt-2">
+                                        <div className="flex items-center gap-1.5">
+                                            <Trophy className="h-3.5 w-3.5 text-yellow-500" />
+                                            <span className="text-xs text-muted-foreground">
+                                                Best: <span className="font-semibold text-foreground">{insights.longestStreak} days</span>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-2">
+                                        {insights.currentStreak >= insights.longestStreak && insights.currentStreak > 1
+                                            ? '🔥 You\'re on your best streak ever!'
+                                            : insights.currentStreak >= 5
+                                                ? '🔥 Great run! Keep the momentum going.'
+                                                : insights.currentStreak >= 3
+                                                    ? '💪 Solid streak building up!'
+                                                    : insights.currentStreak > 0
+                                                        ? 'Keep going — every day counts.'
+                                                        : 'Log a profitable day to start a streak!'}
+                                    </p>
+                                </div>
+                            </div>
                         </CardContent>
                     </Card>
-                </>
+
+                    {/* Win Rate */}
+                    <Card className="border-blue-500/20">
+                        <CardContent className="py-5">
+                            <div className="flex items-start gap-4">
+                                <div className="p-3 rounded-xl bg-blue-500/10">
+                                    <BarChart3 className="h-7 w-7 text-blue-500" />
+                                </div>
+                                <div className="flex-1">
+                                    <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Win Rate</p>
+                                    <div className="flex items-baseline gap-2">
+                                        <span className={`text-2xl sm:text-3xl font-bold ${insights.winRate >= 50 ? 'text-green-500' : 'text-red-500'}`}>
+                                            {insights.winRate.toFixed(1)}%
+                                        </span>
+                                        <span className="text-xs text-muted-foreground">
+                                            {insights.wins}W – {insights.losses}L{insights.breakEven > 0 ? ` – ${insights.breakEven}BE` : ''}
+                                        </span>
+                                    </div>
+
+                                    {/* Win/Loss visual bar */}
+                                    <div className="flex h-2 w-full rounded-full overflow-hidden mt-2 bg-muted">
+                                        <div
+                                            className="h-full bg-green-500 rounded-l-full transition-all"
+                                            style={{ width: `${insights.totalEntries > 0 ? (insights.wins / insights.totalEntries) * 100 : 0}%` }}
+                                        />
+                                        <div
+                                            className="h-full bg-red-500 rounded-r-full transition-all"
+                                            style={{ width: `${insights.totalEntries > 0 ? (insights.losses / insights.totalEntries) * 100 : 0}%` }}
+                                        />
+                                    </div>
+
+                                    <div className="grid grid-cols-3 gap-2 mt-3">
+                                        <div>
+                                            <p className="text-[10px] text-muted-foreground uppercase">Avg Win</p>
+                                            <p className="text-xs font-bold text-green-500">+${insights.avgWin.toLocaleString()}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] text-muted-foreground uppercase">Avg Loss</p>
+                                            <p className="text-xs font-bold text-red-500">-${insights.avgLoss.toLocaleString()}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-[10px] text-muted-foreground uppercase">Profit Factor</p>
+                                            <p className={`text-xs font-bold ${(insights.profitFactor ?? 0) >= 1 ? 'text-green-500' : 'text-red-500'}`}>
+                                                {insights.profitFactor != null ? insights.profitFactor.toFixed(2) : '∞'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </div>
             )}
 
-            {/* Dialogs */}
-            <GoalFormDialog
-                goal={editingGoal}
-                open={goalDialogOpen}
-                onOpenChange={setGoalDialogOpen}
+            {/* Cumulative Chart */}
+            {chartData.length > 0 && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-sm font-medium flex items-center gap-2">
+                            <TrendingUp className="h-4 w-4 text-primary" />
+                            Cumulative Earnings vs. Ideal Pace
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="h-[250px] sm:h-[300px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <ComposedChart data={chartData}>
+                                <defs>
+                                    <linearGradient id="earnedGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor={progressColor} stopOpacity={0.3} />
+                                        <stop offset="95%" stopColor={progressColor} stopOpacity={0} />
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                                <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+                                <RechartsTooltip
+                                    contentStyle={{
+                                        backgroundColor: 'hsl(var(--card))',
+                                        border: '1px solid hsl(var(--border))',
+                                        borderRadius: '8px',
+                                        fontSize: '12px'
+                                    }}
+                                    formatter={((value: number, name: string) => [
+                                        `$${value.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+                                        name === 'earned' ? 'Actual' : 'Ideal Pace'
+                                    ]) as any}
+                                />
+                                <Area
+                                    type="monotone"
+                                    dataKey="earned"
+                                    stroke={progressColor}
+                                    strokeWidth={2}
+                                    fill="url(#earnedGradient)"
+                                />
+                                <Line
+                                    type="monotone"
+                                    dataKey="ideal"
+                                    stroke="#94a3b8"
+                                    strokeWidth={1.5}
+                                    strokeDasharray="6 3"
+                                    dot={false}
+                                />
+                            </ComposedChart>
+                        </ResponsiveContainer>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Entry Log */}
+            <Card>
+                <CardHeader>
+                    <div className="flex items-center justify-between">
+                        <CardTitle className="text-lg flex items-center gap-2">
+                            <Calendar className="h-5 w-5 text-primary" />
+                            Earnings Log
+                        </CardTitle>
+                        <Button
+                            size="sm"
+                            onClick={() => { setEditingEntry(undefined); setEntryDialogOpen(true); }}
+                            className="gap-1 text-xs"
+                        >
+                            <Plus className="h-3 w-3" />
+                            Log Entry
+                        </Button>
+                    </div>
+                </CardHeader>
+                <CardContent className="p-0 sm:p-6">
+                    {entriesLoading ? (
+                        <div className="flex justify-center py-8">
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                        </div>
+                    ) : entries.length === 0 ? (
+                        <div className="text-center py-10 text-muted-foreground">
+                            <DollarSign className="h-8 w-8 mx-auto mb-2 opacity-30" />
+                            <p className="text-sm">No entries yet. Start logging your daily earnings!</p>
+                        </div>
+                    ) : (
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
+                                    <tr>
+                                        <th className="px-4 py-3">Date</th>
+                                        <th className="px-4 py-3">Amount</th>
+                                        <th className="px-4 py-3 hidden sm:table-cell">Notes</th>
+                                        <th className="px-4 py-3 text-right">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {entries.map(entry => (
+                                        <tr key={entry.id} className="border-b hover:bg-muted/50 transition-colors">
+                                            <td className="px-4 py-3 font-medium">
+                                                {(() => {
+                                                    const d = new Date(entry.entry_date);
+                                                    const localDate = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+                                                    return format(localDate, 'MMM d, yyyy');
+                                                })()}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                    {Number(entry.amount) >= 0 ? '+' : ''}${Number(entry.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 hidden sm:table-cell text-xs text-muted-foreground truncate max-w-[200px]">
+                                                {entry.notes || '—'}
+                                            </td>
+                                            <td className="px-4 py-3 text-right">
+                                                <div className="flex items-center justify-end gap-1">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-7 w-7"
+                                                        onClick={() => {
+                                                            setEditingEntry(entry);
+                                                            setEntryDialogOpen(true);
+                                                        }}
+                                                    >
+                                                        <Edit3 className="h-3 w-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-7 w-7 text-red-500 hover:text-red-700"
+                                                        onClick={() => handleDeleteEntry(entry.id)}
+                                                    >
+                                                        <Trash2 className="h-3 w-3" />
+                                                    </Button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+        </>
+    )
+    }
+
+    {/* Dialogs */ }
+    <GoalFormDialog
+        goal={editingGoal}
+        open={goalDialogOpen}
+        onOpenChange={setGoalDialogOpen}
+        onSaved={invalidateAll}
+    />
+
+    {
+        activeGoalId && (
+            <AddEntryDialog
+                goalId={activeGoalId}
+                open={entryDialogOpen}
+                onOpenChange={open => {
+                    setEntryDialogOpen(open);
+                    if (!open) setEditingEntry(undefined);
+                }}
                 onSaved={invalidateAll}
+                editEntry={editingEntry}
             />
-
-            {activeGoalId && (
-                <AddEntryDialog
-                    goalId={activeGoalId}
-                    open={entryDialogOpen}
-                    onOpenChange={open => {
-                        setEntryDialogOpen(open);
-                        if (!open) setEditingEntry(undefined);
-                    }}
-                    onSaved={invalidateAll}
-                    editEntry={editingEntry}
-                />
-            )}
-        </div>
+        )
+    }
+        </div >
     );
 }
