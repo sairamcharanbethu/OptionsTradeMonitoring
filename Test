@@ -1,0 +1,644 @@
+You are a senior staff-level full-stack engineer working on an existing production-grade trading analytics platform repository.
+
+IMPORTANT REPOSITORY RULES:
+- ONLY work on the staging branch.
+- NEVER touch main.
+- NEVER merge into main.
+- NEVER rewrite git history.
+- NEVER force push.
+- Commit frequently to staging.
+- After EACH completed milestone:
+  1. Run linting
+  2. Run unit tests
+  3. Run integration tests if applicable
+  4. Ensure build passes
+  5. Commit changes before proceeding
+- If tests fail:
+  - STOP
+  - Fix failures first
+  - Re-run tests
+  - Only proceed after green status
+- Every commit message must be clean and descriptive.
+- Preserve existing CI/CD workflows.
+- Do not break current application functionality.
+- Follow existing project conventions and architecture patterns.
+
+====================================================
+PROJECT GOAL
+====================================================
+
+Build a real-time trading intelligence platform focused on:
+- SPY
+- QQQ
+
+The platform should provide:
+- live trend analysis
+- live options signals
+- momentum setups
+- bullish/bearish market bias
+- recommended option contracts
+- live dashboard updates
+- alerting infrastructure
+
+The system uses ONLY Questrade market data APIs and WebSocket streaming.
+
+The platform is NOT for auto-trading.
+It is a trader decision-support system.
+
+====================================================
+PRIMARY OBJECTIVE
+====================================================
+
+When a user opens SPY or QQQ, the system should instantly show:
+
+1. Current market bias
+2. Trend strength
+3. Live setup signals
+4. Recommended option contracts
+5. Entry/stop/target
+6. Signal confidence
+7. Real-time updates
+
+====================================================
+HIGH-LEVEL SYSTEM DESIGN
+====================================================
+
+Architecture:
+
+Questrade WebSocket Stream
+    ↓
+Market Stream Service
+    ↓
+Indicator Engine
+    ↓
+Trend Engine
+    ↓
+Signal Engine
+    ↓
+WebSocket Gateway
+    ↓
+React Frontend Dashboard
+
+====================================================
+IMPLEMENTATION REQUIREMENTS
+====================================================
+
+Implement incrementally in phases.
+
+DO NOT jump ahead.
+
+DO NOT create massive untested PR-style changes.
+
+Each phase must:
+- compile
+- pass tests
+- pass lint
+- be committed
+before next phase begins.
+
+====================================================
+PHASE 0 — REPOSITORY ANALYSIS
+====================================================
+
+First:
+1. Analyze repository structure
+2. Identify:
+   - backend framework
+   - frontend framework
+   - websocket infrastructure
+   - state management
+   - database ORM
+   - existing services
+   - existing CI/CD workflows
+   - existing test framework
+3. Generate implementation plan mapped to actual repo structure
+4. Identify reusable components
+5. DO NOT start coding yet
+6. Produce architecture notes first
+
+Then commit:
+docs: add trading intelligence implementation plan
+
+====================================================
+PHASE 1 — MARKET STREAM INFRASTRUCTURE
+====================================================
+
+Goal:
+Create live market streaming infrastructure using Questrade WebSockets.
+
+Requirements:
+- reusable websocket client
+- reconnect handling
+- heartbeat handling
+- stream lifecycle management
+- subscription manager
+- event emitter architecture
+- strong TypeScript typing
+
+Create backend modules:
+
+backend/src/services/marketstream/
+    MarketStreamService
+    QuestradeSocketClient
+    SubscriptionManager
+    StreamEventBus
+
+Features:
+- subscribe to SPY
+- subscribe to QQQ
+- receive:
+  - live quotes
+  - bid/ask
+  - volume
+  - option quote updates
+
+Requirements:
+- no polling architecture
+- event-driven only
+- modular and testable
+
+Testing:
+- websocket reconnection tests
+- subscription tests
+- event propagation tests
+- mock stream tests
+
+After completion:
+- run tests
+- run lint
+- verify build
+- commit
+
+Commit message:
+feat: add market streaming infrastructure
+
+====================================================
+PHASE 2 — INDICATOR ENGINE
+====================================================
+
+Goal:
+Build real-time indicator calculation engine.
+
+Indicators:
+- VWAP
+- EMA 9
+- EMA 21
+- RSI
+- Relative Volume
+- ATR
+
+Requirements:
+- streaming calculations
+- memory efficient
+- incremental updates
+- no recalculation from scratch
+- deterministic outputs
+- unit tested
+
+Create:
+
+backend/src/services/indicators/
+    IndicatorEngine
+    EMAService
+    VWAPService
+    RSIService
+    ATRService
+    RelativeVolumeService
+
+Requirements:
+- pure functions where possible
+- no duplicated logic
+- isolated calculations
+
+Testing:
+- mathematical correctness
+- edge cases
+- low-volume scenarios
+- market open scenarios
+- stale data scenarios
+
+After completion:
+- run all tests
+- run lint
+- verify build
+- commit
+
+Commit message:
+feat: implement real-time indicator engine
+
+====================================================
+PHASE 3 — TREND ENGINE
+====================================================
+
+Goal:
+Determine market direction and strength.
+
+Trend classifications:
+- STRONG_BULLISH
+- BULLISH
+- NEUTRAL
+- BEARISH
+- STRONG_BEARISH
+
+Inputs:
+- VWAP
+- EMA alignment
+- RSI
+- relative volume
+- price momentum
+
+Output example:
+
+{
+  ticker: "QQQ",
+  trend: "BULLISH",
+  strength: 82,
+  reasons: [
+    "Above VWAP",
+    "EMA9 above EMA21",
+    "Relative volume elevated"
+  ]
+}
+
+Create:
+
+backend/src/services/trend/
+    TrendEngine
+    TrendScorer
+    TrendClassifier
+
+Requirements:
+- deterministic scoring
+- configurable thresholds
+- no AI logic
+- fully testable
+
+Testing:
+- bullish scenarios
+- bearish scenarios
+- sideways markets
+- volatile spikes
+- opening session behavior
+
+After completion:
+- run tests
+- run lint
+- verify build
+- commit
+
+Commit message:
+feat: add market trend engine
+
+====================================================
+PHASE 4 — SIGNAL ENGINE
+====================================================
+
+Goal:
+Generate actionable trading setups.
+
+Signal types:
+- CALL_MOMENTUM
+- PUT_MOMENTUM
+- BREAKOUT
+- REVERSAL
+- VWAP_RECLAIM
+- TREND_CONTINUATION
+
+Signal output:
+
+{
+  ticker: "QQQ",
+  signal: "CALL_MOMENTUM",
+  confidence: 84,
+  entry: 524.2,
+  stop: 523.4,
+  targets: [525.5, 526.2],
+  reasons: [
+    "Above VWAP",
+    "EMA bull cross",
+    "Volume acceleration"
+  ]
+}
+
+Create:
+
+backend/src/services/signals/
+    SignalEngine
+    SetupDetector
+    ConfidenceScorer
+    SignalPublisher
+
+Requirements:
+- rule-based only
+- no ML
+- configurable
+- low latency
+- debounced signal generation
+
+Testing:
+- duplicate signal prevention
+- confidence scoring
+- false breakout scenarios
+- conflicting signals
+- low liquidity conditions
+
+After completion:
+- run tests
+- run lint
+- verify build
+- commit
+
+Commit message:
+feat: implement live trading signal engine
+
+====================================================
+PHASE 5 — OPTIONS ANALYTICS
+====================================================
+
+Goal:
+Surface best option contracts.
+
+Features:
+- call/put imbalance
+- unusual volume
+- premium acceleration
+- IV change tracking
+- contract ranking
+
+Output example:
+
+{
+  contract: "QQQ 526C",
+  expiry: "0DTE",
+  score: 91,
+  reasons: [
+    "Premium expanding",
+    "Call volume elevated",
+    "Momentum aligned with trend"
+  ]
+}
+
+Create:
+
+backend/src/services/options/
+    OptionsAnalyzer
+    ContractRanker
+    PremiumTracker
+    OptionSignalEngine
+
+Requirements:
+- efficient chain processing
+- scalable filtering
+- avoid excessive memory usage
+
+Testing:
+- large chain datasets
+- rapid premium changes
+- ranking consistency
+- missing data handling
+
+After completion:
+- run tests
+- run lint
+- verify build
+- commit
+
+Commit message:
+feat: add options analytics engine
+
+====================================================
+PHASE 6 — WEBSOCKET API GATEWAY
+====================================================
+
+Goal:
+Push live data to frontend.
+
+Requirements:
+- frontend websocket gateway
+- authentication-safe architecture
+- event broadcasting
+- subscription channels
+- rate limiting
+- reconnect support
+
+Frontend events:
+- trend updates
+- signal updates
+- option updates
+- alert updates
+
+Testing:
+- websocket event delivery
+- reconnect handling
+- multiple subscribers
+- stale connection cleanup
+
+Commit message:
+feat: implement frontend websocket gateway
+
+====================================================
+PHASE 7 — FRONTEND DASHBOARD
+====================================================
+
+Goal:
+Build trading dashboard UX.
+
+Frontend requirements:
+- highly responsive
+- low latency updates
+- no unnecessary rerenders
+- modular components
+- clean visual hierarchy
+
+Pages:
+1. Dashboard
+2. QQQ detail page
+3. SPY detail page
+4. Alerts page
+5. Trade journal page
+
+Core UI sections:
+- Market bias banner
+- Live signal feed
+- Trend strength panel
+- Recommended contracts
+- Live chart
+- Option activity tape
+
+Preferred UI behavior:
+- actionable
+- minimal clutter
+- trader-focused
+
+Frontend components:
+
+frontend/src/components/trading/
+    MarketBiasCard
+    SignalFeed
+    TradeSetupCard
+    OptionActivityFeed
+    TrendStrengthMeter
+    RecommendedContracts
+    LivePriceTicker
+
+Testing:
+- component rendering
+- websocket updates
+- loading states
+- empty states
+- rapid update handling
+
+Commit message:
+feat: build live trading dashboard
+
+====================================================
+PHASE 8 — ALERTING SYSTEM
+====================================================
+
+Features:
+- trend shift alerts
+- breakout alerts
+- premium acceleration alerts
+- signal confidence alerts
+
+Delivery:
+- in-app alerts
+- websocket alerts
+
+Testing:
+- duplicate prevention
+- throttling
+- stale alert cleanup
+
+Commit message:
+feat: add real-time alerting system
+
+====================================================
+PHASE 9 — OBSERVABILITY
+====================================================
+
+Add:
+- structured logging
+- latency tracking
+- websocket monitoring
+- stream health metrics
+- error boundaries
+
+Testing:
+- graceful failure handling
+- reconnect scenarios
+- malformed stream events
+
+Commit message:
+feat: add observability and monitoring
+
+====================================================
+PHASE 10 — FINAL HARDENING
+====================================================
+
+Perform:
+- performance review
+- memory leak analysis
+- websocket stability testing
+- frontend render optimization
+- code cleanup
+- dead code removal
+- type safety audit
+
+Then:
+- run full CI
+- run all tests
+- generate implementation summary
+
+Commit message:
+chore: finalize trading intelligence platform
+
+====================================================
+IMPORTANT ENGINEERING RULES
+====================================================
+
+Code Quality:
+- strict TypeScript
+- no any types unless unavoidable
+- avoid large files
+- single responsibility principle
+- reusable abstractions
+- dependency injection where appropriate
+
+Performance:
+- avoid unnecessary rerenders
+- avoid polling
+- avoid synchronous blocking
+- debounce heavy computations
+
+Testing:
+- unit tests mandatory
+- integration tests where applicable
+- test before proceeding
+- never leave broken tests
+
+Git Rules:
+- commit after EVERY stable milestone
+- staging branch ONLY
+- never modify main
+- never bypass CI/CD
+
+Architecture:
+- event-driven design
+- scalable service boundaries
+- modular feature folders
+- clean interfaces
+- maintainable abstractions
+
+UI/UX:
+- prioritize actionable information
+- avoid indicator overload
+- focus on:
+  - trend
+  - confidence
+  - entry
+  - stop
+  - target
+  - contract recommendation
+
+====================================================
+FINAL PRODUCT EXPERIENCE
+====================================================
+
+User opens app.
+
+Immediately sees:
+- SPY market bias
+- QQQ market bias
+- strongest current setup
+- recommended option contract
+- entry/stop/targets
+- live updates
+
+The platform should feel:
+- fast
+- professional
+- focused
+- trader-centric
+- real-time
+- actionable
+
+NOT:
+- cluttered
+- overly technical
+- overloaded with indicators
+- prediction-focused
+
+====================================================
+ABSOLUTE RULES
+====================================================
+
+- NEVER touch main branch
+- ALWAYS commit to staging
+- ALWAYS test before proceeding
+- NEVER proceed with failing tests
+- NEVER break CI/CD
+- NEVER introduce untyped websocket payloads
+- NEVER add AI prediction systems
+- NEVER implement auto-trading
+- ALWAYS maintain production-grade code quality
