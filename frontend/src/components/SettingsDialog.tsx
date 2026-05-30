@@ -109,22 +109,42 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
     async function initiateQuestradeLogin() {
         if (!qtClientId) {
-            alert('Please enter your Questrade Consumer Key first.');
+            alert('Please enter your Questrade Key or Token first.');
             return;
         }
 
         setQtConnecting(true);
         try {
-            // Save client ID first
-            await api.saveQuestradeClient(qtClientId);
-
-            const redirectUri = window.location.origin + window.location.pathname;
-            const authUrl = `https://login.questrade.com/oauth2/authorize?client_id=${qtClientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}`;
-
-            window.location.href = authUrl;
-        } catch (err) {
-            console.error(err);
+            // Step 1: Attempt direct manual Refresh Token verification first
+            console.log('[Questrade] Attempting direct connection via manual Refresh Token...');
+            await api.saveQuestradeManualToken(qtClientId);
+            
+            // If it succeeds, the token is verified and refreshed successfully
+            await loadQuestradeConfig();
+            alert('Questrade connected successfully using Refresh Token!');
             setQtConnecting(false);
+        } catch (err: any) {
+            console.warn('[Questrade] Direct Refresh Token link failed. Checking fallback to redirect OAuth...', err);
+            
+            // Step 2: Fallback prompt for standard OAuth redirect if it is a Client ID/Consumer Key
+            const confirmRedirect = window.confirm(
+                `Failed to connect directly: ${err.message}\n\nDo you want to treat this key as a Consumer Key (Client ID) and perform a standard Questrade OAuth Redirect Login?`
+            );
+            
+            if (confirmRedirect) {
+                try {
+                    await api.saveQuestradeClient(qtClientId);
+                    const redirectUri = window.location.origin + window.location.pathname;
+                    const authUrl = `https://login.questrade.com/oauth2/authorize?client_id=${qtClientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}`;
+                    window.location.href = authUrl;
+                } catch (oauthErr) {
+                    console.error(oauthErr);
+                    alert('OAuth redirect initiation failed.');
+                    setQtConnecting(false);
+                }
+            } else {
+                setQtConnecting(false);
+            }
         }
     }
 
@@ -379,30 +399,30 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
                                 <div className="grid gap-4 p-6 border rounded-lg bg-muted/30">
                                     <div className="grid gap-2">
-                                        <Label htmlFor="qt-client">Consumer Key (Client ID)</Label>
+                                        <Label htmlFor="qt-client">Questrade API Key / Refresh Token</Label>
                                         <Input
                                             id="qt-client"
                                             value={qtClientId}
                                             onChange={(e) => setQtClientId(e.target.value)}
-                                            placeholder="Your Questrade API key"
+                                            placeholder="Paste your manually generated Refresh Token or Consumer Key"
                                             type="password"
                                         />
-                                        <p className="text-[10px] text-muted-foreground">
-                                            Found in the Questrade API Center as "Consumer Key".
+                                        <p className="text-[10px] text-muted-foreground leading-normal">
+                                            <strong>Recommended:</strong> Click <strong>"New manual authorization"</strong> in your Questrade API Centre, copy the Refresh Token, and paste it here. Or, enter your static **Consumer Key (Client ID)** to use the redirect flow.
                                         </p>
                                     </div>
 
                                     <Button
                                         onClick={initiateQuestradeLogin}
                                         disabled={qtConnecting}
-                                        className="w-full bg-[#ffcc00] text-black hover:bg-[#e6b800] font-bold"
+                                        className="w-full bg-[#ffcc00] text-black hover:bg-[#e6b800] font-bold transition-all duration-200 shadow-md hover:shadow-lg"
                                     >
                                         {qtConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                                         Connect Questrade
                                     </Button>
 
                                     <p className="text-[10px] text-center text-muted-foreground italic">
-                                        This will redirect you to Questrade to authorize this application.
+                                        The application will automatically detect, verify, and rotate your token directly.
                                     </p>
                                 </div>
                             </div>

@@ -444,6 +444,16 @@ export const api = {
     });
     if (!res.ok) throw new Error('Failed to save Questrade client ID');
   },
+  async saveQuestradeManualToken(refreshToken: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/settings/questrade/manual-token`, {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to verify manual refresh token');
+    }
+  },
   async saveQuestradeToken(data: any): Promise<void> {
     const res = await authFetch(`${API_BASE}/settings/questrade/token`, {
       method: 'POST',

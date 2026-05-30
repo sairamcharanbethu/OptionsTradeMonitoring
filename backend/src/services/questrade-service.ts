@@ -36,7 +36,7 @@ export class QuestradeService {
         }
     }
 
-    private async saveTokenToDb(refreshToken: string) {
+    async saveTokenToDb(refreshToken: string) {
         try {
             // Use user_id 1 as default/primary
             const tokenKey = process.env.QUESTRADE_TOKEN_KEY || 'questrade_refresh_token';
