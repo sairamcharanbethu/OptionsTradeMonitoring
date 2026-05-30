@@ -82,7 +82,6 @@ import PositionForm from './PositionForm';
 
 import SettingsDialog from './SettingsDialog';
 import Prediction from '@/pages/Prediction';
-import LiveAnalysis from '@/pages/LiveAnalysis';
 import GoalTracker from './GoalTracker';
 import { StatsCard } from './StatsCard';
 import { PositionsTable } from './PositionsTable';
@@ -384,7 +383,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
               <TabsTrigger value="goals">Goals</TabsTrigger>
-              <TabsTrigger value="live-analysis">Live Analysis</TabsTrigger>
               <TabsTrigger value="prediction">AI Prediction</TabsTrigger>
               {user.role === 'ADMIN' && (
                 <TabsTrigger value="users">Users</TabsTrigger>
@@ -399,7 +397,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   <SelectItem value="overview">Overview</SelectItem>
                   <SelectItem value="portfolio">Portfolio</SelectItem>
                   <SelectItem value="goals">Goals</SelectItem>
-                  <SelectItem value="live-analysis">Live Analysis</SelectItem>
                   <SelectItem value="prediction">AI Prediction</SelectItem>
                   {user.role === 'ADMIN' && (
                     <SelectItem value="users">Users</SelectItem>
@@ -846,10 +843,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
         <TabsContent value="goals" className="space-y-6 mt-0">
           <GoalTracker />
-        </TabsContent>
-
-        <TabsContent value="live-analysis" className="mt-0">
-          <LiveAnalysis />
         </TabsContent>
 
         <TabsContent value="prediction" className="mt-0">

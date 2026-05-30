@@ -10,7 +10,6 @@ import { marketRoutes } from './routes/market';
 import { aiRoutes } from './routes/ai';
 import { settingsRoutes } from './routes/settings';
 import { goalRoutes } from './routes/goals';
-import { liveAnalysisRoutes } from './routes/live-analysis';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -52,6 +51,75 @@ const testConnection = async (connectionString: string, label: string): Promise<
   }
 };
 
+const ensureSchema = async (instance: any) => {
+  try {
+    instance.log.info('[Database] Verifying database schema...');
+    
+    // 1. Create stock_history_cache table
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS stock_history_cache (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(20) UNIQUE NOT NULL,
+        symbol_id VARCHAR(50),
+        data JSONB NOT NULL,
+        fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+    // 2. Create goals and goal_entries tables
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS goals (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(100) NOT NULL,
+        target_amount DECIMAL(12,2) NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS goal_entries (
+        id SERIAL PRIMARY KEY,
+        goal_id INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+        entry_date DATE NOT NULL,
+        amount DECIMAL(12,2) NOT NULL,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(goal_id, entry_date)
+      );
+    `);
+
+    // 3. Ensure all extra columns are added to positions table
+    const columns = [
+      { name: 'delta', type: 'DECIMAL(10, 4)' },
+      { name: 'theta', type: 'DECIMAL(10, 4)' },
+      { name: 'gamma', type: 'DECIMAL(10, 4)' },
+      { name: 'vega', type: 'DECIMAL(10, 4)' },
+      { name: 'iv', type: 'DECIMAL(10, 4)' },
+      { name: 'underlying_price', type: 'DECIMAL(10, 2)' },
+      { name: 'analyzed_support', type: 'DECIMAL(10, 2)' },
+      { name: 'analyzed_resistance', type: 'DECIMAL(10, 2)' },
+      { name: 'suggested_stop_loss', type: 'DECIMAL(10, 2)' },
+      { name: 'suggested_take_profit_1', type: 'DECIMAL(10, 2)' },
+      { name: 'suggested_take_profit_2', type: 'DECIMAL(10, 2)' },
+      { name: 'analysis_data', type: 'JSONB' }
+    ];
+
+    for (const col of columns) {
+      await instance.pg.query(`
+        ALTER TABLE positions ADD COLUMN IF NOT EXISTS ${col.name} ${col.type};
+      `);
+    }
+
+    instance.log.info('[Database] Schema verification completed successfully.');
+  } catch (err: any) {
+    instance.log.error(`[Database] Schema verification failed: ${err.message}`);
+  }
+};
+
 const start = async () => {
   try {
     let activeDbUrl = process.env.DATABASE_URL || 'postgres://user:password@localhost:5432/options_monitoring';
@@ -84,6 +152,9 @@ const start = async () => {
       max: 20,
       idleTimeoutMillis: 30000
     });
+
+    // Verify and ensure all required database schema elements exist
+    await ensureSchema(fastify);
 
     await fastify.register(cors, {
       origin: true
@@ -154,7 +225,6 @@ const start = async () => {
     fastify.register(marketRoutes, { prefix: '/api/market' });
     fastify.register(aiRoutes, { prefix: '/api/ai' });
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
-    fastify.register(liveAnalysisRoutes, { prefix: '/api/live-analysis' });
     fastify.register(goalRoutes, { prefix: '/api/goals' });
 
     fastify.get('/health', async () => {
@@ -238,7 +308,7 @@ const start = async () => {
 
     // Start background services
     poller.start();
-    // streamer.start(); // Disabled: Subscriptions are now on-demand via Live Analysis only
+    // streamer.start(); // Disabled: Subscriptions are on-demand via position sync
 
     fastify.log.info(`Server listening on http://localhost:${port}`);
   } catch (err) {

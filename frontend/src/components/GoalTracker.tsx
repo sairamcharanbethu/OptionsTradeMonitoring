@@ -190,17 +190,20 @@ function AddEntryDialog({
     onOpenChange,
     onSaved,
     editEntry,
+    usdToCadRate,
 }: {
     goalId: number;
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onSaved: () => void;
     editEntry?: GoalEntry;
+    usdToCadRate: number;
 }) {
     const [entryDate, setEntryDate] = useState(editEntry?.entry_date?.split('T')[0] || format(new Date(), 'yyyy-MM-dd'));
     const [amount, setAmount] = useState(editEntry?.amount?.toString() || '');
     const [notes, setNotes] = useState(editEntry?.notes || '');
     const [saving, setSaving] = useState(false);
+    const [currency, setCurrency] = useState<'USD' | 'CAD'>('USD');
 
     // Reset form when dialog opens or entry changes
     useEffect(() => {
@@ -209,17 +212,23 @@ function AddEntryDialog({
             setAmount(editEntry?.amount?.toString() || '');
             setNotes(editEntry?.notes || '');
             setSaving(false);
+            setCurrency('USD');
         }
     }, [open, editEntry]);
+
+    const parsedAmount = parseFloat(amount);
+    const hasValidAmount = amount !== '' && !isNaN(parsedAmount);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
         try {
+            // Always store in USD — convert from CAD if needed
+            const amountUSD = currency === 'CAD' ? parsedAmount / usdToCadRate : parsedAmount;
             if (editEntry) {
-                await api.updateGoalEntry(goalId, editEntry.id, { entry_date: entryDate, amount: parseFloat(amount), notes });
+                await api.updateGoalEntry(goalId, editEntry.id, { entry_date: entryDate, amount: amountUSD, notes });
             } else {
-                await api.addGoalEntry(goalId, { entry_date: entryDate, amount: parseFloat(amount), notes: notes || undefined });
+                await api.addGoalEntry(goalId, { entry_date: entryDate, amount: amountUSD, notes: notes || undefined });
             }
             onSaved();
             onOpenChange(false);
@@ -244,10 +253,63 @@ function AddEntryDialog({
                         <label className="text-sm font-medium">Date</label>
                         <Input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)} required />
                     </div>
+
+                    {/* Amount field with currency toggle */}
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Amount ($)</label>
-                        <Input type="number" step="0.01" placeholder="500.00" value={amount} onChange={e => setAmount(e.target.value)} required />
+                        <div className="flex items-center justify-between">
+                            <label className="text-sm font-medium">Amount ({currency})</label>
+                            {/* USD / CAD pill toggle */}
+                            <div className="flex items-center bg-muted/50 p-0.5 rounded-md">
+                                <button
+                                    type="button"
+                                    onClick={() => setCurrency('USD')}
+                                    className={`px-2.5 py-0.5 text-xs font-medium rounded transition-all ${
+                                        currency === 'USD'
+                                            ? 'bg-background shadow-sm text-foreground'
+                                            : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                                >
+                                    USD
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCurrency('CAD')}
+                                    className={`px-2.5 py-0.5 text-xs font-medium rounded transition-all ${
+                                        currency === 'CAD'
+                                            ? 'bg-background shadow-sm text-foreground'
+                                            : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                                >
+                                    CAD
+                                </button>
+                            </div>
+                        </div>
+                        <Input
+                            type="number"
+                            step="0.01"
+                            placeholder={currency === 'CAD' ? '685.00' : '500.00'}
+                            value={amount}
+                            onChange={e => setAmount(e.target.value)}
+                            required
+                        />
+                        {/* Live conversion preview */}
+                        {hasValidAmount && (
+                            <p className="text-xs text-muted-foreground">
+                                {currency === 'CAD' ? (
+                                    <>≈ <span className="font-medium text-foreground">${(parsedAmount / usdToCadRate).toFixed(2)} USD</span> will be saved&nbsp;&bull;&nbsp;Rate: {usdToCadRate.toFixed(4)} CAD/USD</>
+                                ) : (
+                                    <>≈ <span className="font-medium text-foreground">${(parsedAmount * usdToCadRate).toFixed(2)} CAD</span>&nbsp;&bull;&nbsp;Rate: {usdToCadRate.toFixed(4)} CAD/USD</>
+                                )}
+                            </p>
+                        )}
+                        {/* Always show rate hint even without an amount */}
+                        {!hasValidAmount && (
+                            <p className="text-xs text-muted-foreground">
+                                Live rate: 1 USD = {usdToCadRate.toFixed(4)} CAD
+                            </p>
+                        )}
                     </div>
+
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Notes (optional)</label>
                         <Input placeholder="e.g. SPY calls profit" value={notes} onChange={e => setNotes(e.target.value)} />
@@ -267,6 +329,45 @@ function AddEntryDialog({
 export default function GoalTracker() {
     const queryClient = useQueryClient();
     const { data: goals = [], isLoading: goalsLoading } = useGoals();
+
+    const [usdToCadRate, setUsdToCadRate] = useState<number>(1.37);
+
+    useEffect(() => {
+        fetch('https://open.er-api.com/v6/latest/USD')
+            .then(res => res.json())
+            .then(data => {
+                if (data && data.rates && data.rates.CAD) {
+                    setUsdToCadRate(data.rates.CAD);
+                }
+            })
+            .catch(err => console.error('Failed to fetch exchange rate:', err));
+    }, []);
+
+    const formatCurrency = (val: number, includeCAD = true, fractionDigits = 2, showPlus = false): React.ReactNode => {
+        const isNegative = val < 0;
+        const absVal = Math.abs(val);
+        const prefix = isNegative ? '-' : (showPlus ? '+' : '');
+        const usdStr = `${prefix}$${absVal.toLocaleString(undefined, { 
+            minimumFractionDigits: fractionDigits, 
+            maximumFractionDigits: fractionDigits 
+        })}`;
+        
+        if (!includeCAD) {
+            return usdStr;
+        }
+        
+        const cadVal = absVal * usdToCadRate;
+        const cadStr = `${prefix}$${cadVal.toLocaleString(undefined, { 
+            minimumFractionDigits: fractionDigits, 
+            maximumFractionDigits: fractionDigits 
+        })} CAD`;
+        
+        return (
+            <span>
+                {usdStr} <span className="text-[0.75em] text-muted-foreground font-normal">({cadStr})</span>
+            </span>
+        );
+    };
 
     const [selectedGoalId, setSelectedGoalId] = useState<number | null>(null);
     const [goalDialogOpen, setGoalDialogOpen] = useState(false);
@@ -368,6 +469,7 @@ export default function GoalTracker() {
                 rawDate: entryDate,
                 earned: Math.round(cumulative * 100) / 100,
                 ideal: Math.round(idealAtDay * 100) / 100,
+                dailyAmount: Number(entry.amount),
             };
         });
     }, [entries, activeGoal]);
@@ -513,10 +615,10 @@ export default function GoalTracker() {
                                         <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 sm:gap-4">
                                             <div>
                                                 <span className="text-2xl sm:text-3xl font-bold" style={{ color: progressColor }}>
-                                                    ${insights.totalEarned.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                    {formatCurrency(insights.totalEarned, true, 2)}
                                                 </span>
                                                 <span className="text-xs sm:text-sm text-muted-foreground ml-0 sm:ml-2 block sm:inline">
-                                                    of ${insights.targetAmount.toLocaleString()}
+                                                    of {formatCurrency(insights.targetAmount, true, 0)}
                                                 </span>
                                             </div>
                                             <span className="text-xl sm:text-2xl font-bold self-start sm:self-auto" style={{ color: progressColor }}>
@@ -586,16 +688,16 @@ export default function GoalTracker() {
                                         <div className="grid grid-cols-2 gap-2 sm:gap-3">
                                             <div className="p-2.5 rounded-lg bg-background border">
                                                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Daily Avg</p>
-                                                <p className="text-sm font-bold">${insights.dailyAverage.toLocaleString()}</p>
+                                                <p className="text-sm font-bold">{formatCurrency(insights.dailyAverage, true, 2)}</p>
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
                                                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need/Day</p>
-                                                <p className="text-sm font-bold text-orange-500">${insights.remainingPerDay.toLocaleString()}</p>
+                                                <p className="text-sm font-bold text-orange-500">{formatCurrency(insights.remainingPerDay, true, 2)}</p>
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
                                                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Projected</p>
                                                 <p className={`text-sm font-bold ${insights.projectedTotal >= insights.targetAmount ? 'text-green-500' : 'text-red-500'}`}>
-                                                    ${insights.projectedTotal.toLocaleString()}
+                                                    {formatCurrency(insights.projectedTotal, true, 2)}
                                                 </p>
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
@@ -608,9 +710,15 @@ export default function GoalTracker() {
                                             <p className="text-xs text-muted-foreground leading-relaxed">
                                                 {insights.status === 'COMPLETED' && '🎯 Congratulations! You\'ve reached your goal!'}
                                                 {insights.status === 'AHEAD' && `🚀 Great pace! You're ${insights.progressDelta.toFixed(1)}% ahead of schedule.`}
-                                                {insights.status === 'ON_TRACK' && `✅ You're on track. Keep averaging $${insights.dailyAverage.toLocaleString()}/day.`}
-                                                {insights.status === 'AT_RISK' && `⚠️ Slightly behind. Aim for $${insights.remainingPerDay.toLocaleString()}/day to catch up.`}
-                                                {insights.status === 'BEHIND' && `🔴 Behind by ${Math.abs(insights.progressDelta).toFixed(1)}%. Need $${insights.remainingPerDay.toLocaleString()}/day to recover.`}
+                                                {insights.status === 'ON_TRACK' && (
+                                                    <span>✅ You're on track. Keep averaging {formatCurrency(insights.dailyAverage, true, 2)}/day.</span>
+                                                )}
+                                                {insights.status === 'AT_RISK' && (
+                                                    <span>⚠️ Slightly behind. Aim for {formatCurrency(insights.remainingPerDay, true, 2)}/day to catch up.</span>
+                                                )}
+                                                {insights.status === 'BEHIND' && (
+                                                    <span>🔴 Behind by {Math.abs(insights.progressDelta).toFixed(1)}%. Need {formatCurrency(insights.remainingPerDay, true, 2)}/day to recover.</span>
+                                                )}
                                             </p>
                                         </div>
                                     </>
@@ -696,11 +804,11 @@ export default function GoalTracker() {
                                             <div className="grid grid-cols-3 gap-2 mt-3">
                                                 <div>
                                                     <p className="text-[10px] text-muted-foreground uppercase">Avg Win</p>
-                                                    <p className="text-xs font-bold text-green-500">+${insights.avgWin.toLocaleString()}</p>
+                                                    <p className="text-xs font-bold text-green-500">{formatCurrency(insights.avgWin, true, 2, true)}</p>
                                                 </div>
                                                 <div>
                                                     <p className="text-[10px] text-muted-foreground uppercase">Avg Loss</p>
-                                                    <p className="text-xs font-bold text-red-500">-${insights.avgLoss.toLocaleString()}</p>
+                                                    <p className="text-xs font-bold text-red-500">{formatCurrency(-insights.avgLoss, true, 2)}</p>
                                                 </div>
                                                 <div>
                                                     <p className="text-[10px] text-muted-foreground uppercase">Profit Factor</p>
@@ -749,7 +857,18 @@ export default function GoalTracker() {
                                         </defs>
                                         <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
                                         <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                                        <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `$${(v / 1000).toFixed(0)}k`} />
+                                        <YAxis
+                                            tick={{ fontSize: 11 }}
+                                            domain={[dataMin => Math.min(0, dataMin), 'auto']}
+                                            tickFormatter={v => {
+                                                const isNegative = v < 0;
+                                                const absV = Math.abs(v);
+                                                if (absV >= 1000) {
+                                                    return `${isNegative ? '-' : ''}$${(absV / 1000).toFixed(0)}k`;
+                                                }
+                                                return `${isNegative ? '-' : ''}$${absV}`;
+                                            }}
+                                        />
                                         <RechartsTooltip
                                             contentStyle={{
                                                 backgroundColor: 'hsl(var(--card))',
@@ -758,15 +877,17 @@ export default function GoalTracker() {
                                                 fontSize: '12px'
                                             }}
                                             formatter={((value: number, name: string) => [
-                                                `$${value.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+                                                formatCurrency(value, true, 2),
                                                 name === 'earned' ? 'Actual' : 'Ideal Pace'
                                             ]) as any}
                                         />
+                                        <ReferenceLine y={0} stroke="hsl(var(--border))" strokeWidth={1} />
                                         <Bar dataKey="earned" radius={[4, 4, 0, 0]} maxBarSize={40}>
                                             {filteredChartData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={entry.earned >= entry.ideal ? '#22c55e' : '#ef4444'} />
+                                                <Cell key={`cell-${index}`} fill={(entry.dailyAmount < 0 || entry.earned < entry.ideal) ? '#ef4444' : '#22c55e'} />
                                             ))}
-                                        </Bar>                            <Line
+                                        </Bar>
+                                        <Line
                                             type="monotone"
                                             dataKey="ideal"
                                             stroke="#94a3b8"
@@ -836,7 +957,7 @@ export default function GoalTracker() {
                                                                 <Input type="number" step="0.01" value={inlineAmount} onChange={e => setInlineAmount(e.target.value)} className="h-8 w-[100px] text-xs" />
                                                             ) : (
                                                                 <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                                                    {Number(entry.amount) >= 0 ? '+' : ''}${Number(entry.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                                                    {formatCurrency(Number(entry.amount), true, 2, Number(entry.amount) >= 0)}
                                                                 </span>
                                                             )}
                                                         </td>
@@ -913,6 +1034,7 @@ export default function GoalTracker() {
                         }}
                         onSaved={invalidateAll}
                         editEntry={editingEntry}
+                        usdToCadRate={usdToCadRate}
                     />
                 )
             }

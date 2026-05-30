@@ -87,34 +87,82 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         };
     }
 
+    public async getSettings(): Promise<{ ai_provider: string; openrouter_key: string; ai_model: string }> {
+        let currentProvider = 'ollama';
+        let openRouterKey = '';
+        let currentModel = this.model;
+
+        try {
+            const { rows } = await (this.fastify as any).pg.query('SELECT key, value FROM settings');
+            const settings = rows.reduce((acc: any, row: any) => {
+                acc[row.key] = row.value;
+                return acc;
+            }, {});
+
+            if (settings.ai_provider) currentProvider = settings.ai_provider;
+            if (settings.openrouter_key) openRouterKey = settings.openrouter_key;
+            if (settings.ai_model) currentModel = settings.ai_model;
+        } catch (err) {
+            console.warn('[AIService] Failed to fetch settings, using defaults:', err);
+        }
+
+        return {
+            ai_provider: currentProvider,
+            openrouter_key: openRouterKey,
+            ai_model: currentModel
+        };
+    }
+
+    async checkHealth(): Promise<void> {
+        const settings = await this.getSettings();
+
+        if (settings.ai_provider === 'openrouter') {
+            if (!settings.openrouter_key) {
+                throw new Error('OpenRouter selected but no API Key found in settings.');
+            }
+            try {
+                const response = await fetch('https://openrouter.ai/api/v1/key', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${settings.openrouter_key}`
+                    }
+                });
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`OpenRouter accessibility check failed: ${response.status} - ${errText}`);
+                }
+                const data = await response.json();
+                if (data && data.error) {
+                    throw new Error(`OpenRouter API Key check returned error: ${JSON.stringify(data.error)}`);
+                }
+            } catch (err: any) {
+                throw new Error(`OpenRouter is not accessible. Error: ${err.message}`);
+            }
+        } else if (settings.ai_provider === 'ollama') {
+            try {
+                const response = await fetch(`${this.ollamaUrl}/api/tags`, {
+                    method: 'GET'
+                });
+                if (!response.ok) {
+                    throw new Error(`Ollama health check failed: ${response.status} ${response.statusText}`);
+                }
+            } catch (err: any) {
+                throw new Error(`Ollama is not accessible at ${this.ollamaUrl}. Error: ${err.message}`);
+            }
+        }
+    }
+
     private async generateAnalysisInternal(prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
         try {
             // 1. Fetch settings from DB
-            let currentProvider = 'ollama';
-            let openRouterKey = '';
-            let currentModel = this.model;
-
-            try {
-                const { rows } = await (this.fastify as any).pg.query('SELECT key, value FROM settings');
-                const settings = rows.reduce((acc: any, row: any) => {
-                    acc[row.key] = row.value;
-                    return acc;
-                }, {});
-
-                if (settings.ai_provider) currentProvider = settings.ai_provider;
-                if (settings.openrouter_key) openRouterKey = settings.openrouter_key;
-                if (settings.ai_model) currentModel = settings.ai_model;
-
-            } catch (err) {
-                console.warn('[AIService] Failed to fetch settings, using defaults:', err);
-            }
+            const settings = await this.getSettings();
 
             // 2. Route based on provider
-            if (currentProvider === 'openrouter') {
-                if (!openRouterKey) throw new Error('OpenRouter selected but no API Key found.');
-                return this.callOpenRouter(currentModel, openRouterKey, prompt);
+            if (settings.ai_provider === 'openrouter') {
+                if (!settings.openrouter_key) throw new Error('OpenRouter selected but no API Key found.');
+                return this.callOpenRouter(settings.ai_model, settings.openrouter_key, prompt);
             } else {
-                return this.callOllama(currentModel, prompt);
+                return this.callOllama(settings.ai_model, prompt);
             }
 
         } catch (error: any) {

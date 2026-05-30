@@ -123,36 +123,6 @@ export const api = {
     if (!res.ok) throw new Error('Failed to update AI settings');
   },
 
-  // Live Analysis
-  async getLiveCandles(symbol: string): Promise<{ symbol: string; symbolId: number; interval: string; candles: any[] }> {
-    const res = await authFetch(`${API_BASE}/live-analysis/candles/${encodeURIComponent(symbol)}`);
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to fetch candles');
-    }
-    return res.json();
-  },
-
-  async searchLiveSymbols(query: string): Promise<{ results: any[] }> {
-    const res = await authFetch(`${API_BASE}/live-analysis/search/${encodeURIComponent(query)}`);
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Search failed');
-    }
-    return res.json();
-  },
-
-  async subscribeLiveAnalysis(symbol: string): Promise<{ success: boolean; symbol: string; symbolId: number }> {
-    const res = await authFetch(`${API_BASE}/live-analysis/subscribe/${encodeURIComponent(symbol)}`, {
-      method: 'POST'
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Subscription failed');
-    }
-    return res.json();
-  },
-
   async getAllUsers(): Promise<User[]> {
     const res = await authFetch(`${API_BASE}/admin/users`);
     if (!res.ok) throw new Error('Failed to fetch users');
@@ -443,6 +413,16 @@ export const api = {
       body: JSON.stringify({ clientId })
     });
     if (!res.ok) throw new Error('Failed to save Questrade client ID');
+  },
+  async saveQuestradeManualToken(refreshToken: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/settings/questrade/manual-token`, {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to verify manual refresh token');
+    }
   },
   async saveQuestradeToken(data: any): Promise<void> {
     const res = await authFetch(`${API_BASE}/settings/questrade/token`, {

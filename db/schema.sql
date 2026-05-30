@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS positions (
     loss_avoided DECIMAL(10, 2),
     current_price DECIMAL(10, 2),
     underlying_price DECIMAL(10, 2),
+    analyzed_support DECIMAL(10, 2),
+    analyzed_resistance DECIMAL(10, 2),
+    suggested_stop_loss DECIMAL(10, 2),
+    suggested_take_profit_1 DECIMAL(10, 2),
+    suggested_take_profit_2 DECIMAL(10, 2),
+    analysis_data JSONB,
     status VARCHAR(20) DEFAULT 'OPEN', -- OPEN, CLOSED
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -61,3 +67,36 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, key)
 );
+
+-- Goals Table
+CREATE TABLE IF NOT EXISTS goals (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    target_amount DECIMAL(12,2) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Goal Entries (daily earnings log)
+CREATE TABLE IF NOT EXISTS goal_entries (
+    id SERIAL PRIMARY KEY,
+    goal_id INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+    entry_date DATE NOT NULL,
+    amount DECIMAL(12,2) NOT NULL,
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(goal_id, entry_date)
+);
+
+-- Stock History Cache Table
+CREATE TABLE IF NOT EXISTS stock_history_cache (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(20) UNIQUE NOT NULL,
+    symbol_id VARCHAR(50),
+    data JSONB NOT NULL,
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+

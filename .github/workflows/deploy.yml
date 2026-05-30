@@ -114,6 +114,7 @@ jobs:
             echo "PORT_FRONTEND=8100" >> $GITHUB_ENV
             echo "PORT_DB=5432" >> $GITHUB_ENV
             echo "PORT_REDIS=6379" >> $GITHUB_ENV
+            echo "INFISICAL_ENV=prod" >> $GITHUB_ENV
           else
             echo "DEPLOY_PATH=/srv/ssmedia/docker/OptionsTradeMonitoring-staging" >> $GITHUB_ENV
             echo "COMPOSE_PROJECT_NAME=options-monitor-staging" >> $GITHUB_ENV
@@ -122,6 +123,7 @@ jobs:
             echo "PORT_FRONTEND=8200" >> $GITHUB_ENV
             echo "PORT_DB=5432" >> $GITHUB_ENV
             echo "PORT_REDIS=46380" >> $GITHUB_ENV
+            echo "INFISICAL_ENV=staging" >> $GITHUB_ENV
           fi
 
       - name: Prepare SSH key
@@ -137,11 +139,12 @@ jobs:
           scp -i ~/.ssh/deploy_key docker-compose.yml ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_PATH }}/
 
           # Deploy via SSH
-          ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} << 'DEPLOY_SCRIPT'
+          ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "INFISICAL_TOKEN='${{ secrets.INFISICAL_TOKEN }}' ENV_NAME='${{ env.ENV_NAME }}' DEPLOY_PATH='${{ env.DEPLOY_PATH }}' COMPOSE_PROJECT_NAME='${{ env.COMPOSE_PROJECT_NAME }}' PORT_BACKEND='${{ env.PORT_BACKEND }}' PORT_FRONTEND='${{ env.PORT_FRONTEND }}' PORT_DB='${{ env.PORT_DB }}' PORT_REDIS='${{ env.PORT_REDIS }}' INFISICAL_ENV='${{ env.INFISICAL_ENV }}' INFISICAL_API_URL='https://cred.ssmedia.ca' bash -s" << 'DEPLOY_SCRIPT'
             set -e
             cd ${{ env.DEPLOY_PATH }}
             
-            [[ "${{ env.ENV_NAME }}" == "Staging" ]] && cp -f /srv/ssmedia/docker/OptionsTradeMonitoring/.env .env || true
+            # Export secrets from Infisical into .env file
+            infisical export --projectId=d35df18b-133e-4eb2-a956-6cad1f5c587d --env=${INFISICAL_ENV} --format=dotenv > .env
             
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
