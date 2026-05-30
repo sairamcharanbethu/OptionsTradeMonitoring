@@ -403,6 +403,7 @@ export default function GoalTracker() {
                 rawDate: entryDate,
                 earned: Math.round(cumulative * 100) / 100,
                 ideal: Math.round(idealAtDay * 100) / 100,
+                dailyAmount: Number(entry.amount),
             };
         });
     }, [entries, activeGoal]);
@@ -811,7 +812,7 @@ export default function GoalTracker() {
                                         <ReferenceLine y={0} stroke="hsl(var(--border))" strokeWidth={1} />
                                         <Bar dataKey="earned" radius={[4, 4, 0, 0]} maxBarSize={40}>
                                             {filteredChartData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={entry.earned >= entry.ideal ? '#22c55e' : '#ef4444'} />
+                                                <Cell key={`cell-${index}`} fill={(entry.dailyAmount < 0 || entry.earned < entry.ideal) ? '#ef4444' : '#22c55e'} />
                                             ))}
                                         </Bar>
                                         <Line
