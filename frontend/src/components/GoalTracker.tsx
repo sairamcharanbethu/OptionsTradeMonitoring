@@ -190,17 +190,20 @@ function AddEntryDialog({
     onOpenChange,
     onSaved,
     editEntry,
+    usdToCadRate,
 }: {
     goalId: number;
     open: boolean;
     onOpenChange: (open: boolean) => void;
     onSaved: () => void;
     editEntry?: GoalEntry;
+    usdToCadRate: number;
 }) {
     const [entryDate, setEntryDate] = useState(editEntry?.entry_date?.split('T')[0] || format(new Date(), 'yyyy-MM-dd'));
     const [amount, setAmount] = useState(editEntry?.amount?.toString() || '');
     const [notes, setNotes] = useState(editEntry?.notes || '');
     const [saving, setSaving] = useState(false);
+    const [currency, setCurrency] = useState<'USD' | 'CAD'>('USD');
 
     // Reset form when dialog opens or entry changes
     useEffect(() => {
@@ -209,17 +212,23 @@ function AddEntryDialog({
             setAmount(editEntry?.amount?.toString() || '');
             setNotes(editEntry?.notes || '');
             setSaving(false);
+            setCurrency('USD');
         }
     }, [open, editEntry]);
+
+    const parsedAmount = parseFloat(amount);
+    const hasValidAmount = amount !== '' && !isNaN(parsedAmount);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
         try {
+            // Always store in USD — convert from CAD if needed
+            const amountUSD = currency === 'CAD' ? parsedAmount / usdToCadRate : parsedAmount;
             if (editEntry) {
-                await api.updateGoalEntry(goalId, editEntry.id, { entry_date: entryDate, amount: parseFloat(amount), notes });
+                await api.updateGoalEntry(goalId, editEntry.id, { entry_date: entryDate, amount: amountUSD, notes });
             } else {
-                await api.addGoalEntry(goalId, { entry_date: entryDate, amount: parseFloat(amount), notes: notes || undefined });
+                await api.addGoalEntry(goalId, { entry_date: entryDate, amount: amountUSD, notes: notes || undefined });
             }
             onSaved();
             onOpenChange(false);
@@ -244,10 +253,63 @@ function AddEntryDialog({
                         <label className="text-sm font-medium">Date</label>
                         <Input type="date" value={entryDate} onChange={e => setEntryDate(e.target.value)} required />
                     </div>
+
+                    {/* Amount field with currency toggle */}
                     <div className="space-y-2">
-                        <label className="text-sm font-medium">Amount ($)</label>
-                        <Input type="number" step="0.01" placeholder="500.00" value={amount} onChange={e => setAmount(e.target.value)} required />
+                        <div className="flex items-center justify-between">
+                            <label className="text-sm font-medium">Amount ({currency})</label>
+                            {/* USD / CAD pill toggle */}
+                            <div className="flex items-center bg-muted/50 p-0.5 rounded-md">
+                                <button
+                                    type="button"
+                                    onClick={() => setCurrency('USD')}
+                                    className={`px-2.5 py-0.5 text-xs font-medium rounded transition-all ${
+                                        currency === 'USD'
+                                            ? 'bg-background shadow-sm text-foreground'
+                                            : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                                >
+                                    USD
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCurrency('CAD')}
+                                    className={`px-2.5 py-0.5 text-xs font-medium rounded transition-all ${
+                                        currency === 'CAD'
+                                            ? 'bg-background shadow-sm text-foreground'
+                                            : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                                >
+                                    CAD
+                                </button>
+                            </div>
+                        </div>
+                        <Input
+                            type="number"
+                            step="0.01"
+                            placeholder={currency === 'CAD' ? '685.00' : '500.00'}
+                            value={amount}
+                            onChange={e => setAmount(e.target.value)}
+                            required
+                        />
+                        {/* Live conversion preview */}
+                        {hasValidAmount && (
+                            <p className="text-xs text-muted-foreground">
+                                {currency === 'CAD' ? (
+                                    <>≈ <span className="font-medium text-foreground">${(parsedAmount / usdToCadRate).toFixed(2)} USD</span> will be saved&nbsp;&bull;&nbsp;Rate: {usdToCadRate.toFixed(4)} CAD/USD</>
+                                ) : (
+                                    <>≈ <span className="font-medium text-foreground">${(parsedAmount * usdToCadRate).toFixed(2)} CAD</span>&nbsp;&bull;&nbsp;Rate: {usdToCadRate.toFixed(4)} CAD/USD</>
+                                )}
+                            </p>
+                        )}
+                        {/* Always show rate hint even without an amount */}
+                        {!hasValidAmount && (
+                            <p className="text-xs text-muted-foreground">
+                                Live rate: 1 USD = {usdToCadRate.toFixed(4)} CAD
+                            </p>
+                        )}
                     </div>
+
                     <div className="space-y-2">
                         <label className="text-sm font-medium">Notes (optional)</label>
                         <Input placeholder="e.g. SPY calls profit" value={notes} onChange={e => setNotes(e.target.value)} />
@@ -972,6 +1034,7 @@ export default function GoalTracker() {
                         }}
                         onSaved={invalidateAll}
                         editEntry={editingEntry}
+                        usdToCadRate={usdToCadRate}
                     />
                 )
             }
