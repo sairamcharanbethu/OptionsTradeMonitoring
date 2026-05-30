@@ -281,7 +281,7 @@ export default function GoalTracker() {
             .catch(err => console.error('Failed to fetch exchange rate:', err));
     }, []);
 
-    const formatCurrency = (val: number, includeCAD = true, fractionDigits = 2, showPlus = false) => {
+    const formatCurrency = (val: number, includeCAD = true, fractionDigits = 2, showPlus = false): React.ReactNode => {
         const isNegative = val < 0;
         const absVal = Math.abs(val);
         const prefix = isNegative ? '-' : (showPlus ? '+' : '');
@@ -300,7 +300,11 @@ export default function GoalTracker() {
             maximumFractionDigits: fractionDigits 
         })} CAD`;
         
-        return `${usdStr} (${cadStr})`;
+        return (
+            <span>
+                {usdStr} <span className="text-[0.75em] text-muted-foreground font-normal">({cadStr})</span>
+            </span>
+        );
     };
 
     const [selectedGoalId, setSelectedGoalId] = useState<number | null>(null);
@@ -644,9 +648,15 @@ export default function GoalTracker() {
                                             <p className="text-xs text-muted-foreground leading-relaxed">
                                                 {insights.status === 'COMPLETED' && '🎯 Congratulations! You\'ve reached your goal!'}
                                                 {insights.status === 'AHEAD' && `🚀 Great pace! You're ${insights.progressDelta.toFixed(1)}% ahead of schedule.`}
-                                                {insights.status === 'ON_TRACK' && `✅ You're on track. Keep averaging ${formatCurrency(insights.dailyAverage, true, 2)}/day.`}
-                                                {insights.status === 'AT_RISK' && `⚠️ Slightly behind. Aim for ${formatCurrency(insights.remainingPerDay, true, 2)}/day to catch up.`}
-                                                {insights.status === 'BEHIND' && `🔴 Behind by ${Math.abs(insights.progressDelta).toFixed(1)}%. Need ${formatCurrency(insights.remainingPerDay, true, 2)}/day to recover.`}
+                                                {insights.status === 'ON_TRACK' && (
+                                                    <span>✅ You're on track. Keep averaging {formatCurrency(insights.dailyAverage, true, 2)}/day.</span>
+                                                )}
+                                                {insights.status === 'AT_RISK' && (
+                                                    <span>⚠️ Slightly behind. Aim for {formatCurrency(insights.remainingPerDay, true, 2)}/day to catch up.</span>
+                                                )}
+                                                {insights.status === 'BEHIND' && (
+                                                    <span>🔴 Behind by {Math.abs(insights.progressDelta).toFixed(1)}%. Need {formatCurrency(insights.remainingPerDay, true, 2)}/day to recover.</span>
+                                                )}
                                             </p>
                                         </div>
                                     </>
