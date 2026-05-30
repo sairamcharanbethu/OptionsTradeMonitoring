@@ -48,10 +48,20 @@ export async function aiRoutes(fastify: FastifyInstance, options: FastifyPluginO
 
         } catch (err: any) {
             fastify.log.error(err);
-            if (err.message?.includes('Too Many') || err.message?.includes('429') || err.message?.includes('Rate')) {
+            const msg = err.message || '';
+            const isRateLimit = msg.includes('Too Many') || msg.includes('429') || msg.includes('Rate');
+
+            if (isRateLimit) {
+                if (msg.includes('OpenRouter')) {
+                    return reply.code(429).send({
+                        error: 'Rate Limited (OpenRouter)',
+                        message: 'OpenRouter AI service rate limit reached. Please check your limits or wait a few minutes.',
+                        retryAfter: 60
+                    });
+                }
                 return reply.code(429).send({
                     error: 'Rate Limited',
-                    message: 'Questrade API rate limit reached. Please wait a few minutes.',
+                    message: 'AI service rate limit reached. Please wait a few minutes.',
                     retryAfter: 60
                 });
             }
@@ -95,10 +105,26 @@ export async function aiRoutes(fastify: FastifyInstance, options: FastifyPluginO
             const result = await predictionService.analyzeStock(symbol);
             return result;
         } catch (err: any) {
-            // Check for rate limit errors and return user-friendly response
-            if (err.message?.includes('Too Many') || err.message?.includes('429') || err.message?.includes('Rate')) {
+            const msg = err.message || '';
+            const isRateLimit = msg.includes('Too Many') || msg.includes('429') || msg.includes('Rate');
+
+            if (isRateLimit) {
+                if (msg.includes('OpenRouter')) {
+                    return reply.code(429).send({
+                        error: 'Rate Limited (OpenRouter)',
+                        message: 'OpenRouter AI service rate limit reached. Please check your OpenRouter account/limits or wait a few minutes.',
+                        retryAfter: 60
+                    });
+                }
+                if (msg.includes('Yahoo Finance') || msg.includes('Yahoo')) {
+                    return reply.code(429).send({
+                        error: 'Rate Limited (Yahoo Finance)',
+                        message: 'Yahoo Finance rate limit reached. Please wait a few minutes.',
+                        retryAfter: 60
+                    });
+                }
                 return reply.code(429).send({
-                    error: 'Rate Limited',
+                    error: 'Rate Limited (Questrade)',
                     message: 'Questrade API rate limit reached. Please wait 2-3 minutes before trying again. The system processes many market data requests for historical analysis.',
                     retryAfter: 180 // 3 minutes in seconds
                 });
