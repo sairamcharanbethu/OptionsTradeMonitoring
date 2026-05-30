@@ -4,6 +4,9 @@ import { AIService } from './ai-service';
 import { spawn } from 'child_process';
 import path from 'path';
 import { redis } from '../lib/redis';
+import YahooFinance from 'yahoo-finance2';
+
+const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
 export interface TechnicalIndicators {
     rsi: number;
@@ -61,13 +64,48 @@ export class PredictionService {
         this.aiService = new AIService(fastify);
     }
 
+    private async fetchHistoryFromYahoo(symbol: string, startDate: Date, endDate: Date): Promise<any[]> {
+        console.log(`[PredictionService] Fetching historical data from Yahoo Finance for ${symbol}...`);
+        try {
+            // Format dates as YYYY-MM-DD
+            const startStr = startDate.toISOString().split('T')[0];
+            const endStr = endDate.toISOString().split('T')[0];
+
+            const result = await (yahooFinance as any).historical(symbol, {
+                period1: startStr,
+                period2: endStr,
+                interval: '1d'
+            });
+
+            if (!result || result.length === 0) {
+                throw new Error(`No historical data returned from Yahoo Finance for ${symbol}.`);
+            }
+
+            return result.map((c: any) => ({
+                date: c.date instanceof Date ? c.date.toISOString().split('T')[0] : new Date(c.date).toISOString().split('T')[0],
+                open: c.open,
+                high: c.high,
+                low: c.low,
+                close: c.close,
+                volume: c.volume
+            }));
+        } catch (err: any) {
+            console.error(`[PredictionService] Yahoo Finance fetch failed for ${symbol}:`, err.message);
+            throw err;
+        }
+    }
+
     async analyzeStock(symbol: string): Promise<PredictionResult> {
         try {
             const upperSymbol = symbol.toUpperCase();
+
+            // Run AI health check first before fetching any data from Questrade
+            await this.aiService.checkHealth();
+
             // 1. Check database cache for historical data (30-day retention)
             let historicalData: any[] = [];
 
-            const { rows } = await this.fastify.pg.query(
+            const { rows } = await (this.fastify as any).pg.query(
                 `SELECT data, fetched_at FROM stock_history_cache 
                  WHERE symbol = $1 AND fetched_at > NOW() - INTERVAL '30 days'`,
                 [upperSymbol]
@@ -86,41 +124,66 @@ export class PredictionService {
                     console.log(`[PredictionService] Cache stale (${hoursSinceFetch}h). Performing incremental sync...`);
                     try {
                         const symbolId = await questrade.getSymbolId(upperSymbol);
-                        if (symbolId) {
+                        if (!symbolId) {
+                            throw new Error(`Symbol ID not found on Questrade.`);
+                        }
+                        const lastDateInCache = new Date(historicalData[historicalData.length - 1].date);
+                        const nextDay = new Date(lastDateInCache);
+                        nextDay.setDate(nextDay.getDate() + 1);
+
+                        const now = new Date();
+
+                        if (nextDay < now) {
+                            const newCandles = await questrade.getHistoricalData(symbolId, nextDay, now, 'OneDay');
+                            if (newCandles && newCandles.length > 0) {
+                                const mappedNew = newCandles.map((c: any) => ({
+                                    date: c.start.split('T')[0],
+                                    open: c.open,
+                                    high: c.high,
+                                    low: c.low,
+                                    close: c.close,
+                                    volume: c.volume
+                                }));
+
+                                // Merge and remove duplicates (by date)
+                                const merged = [...historicalData, ...mappedNew];
+                                const unique = Array.from(new Map(merged.map(item => [item.date, item])).values());
+                                historicalData = unique.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+                                // Update DB with merged set
+                                await (this.fastify as any).pg.query(
+                                    `UPDATE stock_history_cache SET data = $2, fetched_at = CURRENT_TIMESTAMP WHERE symbol = $1`,
+                                    [upperSymbol, JSON.stringify(historicalData)]
+                                );
+                                console.log(`[PredictionService] Incremental sync complete. Added ${mappedNew.length} new days.`);
+                            }
+                        }
+                    } catch (syncErr: any) {
+                        console.warn(`[PredictionService] Incremental sync via Questrade failed: ${syncErr.message}. Attempting Yahoo Finance fallback...`);
+                        try {
                             const lastDateInCache = new Date(historicalData[historicalData.length - 1].date);
                             const nextDay = new Date(lastDateInCache);
                             nextDay.setDate(nextDay.getDate() + 1);
-
                             const now = new Date();
-
                             if (nextDay < now) {
-                                const newCandles = await questrade.getHistoricalData(symbolId, nextDay, now, 'OneDay');
-                                if (newCandles && newCandles.length > 0) {
-                                    const mappedNew = newCandles.map((c: any) => ({
-                                        date: c.start.split('T')[0],
-                                        open: c.open,
-                                        high: c.high,
-                                        low: c.low,
-                                        close: c.close,
-                                        volume: c.volume
-                                    }));
-
-                                    // Merge and remove duplicates (by date)
+                                const mappedNew = await this.fetchHistoryFromYahoo(upperSymbol, nextDay, now);
+                                if (mappedNew && mappedNew.length > 0) {
                                     const merged = [...historicalData, ...mappedNew];
                                     const unique = Array.from(new Map(merged.map(item => [item.date, item])).values());
                                     historicalData = unique.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
                                     // Update DB with merged set
-                                    await this.fastify.pg.query(
+                                    await (this.fastify as any).pg.query(
                                         `UPDATE stock_history_cache SET data = $2, fetched_at = CURRENT_TIMESTAMP WHERE symbol = $1`,
                                         [upperSymbol, JSON.stringify(historicalData)]
                                     );
-                                    console.log(`[PredictionService] Incremental sync complete. Added ${mappedNew.length} new days.`);
+                                    console.log(`[PredictionService] Incremental sync via Yahoo Finance complete. Added ${mappedNew.length} new days.`);
                                 }
                             }
+                        } catch (yahooErr: any) {
+                            console.error(`[PredictionService] Yahoo Finance incremental sync also failed: ${yahooErr.message}`);
+                            console.warn(`[PredictionService] Falling back to stale cache data.`);
                         }
-                    } catch (syncErr: any) {
-                        console.warn(`[PredictionService] Incremental sync failed (falling back to cache): ${syncErr.message}`);
                     }
                 }
             } else {
@@ -131,37 +194,59 @@ export class PredictionService {
 
                 console.log(`[PredictionService] Bootstrapping 5-year history for ${upperSymbol}...`);
 
-                const questrade = (this.fastify as any).questrade;
-                const symbolId = await questrade.getSymbolId(upperSymbol);
+                try {
+                    const questrade = (this.fastify as any).questrade;
+                    const symbolId = await questrade.getSymbolId(upperSymbol);
 
-                if (!symbolId) {
-                    throw new Error(`Symbol ${upperSymbol} not found on Questrade.`);
+                    if (!symbolId) {
+                        throw new Error(`Symbol ${upperSymbol} not found on Questrade.`);
+                    }
+
+                    const candles = await questrade.getHistoricalData(symbolId, startDate, endDate, 'OneDay');
+
+                    if (!candles || candles.length < 200) {
+                        throw new Error(`Insufficient data for ${upperSymbol} from Questrade. Need at least 200 days.`);
+                    }
+
+                    // Map Questrade candles to expected format
+                    historicalData = candles.map((c: any) => ({
+                        date: c.start.split('T')[0],
+                        open: c.open,
+                        high: c.high,
+                        low: c.low,
+                        close: c.close,
+                        volume: c.volume
+                    }));
+
+                    // Store in database with symbol_id
+                    await (this.fastify as any).pg.query(
+                        `INSERT INTO stock_history_cache (symbol, symbol_id, data, fetched_at) 
+                         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                         ON CONFLICT (symbol) DO UPDATE SET symbol_id = $2, data = $3, fetched_at = CURRENT_TIMESTAMP`,
+                        [upperSymbol, symbolId, JSON.stringify(historicalData)]
+                    );
+                    console.log(`[PredictionService] Cached 5-year history for ${upperSymbol} in database`);
+                } catch (questradeErr: any) {
+                    console.warn(`[PredictionService] Bootstrapping from Questrade failed: ${questradeErr.message}. Attempting Yahoo Finance fallback...`);
+                    try {
+                        historicalData = await this.fetchHistoryFromYahoo(upperSymbol, startDate, endDate);
+                        if (!historicalData || historicalData.length < 200) {
+                            throw new Error(`Insufficient data for ${upperSymbol} from Yahoo Finance. Need at least 200 days.`);
+                        }
+
+                        // Store in database with symbol_id as 'yahoo'
+                        await (this.fastify as any).pg.query(
+                            `INSERT INTO stock_history_cache (symbol, symbol_id, data, fetched_at) 
+                             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                             ON CONFLICT (symbol) DO UPDATE SET symbol_id = $2, data = $3, fetched_at = CURRENT_TIMESTAMP`,
+                            [upperSymbol, 'yahoo', JSON.stringify(historicalData)]
+                        );
+                        console.log(`[PredictionService] Cached 5-year history from Yahoo Finance for ${upperSymbol} in database`);
+                    } catch (yahooErr: any) {
+                        console.error(`[PredictionService] Yahoo Finance bootstrapping also failed: ${yahooErr.message}`);
+                        throw new Error(`Failed to bootstrap history for ${upperSymbol}: both Questrade and Yahoo Finance failed. Questrade error: ${questradeErr.message}. Yahoo error: ${yahooErr.message}`);
+                    }
                 }
-
-                const candles = await questrade.getHistoricalData(symbolId, startDate, endDate, 'OneDay');
-
-                if (!candles || candles.length < 200) {
-                    throw new Error(`Insufficient data for ${upperSymbol} from Questrade. Need at least 200 days.`);
-                }
-
-                // Map Questrade candles to expected format
-                historicalData = candles.map((c: any) => ({
-                    date: c.start.split('T')[0],
-                    open: c.open,
-                    high: c.high,
-                    low: c.low,
-                    close: c.close,
-                    volume: c.volume
-                }));
-
-                // Store in database with symbol_id
-                await this.fastify.pg.query(
-                    `INSERT INTO stock_history_cache (symbol, symbol_id, data, fetched_at) 
-                     VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-                     ON CONFLICT (symbol) DO UPDATE SET symbol_id = $2, data = $3, fetched_at = CURRENT_TIMESTAMP`,
-                    [upperSymbol, symbolId, JSON.stringify(historicalData)]
-                );
-                console.log(`[PredictionService] Cached 5-year history for ${upperSymbol} in database`);
             }
 
             // 2. Run ML Prediction (Python) - pass symbol for news sentiment
