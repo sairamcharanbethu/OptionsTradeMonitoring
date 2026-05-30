@@ -10,7 +10,6 @@ import { marketRoutes } from './routes/market';
 import { aiRoutes } from './routes/ai';
 import { settingsRoutes } from './routes/settings';
 import { goalRoutes } from './routes/goals';
-import { liveAnalysisRoutes } from './routes/live-analysis';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -226,7 +225,6 @@ const start = async () => {
     fastify.register(marketRoutes, { prefix: '/api/market' });
     fastify.register(aiRoutes, { prefix: '/api/ai' });
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
-    fastify.register(liveAnalysisRoutes, { prefix: '/api/live-analysis' });
     fastify.register(goalRoutes, { prefix: '/api/goals' });
 
     fastify.get('/health', async () => {
@@ -310,7 +308,7 @@ const start = async () => {
 
     // Start background services
     poller.start();
-    // streamer.start(); // Disabled: Subscriptions are now on-demand via Live Analysis only
+    // streamer.start(); // Disabled: Subscriptions are on-demand via position sync
 
     fastify.log.info(`Server listening on http://localhost:${port}`);
   } catch (err) {
