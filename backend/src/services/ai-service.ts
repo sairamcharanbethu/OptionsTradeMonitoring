@@ -148,10 +148,10 @@ ${insightsText}
 Task: Provide a high-level summary of this equity/crypto portfolio utilizing a simulated Multi-Agent Debate for the top holdings.
 1. Portfolio Summary: Briefly highlight the biggest winners and losers by PnL, and discuss the asset allocation.
 2. Top Holdings Debate: For EACH of the top holdings with provided news/fundamentals, simulate a rigorous debate between two AI agents:
-   - 🐂 Bull Agent: Provide a concise bullish argument leveraging the provided news, P/E ratio, and recent highs.
-   - 🐻 Bear Agent: Provide a concise bearish counter-argument focusing on valuation risks or negative news.
-   - ⚖️ Manager Verdict: The final decision on whether to hold, trim, or buy more, with a rebalancing rationale.
-Style: Professional wealth manager tone, structured with clear Markdown headers for each holding.
+   - 🐂 Bull Agent: Exactly one high-density, 1-sentence bullish argument leveraging the provided news, P/E ratio, or recent highs.
+   - 🐻 Bear Agent: Exactly one high-density, 1-sentence bearish counter-argument focusing on valuation risks or negative news.
+   - ⚖️ Manager Verdict: A brief, punchy decision (Hold, Trim, Buy) and exactly 1-sentence of direct rationale.
+Style: Extremely direct, high-density, 'Caveman Mode' (ultra-concise, zero pleasantries, no conversational fillers or fluff). Keep every section highly condensed and focused strictly on the facts to optimize readability and speed.
 Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
 
         const response = await this.generateAnalysisInternal(prompt, 2048);
