@@ -7,6 +7,33 @@ import { AIService } from './ai-service';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
+interface MacroEvent {
+    name: string;
+    time: Date;
+}
+
+const MACRO_EVENTS: MacroEvent[] = [
+    // May 2026
+    { name: 'FOMC Meeting Decision', time: new Date('2026-05-06T14:00:00-04:00') },
+    { name: 'Fed Chair Powell Press Conference', time: new Date('2026-05-06T14:30:00-04:00') },
+    { name: 'CPI Inflation Release', time: new Date('2026-05-13T08:30:00-04:00') },
+    
+    // June 2026
+    { name: 'CPI Inflation Release', time: new Date('2026-06-12T08:30:00-04:00') },
+    { name: 'FOMC Meeting Decision', time: new Date('2026-06-17T14:00:00-04:00') },
+    { name: 'Fed Chair Powell Press Conference', time: new Date('2026-06-17T14:30:00-04:00') },
+
+    // July 2026
+    { name: 'CPI Inflation Release', time: new Date('2026-07-15T08:30:00-04:00') },
+    { name: 'FOMC Meeting Decision', time: new Date('2026-07-29T14:00:00-04:00') },
+    { name: 'Fed Chair Powell Press Conference', time: new Date('2026-07-29T14:30:00-04:00') },
+
+    // August 2026
+    { name: 'CPI Inflation Release', time: new Date('2026-08-12T08:30:00-04:00') },
+    { name: 'FOMC Meeting Decision', time: new Date('2026-08-26T14:00:00-04:00') },
+    { name: 'Fed Chair Powell Press Conference', time: new Date('2026-08-26T14:30:00-04:00') }
+];
+
 export interface GexResult {
     netGex: number;
     netVex: number;
@@ -263,6 +290,20 @@ export class AutoTraderService {
             return { success: false, reason: 'Market is closed' };
         }
 
+        // 2.5 CPI / FOMC Macro Event Guard (Volatility Blocker)
+        const nowMs = Date.now();
+        const thirtyMinutesMs = 30 * 60 * 1000;
+        for (const event of MACRO_EVENTS) {
+            const timeDiff = Math.abs(nowMs - event.time.getTime());
+            if (timeDiff <= thirtyMinutesMs) {
+                const minutesDiff = Math.round(timeDiff / 1000 / 60);
+                const isBefore = nowMs < event.time.getTime();
+                const warningMsg = `[AutoTraderService] Macro Event Guard active: ${minutesDiff} minutes ${isBefore ? 'before' : 'after'} high-impact release "${event.name}" (${event.time.toISOString()}). Blocking all entries.`;
+                this.fastify.log.warn(warningMsg);
+                return { success: false, reason: `Economic Volatility Blocker: Close to ${event.name}` };
+            }
+        }
+
         for (const symbol of symbolsToScan) {
             try {
                 // Fetch GEX Metrics
@@ -340,6 +381,45 @@ export class AutoTraderService {
                     if (aiRes.analysis.includes("BUY_CALL")) verdict = "BUY_CALL";
                     else if (aiRes.analysis.includes("BUY_PUT")) verdict = "BUY_PUT";
                     else verdict = "WAIT";
+                }
+
+                // 2.75 Multi-Timeframe Trend Alignment Filter
+                if (verdict === 'BUY_CALL' || verdict === 'BUY_PUT') {
+                    const isEmaBullish = indicators.ema9 > indicators.ema21;
+                    const isSma50Bullish = price > indicators.sma50;
+                    
+                    let isAligned = true;
+                    let trendReason = '';
+
+                    if (verdict === 'BUY_CALL') {
+                        // Bullish signal: longer-term indicators should not be heavily bearish
+                        if (!isEmaBullish && !isSma50Bullish) {
+                            isAligned = false;
+                            trendReason = 'Daily EMA9/21 cross is bearish and price is below Daily SMA50';
+                        }
+                    } else if (verdict === 'BUY_PUT') {
+                        // Bearish signal: longer-term indicators should not be heavily bullish
+                        if (isEmaBullish && isSma50Bullish) {
+                            isAligned = false;
+                            trendReason = 'Daily EMA9/21 cross is bullish and price is above Daily SMA50';
+                        }
+                    }
+
+                    if (!isAligned) {
+                        this.fastify.log.warn(`[AutoTraderService] Skip entry on ${symbol}: Verdict ${verdict} conflicts with longer-term daily trend (${trendReason})`);
+                        results.push({
+                            symbol,
+                            verdict: 'SKIPPED_TREND_CONFLICT',
+                            osiTicker: '',
+                            strike: 0,
+                            expiration: '',
+                            entryPrice: 0,
+                            contractsCount: 0,
+                            mode,
+                            reason: `Verdict ${verdict} conflicts with structural Daily trend: ${trendReason}.`
+                        });
+                        continue;
+                    }
                 }
 
                 if (verdict === 'BUY_CALL' || verdict === 'BUY_PUT') {
@@ -486,7 +566,9 @@ export class AutoTraderService {
                                 rationale: parsed.reasoning,
                                 targetDte,
                                 sessionMode: mode,
-                                snaptradeDetails
+                                snaptradeDetails,
+                                gexRegime: gexData.netGex < 0 ? 'NEGATIVE' : 'POSITIVE',
+                                entryUnderlying: price
                             }),
                             underlyingStop,
                             underlyingTarget

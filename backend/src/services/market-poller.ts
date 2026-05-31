@@ -581,14 +581,79 @@ export class MarketPoller {
     }
 
     if (underlyingPrice && underlyingTarget && !triggered) {
-      if (position.option_type === 'CALL' && underlyingPrice >= underlyingTarget) {
-        triggered = true;
-        triggerType = 'TAKE_PROFIT';
-        this.fastify.log.info(`[MarketPoller] Strategy 1 TAKE_PROFIT triggered via underlying index price: ${underlyingPrice} >= ${underlyingTarget}`);
-      } else if (position.option_type === 'PUT' && underlyingPrice <= underlyingTarget) {
-        triggered = true;
-        triggerType = 'TAKE_PROFIT';
-        this.fastify.log.info(`[MarketPoller] Strategy 1 TAKE_PROFIT triggered via underlying index price: ${underlyingPrice} <= ${underlyingTarget}`);
+      // Parse analysis_data to check for Negative GEX Regime dynamic trailing stop
+      let analysis: any = {};
+      try {
+        if (position.analysis_data) {
+          analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data;
+        }
+      } catch (e) {
+        this.fastify.log.warn(`[MarketPoller] Failed to parse analysis_data for position ${position.id}`);
+      }
+
+      const gexRegime = analysis.gexRegime || 'POSITIVE';
+
+      if (gexRegime === 'NEGATIVE') {
+        // Dynamic Trailing profit target active
+        if (position.option_type === 'CALL') {
+          // Check if we already hit target and activated trailing
+          const hasReachedTarget = analysis.underlyingTrailingHigh !== undefined || underlyingPrice >= underlyingTarget;
+          if (hasReachedTarget) {
+            const currentTrailingHigh = analysis.underlyingTrailingHigh || underlyingPrice;
+            const newTrailingHigh = Math.max(currentTrailingHigh, underlyingPrice);
+            analysis.underlyingTrailingHigh = newTrailingHigh;
+
+            // Trailing stop at 0.2% below trailing high
+            const trailingStopPrice = newTrailingHigh * (1 - 0.002);
+            this.fastify.log.info(`[MarketPoller] Negative GEX Dynamic Trailing active on position ${position.id}. High: ${newTrailingHigh.toFixed(2)}, Stop: ${trailingStopPrice.toFixed(2)}, Spot: ${underlyingPrice.toFixed(2)}`);
+
+            if (underlyingPrice <= trailingStopPrice) {
+              triggered = true;
+              triggerType = 'TAKE_PROFIT';
+              this.fastify.log.info(`[MarketPoller] Dynamic Trailing TAKE_PROFIT triggered for CALL: Spot ${underlyingPrice.toFixed(2)} <= Trailing Stop ${trailingStopPrice.toFixed(2)}`);
+            }
+
+            // Save updated analysis data back to the database
+            await (this.fastify as any).pg.query(
+              "UPDATE positions SET analysis_data = $1 WHERE id = $2",
+              [JSON.stringify(analysis), position.id]
+            );
+          }
+        } else if (position.option_type === 'PUT') {
+          const hasReachedTarget = analysis.underlyingTrailingLow !== undefined || underlyingPrice <= underlyingTarget;
+          if (hasReachedTarget) {
+            const currentTrailingLow = analysis.underlyingTrailingLow || underlyingPrice;
+            const newTrailingLow = Math.min(currentTrailingLow, underlyingPrice);
+            analysis.underlyingTrailingLow = newTrailingLow;
+
+            // Trailing stop at 0.2% above trailing low
+            const trailingStopPrice = newTrailingLow * (1 + 0.002);
+            this.fastify.log.info(`[MarketPoller] Negative GEX Dynamic Trailing active on position ${position.id}. Low: ${newTrailingLow.toFixed(2)}, Stop: ${trailingStopPrice.toFixed(2)}, Spot: ${underlyingPrice.toFixed(2)}`);
+
+            if (underlyingPrice >= trailingStopPrice) {
+              triggered = true;
+              triggerType = 'TAKE_PROFIT';
+              this.fastify.log.info(`[MarketPoller] Dynamic Trailing TAKE_PROFIT triggered for PUT: Spot ${underlyingPrice.toFixed(2)} >= Trailing Stop ${trailingStopPrice.toFixed(2)}`);
+            }
+
+            // Save updated analysis data
+            await (this.fastify as any).pg.query(
+              "UPDATE positions SET analysis_data = $1 WHERE id = $2",
+              [JSON.stringify(analysis), position.id]
+            );
+          }
+        }
+      } else {
+        // Standard fixed take-profit target for Positive GEX mean-reversion
+        if (position.option_type === 'CALL' && underlyingPrice >= underlyingTarget) {
+          triggered = true;
+          triggerType = 'TAKE_PROFIT';
+          this.fastify.log.info(`[MarketPoller] Strategy 1 Fixed TAKE_PROFIT triggered via underlying index price: ${underlyingPrice} >= ${underlyingTarget}`);
+        } else if (position.option_type === 'PUT' && underlyingPrice <= underlyingTarget) {
+          triggered = true;
+          triggerType = 'TAKE_PROFIT';
+          this.fastify.log.info(`[MarketPoller] Strategy 1 Fixed TAKE_PROFIT triggered via underlying index price: ${underlyingPrice} <= ${underlyingTarget}`);
+        }
       }
     }
 
