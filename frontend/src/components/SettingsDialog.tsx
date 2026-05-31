@@ -45,6 +45,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [qtConnecting, setQtConnecting] = useState(false);
     const [qtSaved, setQtSaved] = useState(false);
 
+    // SnapTrade State
+    const [snaptradeClientId, setSnaptradeClientId] = useState('');
+    const [snaptradeConsumerKey, setSnaptradeConsumerKey] = useState('');
+
     useEffect(() => {
         if (open) {
             loadSettings();
@@ -158,6 +162,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setBriefingFrequency(data.briefing_frequency || 'disabled');
             setPollInterval(data.market_poll_interval || '60');
             setPositionPollInterval(data.position_poll_interval || '2');
+            setSnaptradeClientId(data.snaptrade_client_id || '');
+            setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
         } catch (err) {
             console.error(err);
         } finally {
@@ -219,7 +225,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 ai_model: model,
                 briefing_frequency: briefingFrequency,
                 market_poll_interval: pollInterval,
-                position_poll_interval: positionPollInterval
+                position_poll_interval: positionPollInterval,
+                snaptrade_client_id: snaptradeClientId,
+                snaptrade_consumer_key: snaptradeConsumerKey
             });
             onUpdate(user); // Force refresh of parent if needed
             setOpen(false);
@@ -423,6 +431,46 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
                                     <p className="text-[10px] text-center text-muted-foreground italic">
                                         The application will automatically detect, verify, and rotate your token directly.
+                                    </p>
+                                </div>
+                                
+                                <div className="flex items-center justify-between p-4 border rounded-lg bg-card mt-6">
+                                    <div className="space-y-1">
+                                        <h4 className="font-medium">Wealthsimple (via SnapTrade)</h4>
+                                        <p className="text-sm text-muted-foreground">Connect your SnapTrade App credentials to enable Wealthsimple.</p>
+                                    </div>
+                                    <Badge variant={snaptradeClientId && snaptradeConsumerKey ? "default" : "secondary"}>
+                                        {snaptradeClientId && snaptradeConsumerKey ? "Configured" : "Not Linked"}
+                                    </Badge>
+                                </div>
+
+                                <div className="grid gap-4 p-6 border rounded-lg bg-muted/30">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="st-client">SnapTrade Client ID</Label>
+                                        <Input
+                                            id="st-client"
+                                            value={snaptradeClientId}
+                                            onChange={(e) => setSnaptradeClientId(e.target.value)}
+                                            placeholder="PERS-..."
+                                            type="password"
+                                        />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="st-key">SnapTrade Consumer Key</Label>
+                                        <Input
+                                            id="st-key"
+                                            value={snaptradeConsumerKey}
+                                            onChange={(e) => setSnaptradeConsumerKey(e.target.value)}
+                                            placeholder="6KyYeW..."
+                                            type="password"
+                                        />
+                                    </div>
+                                    <Button className="w-full mt-2" onClick={handleSaveSettings} disabled={saving}>
+                                        {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                        Save SnapTrade Keys
+                                    </Button>
+                                    <p className="text-[10px] text-muted-foreground">
+                                        Once saved, go to the Wealthsimple dashboard to securely connect your broker.
                                     </p>
                                 </div>
                             </div>

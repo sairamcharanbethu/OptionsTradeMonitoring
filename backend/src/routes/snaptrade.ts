@@ -6,10 +6,19 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
   fastify.addHook('onRequest', fastify.authenticate);
   const snaptradeService = new SnaptradeService(fastify);
 
-  // We are currently hardcoding the userId and userSecret based on our previous testing.
-  // In a production app, you would retrieve these from the user's profile in the database.
-  const SNAPTRADE_USER_ID = "sbethu";
-  const SNAPTRADE_USER_SECRET = "264a905e-d75b-4f3b-939e-9c58f01c5375";
+  // POST /connect
+  fastify.post('/connect', {
+    schema: {
+      tags: ['SnapTrade'],
+      summary: 'Generate Connection URL',
+      description: 'Generates a unique redirect URI so the user can securely login to their Wealthsimple broker.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    const result = await snaptradeService.generateConnectionUrl(userId);
+    return result; // { redirectURI: "https://..." }
+  });
 
   // POST /sync
   fastify.post('/sync', {
@@ -21,7 +30,7 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
     }
   }, async (request, reply) => {
     const { id: userId } = (request as any).user;
-    const result = await snaptradeService.syncPortfolio(userId, SNAPTRADE_USER_ID, SNAPTRADE_USER_SECRET);
+    const result = await snaptradeService.syncPortfolio(userId);
     return result;
   });
 

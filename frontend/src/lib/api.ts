@@ -509,6 +509,12 @@ export const api = {
   },
 
   // ─── Snaptrade ───
+  async connectSnaptrade(): Promise<{ redirectURI: string }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/connect`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to generate Wealthsimple connection URL');
+    return res.json();
+  },
+
   async syncSnaptradePortfolio(): Promise<{ success: boolean; syncedAccounts: number }> {
     const res = await authFetch(`${API_BASE}/snaptrade/sync`, { method: 'POST' });
     if (!res.ok) throw new Error('Failed to sync Wealthsimple portfolio');

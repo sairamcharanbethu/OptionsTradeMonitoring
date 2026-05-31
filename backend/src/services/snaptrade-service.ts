@@ -4,22 +4,78 @@ import { redis } from '../lib/redis';
 
 export class SnaptradeService {
     private fastify: FastifyInstance;
-    private snaptrade: Snaptrade;
 
     constructor(fastify: FastifyInstance) {
         this.fastify = fastify;
-        this.snaptrade = new Snaptrade({
-            clientId: process.env.SNAPTRADE_CLIENT_ID || "PERS-8Q4PKK8U07RX1XSQM92Z",
-            consumerKey: process.env.SNAPTRADE_CONSUMER_KEY || "6KyYeWMcv6UAYTUfkqJaKEn1IYgbXL7aWBtUlILoYALchsBS5X",
-        });
     }
 
-    async syncPortfolio(userId: number, snaptradeUserId: string, snaptradeUserSecret: string) {
+    private async getSnaptradeClient(userId: number): Promise<{ snaptrade: Snaptrade, userIdStr: string, userSecret: string }> {
+        const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
+        const settings = rows.reduce((acc: any, row: any) => {
+            acc[row.key] = row.value;
+            return acc;
+        }, {});
+
+        const clientId = settings.snaptrade_client_id;
+        const consumerKey = settings.snaptrade_consumer_key;
+
+        if (!clientId || !consumerKey) {
+            throw new Error('SnapTrade Client ID or Consumer Key not configured in settings.');
+        }
+
+        const snaptrade = new Snaptrade({
+            clientId,
+            consumerKey
+        });
+
+        let userSecret = settings.snaptrade_user_secret;
+        const userIdStr = String(userId);
+
+        if (!userSecret) {
+            this.fastify.log.info(`[SnaptradeService] Registering new SnapTrade user: ${userIdStr}`);
+            try {
+                const response = await snaptrade.authentication.registerSnapTradeUser({
+                    userId: userIdStr
+                });
+                userSecret = response.data.userSecret;
+
+                await this.fastify.pg.query(
+                    `INSERT INTO settings (user_id, key, value, updated_at) 
+                     VALUES ($1, 'snaptrade_user_secret', $2, CURRENT_TIMESTAMP) 
+                     ON CONFLICT (user_id, key) DO UPDATE 
+                     SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+                    [userId, userSecret]
+                );
+            } catch (err: any) {
+                this.fastify.log.error(`[SnaptradeService] Failed to register user: ${err.message}`);
+                throw new Error('Failed to register SnapTrade user. Verify your Client ID and Consumer Key.');
+            }
+        }
+
+        return { snaptrade, userIdStr, userSecret };
+    }
+
+    async generateConnectionUrl(userId: number) {
+        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        try {
+            const response = await snaptrade.authentication.loginSnapTradeUser({
+                userId: userIdStr,
+                userSecret: userSecret
+            });
+            return { redirectURI: response.data?.redirectURI };
+        } catch (err: any) {
+            throw new Error(`Failed to generate connection URL: ${err.message}`);
+        }
+    }
+
+    async syncPortfolio(userId: number) {
         this.fastify.log.info(`Syncing Snaptrade portfolio for user ${userId}...`);
         
+        const { snaptrade, userIdStr: snaptradeUserId, userSecret: snaptradeUserSecret } = await this.getSnaptradeClient(userId);
+
         try {
             // 1. Fetch Accounts
-            const accountsRes = await this.snaptrade.accountInformation.listUserAccounts({
+            const accountsRes = await snaptrade.accountInformation.listUserAccounts({
                 userId: snaptradeUserId,
                 userSecret: snaptradeUserSecret,
             });
@@ -54,13 +110,13 @@ export class SnaptradeService {
                     `, [account.id, userId, account.name, account.number, status, unifiedType, account]);
 
                     // Fetch positions for this account
-                    const positionsRes = await this.snaptrade.accountInformation.getUserAccountPositions({
+                    const positionsRes = await snaptrade.accountInformation.getUserAccountPositions({
                         userId: snaptradeUserId,
                         userSecret: snaptradeUserSecret,
                         accountId: account.id,
                     });
 
-                    // Clear old positions for this account (or soft delete) - here we just delete and re-insert for simplicity and accuracy
+                    // Clear old positions for this account
                     await client.query('DELETE FROM snaptrade_positions WHERE account_id = $1', [account.id]);
 
                     for (const pos of positionsRes.data) {

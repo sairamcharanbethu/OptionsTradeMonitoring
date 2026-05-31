@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, BrainCircuit, Activity, TrendingUp, AlertTriangle, Loader2 } from 'lucide-react';
+import { RefreshCw, BrainCircuit, Activity, TrendingUp, AlertTriangle, Loader2, Link } from 'lucide-react';
 import { StatsCard } from './StatsCard';
 
 export default function WealthsimplePortfolio() {
@@ -19,6 +19,7 @@ export default function WealthsimplePortfolio() {
   const { data: portfolio, isLoading, error, refetch } = useSnaptradePortfolio();
   const [isSyncing, setIsSyncing] = useState(false);
   const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [briefing, setBriefing] = useState<string | null>(null);
 
   const handleSync = async () => {
@@ -44,6 +45,22 @@ export default function WealthsimplePortfolio() {
       alert('Failed to generate AI briefing. Please try again.');
     } finally {
       setIsGeneratingBriefing(false);
+    }
+  };
+
+  const handleConnect = async () => {
+    setIsConnecting(true);
+    try {
+      const data = await api.connectSnaptrade();
+      if (data.redirectURI) {
+        window.location.href = data.redirectURI;
+      } else {
+        alert('Failed to get connection URL');
+      }
+    } catch (err: any) {
+      alert(`Error connecting to SnapTrade: ${err.message}`);
+    } finally {
+      setIsConnecting(false);
     }
   };
 
@@ -84,9 +101,13 @@ export default function WealthsimplePortfolio() {
           <p className="text-xs text-muted-foreground mt-1">Manage your long-term equities and crypto holdings</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleSync} disabled={isSyncing} className="gap-2">
+          <Button variant="outline" size="sm" onClick={handleConnect} disabled={isConnecting} className="gap-2">
+            {isConnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link className="h-4 w-4" />}
+            Connect Broker
+          </Button>
+          <Button variant="default" size="sm" onClick={handleSync} disabled={isSyncing} className="gap-2">
             <RefreshCw className={`h-4 w-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            {isSyncing ? 'Syncing...' : 'Sync Broker'}
+            {isSyncing ? 'Syncing...' : 'Sync Data'}
           </Button>
         </div>
       </div>
