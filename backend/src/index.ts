@@ -14,6 +14,7 @@ import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
 import { snaptradeRoutes } from './routes/snaptrade';
+import { autoTraderRoutes } from './routes/auto-trader';
 import { FastifyRequest, FastifyReply } from 'fastify';
 
 declare module 'fastify' {
@@ -106,7 +107,8 @@ const ensureSchema = async (instance: any) => {
       { name: 'suggested_stop_loss', type: 'DECIMAL(10, 2)' },
       { name: 'suggested_take_profit_1', type: 'DECIMAL(10, 2)' },
       { name: 'suggested_take_profit_2', type: 'DECIMAL(10, 2)' },
-      { name: 'analysis_data', type: 'JSONB' }
+      { name: 'analysis_data', type: 'JSONB' },
+      { name: 'is_simulated', type: 'BOOLEAN DEFAULT FALSE' }
     ];
 
     for (const col of columns) {
@@ -168,6 +170,27 @@ const ensureSchema = async (instance: any) => {
     } catch (e) {
       instance.log.warn('[Database] Could not alter some snaptrade columns (might not exist yet or conflicting constraint).');
     }
+
+    // 5. Ensure default auto-trader settings exist for all users
+    try {
+      const { rows: dbUsers } = await instance.pg.query('SELECT id FROM users');
+      for (const u of dbUsers) {
+        await instance.pg.query(`
+          INSERT INTO settings (user_id, key, value)
+          VALUES ($1, 'auto_trader_mode', 'simulation')
+          ON CONFLICT (user_id, key) DO NOTHING
+        `, [u.id]);
+        await instance.pg.query(`
+          INSERT INTO settings (user_id, key, value)
+          VALUES ($1, 'auto_trader_max_contracts', '5')
+          ON CONFLICT (user_id, key) DO NOTHING
+        `, [u.id]);
+      }
+    } catch (e: any) {
+      instance.log.warn(`[Database] Could not seed default settings: ${e.message}`);
+    }
+
+    instance.log.info('[Database] Schema verification completed successfully.');
   } catch (err: any) {
     instance.log.error(`[Database] Schema verification failed: ${err.message}`);
   }
@@ -280,6 +303,7 @@ const start = async () => {
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
     fastify.register(goalRoutes, { prefix: '/api/goals' });
     fastify.register(snaptradeRoutes, { prefix: '/api/snaptrade' });
+    fastify.register(autoTraderRoutes, { prefix: '/api/auto-trader' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };

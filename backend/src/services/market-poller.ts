@@ -377,7 +377,108 @@ export class MarketPoller {
       return;
     }
 
-    const symbols = [...new Set(positions.map((p: any) => p.symbol))];
+    // 0. Hard Time-based Day Trading Cutoffs Enforcements
+    const now = new Date();
+    const etFormatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: false
+    });
+    const [etHourStr, etMinuteStr] = etFormatter.format(now).split(':');
+    const etHour = parseInt(etHourStr, 10);
+    const etMinute = parseInt(etMinuteStr, 10);
+    const etTimeMinutes = etHour * 60 + etMinute;
+
+    const todayStr = now.toISOString().split('T')[0];
+
+    const isEodCutoff = etTimeMinutes >= 15 * 60 + 50; // 3:50 PM ET or later
+    const isMorningCutoff = etTimeMinutes >= 13 * 60; // 1:00 PM ET or later
+
+    for (const pos of positions) {
+        let shouldForceClose = false;
+        let reason = '';
+
+        const expDateStr = pos.expiration_date instanceof Date 
+            ? pos.expiration_date.toISOString().split('T')[0] 
+            : new Date(pos.expiration_date).toISOString().split('T')[0];
+        const is0Dte = expDateStr === todayStr;
+
+        if (isEodCutoff) {
+            shouldForceClose = true;
+            reason = 'EOD Hard Cutoff (3:50 PM ET)';
+        } else if (isMorningCutoff && is0Dte) {
+            shouldForceClose = true;
+            reason = 'Morning 0 DTE Hard Cutoff (1:00 PM ET)';
+        }
+
+        if (shouldForceClose) {
+            this.fastify.log.info(`[MarketPoller] Force closing position ${pos.id} (${pos.symbol}) due to ${reason}.`);
+            let currentPrice = Number(pos.current_price || pos.entry_price);
+            
+            if (!pos.is_simulated) {
+                try {
+                    const { rows: actRows } = await (this.fastify as any).pg.query(
+                        "SELECT id FROM snaptrade_accounts WHERE user_id = $1 LIMIT 1",
+                        [pos.user_id]
+                    );
+                    if (actRows.length > 0) {
+                        const accountId = actRows[0].id;
+                        const snaptradeService = new (await import('./snaptrade-service')).SnaptradeService(this.fastify);
+                        const osiTicker = this.constructOSITicker(
+                            pos.symbol, 
+                            Number(pos.strike_price), 
+                            pos.option_type, 
+                            pos.expiration_date
+                        );
+                        await snaptradeService.placeOptionOrder(
+                            pos.user_id,
+                            accountId,
+                            osiTicker,
+                            'SELL_TO_CLOSE',
+                            pos.quantity,
+                            'MARKET'
+                        );
+                    }
+                } catch (err: any) {
+                    this.fastify.log.error(`[MarketPoller] Failed to execute Live force-close for position ${pos.id}: ${err.message}`);
+                }
+            }
+
+            const realizedPnl = (currentPrice - Number(pos.entry_price)) * pos.quantity * 100;
+
+            await (this.fastify as any).pg.query(
+                `UPDATE positions 
+                 SET status = 'CLOSED', 
+                     realized_pnl = $1,
+                     notes = COALESCE(notes, '') || $2,
+                     updated_at = CURRENT_TIMESTAMP 
+                 WHERE id = $3`,
+                [realizedPnl, ` [Force closed: ${reason}]`, pos.id]
+            );
+
+            await this.notifyN8n(
+                pos, 
+                currentPrice, 
+                realizedPnl, 
+                0, 
+                'FORCE_CLOSE', 
+                `Position force closed due to ${reason}`, 
+                `**[FORCE CLOSE]** Position closed due to ${reason}. Current price: $${currentPrice}. P&L: $${realizedPnl.toFixed(2)}`
+            );
+
+            pos.status = 'CLOSED';
+        }
+    }
+
+    // Refresh active positions list after cutoffs
+    const activePositions = positions.filter((p: any) => p.status !== 'CLOSED');
+    if (activePositions.length === 0) {
+      this.fastify.log.info('[MarketPoller] All active positions were force-closed by cutoffs.');
+      return;
+    }
+
+    const symbols = [...new Set(activePositions.map((p: any) => p.symbol))];
     const isMarketOpen = this.isMarketOpen();
 
     if (!force && !isMarketOpen) {
@@ -465,20 +566,52 @@ export class MarketPoller {
     );
 
     if (engineResult.triggered) {
-      // Logic Change: Do NOT close automatically. Just set status to STOP_TRIGGERED or PROFIT_TRIGGERED.
-      // Only notify if we haven't already set it to STOP_TRIGGERED/PROFIT_TRIGGERED (avoid spamming n8n every 15 mins)
-
       if (position.status === 'OPEN') {
         const triggerType = engineResult.triggerType || 'STOP_LOSS';
-        const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
+        const newStatus = 'CLOSED';
+        const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
+
+        // Execute Live SnapTrade order if not simulated
+        if (!position.is_simulated) {
+            this.fastify.log.info(`[MarketPoller] LIVE position exit triggered for position ${position.id} (${position.symbol}). Executing SELL_TO_CLOSE via SnapTrade...`);
+            try {
+                const { rows: actRows } = await (this.fastify as any).pg.query(
+                    "SELECT id FROM snaptrade_accounts WHERE user_id = $1 LIMIT 1",
+                    [position.user_id]
+                );
+                if (actRows.length > 0) {
+                    const accountId = actRows[0].id;
+                    const snaptradeService = new (await import('./snaptrade-service')).SnaptradeService(this.fastify);
+                    const osiTicker = this.constructOSITicker(
+                        position.symbol, 
+                        Number(position.strike_price), 
+                        position.option_type, 
+                        position.expiration_date
+                    );
+                    await snaptradeService.placeOptionOrder(
+                        position.user_id,
+                        accountId,
+                        osiTicker,
+                        'SELL_TO_CLOSE',
+                        position.quantity,
+                        'MARKET'
+                    );
+                    this.fastify.log.info(`[MarketPoller] Live exit execution successful for position ${position.id}.`);
+                }
+            } catch (err: any) {
+                this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${err.message}`);
+            }
+        }
 
         const updateResult = await (this.fastify as any).pg.query(
           `UPDATE positions 
-             SET status = $1, 
-             loss_avoided = $2,
-             updated_at = CURRENT_TIMESTAMP 
-             WHERE id = $3 AND status = 'OPEN'`,
-          [newStatus, engineResult.lossAvoided, position.id]
+              SET status = $1, 
+              loss_avoided = $2,
+              realized_pnl = $3,
+              notes = COALESCE(notes, '') || $4,
+              updated_at = CURRENT_TIMESTAMP 
+              WHERE id = $5 AND status = 'OPEN'`,
+          [newStatus, engineResult.lossAvoided, realizedPnl, ` [Closed via ${triggerType} Trigger]`, position.id]
         );
 
         if (updateResult.rowCount === 0) {
@@ -512,9 +645,6 @@ export class MarketPoller {
         } catch (err) {
           this.fastify.log.error(`[MarketPoller] AI Summary generation failed: ${err}`);
         }
-
-        // Calculate realized PnL
-        const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
 
         this.notifyN8n(position, price, realizedPnl, engineResult.lossAvoided, triggerType, aiData.summary, aiData.discord_message, greeks, iv);
       }

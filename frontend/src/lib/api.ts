@@ -531,6 +531,33 @@ export const api = {
     const res = await authFetch(`${API_BASE}/snaptrade/briefing`);
     if (!res.ok) throw new Error('Failed to generate Wealthsimple AI briefing');
     return res.json();
+  },
+
+  // --- Auto Trader ---
+  async getAutoTraderSettings(): Promise<{ mode: 'simulation' | 'live'; maxContracts: number }> {
+    const res = await authFetch(`${API_BASE}/auto-trader/settings`);
+    if (!res.ok) throw new Error('Failed to fetch Auto Trader settings');
+    return res.json();
+  },
+
+  async updateAutoTraderSettings(mode: 'simulation' | 'live', maxContracts: number): Promise<void> {
+    const res = await authFetch(`${API_BASE}/auto-trader/settings`, {
+      method: 'POST',
+      body: JSON.stringify({ mode, maxContracts })
+    });
+    if (!res.ok) throw new Error('Failed to update Auto Trader settings');
+  },
+
+  async triggerAutoTraderScan(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/auto-trader/trigger`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to trigger Auto Trader scan');
+    return res.json();
+  },
+
+  async getAutoTraderStatus(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/auto-trader/status`);
+    if (!res.ok) throw new Error('Failed to fetch Auto Trader status');
+    return res.json();
   }
 };
 
