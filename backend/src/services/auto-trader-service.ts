@@ -256,7 +256,7 @@ export class AutoTraderService {
 
         // 1. Get execution settings
         const { rows: settingsRows } = await this.fastify.pg.query(
-            "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('auto_trader_mode', 'auto_trader_max_contracts')",
+            "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('auto_trader_mode', 'auto_trader_max_contracts', 'auto_trader_symbols')",
             [userId]
         );
         const settings = settingsRows.reduce((acc: any, row: any) => {
@@ -267,7 +267,19 @@ export class AutoTraderService {
         const mode = settings.auto_trader_mode || 'simulation'; // 'simulation' (paper) or 'live'
         const maxContracts = Math.min(parseInt(settings.auto_trader_max_contracts, 10) || 5, 10);
 
-        // 2. Check Daily Trade Count Limit (Max 2-3 executed trades per day)
+        // Determine which symbols to scan based on user preference
+        const symbolPref = (settings.auto_trader_symbols || 'both').toUpperCase();
+        let symbolsToScan: string[];
+        if (symbolPref === 'SPY') {
+            symbolsToScan = ['SPY'];
+        } else if (symbolPref === 'QQQ') {
+            symbolsToScan = ['QQQ'];
+        } else {
+            symbolsToScan = ['SPY', 'QQQ'];
+        }
+        this.fastify.log.info(`[AutoTraderService] Scanning symbols: ${symbolsToScan.join(', ')}`);
+
+        // 2. Check Daily Trade Count Limit (Max 3 executed trades per day)
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
 
@@ -283,9 +295,22 @@ export class AutoTraderService {
             return { success: false, reason: 'Daily trade limit reached (max 3 trades)' };
         }
 
-        // 3. Scan QQQ & SPY
-        const symbolsToScan = ['SPY', 'QQQ'];
         const results = [];
+
+        // 3. Fetch VIX for volatility regime context
+        let vixLevel = 20; // Fallback
+        let vixRegime = 'NORMAL';
+        try {
+            const vixQuote: any = await yahooFinance.quote('^VIX');
+            vixLevel = vixQuote?.regularMarketPrice || 20;
+            if (vixLevel >= 30) vixRegime = 'EXTREME';
+            else if (vixLevel >= 25) vixRegime = 'HIGH';
+            else if (vixLevel >= 18) vixRegime = 'ELEVATED';
+            else vixRegime = 'LOW';
+            this.fastify.log.info(`[AutoTraderService] VIX: ${vixLevel.toFixed(2)} (${vixRegime})`);
+        } catch (vixErr) {
+            this.fastify.log.warn(`[AutoTraderService] Failed to fetch VIX, using fallback ${vixLevel}: ${vixErr}`);
+        }
 
         // Check if market is open
         const poller = (this.fastify as any).poller;
@@ -338,17 +363,30 @@ export class AutoTraderService {
                 const takeProfitPct = 20; // Hard 20% target
 
                 // Construct rich prompter context for LLM Option Trade Evaluation
+                const rsiValue = indicators.rsi;
+                const rsiZone = rsiValue >= 70 ? 'OVERBOUGHT (>70)' : rsiValue >= 60 ? 'BULLISH (60-70)' : rsiValue <= 30 ? 'OVERSOLD (<30)' : rsiValue <= 40 ? 'BEARISH (30-40)' : 'NEUTRAL (40-60)';
+
                 const prompt = `
                 Evaluate this OPTION TRADE SETUP as a professional Day Trader.
                 ASSET: ${symbol} at $${price.toFixed(2)}
                 SESSION SCHEDULE: ${targetDte} Session (Current ET Time: ${etHour}:${etMinute})
                 MAX ENTRABLE CONTRACTS: ${maxContracts}
                 
+                VOLATILITY REGIME (VIX):
+                - VIX Level: ${vixLevel.toFixed(2)} (${vixRegime})
+                - When VIX > 25: Favor WIDER stops and SMALLER position size. Expect large swings.
+                - When VIX < 18: Favor TIGHTER setups. Expect range-bound mean-reversion.
+                - When VIX 18-25: Standard volatility. Follow technical signals.
+                
                 TECHNICAL SIGNALS:
-                - RSI (14): ${indicators.rsi.toFixed(2)}
-                - EMA 9: $${indicators.ema9.toFixed(2)} | EMA 21: $${indicators.ema21.toFixed(2)}
+                - RSI (14): ${rsiValue.toFixed(2)} — Zone: ${rsiZone}
+                  * RSI > 70: Overbought — favor PUTs or WAIT for pullback before CALL entry.
+                  * RSI 50-70: Bullish momentum — confirms CALL setups.
+                  * RSI 30-50: Bearish momentum — confirms PUT setups.
+                  * RSI < 30: Oversold — favor CALLs or WAIT for bounce confirmation before PUT entry.
+                - EMA 9: $${indicators.ema9.toFixed(2)} | EMA 21: $${indicators.ema21.toFixed(2)} (Cross: ${indicators.ema9 > indicators.ema21 ? 'BULLISH' : 'BEARISH'})
                 - SMA 50: $${indicators.sma50.toFixed(2)} | SMA 200: $${indicators.sma200.toFixed(2)}
-                - MACD: Line=${indicators.macd.macd.toFixed(3)}, Signal=${indicators.macd.signal.toFixed(3)}, Hist=${indicators.macd.histogram.toFixed(3)}
+                - MACD: Line=${indicators.macd.macd.toFixed(3)}, Signal=${indicators.macd.signal.toFixed(3)}, Hist=${indicators.macd.histogram.toFixed(3)} (${indicators.macd.histogram > 0 ? 'BULLISH' : 'BEARISH'})
                 
                 DEALER POSITIONING (GEX EXPOSURE):
                 - Net GEX: $${gexData.netGex.toLocaleString()} (Positive is supportive/dampening, Negative is trend-following/volatility)
@@ -356,9 +394,11 @@ export class AutoTraderService {
                 - Heavy Call Wall (Resistance): $${gexData.callWall.toFixed(2)}
                 - Heavy Put Wall (Support): $${gexData.putWall.toFixed(2)}
                 
-                TRADING REGIME RULE:
+                TRADING REGIME RULES:
                 - If Net GEX is POSITIVE: Play mean-reversion or tight range breakouts. Reject highly aggressive trends.
                 - If Net GEX is NEGATIVE: Favor momentum breakouts (e.g. buying PUTS if support fails, calls if resistance snaps).
+                - If VIX > 30 (EXTREME): Strongly prefer WAIT unless an extremely clear reversal setup exists.
+                - RSI + EMA agreement increases confidence. RSI + EMA divergence = WAIT.
                 - Target strike Delta: 0.35 - 0.45.
                 
                 DECISION CHOICES:
@@ -370,7 +410,7 @@ export class AutoTraderService {
                 {
                    "verdict": "BUY_CALL" | "BUY_PUT" | "WAIT",
                    "targetStrike": number,
-                   "reasoning": "2 sentences outlining technical and GEX wall confirmations."
+                   "reasoning": "2 sentences outlining technical, VIX, RSI and GEX wall confirmations."
                 }
                 `;
 
@@ -541,6 +581,7 @@ export class AutoTraderService {
                     const underlyingTarget = optionType === 'CALL' ? price * 1.01 : price * 0.99;
 
                     // Insert logged position in DB (Unified Simulation or Live tracking)
+                    // Store VIX + RSI in analysis_data for audit trail
                     const { rows: posRows } = await this.fastify.pg.query(
                         `INSERT INTO positions (
                             user_id, symbol, option_type, strike_price, expiration_date, 
@@ -573,7 +614,11 @@ export class AutoTraderService {
                                 sessionMode: mode,
                                 snaptradeDetails,
                                 gexRegime: gexData.netGex < 0 ? 'NEGATIVE' : 'POSITIVE',
-                                entryUnderlying: price
+                                entryUnderlying: price,
+                                vixLevel,
+                                vixRegime,
+                                rsi: indicators.rsi,
+                                rsiZone
                             }),
                             underlyingStop,
                             underlyingTarget

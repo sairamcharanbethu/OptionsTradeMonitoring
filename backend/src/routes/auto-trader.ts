@@ -17,7 +17,7 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
     }, async (request, reply) => {
         const { id: userId } = (request as any).user;
         const { rows } = await fastify.pg.query(
-            "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('auto_trader_mode', 'auto_trader_max_contracts')",
+            "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('auto_trader_mode', 'auto_trader_max_contracts', 'auto_trader_symbols')",
             [userId]
         );
 
@@ -28,7 +28,8 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
 
         return {
             mode: settings.auto_trader_mode || 'simulation',
-            maxContracts: parseInt(settings.auto_trader_max_contracts, 10) || 5
+            maxContracts: parseInt(settings.auto_trader_max_contracts, 10) || 5,
+            symbols: settings.auto_trader_symbols || 'both'
         };
     });
 
@@ -43,14 +44,15 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
                 required: ['mode', 'maxContracts'],
                 properties: {
                     mode: { type: 'string', enum: ['simulation', 'live'] },
-                    maxContracts: { type: 'integer', minimum: 1, maximum: 10 }
+                    maxContracts: { type: 'integer', minimum: 1, maximum: 10 },
+                    symbols: { type: 'string', enum: ['SPY', 'QQQ', 'both'] }
                 }
             },
             security: [{ bearerAuth: [] }]
         }
     }, async (request, reply) => {
         const { id: userId } = (request as any).user;
-        const { mode, maxContracts } = request.body as { mode: 'simulation' | 'live'; maxContracts: number };
+        const { mode, maxContracts, symbols } = request.body as { mode: 'simulation' | 'live'; maxContracts: number; symbols?: string };
 
         await fastify.pg.query(
             `INSERT INTO settings (user_id, key, value, updated_at) 
@@ -66,7 +68,16 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
             [userId, maxContracts.toString()]
         );
 
-        return { success: true, mode, maxContracts };
+        if (symbols) {
+            await fastify.pg.query(
+                `INSERT INTO settings (user_id, key, value, updated_at) 
+                 VALUES ($1, 'auto_trader_symbols', $2, CURRENT_TIMESTAMP)
+                 ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+                [userId, symbols]
+            );
+        }
+
+        return { success: true, mode, maxContracts, symbols: symbols || 'both' };
     });
 
     // POST /trigger

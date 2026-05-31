@@ -42,7 +42,7 @@ import {
 } from 'recharts';
 
 export default function AutoTraderDashboard() {
-  const [settings, setSettings] = useState<{ mode: 'simulation' | 'live'; maxContracts: number } | null>(null);
+  const [settings, setSettings] = useState<{ mode: 'simulation' | 'live'; maxContracts: number; symbols: string } | null>(null);
   const [status, setStatus] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
@@ -143,10 +143,10 @@ export default function AutoTraderDashboard() {
     await updateSettings(settings.mode, settings.maxContracts);
   };
 
-  const updateSettings = async (mode: 'simulation' | 'live', maxContracts: number) => {
+  const updateSettings = async (mode: 'simulation' | 'live', maxContracts: number, symbols?: string) => {
     setIsUpdatingSettings(true);
     try {
-      await api.updateAutoTraderSettings(mode, maxContracts);
+      await api.updateAutoTraderSettings(mode, maxContracts, symbols || settings?.symbols);
       const updated = await api.getAutoTraderSettings();
       setSettings(updated);
     } catch (err: any) {
@@ -389,6 +389,31 @@ export default function AutoTraderDashboard() {
                       />
                     </button>
                   </div>
+                </div>
+
+                {/* Symbol Selection */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Symbols to Trade</label>
+                  <div className="flex rounded-lg border bg-slate-50/50 dark:bg-slate-900/50 p-1 gap-1">
+                    {(['SPY', 'QQQ', 'both'] as const).map((sym) => (
+                      <button
+                        key={sym}
+                        onClick={() => updateSettings(settings.mode, settings.maxContracts, sym)}
+                        disabled={isUpdatingSettings}
+                        className={`flex-1 py-2 px-3 rounded-md text-xs font-bold transition-all duration-200 ${
+                          settings.symbols === sym
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-500/20'
+                            : 'text-slate-500 hover:bg-slate-200/50 dark:hover:bg-slate-700/50'
+                        }`}
+                      >
+                        {sym === 'both' ? 'SPY + QQQ' : sym}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    {settings.symbols === 'both' ? 'Scanning both SPY and QQQ for trade setups.' :
+                     `Only scanning ${settings.symbols} for trade setups.`}
+                  </p>
                 </div>
 
                 {/* Contract Size Slider */}
