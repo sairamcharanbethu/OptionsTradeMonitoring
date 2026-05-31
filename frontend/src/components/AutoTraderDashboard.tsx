@@ -435,7 +435,7 @@ export default function AutoTraderDashboard() {
                       {status.gex?.SPY?.netGex >= 0 ? 'Positive GEX' : 'Negative GEX'}
                     </Badge>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-2 gap-3 text-xs">
                     <div>
                       <span className="text-muted-foreground">Net GEX:</span>
                       <div className="font-bold text-sm text-slate-700 dark:text-slate-300">
@@ -445,6 +445,18 @@ export default function AutoTraderDashboard() {
                     <div>
                       <span className="text-muted-foreground">Gamma Flip:</span>
                       <div className="font-bold text-sm text-slate-700 dark:text-slate-300">${Number(status.gex?.SPY?.gammaFlip).toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Net Vanna (VEX):</span>
+                      <div className={`font-bold text-xs ${status.gex?.SPY?.netVex >= 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
+                        ${(status.gex?.SPY?.netVex || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/vol
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Net Charm (CEX):</span>
+                      <div className={`font-bold text-xs ${status.gex?.SPY?.netCex >= 0 ? 'text-emerald-500' : 'text-orange-500'}`}>
+                        ${(status.gex?.SPY?.netCex || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/day
+                      </div>
                     </div>
                   </div>
                   {renderGexBar(
@@ -463,7 +475,7 @@ export default function AutoTraderDashboard() {
                       {status.gex?.QQQ?.netGex >= 0 ? 'Positive GEX' : 'Negative GEX'}
                     </Badge>
                   </div>
-                  <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="grid grid-cols-2 gap-3 text-xs">
                     <div>
                       <span className="text-muted-foreground">Net GEX:</span>
                       <div className="font-bold text-sm text-slate-700 dark:text-slate-300">
@@ -473,6 +485,18 @@ export default function AutoTraderDashboard() {
                     <div>
                       <span className="text-muted-foreground">Gamma Flip:</span>
                       <div className="font-bold text-sm text-slate-700 dark:text-slate-300">${Number(status.gex?.QQQ?.gammaFlip).toFixed(2)}</div>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Net Vanna (VEX):</span>
+                      <div className={`font-bold text-xs ${status.gex?.QQQ?.netVex >= 0 ? 'text-indigo-500' : 'text-rose-500'}`}>
+                        ${(status.gex?.QQQ?.netVex || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/vol
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Net Charm (CEX):</span>
+                      <div className={`font-bold text-xs ${status.gex?.QQQ?.netCex >= 0 ? 'text-emerald-500' : 'text-orange-500'}`}>
+                        ${(status.gex?.QQQ?.netCex || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}/day
+                      </div>
                     </div>
                   </div>
                   {renderGexBar(

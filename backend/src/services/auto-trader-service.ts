@@ -9,6 +9,8 @@ const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
 export interface GexResult {
     netGex: number;
+    netVex: number;
+    netCex: number;
     gammaFlip: number;
     callWall: number;
     putWall: number;
@@ -34,6 +36,25 @@ function calculateBSGamma(S: number, K: number, t: number, r: number, sigma: num
     const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (sigma * Math.sqrt(t));
     const gamma = normalPDF(d1) / (S * sigma * Math.sqrt(t));
     return isNaN(gamma) ? 0 : gamma;
+}
+
+// Calculate Black-Scholes Vanna
+function calculateBSVanna(S: number, K: number, t: number, r: number, sigma: number): number {
+    if (sigma <= 0 || t <= 0) return 0;
+    const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (sigma * Math.sqrt(t));
+    const d2 = d1 - sigma * Math.sqrt(t);
+    const vanna = -normalPDF(d1) * d2 / sigma;
+    return isNaN(vanna) ? 0 : vanna;
+}
+
+// Calculate Black-Scholes Charm
+function calculateBSCharm(S: number, K: number, t: number, r: number, sigma: number, isCall: boolean): number {
+    if (sigma <= 0 || t <= 0) return 0;
+    const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * t) / (sigma * Math.sqrt(t));
+    const d2 = d1 - sigma * Math.sqrt(t);
+    const term = normalPDF(d1) * (r / (sigma * Math.sqrt(t)) - d2 / (2 * t));
+    const charm = isCall ? term : term - r * Math.exp(-r * t);
+    return isNaN(charm) ? 0 : charm;
 }
 
 export class AutoTraderService {
@@ -83,9 +104,11 @@ export class AutoTraderService {
             const t = daysToExpiry / 365; // Time in years
 
             let netGex = 0;
+            let netVex = 0;
+            let netCex = 0;
             const strikeGexMap: Map<number, { callGex: number; putGex: number }> = new Map();
 
-            // Calculate GEX for Calls
+            // Calculate GEX, VEX, CEX for Calls
             for (const call of calls) {
                 const K = call.strike;
                 const iv = call.impliedVolatility || 0.20; // Default 20% IV if missing
@@ -96,12 +119,20 @@ export class AutoTraderService {
                 const gex = gamma * oi * 100 * spotPrice * spotPrice * 0.01;
                 netGex += gex;
 
+                const vanna = calculateBSVanna(spotPrice, K, t, r, iv);
+                const vex = vanna * oi * 100 * spotPrice * 0.01;
+                netVex += vex;
+
+                const charm = calculateBSCharm(spotPrice, K, t, r, iv, true);
+                const cex = charm * oi * 100 * spotPrice * 0.01;
+                netCex += cex;
+
                 const existing = strikeGexMap.get(K) || { callGex: 0, putGex: 0 };
                 existing.callGex = gex;
                 strikeGexMap.set(K, existing);
             }
 
-            // Calculate GEX for Puts
+            // Calculate GEX, VEX, CEX for Puts
             for (const put of puts) {
                 const K = put.strike;
                 const iv = put.impliedVolatility || 0.20;
@@ -111,6 +142,14 @@ export class AutoTraderService {
                 // GEX_Put = -Gamma * OI * 100 * S^2 * 0.01
                 const gex = -gamma * oi * 100 * spotPrice * spotPrice * 0.01;
                 netGex += gex;
+
+                const vanna = calculateBSVanna(spotPrice, K, t, r, iv);
+                const vex = -vanna * oi * 100 * spotPrice * 0.01;
+                netVex += vex;
+
+                const charm = calculateBSCharm(spotPrice, K, t, r, iv, false);
+                const cex = -charm * oi * 100 * spotPrice * 0.01;
+                netCex += cex;
 
                 const existing = strikeGexMap.get(K) || { callGex: 0, putGex: 0 };
                 existing.putGex = gex;
@@ -153,6 +192,8 @@ export class AutoTraderService {
 
             return {
                 netGex,
+                netVex,
+                netCex,
                 gammaFlip,
                 callWall,
                 putWall,
@@ -165,6 +206,8 @@ export class AutoTraderService {
             const spot = symbol.toUpperCase() === 'SPY' ? 520 : 440;
             return {
                 netGex: 50000000, // Positive GEX representation
+                netVex: 12000000,
+                netCex: -4000000,
                 gammaFlip: spot - 2,
                 callWall: spot + 10,
                 putWall: spot - 10,
