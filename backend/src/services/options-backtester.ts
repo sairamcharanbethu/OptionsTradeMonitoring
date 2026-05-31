@@ -244,7 +244,7 @@ export class OptionsBacktester {
                     `;
 
                     try {
-                        const aiRes = await this.aiService.askAI(prompt);
+                        const aiRes = await this.aiService.askClaudeForTrading(prompt);
                         const parsed = JSON.parse(aiRes.analysis || aiRes.verdict);
                         verdict = parsed.verdict;
                         reasoning = parsed.reasoning || '';

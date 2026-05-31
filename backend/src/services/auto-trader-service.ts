@@ -328,7 +328,7 @@ export class AutoTraderService {
                 }
                 `;
 
-                const aiRes = await this.aiService.askAI(prompt);
+                const aiRes = await this.aiService.askClaudeForTrading(prompt);
                 let verdict = aiRes.verdict;
                 let parsed = { verdict: 'WAIT', targetStrike: price, reasoning: '' };
 

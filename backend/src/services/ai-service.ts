@@ -186,6 +186,25 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
         };
     }
 
+    async askClaudeForTrading(prompt: string): Promise<{ verdict: string; analysis: string }> {
+        try {
+            const settings = await this.getSettings();
+            if (settings.ai_provider === 'openrouter' && settings.openrouter_key) {
+                // Hardcode Claude 3.5 Sonnet on OpenRouter with highly restricted max tokens (120) to be extremely token efficient
+                const response = await this.callOpenRouter('anthropic/claude-3.5-sonnet', settings.openrouter_key, prompt, 120);
+                return {
+                    verdict: response.verdict,
+                    analysis: response.analysis
+                };
+            }
+            // Fallback to standard selected provider if OpenRouter or key isn't active
+            return this.askAI(prompt);
+        } catch (err) {
+            console.error("[AIService] Failed to invoke hardcoded Claude 3.5 Sonnet for trading, falling back:", err);
+            return this.askAI(prompt);
+        }
+    }
+
     public async getSettings(): Promise<{ ai_provider: string; openrouter_key: string; ai_model: string }> {
         let currentProvider = 'ollama';
         let openRouterKey = '';
