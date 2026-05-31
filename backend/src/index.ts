@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import postgres from '@fastify/postgres';
@@ -14,6 +13,7 @@ import { goalRoutes } from './routes/goals';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
+import { snaptradeRoutes } from './routes/snaptrade';
 import { FastifyRequest, FastifyReply } from 'fastify';
 
 declare module 'fastify' {
@@ -261,7 +261,7 @@ const start = async () => {
     fastify.register(aiRoutes, { prefix: '/api/ai' });
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
     fastify.register(goalRoutes, { prefix: '/api/goals' });
-    fastify.register((await import('./routes/snaptrade')).snaptradeRoutes, { prefix: '/api/snaptrade' });
+    fastify.register(snaptradeRoutes, { prefix: '/api/snaptrade' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
