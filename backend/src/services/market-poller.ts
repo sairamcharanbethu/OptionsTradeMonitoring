@@ -431,13 +431,35 @@ export class MarketPoller {
                             pos.option_type, 
                             pos.expiration_date
                         );
+
+                        // Dynamically resolve mid-price for limit order
+                        let limitPrice: string | undefined = undefined;
+                        let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
+                        try {
+                            const data = await this.getOptionPremium(
+                                pos.symbol,
+                                Number(pos.strike_price),
+                                pos.option_type,
+                                pos.expiration_date,
+                                true // skip cache to get real-time price
+                            );
+                            if (data && data.price > 0) {
+                                limitPrice = data.price.toFixed(2);
+                                orderType = 'LIMIT';
+                                currentPrice = data.price; // Update currentPrice to reflect fresh exit price
+                            }
+                        } catch (e) {
+                            this.fastify.log.warn(`[MarketPoller] Failed to resolve fresh mid-price for cutoff of position ${pos.id}, falling back to MARKET order: ${e}`);
+                        }
+
                         await snaptradeService.placeOptionOrder(
                             pos.user_id,
                             accountId,
                             osiTicker,
                             'SELL_TO_CLOSE',
                             pos.quantity,
-                            'MARKET'
+                            orderType,
+                            limitPrice
                         );
                     }
                 } catch (err: any) {
@@ -622,15 +644,24 @@ export class MarketPoller {
                         position.option_type, 
                         position.expiration_date
                     );
+                    
+                    let limitPrice: string | undefined = undefined;
+                    let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
+                    if (price > 0) {
+                        limitPrice = price.toFixed(2);
+                        orderType = 'LIMIT';
+                    }
+
                     await snaptradeService.placeOptionOrder(
                         position.user_id,
                         accountId,
                         osiTicker,
                         'SELL_TO_CLOSE',
                         position.quantity,
-                        'MARKET'
+                        orderType,
+                        limitPrice
                     );
-                    this.fastify.log.info(`[MarketPoller] Live exit execution successful for position ${position.id}.`);
+                    this.fastify.log.info(`[MarketPoller] Live exit execution successful for position ${position.id} using ${orderType} order at limit price: ${limitPrice}.`);
                 }
             } catch (err: any) {
                 this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${err.message}`);

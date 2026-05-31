@@ -180,4 +180,154 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
             reply.code(400).send({ error: error.message || 'Backtest execution failed.' });
         }
     });
+
+    // GET /health
+    fastify.get('/health', {
+        schema: {
+            tags: ['AutoTrader'],
+            summary: 'Get Auto Trader Health Status',
+            description: 'Runs real-time latency and connectivity tests for Database, Redis, Questrade, and SnapTrade.',
+            security: [{ bearerAuth: [] }]
+        }
+    }, async (request, reply) => {
+        const { id: userId } = (request as any).user;
+        const results: any = {};
+        let systemStatus = 'HEALTHY';
+
+        // 1. Database Check
+        try {
+            const dbStart = Date.now();
+            await fastify.pg.query("SELECT 1");
+            results.database = {
+                status: 'HEALTHY',
+                latencyMs: Date.now() - dbStart
+            };
+        } catch (err: any) {
+            systemStatus = 'UNHEALTHY';
+            results.database = {
+                status: 'UNHEALTHY',
+                error: err.message
+            };
+        }
+
+        // 2. Redis Check
+        try {
+            const redisStart = Date.now();
+            const { redis: redisClient } = require('../lib/redis');
+            const isConnected = redisClient.isConnected;
+            await redisClient.get('healthcheck_test');
+            results.redis = {
+                status: isConnected ? 'HEALTHY' : 'UNHEALTHY',
+                latencyMs: Date.now() - redisStart
+            };
+            if (!isConnected && systemStatus === 'HEALTHY') {
+                systemStatus = 'DEGRADED';
+            }
+        } catch (err: any) {
+            if (systemStatus === 'HEALTHY') systemStatus = 'DEGRADED';
+            results.redis = {
+                status: 'UNHEALTHY',
+                error: err.message
+            };
+        }
+
+        // 3. Questrade Check
+        const qtService = (fastify as any).questrade;
+        if (qtService) {
+            try {
+                const isLinked = await qtService.isLinked();
+                if (isLinked) {
+                    const qtStart = Date.now();
+                    const token = await qtService.getActiveToken();
+                    if (token) {
+                        const symbols = await qtService.getSymbols(['SPY']);
+                        results.questrade = {
+                            status: 'HEALTHY',
+                            latencyMs: Date.now() - qtStart,
+                            details: {
+                                isLinked: true,
+                                apiServer: token.api_server,
+                                testQuote: symbols.length > 0 ? `SPY resolved to symbol ID ${symbols[0].symbolId}` : 'No symbols returned'
+                            }
+                        };
+                    } else {
+                        if (systemStatus === 'HEALTHY') systemStatus = 'DEGRADED';
+                        results.questrade = {
+                            status: 'UNHEALTHY',
+                            details: { isLinked: true, error: 'Failed to retrieve active token' }
+                        };
+                    }
+                } else {
+                    results.questrade = {
+                        status: 'UNCONFIGURED',
+                        details: { isLinked: false, message: 'Questrade is not linked yet.' }
+                    };
+                }
+            } catch (err: any) {
+                if (systemStatus === 'HEALTHY') systemStatus = 'DEGRADED';
+                results.questrade = {
+                    status: 'UNHEALTHY',
+                    details: { isLinked: true, error: err.message }
+                };
+            }
+        } else {
+            results.questrade = {
+                status: 'UNAVAILABLE',
+                error: 'Questrade service instance not decorated on Fastify.'
+            };
+        }
+
+        // 4. SnapTrade Check
+        try {
+            const { SnaptradeService } = require('../services/snaptrade-service');
+            const snaptradeService = new SnaptradeService(fastify);
+            const stStart = Date.now();
+            
+            const { rows } = await fastify.pg.query(
+                "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('snaptrade_client_id', 'snaptrade_consumer_key')", 
+                [userId]
+            );
+            const settings = rows.reduce((acc: any, row: any) => {
+                acc[row.key] = row.value;
+                return acc;
+            }, {});
+            
+            const hasCreds = settings.snaptrade_client_id?.trim() && settings.snaptrade_consumer_key?.trim();
+            
+            if (hasCreds) {
+                const { snaptrade, userIdStr, userSecret } = await (snaptradeService as any).getSnaptradeClient(userId);
+                const accountsRes = await snaptrade.accountInformation.listUserAccounts({
+                    userId: userIdStr,
+                    userSecret: userSecret,
+                });
+                results.snaptrade = {
+                    status: 'HEALTHY',
+                    latencyMs: Date.now() - stStart,
+                    details: {
+                        isConfigured: true,
+                        accountsCount: accountsRes.data?.length || 0
+                    }
+                };
+            } else {
+                results.snaptrade = {
+                    status: 'UNCONFIGURED',
+                    details: { isConfigured: false, message: 'SnapTrade credentials not configured in settings.' }
+                };
+            }
+        } catch (err: any) {
+            if (systemStatus === 'HEALTHY') systemStatus = 'DEGRADED';
+            results.snaptrade = {
+                status: 'UNHEALTHY',
+                details: { isConfigured: true, error: err.message }
+            };
+        }
+
+        return {
+            success: true,
+            status: systemStatus,
+            timestamp: new Date().toISOString(),
+            services: results
+        };
+    });
 }
+

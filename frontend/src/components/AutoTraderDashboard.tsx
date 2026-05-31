@@ -50,6 +50,10 @@ export default function AutoTraderDashboard() {
   const [showLiveConfirm, setShowLiveConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Integration Health Check States
+  const [healthCheck, setHealthCheck] = useState<any>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+
   // Tab State
   const [activeTab, setActiveTab] = useState<'live' | 'backtest'>('live');
 
@@ -71,6 +75,18 @@ export default function AutoTraderDashboard() {
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
 
+  const fetchHealthCheck = async () => {
+    setIsCheckingHealth(true);
+    try {
+      const data = await api.getAutoTraderHealth();
+      setHealthCheck(data);
+    } catch (err) {
+      console.error('[Health Check] Failed:', err);
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  };
+
   const fetchData = async () => {
     try {
       const [sData, statusData] = await Promise.all([
@@ -90,7 +106,11 @@ export default function AutoTraderDashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 15000); // Poll every 15s
+    fetchHealthCheck();
+    const interval = setInterval(() => {
+      fetchData();
+      fetchHealthCheck();
+    }, 15000); // Poll every 15s
     return () => clearInterval(interval);
   }, []);
 
@@ -287,7 +307,7 @@ export default function AutoTraderDashboard() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={fetchData} className="gap-2">
+          <Button variant="outline" size="sm" onClick={() => { fetchData(); fetchHealthCheck(); }} className="gap-2">
             <RefreshCw className="h-4 w-4" />
             Refresh
           </Button>
@@ -411,6 +431,105 @@ export default function AutoTraderDashboard() {
                       <span className="text-xs font-bold mt-1">{status.todayTradesCount} / 3 taken</span>
                     </div>
                   </div>
+                </div>
+
+                {/* Health Check Status Panel */}
+                <div className="space-y-2 pt-4 border-t">
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Integrations Health</label>
+                    {isCheckingHealth ? (
+                      <span className="text-[10px] text-muted-foreground animate-pulse">Checking...</span>
+                    ) : healthCheck?.status ? (
+                      <Badge 
+                        variant="outline" 
+                        className={`text-[10px] font-extrabold px-1.5 py-0 ${
+                          healthCheck.status === 'HEALTHY' 
+                            ? 'bg-green-500/10 text-green-500 border-green-500/20' 
+                            : healthCheck.status === 'DEGRADED'
+                            ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20'
+                            : 'bg-red-500/10 text-red-500 border-red-500/20'
+                        }`}
+                      >
+                        {healthCheck.status}
+                      </Badge>
+                    ) : null}
+                  </div>
+
+                  {healthCheck?.services ? (
+                    <div className="space-y-2 text-xs">
+                      {/* Database */}
+                      <div className="flex justify-between items-center p-2 rounded border bg-slate-50/30 dark:bg-slate-900/10">
+                        <span className="font-semibold text-slate-600 dark:text-slate-400">Database</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${healthCheck.services.database?.status === 'HEALTHY' ? 'bg-green-500' : 'bg-red-500'}`} />
+                          <span className="font-bold text-slate-700 dark:text-slate-300">
+                            {healthCheck.services.database?.status === 'HEALTHY' ? `${healthCheck.services.database.latencyMs}ms` : 'Offline'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Redis */}
+                      <div className="flex justify-between items-center p-2 rounded border bg-slate-50/30 dark:bg-slate-900/10">
+                        <span className="font-semibold text-slate-600 dark:text-slate-400">Redis Cache</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${healthCheck.services.redis?.status === 'HEALTHY' ? 'bg-green-500' : 'bg-red-500'}`} />
+                          <span className="font-bold text-slate-700 dark:text-slate-300">
+                            {healthCheck.services.redis?.status === 'HEALTHY' ? `${healthCheck.services.redis.latencyMs}ms` : 'Offline'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Questrade */}
+                      <div className="flex justify-between items-center p-2 rounded border bg-slate-50/30 dark:bg-slate-900/10">
+                        <span className="font-semibold text-slate-600 dark:text-slate-400">Questrade Feed</span>
+                        <div className="flex items-center gap-1.5">
+                          <span 
+                            className={`w-2 h-2 rounded-full ${
+                              healthCheck.services.questrade?.status === 'HEALTHY' 
+                                ? 'bg-green-500' 
+                                : healthCheck.services.questrade?.status === 'UNCONFIGURED' 
+                                ? 'bg-amber-400' 
+                                : 'bg-red-500'
+                            }`} 
+                          />
+                          <span className="font-bold text-slate-700 dark:text-slate-300">
+                            {healthCheck.services.questrade?.status === 'HEALTHY' 
+                              ? `${healthCheck.services.questrade.latencyMs}ms` 
+                              : healthCheck.services.questrade?.status === 'UNCONFIGURED'
+                              ? 'Unlinked'
+                              : 'Offline'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* SnapTrade */}
+                      <div className="flex justify-between items-center p-2 rounded border bg-slate-50/30 dark:bg-slate-900/10">
+                        <span className="font-semibold text-slate-600 dark:text-slate-400">SnapTrade API</span>
+                        <div className="flex items-center gap-1.5">
+                          <span 
+                            className={`w-2 h-2 rounded-full ${
+                              healthCheck.services.snaptrade?.status === 'HEALTHY' 
+                                ? 'bg-green-500' 
+                                : healthCheck.services.snaptrade?.status === 'UNCONFIGURED' 
+                                ? 'bg-amber-400' 
+                                : 'bg-red-500'
+                            }`} 
+                          />
+                          <span className="font-bold text-slate-700 dark:text-slate-300">
+                            {healthCheck.services.snaptrade?.status === 'HEALTHY' 
+                              ? `${healthCheck.services.snaptrade.latencyMs}ms` 
+                              : healthCheck.services.snaptrade?.status === 'UNCONFIGURED'
+                              ? 'Unconfigured'
+                              : 'Offline'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-muted-foreground text-center py-2">
+                      Loading integrations health logs...
+                    </div>
+                  )}
                 </div>
 
               </CardContent>

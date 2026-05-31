@@ -559,6 +559,11 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch Auto Trader status');
     return res.json();
   },
+  async getAutoTraderHealth(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/auto-trader/health`);
+    if (!res.ok) throw new Error('Failed to fetch Auto Trader health status');
+    return res.json();
+  },
 
   async runBacktest(symbol: string, startDate: string, endDate: string, mode: 'rule-based' | 'ai', contractSize: number): Promise<any> {
     const res = await authFetch(`${API_BASE}/auto-trader/backtest`, {

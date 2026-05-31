@@ -380,6 +380,8 @@ export class AutoTraderService {
 
                     let entryPrice = 1.50; // Fallback mock premium
                     let snaptradeDetails: any = null;
+                    let calculatedMidPrice: number | null = null;
+                    let isSpreadValid = true;
 
                     // Get a mock/estimated premium price using Questrade or yfinance
                     try {
@@ -390,11 +392,29 @@ export class AutoTraderService {
                             if (quote) {
                                 const bid = quote.bidPrice || 0;
                                 const ask = quote.askPrice || 0;
-                                entryPrice = (bid > 0 && ask > 0) ? (bid + ask) / 2 : quote.lastTradePrice || 1.50;
+                                if (bid > 0 && ask > 0) {
+                                    const midPrice = (bid + ask) / 2;
+                                    const spread = ask - bid;
+                                    calculatedMidPrice = midPrice;
+                                    entryPrice = midPrice;
+
+                                    if (spread > 0.05 * midPrice) {
+                                        this.fastify.log.warn(`[AutoTraderService] Skip entry on ${osiTicker}: Spread ($${spread.toFixed(2)}) is wider than 5% of mid-price ($${midPrice.toFixed(2)})`);
+                                        isSpreadValid = false;
+                                    }
+                                } else {
+                                    entryPrice = quote.lastTradePrice || 1.50;
+                                    this.fastify.log.warn(`[AutoTraderService] Missing bid/ask quotes for ${osiTicker}. Falling back to last trade price/fallback $${entryPrice.toFixed(2)}`);
+                                }
                             }
                         }
                     } catch (pe) {
                         this.fastify.log.warn(`[AutoTraderService] Premium lookup failed, using fallback $1.50: ${pe}`);
+                    }
+
+                    if (!isSpreadValid) {
+                        this.fastify.log.info(`[AutoTraderService] Aborting entry for ${symbol} due to wide bid-ask spread.`);
+                        continue;
                     }
 
                     // Execute Option Order
@@ -409,6 +429,9 @@ export class AutoTraderService {
                         }
                         const accountId = actRows[0].id;
 
+                        const executionOrderType = calculatedMidPrice !== null ? 'LIMIT' : 'MARKET';
+                        const executionLimitPrice = calculatedMidPrice !== null ? calculatedMidPrice.toFixed(2) : undefined;
+
                         // Place real trade via SnapTrade
                         snaptradeDetails = await this.snaptradeService.placeOptionOrder(
                             userId,
@@ -416,7 +439,8 @@ export class AutoTraderService {
                             osiTicker,
                             'BUY_TO_OPEN',
                             maxContracts,
-                            'MARKET'
+                            executionOrderType,
+                            executionLimitPrice
                         );
                         
                         // Extract actual fill price if returned
