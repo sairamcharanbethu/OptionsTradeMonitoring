@@ -230,9 +230,13 @@ Format: JSON { "analysis": "Full analysis here..." }`;
 
         try {
             const parsed = JSON.parse(text);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text;
+            if (typeof analysisText === 'object') {
+                analysisText = JSON.stringify(analysisText, null, 2);
+            }
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
+                analysis: analysisText,
                 discord: parsed.discord
             };
         } catch (e) {
@@ -267,9 +271,13 @@ Format: JSON { "analysis": "Full analysis here..." }`;
 
         try {
             const parsed = JSON.parse(text);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text;
+            if (typeof analysisText === 'object') {
+                analysisText = JSON.stringify(analysisText, null, 2);
+            }
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
+                analysis: analysisText,
                 discord: parsed.discord
             };
         } catch (e) {

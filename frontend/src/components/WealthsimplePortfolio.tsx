@@ -145,7 +145,7 @@ export default function WealthsimplePortfolio() {
           ) : briefing ? (
             <div className="p-6 space-y-4 animate-in fade-in slide-in-from-top-4 duration-700">
               <div className="p-4 rounded-xl bg-background border shadow-inner text-sm leading-relaxed whitespace-pre-wrap font-sans italic text-slate-700 dark:text-slate-300">
-                {briefing}
+                {typeof briefing === 'string' ? briefing : JSON.stringify(briefing, null, 2)}
               </div>
             </div>
           ) : (
