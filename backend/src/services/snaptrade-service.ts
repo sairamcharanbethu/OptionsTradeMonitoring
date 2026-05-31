@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { Snaptrade } from 'snaptrade-typescript-sdk';
 import { redis } from '../lib/redis';
+import crypto from 'crypto';
 
 export class SnaptradeService {
     private fastify: FastifyInstance;
@@ -29,30 +30,35 @@ export class SnaptradeService {
         });
 
         let userSecret = settings.snaptrade_user_secret;
-        const userIdStr = String(userId);
+        let snaptradeUserId = settings.snaptrade_user_id;
 
-        if (!userSecret) {
-            this.fastify.log.info(`[SnaptradeService] Registering new SnapTrade user: ${userIdStr}`);
+        if (!userSecret || !snaptradeUserId) {
+            snaptradeUserId = snaptradeUserId || crypto.randomUUID();
+            this.fastify.log.info(`[SnaptradeService] Registering new SnapTrade user: ${snaptradeUserId}`);
             try {
                 const response = await snaptrade.authentication.registerSnapTradeUser({
-                    userId: userIdStr
+                    userId: snaptradeUserId
                 });
                 userSecret = response.data.userSecret;
 
                 await this.fastify.pg.query(
                     `INSERT INTO settings (user_id, key, value, updated_at) 
-                     VALUES ($1, 'snaptrade_user_secret', $2, CURRENT_TIMESTAMP) 
+                     VALUES ($1, 'snaptrade_user_secret', $2, CURRENT_TIMESTAMP),
+                            ($1, 'snaptrade_user_id', $3, CURRENT_TIMESTAMP)
                      ON CONFLICT (user_id, key) DO UPDATE 
                      SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                    [userId, userSecret]
+                    [userId, userSecret, snaptradeUserId]
                 );
             } catch (err: any) {
                 this.fastify.log.error(`[SnaptradeService] Failed to register user: ${err.message}`);
+                if (err.response?.data) {
+                    this.fastify.log.error(`[SnaptradeService] API Response: ${JSON.stringify(err.response.data)}`);
+                }
                 throw new Error('Failed to register SnapTrade user. Verify your Client ID and Consumer Key.');
             }
         }
 
-        return { snaptrade, userIdStr, userSecret };
+        return { snaptrade, userIdStr: snaptradeUserId, userSecret };
     }
 
     async generateConnectionUrl(userId: number) {
