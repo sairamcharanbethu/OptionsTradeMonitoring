@@ -248,6 +248,28 @@ export class SnaptradeService {
         return result;
     }
 
+    async getAccountBalance(userId: number, accountId: string): Promise<number | null> {
+        try {
+            const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+            const balanceRes = await snaptrade.accountInformation.getUserAccountBalance({
+                userId: userIdStr,
+                userSecret: userSecret,
+                accountId: accountId
+            });
+            // The API returns an array of balances (often one per currency)
+            if (balanceRes.data && balanceRes.data.length > 0) {
+                // Return total cash of the first balance (usually base currency)
+                const bal = balanceRes.data[0];
+                const cash = bal.total?.cash ?? bal.balance?.total?.cash ?? null;
+                return cash;
+            }
+            return null;
+        } catch (err: any) {
+            this.fastify.log.error(`[SnaptradeService] Failed to fetch account balance: ${err.message}`);
+            return null;
+        }
+    }
+
     async placeOptionOrder(
         userId: number,
         accountId: string,

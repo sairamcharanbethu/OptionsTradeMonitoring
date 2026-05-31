@@ -534,16 +534,16 @@ export const api = {
   },
 
   // --- Auto Trader ---
-  async getAutoTraderSettings(): Promise<{ mode: 'simulation' | 'live'; maxContracts: number; symbols: string }> {
+  async getAutoTraderSettings(): Promise<{ mode: 'simulation' | 'live'; maxContracts: number; symbols: string; accountId: string; dailyLossLimit: number; maxRiskPct: number }> {
     const res = await authFetch(`${API_BASE}/auto-trader/settings`);
     if (!res.ok) throw new Error('Failed to fetch Auto Trader settings');
     return res.json();
   },
 
-  async updateAutoTraderSettings(mode: 'simulation' | 'live', maxContracts: number, symbols?: string): Promise<void> {
+  async updateAutoTraderSettings(mode: 'simulation' | 'live', maxContracts: number, symbols?: string, accountId?: string, dailyLossLimit?: number, maxRiskPct?: number): Promise<void> {
     const res = await authFetch(`${API_BASE}/auto-trader/settings`, {
       method: 'POST',
-      body: JSON.stringify({ mode, maxContracts, symbols })
+      body: JSON.stringify({ mode, maxContracts, symbols, accountId, dailyLossLimit, maxRiskPct })
     });
     if (!res.ok) throw new Error('Failed to update Auto Trader settings');
   },

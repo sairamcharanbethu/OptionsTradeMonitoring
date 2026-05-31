@@ -256,7 +256,7 @@ export class AutoTraderService {
 
         // 1. Get execution settings
         const { rows: settingsRows } = await this.fastify.pg.query(
-            "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('auto_trader_mode', 'auto_trader_max_contracts', 'auto_trader_symbols')",
+            "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('auto_trader_mode', 'auto_trader_max_contracts', 'auto_trader_symbols', 'auto_trader_account_id', 'auto_trader_daily_loss_limit', 'auto_trader_max_risk_pct')",
             [userId]
         );
         const settings = settingsRows.reduce((acc: any, row: any) => {
@@ -265,7 +265,15 @@ export class AutoTraderService {
         }, {});
 
         const mode = settings.auto_trader_mode || 'simulation'; // 'simulation' (paper) or 'live'
-        const maxContracts = Math.min(parseInt(settings.auto_trader_max_contracts, 10) || 5, 10);
+        const absoluteMaxContracts = Math.min(parseInt(settings.auto_trader_max_contracts, 10) || 5, 10);
+        const accountId = settings.auto_trader_account_id;
+        const dailyLossLimit = parseInt(settings.auto_trader_daily_loss_limit, 10) || 100;
+        const maxRiskPct = parseInt(settings.auto_trader_max_risk_pct, 10) || 5;
+
+        if (mode === 'live' && !accountId) {
+            this.fastify.log.warn(`[AutoTraderService] Live mode enabled but no SnapTrade account selected. Aborting scan.`);
+            return { success: false, reason: 'No execution account selected' };
+        }
 
         // Determine which symbols to scan based on user preference
         const symbolPref = (settings.auto_trader_symbols || 'both').toUpperCase();
@@ -279,20 +287,32 @@ export class AutoTraderService {
         }
         this.fastify.log.info(`[AutoTraderService] Scanning symbols: ${symbolsToScan.join(', ')}`);
 
-        // 2. Check Daily Trade Count Limit (Max 3 executed trades per day)
+        // 2. Check Daily Trade Count Limit (Max 3 executed trades per day) and Daily Drawdown Limit
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
 
         const { rows: countRows } = await this.fastify.pg.query(
-            `SELECT COUNT(*) FROM positions 
-             WHERE user_id = $1 AND created_at >= $2`,
+            `SELECT COUNT(*), SUM(realized_pnl) as total_pnl FROM positions 
+             WHERE user_id = $1 AND created_at >= $2 AND status = 'CLOSED'`,
             [userId, startOfDay]
         );
-        const dailyTrades = parseInt(countRows[0].count, 10);
+        
+        const { rows: openCountRows } = await this.fastify.pg.query(
+            `SELECT COUNT(*) FROM positions WHERE user_id = $1 AND created_at >= $2`,
+            [userId, startOfDay]
+        );
+
+        const dailyTrades = parseInt(openCountRows[0].count, 10);
+        const dailyPnl = parseFloat(countRows[0].total_pnl || '0');
 
         if (dailyTrades >= 3) {
             this.fastify.log.info(`[AutoTraderService] Daily trade limit reached (${dailyTrades} trades executed today). Skipping scanning.`);
             return { success: false, reason: 'Daily trade limit reached (max 3 trades)' };
+        }
+
+        if (dailyPnl <= -dailyLossLimit) {
+            this.fastify.log.warn(`[AutoTraderService] Daily Loss Limit breached (Realized PnL: $${dailyPnl.toFixed(2)} <= -$${dailyLossLimit}). Aborting trading for the day.`);
+            return { success: false, reason: `Daily Loss Limit breached (-$${dailyLossLimit})` };
         }
 
         const results = [];
@@ -370,7 +390,7 @@ export class AutoTraderService {
                 Evaluate this OPTION TRADE SETUP as a professional Day Trader.
                 ASSET: ${symbol} at $${price.toFixed(2)}
                 SESSION SCHEDULE: ${targetDte} Session (Current ET Time: ${etHour}:${etMinute})
-                MAX ENTRABLE CONTRACTS: ${maxContracts}
+                MAX ENTRABLE CONTRACTS: ${absoluteMaxContracts}
                 
                 VOLATILITY REGIME (VIX):
                 - VIX Level: ${vixLevel.toFixed(2)} (${vixRegime})
@@ -528,42 +548,71 @@ export class AutoTraderService {
                                         isSpreadValid = false;
                                     }
                                 } else {
-                                    entryPrice = quote.lastTradePrice || 1.50;
-                                    this.fastify.log.warn(`[AutoTraderService] Missing bid/ask quotes for ${osiTicker}. Falling back to last trade price/fallback $${entryPrice.toFixed(2)}`);
+                                    this.fastify.log.warn(`[AutoTraderService] Missing bid/ask quotes for ${osiTicker}.`);
+                                    isSpreadValid = false;
                                 }
+                            } else {
+                                isSpreadValid = false;
                             }
+                        } else {
+                            isSpreadValid = false;
                         }
                     } catch (pe) {
-                        this.fastify.log.warn(`[AutoTraderService] Premium lookup failed, using fallback $1.50: ${pe}`);
+                        this.fastify.log.warn(`[AutoTraderService] Premium lookup failed: ${pe}`);
+                        isSpreadValid = false;
                     }
 
-                    if (!isSpreadValid) {
-                        this.fastify.log.info(`[AutoTraderService] Aborting entry for ${symbol} due to wide bid-ask spread.`);
+                    // Strict Limit Enforcement: Do not proceed without a precise midPrice
+                    if (mode === 'live' && (!isSpreadValid || calculatedMidPrice === null)) {
+                        this.fastify.log.info(`[AutoTraderService] Aborting live entry for ${symbol} due to wide bid-ask spread or missing quotes (Strict Limit Enforcement).`);
                         continue;
+                    }
+                    if (mode === 'simulation' && !isSpreadValid) {
+                        // For simulation, we can fall back to 1.50 if absolutely needed, but prefer to abort
+                        this.fastify.log.info(`[AutoTraderService] Spread invalid in simulation, falling back to mock price 1.50`);
+                        entryPrice = 1.50;
+                        calculatedMidPrice = 1.50;
+                    }
+
+                    // Dynamic Position Sizing (Risk %)
+                    let tradeContracts = absoluteMaxContracts;
+                    if (mode === 'live' && accountId) {
+                        const accountCash = await this.snaptradeService.getAccountBalance(userId, accountId);
+                        if (accountCash !== null && accountCash > 0) {
+                            // Calculate max dollar risk
+                            const maxRiskAmount = accountCash * (maxRiskPct / 100);
+                            
+                            // Amount risked per contract (assuming stop loss hits at stopLossPct, but we calculate capital required based on entryPrice)
+                            // We need `entryPrice * 100` capital to buy 1 contract.
+                            const capitalPerContract = entryPrice * 100;
+                            const riskPerContract = capitalPerContract * (stopLossPct / 100);
+
+                            // How many contracts can we afford with our risk budget?
+                            const affordableContracts = Math.floor(maxRiskAmount / riskPerContract);
+                            tradeContracts = Math.min(affordableContracts, absoluteMaxContracts);
+                            
+                            if (tradeContracts <= 0) {
+                                this.fastify.log.warn(`[AutoTraderService] Insufficient cash balance. Risk budget ($${maxRiskAmount.toFixed(2)}) cannot afford 1 contract risk ($${riskPerContract.toFixed(2)}). Aborting.`);
+                                continue;
+                            }
+                        } else {
+                            this.fastify.log.warn(`[AutoTraderService] Failed to fetch account cash balance for sizing, falling back to absolute max (${absoluteMaxContracts}).`);
+                        }
                     }
 
                     // Execute Option Order
                     if (mode === 'live') {
-                        // Resolve SnapTrade Account
-                        const { rows: actRows } = await this.fastify.pg.query(
-                            "SELECT id FROM snaptrade_accounts WHERE user_id = $1 LIMIT 1",
-                            [userId]
-                        );
-                        if (actRows.length === 0) {
-                            throw new Error("No connected SnapTrade accounts found to route live options order.");
-                        }
-                        const accountId = actRows[0].id;
-
-                        const executionOrderType = calculatedMidPrice !== null ? 'LIMIT' : 'MARKET';
-                        const executionLimitPrice = calculatedMidPrice !== null ? calculatedMidPrice.toFixed(2) : undefined;
+                        // Strict Limit Order
+                        const executionOrderType = 'LIMIT';
+                        const executionLimitPrice = calculatedMidPrice!.toFixed(2);
 
                         // Place real trade via SnapTrade
                         snaptradeDetails = await this.snaptradeService.placeOptionOrder(
                             userId,
-                            accountId,
+                            accountId!,
                             osiTicker,
                             'BUY_TO_OPEN',
-                            maxContracts,
+                            tradeContracts,
                             executionOrderType,
                             executionLimitPrice
                         );
@@ -599,7 +648,7 @@ export class AutoTraderService {
                             strike,
                             expStr,
                             entryPrice,
-                            maxContracts,
+                            tradeContracts,
                             stopLossTrigger,
                             takeProfitTrigger,
                             entryPrice, // Trailing high defaults to entry price
@@ -632,7 +681,7 @@ export class AutoTraderService {
                         strike,
                         expiration: expStr,
                         entryPrice,
-                        contractsCount: maxContracts,
+                        contractsCount: tradeContracts,
                         mode,
                         positionId: posRows[0].id
                     });

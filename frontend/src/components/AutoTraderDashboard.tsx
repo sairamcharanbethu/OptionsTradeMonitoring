@@ -42,7 +42,8 @@ import {
 } from 'recharts';
 
 export default function AutoTraderDashboard() {
-  const [settings, setSettings] = useState<{ mode: 'simulation' | 'live'; maxContracts: number; symbols: string } | null>(null);
+  const [settings, setSettings] = useState<{ mode: 'simulation' | 'live'; maxContracts: number; symbols: string; accountId: string; dailyLossLimit: number; maxRiskPct: number } | null>(null);
+  const [accounts, setAccounts] = useState<any[]>([]);
   const [status, setStatus] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
@@ -89,12 +90,14 @@ export default function AutoTraderDashboard() {
 
   const fetchData = async () => {
     try {
-      const [sData, statusData] = await Promise.all([
+      const [sData, statusData, portfolioData] = await Promise.all([
         api.getAutoTraderSettings(),
-        api.getAutoTraderStatus()
+        api.getAutoTraderStatus(),
+        api.getSnaptradePortfolio().catch(() => ({ accounts: [], positions: [] }))
       ]);
       setSettings(sData);
       setStatus(statusData);
+      setAccounts(portfolioData?.accounts || []);
       setError(null);
     } catch (err: any) {
       console.error(err);
@@ -143,10 +146,24 @@ export default function AutoTraderDashboard() {
     await updateSettings(settings.mode, settings.maxContracts);
   };
 
-  const updateSettings = async (mode: 'simulation' | 'live', maxContracts: number, symbols?: string) => {
+  const updateSettings = async (
+    mode: 'simulation' | 'live', 
+    maxContracts: number, 
+    symbols?: string, 
+    accountId?: string, 
+    dailyLossLimit?: number, 
+    maxRiskPct?: number
+  ) => {
     setIsUpdatingSettings(true);
     try {
-      await api.updateAutoTraderSettings(mode, maxContracts, symbols || settings?.symbols);
+      await api.updateAutoTraderSettings(
+        mode, 
+        maxContracts, 
+        symbols || settings?.symbols,
+        accountId !== undefined ? accountId : settings?.accountId,
+        dailyLossLimit !== undefined ? dailyLossLimit : settings?.dailyLossLimit,
+        maxRiskPct !== undefined ? maxRiskPct : settings?.maxRiskPct
+      );
       const updated = await api.getAutoTraderSettings();
       setSettings(updated);
     } catch (err: any) {
@@ -416,11 +433,65 @@ export default function AutoTraderDashboard() {
                   </p>
                 </div>
 
-                {/* Contract Size Slider */}
-                <div className="space-y-2">
+                {/* Risk Management Limits */}
+                <div className="space-y-4">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block border-b pb-1">Risk Management</label>
+                  
+                  {/* Daily Loss Limit */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-semibold block text-slate-700 dark:text-slate-300">Daily Loss Limit ($)</span>
+                      <span className="text-[10px] text-muted-foreground block">Stop trading if realized loss exceeds this amount</span>
+                    </div>
+                    <div className="relative">
+                      <span className="absolute left-2.5 top-2 text-slate-500 text-sm">$</span>
+                      <input 
+                        type="number"
+                        min="10"
+                        step="10"
+                        className="w-24 pl-6 pr-2 py-1.5 rounded-md border text-sm font-bold bg-slate-50 dark:bg-slate-900 focus:ring-2 focus:ring-red-500 outline-none"
+                        value={settings.dailyLossLimit}
+                        onChange={(e) => setSettings({ ...settings, dailyLossLimit: parseInt(e.target.value) || 0 })}
+                        onBlur={(e) => updateSettings(settings.mode, settings.maxContracts, settings.symbols, settings.accountId, parseInt(e.target.value) || 100)}
+                        disabled={isUpdatingSettings}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Max Risk % Slider */}
+                  <div className="space-y-2 pt-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Max Risk per Trade (%)</span>
+                      <span className="text-sm font-extrabold text-red-600 bg-red-500/10 px-2 py-0.5 rounded-full">{settings.maxRiskPct}%</span>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-slate-50/50 dark:bg-slate-900/50">
+                      <input
+                        type="range"
+                        min="1"
+                        max="20"
+                        value={settings.maxRiskPct}
+                        onChange={(e) => setSettings({ ...settings, maxRiskPct: parseInt(e.target.value) || 5 })}
+                        onMouseUp={(e) => updateSettings(settings.mode, settings.maxContracts, settings.symbols, settings.accountId, settings.dailyLossLimit, parseInt((e.target as HTMLInputElement).value) || 5)}
+                        onTouchEnd={(e) => updateSettings(settings.mode, settings.maxContracts, settings.symbols, settings.accountId, settings.dailyLossLimit, parseInt((e.target as HTMLInputElement).value) || 5)}
+                        disabled={isUpdatingSettings}
+                        className="w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-600"
+                      />
+                      <div className="flex justify-between text-[10px] text-muted-foreground font-semibold mt-2">
+                        <span>1% (Conservative)</span>
+                        <span>20% (Aggressive)</span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground pt-1">
+                      Dynamically calculates contracts based on available cash balance and stop-loss distance.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Absolute Max Contracts Slider */}
+                <div className="space-y-2 pt-4 border-t border-slate-100 dark:border-slate-800">
                   <div className="flex justify-between items-center">
-                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Contracts per Trade</label>
-                    <span className="text-sm font-extrabold text-indigo-600 bg-indigo-500/10 px-2 py-0.5 rounded-full">{settings.maxContracts} Contracts</span>
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Absolute Max Contracts</label>
+                    <span className="text-sm font-extrabold text-indigo-600 bg-indigo-500/10 px-2 py-0.5 rounded-full">{settings.maxContracts} Max</span>
                   </div>
                   <div className="p-4 rounded-lg border bg-slate-50/50 dark:bg-slate-900/50 space-y-4">
                     <input
@@ -435,10 +506,13 @@ export default function AutoTraderDashboard() {
                       className="w-full h-2 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-600"
                     />
                     <div className="flex justify-between text-[10px] text-muted-foreground font-semibold">
-                      <span>1 Contract (Low Risk)</span>
-                      <span>10 Contracts (Max Limit)</span>
+                      <span>1 (Minimum)</span>
+                      <span>10 (Hard Cap)</span>
                     </div>
                   </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Upper boundary safety cap. The bot will never buy more than this, even if risk budget allows.
+                  </p>
                 </div>
 
                 {/* System Status Indicators */}

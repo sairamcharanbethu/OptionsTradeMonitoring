@@ -17,7 +17,7 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
     }, async (request, reply) => {
         const { id: userId } = (request as any).user;
         const { rows } = await fastify.pg.query(
-            "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('auto_trader_mode', 'auto_trader_max_contracts', 'auto_trader_symbols')",
+            "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('auto_trader_mode', 'auto_trader_max_contracts', 'auto_trader_symbols', 'auto_trader_account_id', 'auto_trader_daily_loss_limit', 'auto_trader_max_risk_pct')",
             [userId]
         );
 
@@ -29,7 +29,10 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
         return {
             mode: settings.auto_trader_mode || 'simulation',
             maxContracts: parseInt(settings.auto_trader_max_contracts, 10) || 5,
-            symbols: settings.auto_trader_symbols || 'both'
+            symbols: settings.auto_trader_symbols || 'both',
+            accountId: settings.auto_trader_account_id || '',
+            dailyLossLimit: parseInt(settings.auto_trader_daily_loss_limit, 10) || 100,
+            maxRiskPct: parseInt(settings.auto_trader_max_risk_pct, 10) || 5
         };
     });
 
@@ -45,39 +48,45 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
                 properties: {
                     mode: { type: 'string', enum: ['simulation', 'live'] },
                     maxContracts: { type: 'integer', minimum: 1, maximum: 10 },
-                    symbols: { type: 'string', enum: ['SPY', 'QQQ', 'both'] }
+                    symbols: { type: 'string', enum: ['SPY', 'QQQ', 'both'] },
+                    accountId: { type: 'string' },
+                    dailyLossLimit: { type: 'integer', minimum: 10 },
+                    maxRiskPct: { type: 'integer', minimum: 1, maximum: 100 }
                 }
             },
             security: [{ bearerAuth: [] }]
         }
     }, async (request, reply) => {
         const { id: userId } = (request as any).user;
-        const { mode, maxContracts, symbols } = request.body as { mode: 'simulation' | 'live'; maxContracts: number; symbols?: string };
+        const { mode, maxContracts, symbols, accountId, dailyLossLimit, maxRiskPct } = request.body as { 
+            mode: 'simulation' | 'live'; 
+            maxContracts: number; 
+            symbols?: string;
+            accountId?: string;
+            dailyLossLimit?: number;
+            maxRiskPct?: number;
+        };
 
-        await fastify.pg.query(
-            `INSERT INTO settings (user_id, key, value, updated_at) 
-             VALUES ($1, 'auto_trader_mode', $2, CURRENT_TIMESTAMP)
-             ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-            [userId, mode]
-        );
+        const queries = [
+            { key: 'auto_trader_mode', value: mode },
+            { key: 'auto_trader_max_contracts', value: maxContracts.toString() },
+            { key: 'auto_trader_symbols', value: symbols || 'both' }
+        ];
 
-        await fastify.pg.query(
-            `INSERT INTO settings (user_id, key, value, updated_at) 
-             VALUES ($1, 'auto_trader_max_contracts', $2, CURRENT_TIMESTAMP)
-             ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-            [userId, maxContracts.toString()]
-        );
+        if (accountId !== undefined) queries.push({ key: 'auto_trader_account_id', value: accountId });
+        if (dailyLossLimit !== undefined) queries.push({ key: 'auto_trader_daily_loss_limit', value: dailyLossLimit.toString() });
+        if (maxRiskPct !== undefined) queries.push({ key: 'auto_trader_max_risk_pct', value: maxRiskPct.toString() });
 
-        if (symbols) {
+        for (const q of queries) {
             await fastify.pg.query(
                 `INSERT INTO settings (user_id, key, value, updated_at) 
-                 VALUES ($1, 'auto_trader_symbols', $2, CURRENT_TIMESTAMP)
+                 VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
                  ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                [userId, symbols]
+                [userId, q.key, q.value]
             );
         }
 
-        return { success: true, mode, maxContracts, symbols: symbols || 'both' };
+        return { success: true, mode, maxContracts, symbols: symbols || 'both', accountId, dailyLossLimit, maxRiskPct };
     });
 
     // POST /trigger
