@@ -427,15 +427,20 @@ export class AutoTraderService {
                     const stopLossTrigger = entryPrice * (1 - stopLossPct / 100);
                     const takeProfitTrigger = entryPrice * (1 + takeProfitPct / 100);
 
+                    // Strategy 1: Underlying stop and target triggers (0.5% Stop Loss, 1% Take Profit)
+                    const underlyingStop = optionType === 'CALL' ? price * 0.995 : price * 1.005;
+                    const underlyingTarget = optionType === 'CALL' ? price * 1.01 : price * 0.99;
+
                     // Insert logged position in DB (Unified Simulation or Live tracking)
                     const { rows: posRows } = await this.fastify.pg.query(
                         `INSERT INTO positions (
                             user_id, symbol, option_type, strike_price, expiration_date, 
                             entry_price, quantity, stop_loss_trigger, take_profit_trigger, 
                             trailing_high_price, status, is_simulated, current_price, 
-                            underlying_price, delta, iv, analysis_data
+                            underlying_price, delta, iv, analysis_data, suggested_stop_loss,
+                            suggested_take_profit_1
                          )
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'OPEN', $11, $12, $13, $14, $15, $16)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'OPEN', $11, $12, $13, $14, $15, $16, $17, $18)
                          RETURNING id`,
                         [
                             userId,
@@ -458,7 +463,9 @@ export class AutoTraderService {
                                 targetDte,
                                 sessionMode: mode,
                                 snaptradeDetails
-                            })
+                            }),
+                            underlyingStop,
+                            underlyingTarget
                         ]
                     );
 

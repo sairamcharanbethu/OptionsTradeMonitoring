@@ -536,6 +536,40 @@ export class MarketPoller {
       trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
     });
 
+    let triggered = engineResult.triggered;
+    let triggerType: 'STOP_LOSS' | 'TAKE_PROFIT' | undefined = engineResult.triggerType;
+    let lossAvoided = engineResult.lossAvoided;
+
+    // Strategy 1: Underlying-Triggered Stops (Structural Exit Strategy)
+    const underlyingStop = position.suggested_stop_loss ? Number(position.suggested_stop_loss) : null;
+    const underlyingTarget = position.suggested_take_profit_1 ? Number(position.suggested_take_profit_1) : null;
+
+    if (underlyingPrice && underlyingStop) {
+      if (position.option_type === 'CALL' && underlyingPrice <= underlyingStop) {
+        triggered = true;
+        triggerType = 'STOP_LOSS';
+        lossAvoided = Number(position.entry_price) - price;
+        this.fastify.log.info(`[MarketPoller] Strategy 1 STOP_LOSS triggered via underlying index price: ${underlyingPrice} <= ${underlyingStop}`);
+      } else if (position.option_type === 'PUT' && underlyingPrice >= underlyingStop) {
+        triggered = true;
+        triggerType = 'STOP_LOSS';
+        lossAvoided = Number(position.entry_price) - price;
+        this.fastify.log.info(`[MarketPoller] Strategy 1 STOP_LOSS triggered via underlying index price: ${underlyingPrice} >= ${underlyingStop}`);
+      }
+    }
+
+    if (underlyingPrice && underlyingTarget && !triggered) {
+      if (position.option_type === 'CALL' && underlyingPrice >= underlyingTarget) {
+        triggered = true;
+        triggerType = 'TAKE_PROFIT';
+        this.fastify.log.info(`[MarketPoller] Strategy 1 TAKE_PROFIT triggered via underlying index price: ${underlyingPrice} >= ${underlyingTarget}`);
+      } else if (position.option_type === 'PUT' && underlyingPrice <= underlyingTarget) {
+        triggered = true;
+        triggerType = 'TAKE_PROFIT';
+        this.fastify.log.info(`[MarketPoller] Strategy 1 TAKE_PROFIT triggered via underlying index price: ${underlyingPrice} <= ${underlyingTarget}`);
+      }
+    }
+
     // Update Price AND Greeks
     await (this.fastify as any).pg.query(
       `UPDATE positions 
@@ -565,9 +599,9 @@ export class MarketPoller {
       [position.id, price]
     );
 
-    if (engineResult.triggered) {
+    if (triggered) {
       if (position.status === 'OPEN') {
-        const triggerType = engineResult.triggerType || 'STOP_LOSS';
+        const exitTriggerType = triggerType || 'STOP_LOSS';
         const newStatus = 'CLOSED';
         const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
 
@@ -611,7 +645,7 @@ export class MarketPoller {
               notes = COALESCE(notes, '') || $4,
               updated_at = CURRENT_TIMESTAMP 
               WHERE id = $5 AND status = 'OPEN'`,
-          [newStatus, engineResult.lossAvoided, realizedPnl, ` [Closed via ${triggerType} Trigger]`, position.id]
+          [newStatus, lossAvoided, realizedPnl, ` [Closed via Underlying-Triggered ${exitTriggerType} Strategy]`, position.id]
         );
 
         if (updateResult.rowCount === 0) {
@@ -621,7 +655,7 @@ export class MarketPoller {
 
         await (this.fastify as any).pg.query(
           'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',
-          [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]
+          [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT' ? (position.suggested_take_profit_1 || position.take_profit_trigger) : (position.suggested_stop_loss || position.stop_loss_trigger), price]
         );
 
         // Generate AI Summary for the alert (Discord Message)
@@ -632,7 +666,7 @@ export class MarketPoller {
             type: position.option_type,
             strike: position.strike_price,
             expiration: position.expiration_date,
-            event: triggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+            event: exitTriggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
             price: price,
             pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
             greeks: {
@@ -646,7 +680,7 @@ export class MarketPoller {
           this.fastify.log.error(`[MarketPoller] AI Summary generation failed: ${err}`);
         }
 
-        this.notifyN8n(position, price, realizedPnl, engineResult.lossAvoided, triggerType, aiData.summary, aiData.discord_message, greeks, iv);
+        this.notifyN8n(position, price, realizedPnl, lossAvoided, exitTriggerType, aiData.summary, aiData.discord_message, greeks, iv);
       }
     } else if (engineResult.newHigh || engineResult.newStopLoss) {
       await (this.fastify as any).pg.query(

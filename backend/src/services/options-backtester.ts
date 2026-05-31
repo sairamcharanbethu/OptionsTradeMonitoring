@@ -278,6 +278,8 @@ export class OptionsBacktester {
                     let exitTimeStr = '3:50 PM';
                     let exitReason = 'EOD Cutoff';
                     let exitIndex = i;
+                    const underlyingStopPrice = optionType === 'CALL' ? entrySpot * 0.995 : entrySpot * 1.005;
+                    const underlyingTargetPrice = optionType === 'CALL' ? entrySpot * 1.01 : entrySpot * 0.99;
 
                     for (let j = i + 1; j < dayQuotes.length; j++) {
                         const exitQuote = dayQuotes[j];
@@ -288,27 +290,34 @@ export class OptionsBacktester {
 
                         const tExit = Math.max(0.001, tEntry - ((j - i) * 15) / (24 * 60 * 365));
                         
-                        // Calculate option prices at High and Low points of 15m bar to check TP/SL triggers accurately
-                        const optPriceAtHigh = calculateBSPrice(exitQuote.high, strike, tExit, r, iv, optionType === 'CALL');
-                        const optPriceAtLow = calculateBSPrice(exitQuote.low, strike, tExit, r, iv, optionType === 'CALL');
-
-                        const tpTarget = entryPrice * (1 + takeProfitPct / 100);
-                        const slTarget = entryPrice * (1 - stopLossPct / 100);
-
                         // Check Take Profit first (Priority)
-                        if (optPriceAtHigh >= tpTarget) {
-                            exitPrice = tpTarget;
+                        let tpTriggered = false;
+                        if (optionType === 'CALL' && exitQuote.high >= underlyingTargetPrice) {
+                            tpTriggered = true;
+                        } else if (optionType === 'PUT' && exitQuote.low <= underlyingTargetPrice) {
+                            tpTriggered = true;
+                        }
+
+                        if (tpTriggered) {
+                            exitPrice = calculateBSPrice(underlyingTargetPrice, strike, tExit, r, iv, optionType === 'CALL');
                             exitTimeStr = `${exitEtHour}:${exitEtMin.toString().padStart(2, '0')}`;
-                            exitReason = 'Take Profit Hit (+20%)';
+                            exitReason = 'Underlying Take Profit Hit (+1.0%)';
                             exitIndex = j;
                             break;
                         }
 
                         // Check Stop Loss
-                        if (optPriceAtLow <= slTarget) {
-                            exitPrice = slTarget;
+                        let slTriggered = false;
+                        if (optionType === 'CALL' && exitQuote.low <= underlyingStopPrice) {
+                            slTriggered = true;
+                        } else if (optionType === 'PUT' && exitQuote.high >= underlyingStopPrice) {
+                            slTriggered = true;
+                        }
+
+                        if (slTriggered) {
+                            exitPrice = calculateBSPrice(underlyingStopPrice, strike, tExit, r, iv, optionType === 'CALL');
                             exitTimeStr = `${exitEtHour}:${exitEtMin.toString().padStart(2, '0')}`;
-                            exitReason = `Stop Loss Hit (-${stopLossPct}%)`;
+                            exitReason = 'Underlying Stop Loss Hit (-0.5%)';
                             exitIndex = j;
                             break;
                         }
