@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { SnaptradeService } from '../services/snaptrade-service';
+import { AIService } from '../services/ai-service';
 
 export async function snaptradeRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
@@ -51,7 +52,6 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
     const portfolio = await snaptradeService.getPortfolio(userId);
     
     // We need the AIService to generate the briefing
-    const { AIService } = await import('../services/ai-service');
     const aiService = new AIService(fastify);
     
     const briefing = await aiService.generateWealthsimpleBriefing(portfolio.positions);
