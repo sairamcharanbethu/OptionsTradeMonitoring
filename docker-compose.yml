@@ -51,7 +51,9 @@ services:
       - "${PORT_FRONTEND:-3000}:80"
     depends_on:
       - backend
-    # No networks defined, joins default by default
+    networks:
+      - ssmedia_ssmedia_net
+      - default
 
 networks:
   ssmedia_ssmedia_net:
