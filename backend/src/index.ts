@@ -120,12 +120,12 @@ const ensureSchema = async (instance: any) => {
     // 4. Create snaptrade tables
     await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS snaptrade_accounts (
-        id VARCHAR(50) PRIMARY KEY,
+        id VARCHAR(255) PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        name VARCHAR(100),
-        number VARCHAR(50),
-        status VARCHAR(20),
-        unified_type VARCHAR(50),
+        name VARCHAR(255),
+        number VARCHAR(100),
+        status VARCHAR(50),
+        unified_type VARCHAR(100),
         raw_data JSONB,
         last_synced_at TIMESTAMPTZ DEFAULT NOW(),
         created_at TIMESTAMPTZ DEFAULT NOW()
@@ -134,12 +134,12 @@ const ensureSchema = async (instance: any) => {
 
     await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS snaptrade_positions (
-        id VARCHAR(50) PRIMARY KEY,
-        account_id VARCHAR(50) REFERENCES snaptrade_accounts(id) ON DELETE CASCADE,
+        id VARCHAR(255) PRIMARY KEY,
+        account_id VARCHAR(255) REFERENCES snaptrade_accounts(id) ON DELETE CASCADE,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        symbol VARCHAR(50) NOT NULL,
+        symbol VARCHAR(255) NOT NULL,
         description TEXT,
-        asset_type VARCHAR(50),
+        asset_type VARCHAR(100),
         price DECIMAL(15, 4),
         units DECIMAL(15, 4),
         average_purchase_price DECIMAL(15, 4),
@@ -150,6 +150,24 @@ const ensureSchema = async (instance: any) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+
+    // Ensure columns are altered in case they were already created with a smaller size
+    try {
+      await instance.pg.query(`
+        ALTER TABLE snaptrade_accounts ALTER COLUMN id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN name TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN number TYPE VARCHAR(100);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN status TYPE VARCHAR(50);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN unified_type TYPE VARCHAR(100);
+        
+        ALTER TABLE snaptrade_positions ALTER COLUMN id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN account_id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN symbol TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN asset_type TYPE VARCHAR(100);
+      `);
+    } catch (e) {
+      instance.log.warn('[Database] Could not alter some snaptrade columns (might not exist yet or conflicting constraint).');
+    }
   } catch (err: any) {
     instance.log.error(`[Database] Schema verification failed: ${err.message}`);
   }
