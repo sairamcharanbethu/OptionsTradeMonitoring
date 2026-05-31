@@ -155,13 +155,12 @@ ${posSummary}
 Fundamental & News Insights (Top Holdings):
 ${insightsText}
 
-Task: Provide a high-level summary of this equity/crypto portfolio utilizing a simulated Multi-Agent Debate for the top holdings.
+Task: Provide a high-level summary of this equity/crypto portfolio and detailed rebalancing recommendations for the top holdings.
 1. Portfolio Summary: Briefly highlight the biggest winners and losers by PnL, and discuss the asset allocation.
-2. Top Holdings Debate: For EACH of the top holdings with provided news/fundamentals, simulate a rigorous debate between two AI agents:
-   - 🐂 Bull Agent: Provide a comprehensive and highly analytical bullish argument leveraging the provided news, P/E ratio, and recent highs.
-   - 🐻 Bear Agent: Provide a comprehensive and analytical bearish counter-argument focusing on valuation risks or negative news.
-   - ⚖️ Manager Verdict: The final decision on whether to hold, trim, or buy more, with a clear, detailed rebalancing rationale.
-Style: Professional wealth manager tone, highly sophisticated, structured with clear Markdown headers for each holding. Write in beautiful, natural, grammatically complete English. Do NOT use caveman mode or simple short phrases in your output. The briefing should be rich and thoroughly detailed.
+2. Rebalancing Recommendations: For EACH of the top holdings with provided news/fundamentals, internally weigh the bullish factors against the bearish risks, and output ONLY the final verdict and rebalancing recommendation:
+   - ⚖️ Portfolio Manager Verdict: A clear decision (Hold, Trim, Buy) and a comprehensive, detailed rebalancing rationale/action plan based on your analysis.
+Do NOT output any Bull Agent or Bear Agent sections. Only show the final Portfolio Manager Verdict and direct recommendations for each holding.
+Style: Professional wealth manager tone, highly sophisticated, structured with clear Markdown headers for each holding. Write in beautiful, natural, grammatically complete English. The recommendations should be rich and thoroughly detailed.
 Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
 
         const response = await this.generateAnalysisInternal(prompt, 2048);
