@@ -126,11 +126,13 @@ ${posSummary}
 Fundamental & News Insights (Top Holdings):
 ${insightsText}
 
-Task: Provide a high-level summary of this equity/crypto portfolio.
-1. Highlight the biggest winners and losers by PnL.
-2. Discuss the asset allocation (e.g., concentration in crypto vs stocks vs ETFs).
-3. Synthesize the provided News and Fundamentals (P/E, Highs) to suggest a brief next step or general advice for these top holdings.
-Style: Professional wealth manager tone, concise but insightful.
+Task: Provide a high-level summary of this equity/crypto portfolio utilizing a simulated Multi-Agent Debate for the top holdings.
+1. Portfolio Summary: Briefly highlight the biggest winners and losers by PnL, and discuss the asset allocation.
+2. Top Holdings Debate: For EACH of the top holdings with provided news/fundamentals, simulate a rigorous debate between two AI agents:
+   - 🐂 Bull Agent: Provide a concise bullish argument leveraging the provided news, P/E ratio, and recent highs.
+   - 🐻 Bear Agent: Provide a concise bearish counter-argument focusing on valuation risks or negative news.
+   - ⚖️ Manager Verdict: The final decision on whether to hold, trim, or buy more, with a rebalancing rationale.
+Style: Professional wealth manager tone, structured with clear Markdown headers for each holding.
 Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
 
         const response = await this.generateAnalysisInternal(prompt);
