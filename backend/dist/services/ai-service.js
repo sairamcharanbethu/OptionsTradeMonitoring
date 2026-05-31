@@ -45,7 +45,7 @@ ${posSummary}
 Task: Provide a high-level summary of the portfolio's health, highlight positions needing immediate attention (due to PnL or Greek shifts), and suggest next steps.
 Style: Professional trader tone, concise but insightful.
 Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discord message with emojis..." }`;
-        const response = await this.generateAnalysisInternal(prompt);
+        const response = await this.generateAnalysisInternal(prompt, 2048);
         return {
             briefing: response.analysis,
             discord_message: response.discord || response.analysis
@@ -69,11 +69,26 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
                 const ticker = p.symbol;
                 try {
                     const quote = await yahooFinance.quoteSummary(ticker, { modules: ['summaryDetail', 'price'] });
-                    const news = await yahooFinance.search(ticker, { newsCount: 3 });
+                    const news = await yahooFinance.search(ticker, { newsCount: 5 });
                     const price = quote.price?.regularMarketPrice || p.price;
                     const pe = quote.summaryDetail?.trailingPE?.toFixed(2) || 'N/A';
                     const fiftyTwoHigh = quote.summaryDetail?.fiftyTwoWeekHigh?.toFixed(2) || 'N/A';
-                    const headlines = (news.news || []).slice(0, 2).map((n) => `- "${n.title}"`).join('\n      ');
+                    // Filter news relevant to this specific ticker to prevent general financial news fallbacks
+                    const baseSymbol = ticker.split('.')[0];
+                    const uppercaseTicker = ticker.toUpperCase();
+                    const uppercaseBase = baseSymbol.toUpperCase();
+                    const relevantNews = (news.news || []).filter((n) => {
+                        const hasRelatedTicker = n.relatedTickers?.some((t) => {
+                            const uppercaseT = t.toUpperCase();
+                            return uppercaseT === uppercaseTicker || uppercaseT === uppercaseBase;
+                        });
+                        const titleLower = (n.title || '').toLowerCase();
+                        const tickerLower = ticker.toLowerCase();
+                        const baseLower = baseSymbol.toLowerCase();
+                        const hasInTitle = titleLower.includes(tickerLower) || titleLower.includes(baseLower);
+                        return hasRelatedTicker || hasInTitle;
+                    });
+                    const headlines = relevantNews.slice(0, 2).map((n) => `- "${n.title}"`).join('\n      ');
                     return `  [${ticker}] P/E: ${pe} | 52w High: $${fiftyTwoHigh} | Current: $${price}\n      Recent News:\n      ${headlines || 'No recent news.'}`;
                 }
                 catch (e) {
@@ -106,7 +121,7 @@ Task: Provide a high-level summary of this equity/crypto portfolio utilizing a s
    - ⚖️ Manager Verdict: The final decision on whether to hold, trim, or buy more, with a rebalancing rationale.
 Style: Professional wealth manager tone, structured with clear Markdown headers for each holding.
 Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
-        const response = await this.generateAnalysisInternal(prompt);
+        const response = await this.generateAnalysisInternal(prompt, 2048);
         return {
             briefing: response.analysis
         };
@@ -192,7 +207,7 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
             }
         }
     }
-    async generateAnalysisInternal(prompt) {
+    async generateAnalysisInternal(prompt, maxTokens = 300) {
         try {
             // 1. Fetch settings from DB
             const settings = await this.getSettings();
@@ -200,10 +215,10 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
             if (settings.ai_provider === 'openrouter') {
                 if (!settings.openrouter_key)
                     throw new Error('OpenRouter selected but no API Key found.');
-                return this.callOpenRouter(settings.ai_model, settings.openrouter_key, prompt);
+                return this.callOpenRouter(settings.ai_model, settings.openrouter_key, prompt, maxTokens);
             }
             else {
-                return this.callOllama(settings.ai_model, prompt);
+                return this.callOllama(settings.ai_model, prompt, maxTokens);
             }
         }
         catch (error) {
@@ -211,8 +226,8 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
             throw new Error(`AI Analysis Failed: ${error.message}`);
         }
     }
-    async callOpenRouter(model, apiKey, prompt) {
-        console.log(`[AIService] Using OpenRouter (${model}) [Token Efficient]`);
+    async callOpenRouter(model, apiKey, prompt, maxTokens = 300) {
+        console.log(`[AIService] Using OpenRouter (${model}) [Token limit: ${maxTokens}]`);
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -229,7 +244,7 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
                 ],
                 response_format: { type: 'json_object' },
                 temperature: 0,
-                max_tokens: 300 // Token efficiency
+                max_tokens: maxTokens
             })
         });
         if (!response.ok) {
@@ -262,8 +277,8 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
             return { verdict: 'Review', analysis: text };
         }
     }
-    async callOllama(model, prompt) {
-        console.log(`[AIService] Using Ollama (${model}) [Token Efficient]`);
+    async callOllama(model, prompt, maxTokens = 300) {
+        console.log(`[AIService] Using Ollama (${model}) [Token limit: ${maxTokens}]`);
         const response = await fetch(`${this.ollamaUrl}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -274,7 +289,7 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
                 format: 'json',
                 options: {
                     temperature: 0,
-                    num_predict: 300 // Token efficiency
+                    num_predict: maxTokens
                 }
             })
         });
