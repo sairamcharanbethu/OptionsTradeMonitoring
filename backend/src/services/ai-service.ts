@@ -131,7 +131,7 @@ Task: Provide a high-level summary of this equity/crypto portfolio.
 2. Discuss the asset allocation (e.g., concentration in crypto vs stocks vs ETFs).
 3. Synthesize the provided News and Fundamentals (P/E, Highs) to suggest a brief next step or general advice for these top holdings.
 Style: Professional wealth manager tone, concise but insightful.
-Format: JSON { "analysis": "Full analysis here..." }`;
+Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
 
         const response = await this.generateAnalysisInternal(prompt);
         return {
