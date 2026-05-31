@@ -159,12 +159,21 @@ export class OptionsBacktester {
             const sma200 = this.calculateSMA(closesSlice, 200);
             const rsi = this.calculateRSI(closesSlice, 14);
 
-            // GEX & Greeks Proxy Model
-            const isBullishRegime = spotPrice > sma200;
-            const simulatedNetGex = isBullishRegime ? 45000000 : -25000000;
-            const gammaFlip = spotPrice * (isBullishRegime ? 0.99 : 1.01);
-            const callWall = spotPrice * 1.02;
-            const putWall = spotPrice * 0.98;
+            // GEX & Greeks Proxy Model for backtesting
+            // Use trend structure and volatility to approximate dealer positioning
+            const isBullishTrend = spotPrice > sma50;
+            const isStrongTrend = spotPrice > sma200;
+            const trendStrength = Math.abs(ema9 - ema21) / spotPrice * 100; // as % of spot
+
+            // In strong trends with low vol (tight EMAs), dealers are likely long gamma (Positive GEX)
+            // In weak/volatile markets (wide EMAs), dealers are likely short gamma (Negative GEX)
+            const isPositiveGex = isStrongTrend && trendStrength < 0.5;
+            const simulatedNetGex = isPositiveGex ? 45000000 : -25000000;
+
+            // Walls and flip derived from daily levels, not artificially from spot
+            const gammaFlip = sma50; // Gamma flip approximated at institutional moving average
+            const callWall = spotPrice * 1.015; // 1.5% above (more realistic than 2%)
+            const putWall = spotPrice * 0.985;  // 1.5% below
 
             // Enforce maximum of 2-3 trades per day (we will take up to 2 high probability setups per day)
             let dailyTradeCount = 0;
@@ -201,23 +210,31 @@ export class OptionsBacktester {
                     const rsiBullish = rsi > 50;
                     const rsiBearish = rsi < 50;
 
-                    if (simulatedNetGex > 0) {
-                        // Mean reversion regime (buy calls at put walls, puts at call walls, or skip if no extreme)
-                        if (quote.close <= putWall * 1.005 && rsi < 40) {
+                    if (isPositiveGex) {
+                        // Mean reversion regime: fade extremes at dealer walls
+                        if (quote.close <= putWall * 1.005 && rsi < 45) {
                             verdict = 'BUY_CALL';
-                            reasoning = `Support found near Put Wall in Positive GEX regime with oversold RSI.`;
-                        } else if (quote.close >= callWall * 0.995 && rsi > 60) {
+                            reasoning = `Support near Put Wall ($${putWall.toFixed(0)}) in Positive GEX with RSI ${rsi.toFixed(1)} oversold.`;
+                        } else if (quote.close >= callWall * 0.995 && rsi > 55) {
                             verdict = 'BUY_PUT';
-                            reasoning = `Resistance hit near Call Wall in Positive GEX regime with overbought RSI.`;
+                            reasoning = `Resistance near Call Wall ($${callWall.toFixed(0)}) in Positive GEX with RSI ${rsi.toFixed(1)} overbought.`;
                         }
                     } else {
-                        // Momentum/trend regime (chase EMA crossovers)
+                        // Negative GEX / Trending regime: trend-following with momentum confirmation
                         if (emaCrossBullish && rsiBullish && quote.close > gammaFlip) {
                             verdict = 'BUY_CALL';
-                            reasoning = `Bullish EMA crossover in Negative GEX regime above Gamma Flip level.`;
+                            reasoning = `Bullish EMA crossover above Gamma Flip ($${gammaFlip.toFixed(0)}), RSI ${rsi.toFixed(1)} confirms momentum.`;
                         } else if (emaCrossBearish && rsiBearish && quote.close < gammaFlip) {
                             verdict = 'BUY_PUT';
-                            reasoning = `Bearish EMA crossover in Negative GEX regime below Gamma Flip level.`;
+                            reasoning = `Bearish EMA crossover below Gamma Flip ($${gammaFlip.toFixed(0)}), RSI ${rsi.toFixed(1)} confirms weakness.`;
+                        } else if (emaCrossBullish && rsi > 45 && isBullishTrend) {
+                            // Relaxed bullish entry in trending markets — EMA9 > EMA21 with price above SMA50
+                            verdict = 'BUY_CALL';
+                            reasoning = `Trending bullish: EMA9 > EMA21, price above SMA50 ($${sma50.toFixed(0)}), RSI ${rsi.toFixed(1)}.`;
+                        } else if (emaCrossBearish && rsi < 55 && !isBullishTrend) {
+                            // Relaxed bearish entry in downtrending markets
+                            verdict = 'BUY_PUT';
+                            reasoning = `Trending bearish: EMA9 < EMA21, price below SMA50 ($${sma50.toFixed(0)}), RSI ${rsi.toFixed(1)}.`;
                         }
                     }
                 } else {
