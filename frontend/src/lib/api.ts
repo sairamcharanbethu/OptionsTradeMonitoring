@@ -558,6 +558,18 @@ export const api = {
     const res = await authFetch(`${API_BASE}/auto-trader/status`);
     if (!res.ok) throw new Error('Failed to fetch Auto Trader status');
     return res.json();
+  },
+
+  async runBacktest(symbol: string, startDate: string, endDate: string, mode: 'rule-based' | 'ai', contractSize: number): Promise<any> {
+    const res = await authFetch(`${API_BASE}/auto-trader/backtest`, {
+      method: 'POST',
+      body: JSON.stringify({ symbol, startDate, endDate, mode, contractSize })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to run backtest');
+    }
+    return res.json();
   }
 };
 

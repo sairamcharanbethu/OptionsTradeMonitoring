@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { AutoTraderService } from '../services/auto-trader-service';
+import { OptionsBacktester } from '../services/options-backtester';
 
 export async function autoTraderRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
     fastify.addHook('onRequest', fastify.authenticate);
@@ -134,5 +135,49 @@ export async function autoTraderRoutes(fastify: FastifyInstance, options: Fastif
                 createdAt: t.created_at
             }))
         };
+    });
+
+    // POST /backtest
+    fastify.post('/backtest', {
+        schema: {
+            tags: ['AutoTrader'],
+            summary: 'Run Options Trading Strategy Backtest',
+            description: 'Executes backtest over historical candles using analytical Black-Scholes premium simulation.',
+            body: {
+                type: 'object',
+                required: ['symbol', 'startDate', 'endDate', 'mode', 'contractSize'],
+                properties: {
+                    symbol: { type: 'string', enum: ['SPY', 'QQQ', 'spy', 'qqq'] },
+                    startDate: { type: 'string', format: 'date' },
+                    endDate: { type: 'string', format: 'date' },
+                    mode: { type: 'string', enum: ['rule-based', 'ai'] },
+                    contractSize: { type: 'integer', minimum: 1, maximum: 10 }
+                }
+            },
+            security: [{ bearerAuth: [] }]
+        }
+    }, async (request, reply) => {
+        const { symbol, startDate, endDate, mode, contractSize } = request.body as {
+            symbol: string;
+            startDate: string;
+            endDate: string;
+            mode: 'rule-based' | 'ai';
+            contractSize: number;
+        };
+
+        try {
+            const backtester = new OptionsBacktester(fastify);
+            const results = await backtester.runBacktest(
+                symbol.toUpperCase(),
+                startDate,
+                endDate,
+                mode,
+                contractSize
+            );
+            return results;
+        } catch (error: any) {
+            fastify.log.error(`[AutoTrader Route] Backtest execution error: ${error.message}`);
+            reply.code(400).send({ error: error.message || 'Backtest execution failed.' });
+        }
     });
 }
