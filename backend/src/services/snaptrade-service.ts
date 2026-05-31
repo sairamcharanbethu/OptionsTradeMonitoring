@@ -239,8 +239,17 @@ export class SnaptradeService {
         const { rows: accounts } = await this.fastify.pg.query('SELECT * FROM snaptrade_accounts WHERE user_id = $1', [userId]);
         const { rows: positions } = await this.fastify.pg.query('SELECT * FROM snaptrade_positions WHERE user_id = $1', [userId]);
 
+        // Enrich accounts with live cash balance
+        const enrichedAccounts = await Promise.all(accounts.map(async (acc) => {
+            const cash = await this.getAccountBalance(userId, acc.id);
+            return {
+                ...acc,
+                cash_balance: cash
+            };
+        }));
+
         const result = {
-            accounts,
+            accounts: enrichedAccounts,
             positions
         };
 

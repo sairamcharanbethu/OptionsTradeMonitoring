@@ -450,7 +450,7 @@ export default function AutoTraderDashboard() {
                         return isStatusOpen && isSelfDirected;
                     }).map(acc => (
                       <option key={acc.id} value={acc.id}>
-                        {acc.name} ({acc.number})
+                        {acc.name} ({acc.number}) {acc.cash_balance !== undefined && acc.cash_balance !== null ? `- Cash: $${acc.cash_balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : ''}
                       </option>
                     ))}
                   </select>
