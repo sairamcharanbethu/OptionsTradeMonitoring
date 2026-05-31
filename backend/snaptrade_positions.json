@@ -1,0 +1,1147 @@
+{
+  "dfb17a40-dc7a-44fc-b4df-851aee29e71d": [
+    {
+      "symbol": {
+        "symbol": {
+          "id": "9605cecd-1d03-40ae-83e5-d6b1b36d754a",
+          "symbol": "CM.TO",
+          "description": "Canadian Imperial Bank of Commerce",
+          "currency": {
+            "code": "CAD",
+            "name": "Canadian Dollar",
+            "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+          },
+          "exchange": {
+            "id": "77de8509-63ff-4c73-8d92-98c9fd3e207f",
+            "code": "TSX",
+            "mic_code": "XTSE",
+            "name": "Toronto Stock Exchange",
+            "suffix": "TO",
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "CM",
+          "logo_url": "https://api.twelvedata.com/logo/cibc.com",
+          "figi_code": "BBG000BY35K5",
+          "figi_instrument": {
+            "figi_code": "BBG000BY35K5",
+            "figi_share_class": "BBG001S5YBB1"
+          }
+        },
+        "id": "5f730b35-b946-44e6-b736-f4fd0e48082f",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 150.49,
+      "open_pnl": 12646.0952,
+      "fractional_units": 167.5825,
+      "currency": {
+        "code": "CAD",
+        "name": "Canadian Dollar",
+        "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+      },
+      "units": 167.5825,
+      "average_purchase_price": 75.02809212,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "8609e774-e395-4d55-871a-ab478e580f89",
+          "symbol": "CRWV",
+          "description": "CoreWeave, Inc.",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ff4b2ffc-5a0e-4471-9cf5-95c0c30cdedd",
+            "code": "NASDAQ",
+            "mic_code": "XNAS",
+            "name": "NASDAQ",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "CRWV",
+          "logo_url": "https://api.twelvedata.com/logo/coreweave.com",
+          "figi_code": "BBG01SNG02V7",
+          "figi_instrument": {
+            "figi_code": "BBG01SNG02V7",
+            "figi_share_class": null
+          }
+        },
+        "id": "8cb8d7e9-796c-44df-8f32-3abbb7e4ed44",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 108.33,
+      "open_pnl": -1051.48,
+      "fractional_units": null,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 50,
+      "average_purchase_price": 129.3596,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "636ebc99-54c9-4332-aaad-dd38ee373b21",
+          "symbol": "ENB.TO",
+          "description": "Enbridge Inc.",
+          "currency": {
+            "code": "CAD",
+            "name": "Canadian Dollar",
+            "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+          },
+          "exchange": {
+            "id": "77de8509-63ff-4c73-8d92-98c9fd3e207f",
+            "code": "TSX",
+            "mic_code": "XTSE",
+            "name": "Toronto Stock Exchange",
+            "suffix": "TO",
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "ENB",
+          "logo_url": "https://api.twelvedata.com/logo/enbridge.com",
+          "figi_code": "BBG000C7P8K3",
+          "figi_instrument": {
+            "figi_code": "BBG000C7P8K3",
+            "figi_share_class": "BBG001S6Q6D7"
+          }
+        },
+        "id": "1c5269af-17d2-40e2-b121-42d43d0153ef",
+        "description": "Enbridge Inc.",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 75.64,
+      "open_pnl": 1725.7786,
+      "fractional_units": 65.8559,
+      "currency": {
+        "code": "CAD",
+        "name": "Canadian Dollar",
+        "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+      },
+      "units": 65.8559,
+      "average_purchase_price": 49.43462484,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "ed4f8e5e-05a1-48bc-ada7-fdf5cb6c9c07",
+          "symbol": "MFC.TO",
+          "description": "Manulife Financial Corporation",
+          "currency": {
+            "code": "CAD",
+            "name": "Canadian Dollar",
+            "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+          },
+          "exchange": {
+            "id": "77de8509-63ff-4c73-8d92-98c9fd3e207f",
+            "code": "TSX",
+            "mic_code": "XTSE",
+            "name": "Toronto Stock Exchange",
+            "suffix": "TO",
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "MFC",
+          "logo_url": "https://api.twelvedata.com/logo/manulife.com",
+          "figi_code": "BBG000C0QCW5",
+          "figi_instrument": {
+            "figi_code": "BBG000C0QCW5",
+            "figi_share_class": "BBG001S76KD6"
+          }
+        },
+        "id": "f8cfee47-5741-4da8-9fec-2b61fa4a8435",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 52.73,
+      "open_pnl": 5918.4128,
+      "fractional_units": 255.3303,
+      "currency": {
+        "code": "CAD",
+        "name": "Canadian Dollar",
+        "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+      },
+      "units": 255.3303,
+      "average_purchase_price": 29.55056222,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "bde6d4cb-c1e5-4c06-8f5c-26648e074c2a",
+          "symbol": "NVDY",
+          "description": "YieldMax NVDA Option Income Strategy ETF",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "9f3ea556-15c5-4321-8983-ad4033ff802b",
+            "code": "ARCA",
+            "mic_code": "ARCX",
+            "name": "NYSE Arca",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "8057ceb7-e073-4c77-8635-a1c9bc6442cb",
+            "code": "et",
+            "description": "ETF",
+            "is_supported": true
+          },
+          "raw_symbol": "NVDY",
+          "logo_url": "",
+          "figi_code": "BBG01G4W4R31",
+          "figi_instrument": {
+            "figi_code": "BBG01G4W4R31",
+            "figi_share_class": "BBG01G4W4RS4"
+          }
+        },
+        "id": "fbc216ec-afa8-4fbd-b7dd-fad97d93806c",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 13.56,
+      "open_pnl": -1428.4736,
+      "fractional_units": 570.94,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 570.94,
+      "average_purchase_price": 16.06196798,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "dff8cc39-bb53-470b-add0-a9d24edb7f89",
+          "symbol": "SU.TO",
+          "description": "Suncor Energy Inc.",
+          "currency": {
+            "code": "CAD",
+            "name": "Canadian Dollar",
+            "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+          },
+          "exchange": {
+            "id": "77de8509-63ff-4c73-8d92-98c9fd3e207f",
+            "code": "TSX",
+            "mic_code": "XTSE",
+            "name": "Toronto Stock Exchange",
+            "suffix": "TO",
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "SU",
+          "logo_url": "https://api.twelvedata.com/logo/suncor.com",
+          "figi_code": "BBG000BC1N80",
+          "figi_instrument": {
+            "figi_code": "BBG000BC1N80",
+            "figi_share_class": "BBG001S5YSF0"
+          }
+        },
+        "id": "2719a4e6-46f3-46c0-9367-19b28720273f",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 86.17,
+      "open_pnl": 3477.8644,
+      "fractional_units": 65.696,
+      "currency": {
+        "code": "CAD",
+        "name": "Canadian Dollar",
+        "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+      },
+      "units": 65.696,
+      "average_purchase_price": 33.23124645,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "9ef77fa2-df2f-459a-adc1-bb1af679abb7",
+          "symbol": "TLRY",
+          "description": "Tilray Brands, Inc.",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ff4b2ffc-5a0e-4471-9cf5-95c0c30cdedd",
+            "code": "NASDAQ",
+            "mic_code": "XNAS",
+            "name": "NASDAQ",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "TLRY",
+          "logo_url": "https://api.twelvedata.com/logo/tilray.com",
+          "figi_code": "BBG00L7XTPR7",
+          "figi_instrument": {
+            "figi_code": "BBG00L7XTPR7",
+            "figi_share_class": "BBG00L7XTPY9"
+          }
+        },
+        "id": "a653a6b0-d120-4ba2-b9ae-233b17e28c6e",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 5.5107,
+      "open_pnl": -2589.9331,
+      "fractional_units": 17.6955,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 17.6955,
+      "average_purchase_price": 151.87181373,
+      "cash_equivalent": false,
+      "tax_lots": []
+    }
+  ],
+  "9e70b4b4-b576-4943-abfe-238efc6f88ce": [
+    {
+      "symbol": {
+        "symbol": {
+          "id": "f3c91d59-19b9-4ad3-a6ea-62e431ab8916",
+          "symbol": "HHIS.TO",
+          "description": "Diversified High Income Fund",
+          "currency": {
+            "code": "CAD",
+            "name": "Canadian Dollar",
+            "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+          },
+          "exchange": {
+            "id": "77de8509-63ff-4c73-8d92-98c9fd3e207f",
+            "code": "TSX",
+            "mic_code": "XTSE",
+            "name": "Toronto Stock Exchange",
+            "suffix": "TO",
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "HHIS",
+          "logo_url": "",
+          "figi_code": null,
+          "figi_instrument": null
+        },
+        "id": "52a88b42-b8d5-45f4-8c6a-516585db59f0",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 12.19,
+      "open_pnl": -274.269,
+      "fractional_units": 539.7023,
+      "currency": {
+        "code": "CAD",
+        "name": "Canadian Dollar",
+        "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+      },
+      "units": 539.7023,
+      "average_purchase_price": 12.69818565,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "454e9d85-c0c6-40d2-84ee-b481deeaa84e",
+          "symbol": "ZWC.TO",
+          "description": "BMO Canadian High Dividend Covered Call ETF",
+          "currency": {
+            "code": "CAD",
+            "name": "Canadian Dollar",
+            "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+          },
+          "exchange": {
+            "id": "77de8509-63ff-4c73-8d92-98c9fd3e207f",
+            "code": "TSX",
+            "mic_code": "XTSE",
+            "name": "Toronto Stock Exchange",
+            "suffix": "TO",
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "8057ceb7-e073-4c77-8635-a1c9bc6442cb",
+            "code": "et",
+            "description": "ETF",
+            "is_supported": true
+          },
+          "raw_symbol": "ZWC",
+          "logo_url": "",
+          "figi_code": "BBG00FXWSBY7",
+          "figi_instrument": {
+            "figi_code": "BBG00FXWSBY7",
+            "figi_share_class": "BBG00FXWSCR3"
+          }
+        },
+        "id": "72336551-d35c-44c7-a45b-b59a754d6387",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 22.12,
+      "open_pnl": 1122.6939,
+      "fractional_units": 341.8094,
+      "currency": {
+        "code": "CAD",
+        "name": "Canadian Dollar",
+        "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+      },
+      "units": 341.8094,
+      "average_purchase_price": 18.8354387,
+      "cash_equivalent": false,
+      "tax_lots": []
+    }
+  ],
+  "953e7791-4811-42ea-a82d-42f2935635df": [
+    {
+      "symbol": {
+        "symbol": {
+          "id": "59b925cb-30de-413f-ac8f-87084aec4bb9",
+          "symbol": "BMO.TO",
+          "description": "Bank of Montreal",
+          "currency": {
+            "code": "CAD",
+            "name": "Canadian Dollar",
+            "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+          },
+          "exchange": {
+            "id": "77de8509-63ff-4c73-8d92-98c9fd3e207f",
+            "code": "TSX",
+            "mic_code": "XTSE",
+            "name": "Toronto Stock Exchange",
+            "suffix": "TO",
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "BMO",
+          "logo_url": "https://api.twelvedata.com/logo/bmo.com",
+          "figi_code": "BBG000BXSQR7",
+          "figi_instrument": {
+            "figi_code": "BBG000BXSQR7",
+            "figi_share_class": "BBG001S5Y203"
+          }
+        },
+        "id": "6914ac74-becc-4346-9a25-62a4b78e6d8c",
+        "description": "Bank of Montreal",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 223.93,
+      "open_pnl": 2664.9694,
+      "fractional_units": 25.6828,
+      "currency": {
+        "code": "CAD",
+        "name": "Canadian Dollar",
+        "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+      },
+      "units": 25.6828,
+      "average_purchase_price": 120.16524678,
+      "cash_equivalent": false,
+      "tax_lots": []
+    }
+  ],
+  "4ab34ab7-c3aa-447e-998a-78d5279606a3": [
+    {
+      "symbol": {
+        "symbol": {
+          "id": "400dfc94-16d9-4345-b3bc-a4f0fa4668dc",
+          "symbol": "XRP",
+          "description": "XRP",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ede7ad6f-b6c3-4fff-88ca-27cfb32f9250",
+            "code": "BINANCE",
+            "mic_code": null,
+            "name": "Binance",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "00:00:00",
+            "close_time": "23:59:59.999999"
+          },
+          "currencies": [],
+          "type": {
+            "id": "8c76d59d-1214-4412-9526-052412392387",
+            "code": "crypto",
+            "description": "Cryptocurrency",
+            "is_supported": true
+          },
+          "raw_symbol": "XRP",
+          "logo_url": null,
+          "figi_code": null,
+          "figi_instrument": null
+        },
+        "id": "fab9c85c-1749-4a74-8757-bba21f93472d",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 1.85730719,
+      "open_pnl": -4814.9204,
+      "fractional_units": 3946.99002882,
+      "currency": {
+        "code": "CAD",
+        "name": "Canadian Dollar",
+        "id": "f184bfe7-dd89-4abe-9095-6767bfaec387"
+      },
+      "units": 3946.99002882,
+      "average_purchase_price": 3.07720396,
+      "cash_equivalent": false,
+      "tax_lots": []
+    }
+  ],
+  "18323066-2491-4863-95b8-a64c3a3ea14b": [],
+  "acf44407-99b7-4f3c-808e-1c43b97624df": [
+    {
+      "symbol": {
+        "symbol": {
+          "id": "2233eff8-76cf-474a-9235-c7c59c111511",
+          "symbol": "ACHR",
+          "description": "Archer Aviation Inc.",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ebd63029-461e-4bed-bd4a-d0595f880b52",
+            "code": "NYSE",
+            "mic_code": "XNYS",
+            "name": "New York Stock Exchange",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "ACHR",
+          "logo_url": "https://api.twelvedata.com/logo/archer.com",
+          "figi_code": "BBG00YGCK400",
+          "figi_instrument": {
+            "figi_code": "BBG00YGCK400",
+            "figi_share_class": "BBG00XRTC929"
+          }
+        },
+        "id": "27ba4d96-ee78-4a70-a35e-35639db15108",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 6.81,
+      "open_pnl": -348.98,
+      "fractional_units": null,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 400,
+      "average_purchase_price": 7.68245,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "6930cb45-714e-49b9-a962-995e421fc606",
+          "symbol": "COIN",
+          "description": "Coinbase Global, Inc. - Class A",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ff4b2ffc-5a0e-4471-9cf5-95c0c30cdedd",
+            "code": "NASDAQ",
+            "mic_code": "XNAS",
+            "name": "NASDAQ",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "COIN",
+          "logo_url": "https://api.twelvedata.com/logo/coinbase.com",
+          "figi_code": "BBG00ZGF7J39",
+          "figi_instrument": {
+            "figi_code": "BBG00ZGF7J39",
+            "figi_share_class": "BBG00ZGF7799"
+          }
+        },
+        "id": "998789f6-f1dc-43b7-8012-44055806f63e",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 188.6,
+      "open_pnl": -17966.3222,
+      "fractional_units": null,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 110,
+      "average_purchase_price": 351.93020142,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "4a24bb03-98a1-4330-812b-cb600983e29c",
+          "symbol": "CRCL",
+          "description": "Circle Internet Group, Inc.",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ebd63029-461e-4bed-bd4a-d0595f880b52",
+            "code": "NYSE",
+            "mic_code": "XNYS",
+            "name": "New York Stock Exchange",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "CRCL",
+          "logo_url": "https://api.twelvedata.com/logo/circle.com",
+          "figi_code": "BBG01T61V2Z9",
+          "figi_instrument": {
+            "figi_code": "BBG01T61V2Z9",
+            "figi_share_class": null
+          }
+        },
+        "id": "e094080e-0698-4335-a467-7d3281e577bc",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 112.75,
+      "open_pnl": -17626.7112,
+      "fractional_units": null,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 250,
+      "average_purchase_price": 183.25684468,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "8609e774-e395-4d55-871a-ab478e580f89",
+          "symbol": "CRWV",
+          "description": "CoreWeave, Inc.",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ff4b2ffc-5a0e-4471-9cf5-95c0c30cdedd",
+            "code": "NASDAQ",
+            "mic_code": "XNAS",
+            "name": "NASDAQ",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "CRWV",
+          "logo_url": "https://api.twelvedata.com/logo/coreweave.com",
+          "figi_code": "BBG01SNG02V7",
+          "figi_instrument": {
+            "figi_code": "BBG01SNG02V7",
+            "figi_share_class": null
+          }
+        },
+        "id": "8cb8d7e9-796c-44df-8f32-3abbb7e4ed44",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 108.33,
+      "open_pnl": -91.0221,
+      "fractional_units": null,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 100,
+      "average_purchase_price": 109.24022059,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "7723c6c3-d41d-4c13-a0c1-20983941518b",
+          "symbol": "DUOL",
+          "description": "Duolingo, Inc.",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ff4b2ffc-5a0e-4471-9cf5-95c0c30cdedd",
+            "code": "NASDAQ",
+            "mic_code": "XNAS",
+            "name": "NASDAQ",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "DUOL",
+          "logo_url": "https://api.twelvedata.com/logo/duolingo.com",
+          "figi_code": "BBG011WFP5R9",
+          "figi_instrument": {
+            "figi_code": "BBG011WFP5R9",
+            "figi_share_class": "BBG003D4V960"
+          }
+        },
+        "id": "c6776d3e-01bf-4c77-a19b-7dd93a2b7d05",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 112.11,
+      "open_pnl": -4517.8,
+      "fractional_units": null,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 55,
+      "average_purchase_price": 194.25181818,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "ec4cb062-94cf-4d03-b7de-b46ea0899a9d",
+          "symbol": "FISV",
+          "description": "Fiserv, Inc.",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ff4b2ffc-5a0e-4471-9cf5-95c0c30cdedd",
+            "code": "NASDAQ",
+            "mic_code": "XNAS",
+            "name": "NASDAQ",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "FISV",
+          "logo_url": "",
+          "figi_code": "BBG000BJKPG0",
+          "figi_instrument": {
+            "figi_code": "BBG000BJKPG0",
+            "figi_share_class": "BBG001S5R6Q4"
+          }
+        },
+        "id": "5a93ed63-b68f-4e59-9542-1af0f4cbda30",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 56.7829,
+      "open_pnl": -7494.0525,
+      "fractional_units": null,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 150,
+      "average_purchase_price": 106.74325,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "31d333a6-8a3a-44d4-ae44-6331d8ab6467",
+          "symbol": "NMRA",
+          "description": "Neumora Therapeutics, Inc.",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ff4b2ffc-5a0e-4471-9cf5-95c0c30cdedd",
+            "code": "NASDAQ",
+            "mic_code": "XNAS",
+            "name": "NASDAQ",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "NMRA",
+          "logo_url": "https://api.twelvedata.com/logo/neumoratx.com",
+          "figi_code": "BBG01J35GTY4",
+          "figi_instrument": {
+            "figi_code": "BBG01J35GTY4",
+            "figi_share_class": "BBG012W9C504"
+          }
+        },
+        "id": "5f513314-32f1-4b73-94df-1ba29fe76993",
+        "description": "Neumora Therapeutics, Inc.",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 1.85,
+      "open_pnl": -7014.8298,
+      "fractional_units": null,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 1200,
+      "average_purchase_price": 7.69569152,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "bde6d4cb-c1e5-4c06-8f5c-26648e074c2a",
+          "symbol": "NVDY",
+          "description": "YieldMax NVDA Option Income Strategy ETF",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "9f3ea556-15c5-4321-8983-ad4033ff802b",
+            "code": "ARCA",
+            "mic_code": "ARCX",
+            "name": "NYSE Arca",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "8057ceb7-e073-4c77-8635-a1c9bc6442cb",
+            "code": "et",
+            "description": "ETF",
+            "is_supported": true
+          },
+          "raw_symbol": "NVDY",
+          "logo_url": "",
+          "figi_code": "BBG01G4W4R31",
+          "figi_instrument": {
+            "figi_code": "BBG01G4W4R31",
+            "figi_share_class": "BBG01G4W4RS4"
+          }
+        },
+        "id": "fbc216ec-afa8-4fbd-b7dd-fad97d93806c",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 13.56,
+      "open_pnl": -2065.4553,
+      "fractional_units": 800.468,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 800.468,
+      "average_purchase_price": 16.14030962,
+      "cash_equivalent": false,
+      "tax_lots": []
+    },
+    {
+      "symbol": {
+        "symbol": {
+          "id": "a5b9a8e8-ac10-4e60-9a6d-38aaae41f09e",
+          "symbol": "ORCL",
+          "description": "Oracle Corporation",
+          "currency": {
+            "code": "USD",
+            "name": "US Dollar",
+            "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+          },
+          "exchange": {
+            "id": "ebd63029-461e-4bed-bd4a-d0595f880b52",
+            "code": "NYSE",
+            "mic_code": "XNYS",
+            "name": "New York Stock Exchange",
+            "suffix": null,
+            "timezone": "America/New_York",
+            "start_time": "09:30:00",
+            "close_time": "16:00:00"
+          },
+          "currencies": [],
+          "type": {
+            "id": "515c27d1-8471-4dec-a234-af12184c51d4",
+            "code": "cs",
+            "description": "Common Stock",
+            "is_supported": true
+          },
+          "raw_symbol": "ORCL",
+          "logo_url": "https://api.twelvedata.com/logo/oracle.com",
+          "figi_code": "BBG000BQLY10",
+          "figi_instrument": {
+            "figi_code": "BBG000BQLY10",
+            "figi_share_class": "BBG001S5SJG6"
+          }
+        },
+        "id": "f3335cc4-4e6b-4f10-b92d-35cb2d5946ad",
+        "description": "",
+        "local_id": "",
+        "security_type": {},
+        "listing_exchange": {},
+        "is_quotable": true,
+        "is_tradable": true
+      },
+      "price": 226.2,
+      "open_pnl": -4413.2933,
+      "fractional_units": 150.1504,
+      "currency": {
+        "code": "USD",
+        "name": "US Dollar",
+        "id": "57f81c53-bdda-45a7-a51f-032afd1ae41b"
+      },
+      "units": 150.1504,
+      "average_purchase_price": 255.59248418,
+      "cash_equivalent": false,
+      "tax_lots": []
+    }
+  ]
+}

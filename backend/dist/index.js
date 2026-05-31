@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+require("dotenv/config");
 const fastify_1 = __importDefault(require("fastify"));
 const cors_1 = __importDefault(require("@fastify/cors"));
 const postgres_1 = __importDefault(require("@fastify/postgres"));
@@ -48,7 +49,6 @@ const market_1 = require("./routes/market");
 const ai_1 = require("./routes/ai");
 const settings_1 = require("./routes/settings");
 const goals_1 = require("./routes/goals");
-const live_analysis_1 = require("./routes/live-analysis");
 const jwt_1 = __importDefault(require("@fastify/jwt"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = require("./routes/admin");
@@ -139,6 +139,38 @@ const ensureSchema = async (instance) => {
       `);
         }
         instance.log.info('[Database] Schema verification completed successfully.');
+        // 4. Create snaptrade tables
+        await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS snaptrade_accounts (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(100),
+        number VARCHAR(50),
+        status VARCHAR(20),
+        unified_type VARCHAR(50),
+        raw_data JSONB,
+        last_synced_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+        await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS snaptrade_positions (
+        id VARCHAR(50) PRIMARY KEY,
+        account_id VARCHAR(50) REFERENCES snaptrade_accounts(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        symbol VARCHAR(50) NOT NULL,
+        description TEXT,
+        asset_type VARCHAR(50),
+        price DECIMAL(15, 4),
+        units DECIMAL(15, 4),
+        average_purchase_price DECIMAL(15, 4),
+        open_pnl DECIMAL(15, 4),
+        currency VARCHAR(10),
+        raw_data JSONB,
+        last_synced_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
     }
     catch (err) {
         instance.log.error(`[Database] Schema verification failed: ${err.message}`);
@@ -240,8 +272,8 @@ const start = async () => {
         fastify.register(market_1.marketRoutes, { prefix: '/api/market' });
         fastify.register(ai_1.aiRoutes, { prefix: '/api/ai' });
         fastify.register(settings_1.settingsRoutes, { prefix: '/api/settings' });
-        fastify.register(live_analysis_1.liveAnalysisRoutes, { prefix: '/api/live-analysis' });
         fastify.register(goals_1.goalRoutes, { prefix: '/api/goals' });
+        fastify.register((await Promise.resolve().then(() => __importStar(require('./routes/snaptrade')))).snaptradeRoutes, { prefix: '/api/snaptrade' });
         fastify.get('/health', async () => {
             return { status: 'ok' };
         });
@@ -310,7 +342,7 @@ const start = async () => {
         await fastify.listen({ port, host: '0.0.0.0' });
         // Start background services
         poller.start();
-        // streamer.start(); // Disabled: Subscriptions are now on-demand via Live Analysis only
+        // streamer.start(); // Disabled: Subscriptions are on-demand via position sync
         fastify.log.info(`Server listening on http://localhost:${port}`);
     }
     catch (err) {

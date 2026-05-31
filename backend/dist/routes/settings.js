@@ -92,6 +92,30 @@ async function settingsRoutes(fastify) {
             return reply.code(500).send({ error: 'Failed to save client ID' });
         }
     });
+    // QUESTRADE SAVE MANUAL REFRESH TOKEN
+    fastify.post('/questrade/manual-token', async (request, reply) => {
+        const { refreshToken } = request.body;
+        if (!refreshToken)
+            return reply.code(400).send({ error: 'refreshToken required' });
+        try {
+            const questrade = fastify.questrade;
+            // Save the refresh token directly to database
+            await questrade.saveTokenToDb(refreshToken);
+            // Reset in-memory cache and global Redis cache
+            questrade.token = null;
+            await redis_1.redis.del('QUESTRADE_ACTIVE_TOKEN');
+            // Perform direct rotation refresh to verify token is valid and fetch access_token, etc.
+            await questrade.refreshToken();
+            return { status: 'ok', message: 'Manual token saved and verified successfully' };
+        }
+        catch (err) {
+            fastify.log.error(err);
+            const errMsg = err.response?.data?.error_description || err.response?.data?.message || err.message || 'Invalid token';
+            return reply.code(400).send({
+                error: `Failed to verify manual refresh token with Questrade: ${errMsg}`
+            });
+        }
+    });
     // QUESTRADE TOKEN CALLBACK (from frontend hash)
     fastify.post('/questrade/token', async (request, reply) => {
         const data = request.body;

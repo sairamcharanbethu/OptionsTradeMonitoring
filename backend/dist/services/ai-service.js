@@ -46,6 +46,29 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
             discord_message: response.discord || response.analysis
         };
     }
+    async generateWealthsimpleBriefing(positions) {
+        if (positions.length === 0)
+            return { briefing: "No active Wealthsimple positions." };
+        const posSummary = positions.map(p => {
+            const pnl = p.open_pnl ? Number(p.open_pnl).toFixed(2) : '0.00';
+            const val = (Number(p.price) * Number(p.units)).toFixed(2);
+            return `- ${p.symbol} (${p.asset_type}): ${p.units} units @ $${p.average_purchase_price} | Current: $${p.price} | Value: $${val} | PnL: $${pnl}`;
+        }).join('\n');
+        const prompt = `Wealthsimple Portfolio Briefing
+Positions:
+${posSummary}
+
+Task: Provide a high-level summary of this equity/crypto portfolio.
+1. Highlight the biggest winners and losers by PnL.
+2. Discuss the asset allocation (e.g., concentration in crypto vs stocks vs ETFs).
+3. Suggest a brief fundamental/momentum next step or general advice for these holdings.
+Style: Professional wealth manager tone, concise but insightful.
+Format: JSON { "analysis": "Full analysis here..." }`;
+        const response = await this.generateAnalysisInternal(prompt);
+        return {
+            briefing: response.analysis
+        };
+    }
     async generateAnalysis(data) {
         const prompt = this.buildPrompt(data);
         const response = await this.generateAnalysisInternal(prompt);
@@ -61,36 +84,84 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
             analysis: response.analysis
         };
     }
+    async getSettings() {
+        let currentProvider = 'ollama';
+        let openRouterKey = '';
+        let currentModel = this.model;
+        try {
+            const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings');
+            const settings = rows.reduce((acc, row) => {
+                acc[row.key] = row.value;
+                return acc;
+            }, {});
+            if (settings.ai_provider)
+                currentProvider = settings.ai_provider;
+            if (settings.openrouter_key)
+                openRouterKey = settings.openrouter_key;
+            if (settings.ai_model)
+                currentModel = settings.ai_model;
+        }
+        catch (err) {
+            console.warn('[AIService] Failed to fetch settings, using defaults:', err);
+        }
+        return {
+            ai_provider: currentProvider,
+            openrouter_key: openRouterKey,
+            ai_model: currentModel
+        };
+    }
+    async checkHealth() {
+        const settings = await this.getSettings();
+        if (settings.ai_provider === 'openrouter') {
+            if (!settings.openrouter_key) {
+                throw new Error('OpenRouter selected but no API Key found in settings.');
+            }
+            try {
+                const response = await fetch('https://openrouter.ai/api/v1/key', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${settings.openrouter_key}`
+                    }
+                });
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`OpenRouter accessibility check failed: ${response.status} - ${errText}`);
+                }
+                const data = await response.json();
+                if (data && data.error) {
+                    throw new Error(`OpenRouter API Key check returned error: ${JSON.stringify(data.error)}`);
+                }
+            }
+            catch (err) {
+                throw new Error(`OpenRouter is not accessible. Error: ${err.message}`);
+            }
+        }
+        else if (settings.ai_provider === 'ollama') {
+            try {
+                const response = await fetch(`${this.ollamaUrl}/api/tags`, {
+                    method: 'GET'
+                });
+                if (!response.ok) {
+                    throw new Error(`Ollama health check failed: ${response.status} ${response.statusText}`);
+                }
+            }
+            catch (err) {
+                throw new Error(`Ollama is not accessible at ${this.ollamaUrl}. Error: ${err.message}`);
+            }
+        }
+    }
     async generateAnalysisInternal(prompt) {
         try {
             // 1. Fetch settings from DB
-            let currentProvider = 'ollama';
-            let openRouterKey = '';
-            let currentModel = this.model;
-            try {
-                const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings');
-                const settings = rows.reduce((acc, row) => {
-                    acc[row.key] = row.value;
-                    return acc;
-                }, {});
-                if (settings.ai_provider)
-                    currentProvider = settings.ai_provider;
-                if (settings.openrouter_key)
-                    openRouterKey = settings.openrouter_key;
-                if (settings.ai_model)
-                    currentModel = settings.ai_model;
-            }
-            catch (err) {
-                console.warn('[AIService] Failed to fetch settings, using defaults:', err);
-            }
+            const settings = await this.getSettings();
             // 2. Route based on provider
-            if (currentProvider === 'openrouter') {
-                if (!openRouterKey)
+            if (settings.ai_provider === 'openrouter') {
+                if (!settings.openrouter_key)
                     throw new Error('OpenRouter selected but no API Key found.');
-                return this.callOpenRouter(currentModel, openRouterKey, prompt);
+                return this.callOpenRouter(settings.ai_model, settings.openrouter_key, prompt);
             }
             else {
-                return this.callOllama(currentModel, prompt);
+                return this.callOllama(settings.ai_model, prompt);
             }
         }
         catch (error) {
