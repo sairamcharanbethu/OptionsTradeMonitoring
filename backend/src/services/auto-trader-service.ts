@@ -103,31 +103,30 @@ export class AutoTraderService {
     async calculateGex(symbol: string): Promise<GexResult> {
         this.fastify.log.info(`[AutoTraderService] Calculating GEX for ${symbol}...`);
         try {
-            // 1. Fetch Option Chain from yfinance
+            // 1. Fetch Option Chain from yahoo-finance2 v3
+            // v3 returns OptionsResult directly: { quote, options[], expirationDates[], strikes[] }
             const chain: any = await yahooFinance.options(symbol);
-            if (!chain || !chain.optionChain || !chain.optionChain.result || chain.optionChain.result.length === 0) {
+            if (!chain || !chain.options || chain.options.length === 0) {
                 throw new Error(`Failed to fetch option chain for ${symbol}`);
             }
 
-            const result = chain.optionChain.result[0];
-            const spotPrice = result.quote?.regularMarketPrice || 0;
+            const spotPrice = chain.quote?.regularMarketPrice || 0;
             if (!spotPrice) {
                 throw new Error(`Underlying spot price for ${symbol} not found.`);
             }
 
-            const options = result.options[0];
-            const calls = options.calls || [];
-            const puts = options.puts || [];
+            const frontExpiry = chain.options[0];
+            const calls = frontExpiry.calls || [];
+            const puts = frontExpiry.puts || [];
 
             // Standard market risk parameters
             const r = 0.045; // Risk-free rate (4.5%)
-            // Estimate days to expiration (assuming front month / nearest expiry)
-            const expiryStr = result.expirationDates?.[0] 
-                ? new Date(result.expirationDates[0] * 1000).toISOString().split('T')[0] 
-                : new Date().toISOString().split('T')[0];
-            const expDate = new Date(expiryStr);
+            // Estimate days to expiration from the front-month expiration date
+            const expiryDate = chain.expirationDates?.[0]
+                ? new Date(chain.expirationDates[0])
+                : new Date();
             const today = new Date();
-            const daysToExpiry = Math.max((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24), 0.01);
+            const daysToExpiry = Math.max((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24), 0.01);
             const t = daysToExpiry / 365; // Time in years
 
             let netGex = 0;
@@ -229,10 +228,16 @@ export class AutoTraderService {
 
         } catch (err: any) {
             this.fastify.log.error(`[AutoTraderService] GEX Calculation failed for ${symbol}: ${err.message}. Using fallback approximation...`);
-            // Robust Fallback: Calculate GEX based on volatility and trend
-            const spot = symbol.toUpperCase() === 'SPY' ? 520 : 440;
+            // Robust Fallback: try to get real spot price at minimum
+            let spot: number;
+            try {
+                const quote: any = await yahooFinance.quote(symbol);
+                spot = quote?.regularMarketPrice || (symbol.toUpperCase() === 'SPY' ? 750 : 650);
+            } catch {
+                spot = symbol.toUpperCase() === 'SPY' ? 750 : 650;
+            }
             return {
-                netGex: 50000000, // Positive GEX representation
+                netGex: 50000000, // Positive GEX (conservative fallback)
                 netVex: 12000000,
                 netCex: -4000000,
                 gammaFlip: spot - 2,
