@@ -299,15 +299,24 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </div>
                                 )}
 
-                                <div className="grid gap-2">
-                                    <Label htmlFor="model">Model Name</Label>
-                                    <Input
-                                        id="model"
-                                        value={model}
-                                        onChange={(e) => setModel(e.target.value)}
-                                        placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3-haiku'}
-                                    />
-                                </div>
+                                 <div className="grid gap-2">
+                                     <Label htmlFor="model">Model Name</Label>
+                                     <Input
+                                         id="model"
+                                         value={model}
+                                         onChange={(e) => setModel(e.target.value)}
+                                         placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3.5-sonnet'}
+                                     />
+                                     {provider === 'openrouter' && (
+                                         <p className="text-[10px] text-muted-foreground mt-1 leading-normal">
+                                             Recommended OpenRouter slugs:<br/>
+                                             1. <strong>Claude 3.5 Sonnet</strong>: <code>anthropic/claude-3.5-sonnet</code><br/>
+                                             2. <strong>DeepSeek R1 / V3</strong>: <code>deepseek/deepseek-r1</code> or <code>deepseek/deepseek-chat</code><br/>
+                                             3. <strong>OpenAI GPT-4o</strong>: <code>openai/gpt-4o</code><br/>
+                                             4. <strong>Gemini 2.0 Flash / Pro 1.5</strong>: <code>google/gemini-2.0-flash-exp</code> or <code>google/gemini-pro-1.5</code>
+                                         </p>
+                                     )}
+                                 </div>
 
                                 <div className="grid gap-2">
                                     <Label htmlFor="frequency">Morning Briefing Frequency</Label>

@@ -190,8 +190,9 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
         try {
             const settings = await this.getSettings();
             if (settings.ai_provider === 'openrouter' && settings.openrouter_key) {
-                // Hardcode Claude 3.5 Sonnet on OpenRouter with highly restricted max tokens (120) to be extremely token efficient
-                const response = await this.callOpenRouter('anthropic/claude-3.5-sonnet', settings.openrouter_key, prompt, 120);
+                // Route trade decisions through the user's selected model (or default to Claude 3.5 Sonnet)
+                const model = settings.ai_model || 'anthropic/claude-3.5-sonnet';
+                const response = await this.callOpenRouter(model, settings.openrouter_key, prompt, 120);
                 return {
                     verdict: response.verdict,
                     analysis: response.analysis
@@ -200,7 +201,7 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
             // Fallback to standard selected provider if OpenRouter or key isn't active
             return this.askAI(prompt);
         } catch (err) {
-            console.error("[AIService] Failed to invoke hardcoded Claude 3.5 Sonnet for trading, falling back:", err);
+            console.error("[AIService] Failed to invoke configured model for trading, falling back:", err);
             return this.askAI(prompt);
         }
     }
