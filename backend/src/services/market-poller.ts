@@ -9,6 +9,7 @@ export class MarketPoller {
   private aiService: AIService;
   private currentIntervalSeconds: number = 60; // Default 1 min
   private timerId: NodeJS.Timeout | null = null;
+  private pollingEnabled: boolean = true;
 
   private redisClient: any;
 
@@ -21,17 +22,23 @@ export class MarketPoller {
   private readonly LOCK_KEY = 'MARKET_POLLER_LEADER';
 
   public async start() {
-    // 1. Fetch the preferred interval from settings
+    // 1. Fetch the preferred interval and polling enabled state from settings
     try {
       const { rows } = await (this.fastify as any).pg.query(
-        "SELECT value FROM settings WHERE key = 'market_poll_interval' ORDER BY updated_at DESC LIMIT 1"
+        "SELECT key, value FROM settings WHERE key IN ('market_poll_interval', 'polling_enabled') ORDER BY updated_at DESC"
       );
-      if (rows.length > 0) {
-        this.currentIntervalSeconds = parseInt(rows[0].value, 10) || 60;
+      for (const row of rows) {
+        if (row.key === 'market_poll_interval') {
+          this.currentIntervalSeconds = parseInt(row.value, 10) || 60;
+        } else if (row.key === 'polling_enabled') {
+          this.pollingEnabled = row.value !== 'false';
+        }
       }
     } catch (err) {
-      this.fastify.log.error(`[MarketPoller] Failed to load poll interval from DB: ${err}`);
+      this.fastify.log.error(`[MarketPoller] Failed to load poll settings from DB: ${err}`);
     }
+
+    this.fastify.log.info(`[MarketPoller] Starting with polling ${this.pollingEnabled ? 'ENABLED' : 'DISABLED'}, interval: ${this.currentIntervalSeconds}s`);
 
     // Start recursive loop
     this.scheduleNextPoll();
@@ -43,6 +50,11 @@ export class MarketPoller {
 
     this.timerId = setTimeout(async () => {
       try {
+        if (!this.pollingEnabled) {
+          // Skip polling but keep the timer alive so we can resume
+          return;
+        }
+
         // Distributed Lock Check
         // Attempt to acquire lock for slightly longer than the interval
         const lockDuration = this.currentIntervalSeconds + 5;
@@ -50,10 +62,6 @@ export class MarketPoller {
 
         if (acquired) {
           await this.poll();
-          // Keep lock alive if poll took time? The EX is set on acquire.
-          // Ideally we extend it during long polls, but for now this is sufficient for leadership election.
-        } else {
-          // this.fastify.log.debug('[MarketPoller] Standby (Lock held by another instance).');
         }
       } catch (err) {
         this.fastify.log.error(`[MarketPoller] Error during poll execution: ${err}`);
@@ -67,6 +75,30 @@ export class MarketPoller {
     this.fastify.log.info(`[MarketPoller] Updating poll interval to: ${seconds}s`);
     this.currentIntervalSeconds = seconds;
     this.scheduleNextPoll(); // Reschedule immediately
+  }
+
+  /**
+   * Stop polling. The timer loop stays alive but skips actual poll calls.
+   */
+  public stop() {
+    this.pollingEnabled = false;
+    this.fastify.log.info('[MarketPoller] Polling DISABLED by user.');
+  }
+
+  /**
+   * Resume polling after being stopped.
+   */
+  public resume() {
+    this.pollingEnabled = true;
+    this.fastify.log.info('[MarketPoller] Polling ENABLED by user.');
+    this.scheduleNextPoll(); // Kick off immediately
+  }
+
+  /**
+   * Returns whether polling is currently active.
+   */
+  public isRunning(): boolean {
+    return this.pollingEnabled;
   }
 
   // Called by QuestradeStreamService via Index.ts

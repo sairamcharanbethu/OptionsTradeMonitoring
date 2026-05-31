@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Settings, Save, Loader2, User as UserIcon } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { api } from '@/lib/api';
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -27,6 +28,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [model, setModel] = useState('mistral:7b-instruct-q4_K_M');
     const [briefingFrequency, setBriefingFrequency] = useState('disabled');
     const [pollInterval, setPollInterval] = useState('60'); // Market Poll (Global)
+    const [pollingEnabled, setPollingEnabled] = useState(true); // Master polling toggle
     const [positionPollInterval, setPositionPollInterval] = useState('2'); // Position Detail Poll (Local)
 
     // Security & Profile State
@@ -161,6 +163,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setModel(data.ai_model || 'mistral:7b-instruct-q4_K_M');
             setBriefingFrequency(data.briefing_frequency || 'disabled');
             setPollInterval(data.market_poll_interval || '60');
+            setPollingEnabled(data.polling_enabled !== 'false');
             setPositionPollInterval(data.position_poll_interval || '2');
             setSnaptradeClientId(data.snaptrade_client_id || '');
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
@@ -225,6 +228,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 ai_model: model,
                 briefing_frequency: briefingFrequency,
                 market_poll_interval: pollInterval,
+                polling_enabled: pollingEnabled ? 'true' : 'false',
                 position_poll_interval: positionPollInterval,
                 snaptrade_client_id: snaptradeClientId,
                 snaptrade_consumer_key: snaptradeConsumerKey
@@ -339,14 +343,37 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 </div>
 
                                 <div className="grid gap-2 pt-4 border-t">
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="pollingToggle" className="flex items-center gap-2">
+                                            Market Polling
+                                            {pollingEnabled ? (
+                                                <Badge variant="default" className="text-[10px] h-5 bg-emerald-600">Active</Badge>
+                                            ) : (
+                                                <Badge variant="secondary" className="text-[10px] h-5">Paused</Badge>
+                                            )}
+                                        </Label>
+                                        <Switch
+                                            id="pollingToggle"
+                                            checked={pollingEnabled}
+                                            onCheckedChange={setPollingEnabled}
+                                        />
+                                    </div>
+                                    <p className={`text-[10px] ${!pollingEnabled ? 'text-amber-500 font-semibold' : 'text-muted-foreground'}`}>
+                                        {!pollingEnabled
+                                            ? 'Polling is paused. No API calls will be made to fetch prices or Greeks.'
+                                            : 'Master toggle for all server-side market data polling.'}
+                                    </p>
+                                </div>
+
+                                <div className="grid gap-2">
                                     <Label htmlFor="pollInterval" className="flex items-center gap-2">
                                         Market Poll Interval
                                         {parseInt(pollInterval) < 30 && (
                                             <Badge variant="destructive" className="text-[10px] h-5">High Risk</Badge>
                                         )}
                                     </Label>
-                                    <Select value={pollInterval} onValueChange={setPollInterval}>
-                                        <SelectTrigger>
+                                    <Select value={pollInterval} onValueChange={setPollInterval} disabled={!pollingEnabled}>
+                                        <SelectTrigger className={!pollingEnabled ? 'opacity-50' : ''}>
                                             <SelectValue placeholder="Select Interval" />
                                         </SelectTrigger>
                                         <SelectContent>

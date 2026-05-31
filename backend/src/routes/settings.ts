@@ -64,6 +64,15 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     }
                 }
 
+                // If polling toggle was updated, stop/resume the poller
+                if (updates.polling_enabled !== undefined && (fastify as any).poller) {
+                    if (updates.polling_enabled === 'true') {
+                        (fastify as any).poller.resume();
+                    } else {
+                        (fastify as any).poller.stop();
+                    }
+                }
+
                 return { status: 'ok', message: 'Settings updated' };
             } catch (err) {
                 await client.query('ROLLBACK');
