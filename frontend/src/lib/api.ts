@@ -506,6 +506,25 @@ export const api = {
     const res = await authFetch(`${API_BASE}/goals/${goalId}/insights`);
     if (!res.ok) throw new Error('Failed to fetch goal insights');
     return res.json();
+  },
+
+  // ─── Snaptrade ───
+  async syncSnaptradePortfolio(): Promise<{ success: boolean; syncedAccounts: number }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/sync`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to sync Wealthsimple portfolio');
+    return res.json();
+  },
+
+  async getSnaptradePortfolio(): Promise<{ accounts: any[]; positions: any[] }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/portfolio`);
+    if (!res.ok) throw new Error('Failed to fetch Wealthsimple portfolio');
+    return res.json();
+  },
+
+  async getSnaptradeBriefing(): Promise<{ briefing: string }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/briefing`);
+    if (!res.ok) throw new Error('Failed to generate Wealthsimple AI briefing');
+    return res.json();
   }
 };
 

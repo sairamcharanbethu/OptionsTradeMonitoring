@@ -62,3 +62,12 @@ export function usePrefetchDashboard() {
 
     return prefetch;
 }
+
+export function useSnaptradePortfolio() {
+    return useQuery({
+        queryKey: ['snaptradePortfolio'],
+        queryFn: () => api.getSnaptradePortfolio(),
+        refetchInterval: 300000, // Refresh every 5 minutes
+        staleTime: 60000,
+    });
+}

@@ -70,6 +70,32 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         };
     }
 
+    async generateWealthsimpleBriefing(positions: any[]): Promise<{ briefing: string }> {
+        if (positions.length === 0) return { briefing: "No active Wealthsimple positions." };
+
+        const posSummary = positions.map(p => {
+            const pnl = p.open_pnl ? Number(p.open_pnl).toFixed(2) : '0.00';
+            const val = (Number(p.price) * Number(p.units)).toFixed(2);
+            return `- ${p.symbol} (${p.asset_type}): ${p.units} units @ $${p.average_purchase_price} | Current: $${p.price} | Value: $${val} | PnL: $${pnl}`;
+        }).join('\n');
+
+        const prompt = `Wealthsimple Portfolio Briefing
+Positions:
+${posSummary}
+
+Task: Provide a high-level summary of this equity/crypto portfolio.
+1. Highlight the biggest winners and losers by PnL.
+2. Discuss the asset allocation (e.g., concentration in crypto vs stocks vs ETFs).
+3. Suggest a brief fundamental/momentum next step or general advice for these holdings.
+Style: Professional wealth manager tone, concise but insightful.
+Format: JSON { "analysis": "Full analysis here..." }`;
+
+        const response = await this.generateAnalysisInternal(prompt);
+        return {
+            briefing: response.analysis
+        };
+    }
+
     async generateAnalysis(data: AIAnalysisRequest): Promise<{ verdict: string; analysis: string }> {
         const prompt = this.buildPrompt(data);
         const response = await this.generateAnalysisInternal(prompt);

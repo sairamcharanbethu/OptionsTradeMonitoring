@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import postgres from '@fastify/postgres';
@@ -115,6 +116,40 @@ const ensureSchema = async (instance: any) => {
     }
 
     instance.log.info('[Database] Schema verification completed successfully.');
+
+    // 4. Create snaptrade tables
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS snaptrade_accounts (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(100),
+        number VARCHAR(50),
+        status VARCHAR(20),
+        unified_type VARCHAR(50),
+        raw_data JSONB,
+        last_synced_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS snaptrade_positions (
+        id VARCHAR(50) PRIMARY KEY,
+        account_id VARCHAR(50) REFERENCES snaptrade_accounts(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        symbol VARCHAR(50) NOT NULL,
+        description TEXT,
+        asset_type VARCHAR(50),
+        price DECIMAL(15, 4),
+        units DECIMAL(15, 4),
+        average_purchase_price DECIMAL(15, 4),
+        open_pnl DECIMAL(15, 4),
+        currency VARCHAR(10),
+        raw_data JSONB,
+        last_synced_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
   } catch (err: any) {
     instance.log.error(`[Database] Schema verification failed: ${err.message}`);
   }
@@ -226,6 +261,7 @@ const start = async () => {
     fastify.register(aiRoutes, { prefix: '/api/ai' });
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
     fastify.register(goalRoutes, { prefix: '/api/goals' });
+    fastify.register((await import('./routes/snaptrade')).snaptradeRoutes, { prefix: '/api/snaptrade' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
