@@ -156,7 +156,11 @@ export class SnaptradeService {
             try {
                 await client.query('BEGIN');
 
-                // Upsert accounts
+                // 1. Wipe previous SnapTrade sync data for this user to avoid stale/orphaned/duplicate records
+                await client.query('DELETE FROM snaptrade_positions WHERE user_id = $1', [userId]);
+                await client.query('DELETE FROM snaptrade_accounts WHERE user_id = $1', [userId]);
+
+                // 2. Re-insert only the currently active accounts
                 for (const account of openAccounts) {
                     const status = account.meta?.status || account.status || 'open';
                     const unifiedType = account.meta?.unifiedAccountType || '';
@@ -179,9 +183,6 @@ export class SnaptradeService {
                         userSecret: snaptradeUserSecret,
                         accountId: account.id,
                     });
-
-                    // Clear old positions for this account
-                    await client.query('DELETE FROM snaptrade_positions WHERE account_id = $1', [account.id]);
 
                     for (const pos of positionsRes.data) {
                         if (!pos.symbol || !pos.symbol.symbol) continue;
