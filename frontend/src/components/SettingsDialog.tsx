@@ -452,7 +452,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             value={snaptradeClientId}
                                             onChange={(e) => setSnaptradeClientId(e.target.value)}
                                             placeholder="PERS-..."
-                                            type="password"
+                                            type="text"
                                         />
                                     </div>
                                     <div className="grid gap-2">

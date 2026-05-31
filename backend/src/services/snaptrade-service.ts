@@ -17,8 +17,8 @@ export class SnaptradeService {
             return acc;
         }, {});
 
-        const clientId = settings.snaptrade_client_id;
-        const consumerKey = settings.snaptrade_consumer_key;
+        const clientId = settings.snaptrade_client_id?.trim();
+        const consumerKey = settings.snaptrade_consumer_key?.trim();
 
         if (!clientId || !consumerKey) {
             throw new Error('SnapTrade Client ID or Consumer Key not configured in settings.');
@@ -51,10 +51,11 @@ export class SnaptradeService {
                 );
             } catch (err: any) {
                 this.fastify.log.error(`[SnaptradeService] Failed to register user: ${err.message}`);
-                if (err.response?.data) {
-                    this.fastify.log.error(`[SnaptradeService] API Response: ${JSON.stringify(err.response.data)}`);
+                if (err.responseBody) {
+                    this.fastify.log.error(`[SnaptradeService] API Response Body: ${JSON.stringify(err.responseBody)}`);
                 }
-                throw new Error('Failed to register SnapTrade user. Verify your Client ID and Consumer Key.');
+                const detail = err.responseBody?.detail || err.message;
+                throw new Error(`Failed to register SnapTrade user: ${detail}`);
             }
         }
 
@@ -70,7 +71,12 @@ export class SnaptradeService {
             });
             return { redirectURI: response.data?.redirectURI };
         } catch (err: any) {
-            throw new Error(`Failed to generate connection URL: ${err.message}`);
+            this.fastify.log.error(`[SnaptradeService] Failed to generate connection URL: ${err.message}`);
+            if (err.responseBody) {
+                this.fastify.log.error(`[SnaptradeService] API Response Body: ${JSON.stringify(err.responseBody)}`);
+            }
+            const detail = err.responseBody?.detail || err.message;
+            throw new Error(`Failed to generate connection URL: ${detail}`);
         }
     }
 
@@ -164,7 +170,11 @@ export class SnaptradeService {
 
         } catch (error: any) {
             this.fastify.log.error(`Snaptrade Sync Error: ${error.message}`);
-            throw new Error('Failed to sync SnapTrade portfolio');
+            if (error.responseBody) {
+                this.fastify.log.error(`[SnaptradeService] API Response Body: ${JSON.stringify(error.responseBody)}`);
+            }
+            const detail = error.responseBody?.detail || error.message;
+            throw new Error(`Failed to sync SnapTrade portfolio: ${detail}`);
         }
     }
 

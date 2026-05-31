@@ -1,6 +1,11 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AIService = void 0;
+const yahoo_finance2_1 = __importDefault(require("yahoo-finance2"));
+const yahooFinance = new yahoo_finance2_1.default({ suppressNotices: ['ripHistorical'] });
 class AIService {
     fastify;
     ollamaUrl;
@@ -49,6 +54,38 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
     async generateWealthsimpleBriefing(positions) {
         if (positions.length === 0)
             return { briefing: "No active Wealthsimple positions." };
+        // Sort by value descending and take top 10 to avoid rate limits
+        const sortedPositions = [...positions].sort((a, b) => {
+            const valA = Number(a.price) * Number(a.units);
+            const valB = Number(b.price) * Number(b.units);
+            return valB - valA;
+        });
+        const topPositions = sortedPositions.slice(0, 10);
+        let insightsText = "";
+        try {
+            const promises = topPositions.map(async (p) => {
+                // Only lookup equities/ETFs, skip pure crypto if Yahoo doesn't support the exact ticker easily
+                // Though Yahoo supports BTC-USD, the raw symbol might not match. We'll try anyway.
+                const ticker = p.symbol;
+                try {
+                    const quote = await yahooFinance.quoteSummary(ticker, { modules: ['summaryDetail', 'price'] });
+                    const news = await yahooFinance.search(ticker, { newsCount: 3 });
+                    const price = quote.price?.regularMarketPrice || p.price;
+                    const pe = quote.summaryDetail?.trailingPE?.toFixed(2) || 'N/A';
+                    const fiftyTwoHigh = quote.summaryDetail?.fiftyTwoWeekHigh?.toFixed(2) || 'N/A';
+                    const headlines = (news.news || []).slice(0, 2).map((n) => `- "${n.title}"`).join('\n      ');
+                    return `  [${ticker}] P/E: ${pe} | 52w High: $${fiftyTwoHigh} | Current: $${price}\n      Recent News:\n      ${headlines || 'No recent news.'}`;
+                }
+                catch (e) {
+                    return `  [${ticker}] No extended data available.`;
+                }
+            });
+            const resolvedInsights = await Promise.all(promises);
+            insightsText = resolvedInsights.join('\n\n');
+        }
+        catch (e) {
+            console.error("[AIService] Failed to fetch Yahoo Finance insights for Wealthsimple briefing", e);
+        }
         const posSummary = positions.map(p => {
             const pnl = p.open_pnl ? Number(p.open_pnl).toFixed(2) : '0.00';
             const val = (Number(p.price) * Number(p.units)).toFixed(2);
@@ -58,12 +95,17 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
 Positions:
 ${posSummary}
 
-Task: Provide a high-level summary of this equity/crypto portfolio.
-1. Highlight the biggest winners and losers by PnL.
-2. Discuss the asset allocation (e.g., concentration in crypto vs stocks vs ETFs).
-3. Suggest a brief fundamental/momentum next step or general advice for these holdings.
-Style: Professional wealth manager tone, concise but insightful.
-Format: JSON { "analysis": "Full analysis here..." }`;
+Fundamental & News Insights (Top Holdings):
+${insightsText}
+
+Task: Provide a high-level summary of this equity/crypto portfolio utilizing a simulated Multi-Agent Debate for the top holdings.
+1. Portfolio Summary: Briefly highlight the biggest winners and losers by PnL, and discuss the asset allocation.
+2. Top Holdings Debate: For EACH of the top holdings with provided news/fundamentals, simulate a rigorous debate between two AI agents:
+   - 🐂 Bull Agent: Provide a concise bullish argument leveraging the provided news, P/E ratio, and recent highs.
+   - 🐻 Bear Agent: Provide a concise bearish counter-argument focusing on valuation risks or negative news.
+   - ⚖️ Manager Verdict: The final decision on whether to hold, trim, or buy more, with a rebalancing rationale.
+Style: Professional wealth manager tone, structured with clear Markdown headers for each holding.
+Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
         const response = await this.generateAnalysisInternal(prompt);
         return {
             briefing: response.analysis
@@ -197,10 +239,22 @@ Format: JSON { "analysis": "Full analysis here..." }`;
         const data = await response.json();
         const text = data.choices[0].message.content;
         try {
-            const parsed = JSON.parse(text);
+            // Strip markdown json blocks if present
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            }
+            else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+            const parsed = JSON.parse(cleanText);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || cleanText;
+            if (typeof analysisText === 'object') {
+                analysisText = JSON.stringify(analysisText, null, 2);
+            }
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
+                analysis: analysisText,
                 discord: parsed.discord
             };
         }
@@ -230,10 +284,22 @@ Format: JSON { "analysis": "Full analysis here..." }`;
         const result = await response.json();
         const text = result.response;
         try {
-            const parsed = JSON.parse(text);
+            // Strip markdown json blocks if present
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            }
+            else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+            const parsed = JSON.parse(cleanText);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || cleanText;
+            if (typeof analysisText === 'object') {
+                analysisText = JSON.stringify(analysisText, null, 2);
+            }
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
+                analysis: analysisText,
                 discord: parsed.discord
             };
         }

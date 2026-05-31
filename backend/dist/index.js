@@ -36,7 +36,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-require("dotenv/config");
 const fastify_1 = __importDefault(require("fastify"));
 const cors_1 = __importDefault(require("@fastify/cors"));
 const postgres_1 = __importDefault(require("@fastify/postgres"));
@@ -52,6 +51,7 @@ const goals_1 = require("./routes/goals");
 const jwt_1 = __importDefault(require("@fastify/jwt"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = require("./routes/admin");
+const snaptrade_1 = require("./routes/snaptrade");
 const fastify = (0, fastify_1.default)({
     logger: {
         level: 'info',
@@ -142,12 +142,12 @@ const ensureSchema = async (instance) => {
         // 4. Create snaptrade tables
         await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS snaptrade_accounts (
-        id VARCHAR(50) PRIMARY KEY,
+        id VARCHAR(255) PRIMARY KEY,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        name VARCHAR(100),
-        number VARCHAR(50),
-        status VARCHAR(20),
-        unified_type VARCHAR(50),
+        name VARCHAR(255),
+        number VARCHAR(100),
+        status VARCHAR(50),
+        unified_type VARCHAR(100),
         raw_data JSONB,
         last_synced_at TIMESTAMPTZ DEFAULT NOW(),
         created_at TIMESTAMPTZ DEFAULT NOW()
@@ -155,12 +155,12 @@ const ensureSchema = async (instance) => {
     `);
         await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS snaptrade_positions (
-        id VARCHAR(50) PRIMARY KEY,
-        account_id VARCHAR(50) REFERENCES snaptrade_accounts(id) ON DELETE CASCADE,
+        id VARCHAR(255) PRIMARY KEY,
+        account_id VARCHAR(255) REFERENCES snaptrade_accounts(id) ON DELETE CASCADE,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-        symbol VARCHAR(50) NOT NULL,
+        symbol VARCHAR(255) NOT NULL,
         description TEXT,
-        asset_type VARCHAR(50),
+        asset_type VARCHAR(100),
         price DECIMAL(15, 4),
         units DECIMAL(15, 4),
         average_purchase_price DECIMAL(15, 4),
@@ -171,6 +171,24 @@ const ensureSchema = async (instance) => {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
+        // Ensure columns are altered in case they were already created with a smaller size
+        try {
+            await instance.pg.query(`
+        ALTER TABLE snaptrade_accounts ALTER COLUMN id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN name TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN number TYPE VARCHAR(100);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN status TYPE VARCHAR(50);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN unified_type TYPE VARCHAR(100);
+        
+        ALTER TABLE snaptrade_positions ALTER COLUMN id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN account_id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN symbol TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN asset_type TYPE VARCHAR(100);
+      `);
+        }
+        catch (e) {
+            instance.log.warn('[Database] Could not alter some snaptrade columns (might not exist yet or conflicting constraint).');
+        }
     }
     catch (err) {
         instance.log.error(`[Database] Schema verification failed: ${err.message}`);
@@ -273,7 +291,7 @@ const start = async () => {
         fastify.register(ai_1.aiRoutes, { prefix: '/api/ai' });
         fastify.register(settings_1.settingsRoutes, { prefix: '/api/settings' });
         fastify.register(goals_1.goalRoutes, { prefix: '/api/goals' });
-        fastify.register((await Promise.resolve().then(() => __importStar(require('./routes/snaptrade')))).snaptradeRoutes, { prefix: '/api/snaptrade' });
+        fastify.register(snaptrade_1.snaptradeRoutes, { prefix: '/api/snaptrade' });
         fastify.get('/health', async () => {
             return { status: 'ok' };
         });

@@ -41,12 +41,13 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 await client.query('BEGIN');
 
                 for (const [key, value] of Object.entries(updates)) {
+                    const trimmedValue = typeof value === 'string' ? value.trim() : value;
                     await client.query(
                         `INSERT INTO settings (user_id, key, value, updated_at) 
                          VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
                          ON CONFLICT (user_id, key) DO UPDATE 
                          SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                        [userId, key, value]
+                        [userId, key, trimmedValue]
                     );
                 }
 
