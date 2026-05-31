@@ -272,8 +272,16 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
         const text = data.choices[0].message.content;
 
         try {
-            const parsed = JSON.parse(text);
-            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text;
+            // Strip markdown json blocks if present
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            } else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+
+            const parsed = JSON.parse(cleanText);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || cleanText;
             if (typeof analysisText === 'object') {
                 analysisText = JSON.stringify(analysisText, null, 2);
             }
@@ -313,8 +321,16 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
         const text = result.response;
 
         try {
-            const parsed = JSON.parse(text);
-            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text;
+            // Strip markdown json blocks if present
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            } else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+
+            const parsed = JSON.parse(cleanText);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || cleanText;
             if (typeof analysisText === 'object') {
                 analysisText = JSON.stringify(analysisText, null, 2);
             }
