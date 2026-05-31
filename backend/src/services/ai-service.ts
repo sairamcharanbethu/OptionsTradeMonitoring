@@ -1,5 +1,8 @@
 
 import { FastifyInstance } from 'fastify';
+import YahooFinance from 'yahoo-finance2';
+
+const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
 interface AIAnalysisRequest {
     symbol: string;
@@ -73,6 +76,43 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
     async generateWealthsimpleBriefing(positions: any[]): Promise<{ briefing: string }> {
         if (positions.length === 0) return { briefing: "No active Wealthsimple positions." };
 
+        // Sort by value descending and take top 10 to avoid rate limits
+        const sortedPositions = [...positions].sort((a, b) => {
+            const valA = Number(a.price) * Number(a.units);
+            const valB = Number(b.price) * Number(b.units);
+            return valB - valA;
+        });
+
+        const topPositions = sortedPositions.slice(0, 10);
+        
+        let insightsText = "";
+        try {
+            const promises = topPositions.map(async (p) => {
+                // Only lookup equities/ETFs, skip pure crypto if Yahoo doesn't support the exact ticker easily
+                // Though Yahoo supports BTC-USD, the raw symbol might not match. We'll try anyway.
+                const ticker = p.symbol;
+                try {
+                    const quote = await yahooFinance.quoteSummary(ticker, { modules: ['summaryDetail', 'price'] });
+                    const news = await yahooFinance.search(ticker, { newsCount: 3 });
+                    
+                    const price = quote.price?.regularMarketPrice || p.price;
+                    const pe = quote.summaryDetail?.trailingPE?.toFixed(2) || 'N/A';
+                    const fiftyTwoHigh = quote.summaryDetail?.fiftyTwoWeekHigh?.toFixed(2) || 'N/A';
+                    
+                    const headlines = (news.news || []).slice(0, 2).map((n: any) => `- "${n.title}"`).join('\n      ');
+                    
+                    return `  [${ticker}] P/E: ${pe} | 52w High: $${fiftyTwoHigh} | Current: $${price}\n      Recent News:\n      ${headlines || 'No recent news.'}`;
+                } catch (e) {
+                    return `  [${ticker}] No extended data available.`;
+                }
+            });
+
+            const resolvedInsights = await Promise.all(promises);
+            insightsText = resolvedInsights.join('\n\n');
+        } catch (e) {
+            console.error("[AIService] Failed to fetch Yahoo Finance insights for Wealthsimple briefing", e);
+        }
+
         const posSummary = positions.map(p => {
             const pnl = p.open_pnl ? Number(p.open_pnl).toFixed(2) : '0.00';
             const val = (Number(p.price) * Number(p.units)).toFixed(2);
@@ -83,10 +123,13 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
 Positions:
 ${posSummary}
 
+Fundamental & News Insights (Top Holdings):
+${insightsText}
+
 Task: Provide a high-level summary of this equity/crypto portfolio.
 1. Highlight the biggest winners and losers by PnL.
 2. Discuss the asset allocation (e.g., concentration in crypto vs stocks vs ETFs).
-3. Suggest a brief fundamental/momentum next step or general advice for these holdings.
+3. Synthesize the provided News and Fundamentals (P/E, Highs) to suggest a brief next step or general advice for these top holdings.
 Style: Professional wealth manager tone, concise but insightful.
 Format: JSON { "analysis": "Full analysis here..." }`;
 
