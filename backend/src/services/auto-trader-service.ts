@@ -637,9 +637,9 @@ export class AutoTraderService {
                             entry_price, quantity, stop_loss_trigger, take_profit_trigger, 
                             trailing_high_price, status, is_simulated, current_price, 
                             underlying_price, delta, iv, analysis_data, suggested_stop_loss,
-                            suggested_take_profit_1
+                            suggested_take_profit_1, account_id
                          )
-                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'OPEN', $11, $12, $13, $14, $15, $16, $17, $18)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'OPEN', $11, $12, $13, $14, $15, $16, $17, $18, $19)
                          RETURNING id`,
                         [
                             userId,
@@ -670,7 +670,8 @@ export class AutoTraderService {
                                 rsiZone
                             }),
                             underlyingStop,
-                            underlyingTarget
+                            underlyingTarget,
+                            mode === 'live' ? accountId : null
                         ]
                     );
 

@@ -378,6 +378,8 @@ export class PredictionService {
         
         2. TECHNICAL INDICATORS & MOMENTUM:
         - RSI (14): ${indicators.rsi.toFixed(2)}
+        - MACD (12,26,9): MACD=${indicators.macd.macd.toFixed(2)}, Signal=${indicators.macd.signal.toFixed(2)}, Histogram=${indicators.macd.histogram.toFixed(2)}
+        - Bollinger Bands (20,2): Upper=$${indicators.bollinger.upper.toFixed(2)}, Lower=$${indicators.bollinger.lower.toFixed(2)}, Middle=$${indicators.bollinger.middle.toFixed(2)}
         - EMA 9 (Fast): $${indicators.ema9.toFixed(2)}
         - EMA 21 (Med): $${indicators.ema21.toFixed(2)}
         - EMA/Price Alignment: Price is ${price > indicators.ema9 ? 'above' : 'below'} EMA9.
@@ -388,6 +390,8 @@ export class PredictionService {
         TASK: Provide a definitive trading verdict (Buy/Sell/Hold) and synthesis.
         - The SMA200 is the "Institutional Floor". If price is above, favor Buy/Hold. If below, favor Sell/Hold.
         - EMA Crossovers: If EMA 9 > EMA 21, momentum is bullish. If EMA 9 < EMA 21, it's bearish.
+        - MACD: If MACD > Signal, it's bullish. If Histogram is expanding positively, momentum is strong.
+        - Bollinger Bands: Price near the Lower band suggests mean-reversion bounce (oversold). Price near Upper band suggests resistance (overbought).
         - NEWS SENTIMENT: If news is strongly bullish/bearish, factor this into your recommendation.
         - If conflict (ML Bullish but Price < SMA200), remain cautious.
         - Be decisive. If indicators align, don't just say "no clear signal".

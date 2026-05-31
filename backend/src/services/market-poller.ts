@@ -450,12 +450,10 @@ export class MarketPoller {
             
             if (!pos.is_simulated) {
                 try {
-                    const { rows: actRows } = await (this.fastify as any).pg.query(
-                        "SELECT id FROM snaptrade_accounts WHERE user_id = $1 LIMIT 1",
-                        [pos.user_id]
-                    );
-                    if (actRows.length > 0) {
-                        const accountId = actRows[0].id;
+                    const accountId = pos.account_id;
+                    if (!accountId) {
+                        this.fastify.log.error(`[MarketPoller] No account_id found for Live position ${pos.id}. Cannot force close.`);
+                    } else {
                         const snaptradeService = new (await import('./snaptrade-service')).SnaptradeService(this.fastify);
                         const osiTicker = this.constructOSITicker(
                             pos.symbol, 
@@ -464,25 +462,9 @@ export class MarketPoller {
                             pos.expiration_date
                         );
 
-                        // Dynamically resolve mid-price for limit order
+                        // Hard cutoffs always use MARKET orders to guarantee exit before bell
                         let limitPrice: string | undefined = undefined;
                         let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
-                        try {
-                            const data = await this.getOptionPremium(
-                                pos.symbol,
-                                Number(pos.strike_price),
-                                pos.option_type,
-                                pos.expiration_date,
-                                true // skip cache to get real-time price
-                            );
-                            if (data && data.price > 0) {
-                                limitPrice = data.price.toFixed(2);
-                                orderType = 'LIMIT';
-                                currentPrice = data.price; // Update currentPrice to reflect fresh exit price
-                            }
-                        } catch (e) {
-                            this.fastify.log.warn(`[MarketPoller] Failed to resolve fresh mid-price for cutoff of position ${pos.id}, falling back to MARKET order: ${e}`);
-                        }
 
                         await snaptradeService.placeOptionOrder(
                             pos.user_id,
@@ -728,12 +710,10 @@ export class MarketPoller {
         if (!position.is_simulated) {
             this.fastify.log.info(`[MarketPoller] LIVE position exit triggered for position ${position.id} (${position.symbol}). Executing SELL_TO_CLOSE via SnapTrade...`);
             try {
-                const { rows: actRows } = await (this.fastify as any).pg.query(
-                    "SELECT id FROM snaptrade_accounts WHERE user_id = $1 LIMIT 1",
-                    [position.user_id]
-                );
-                if (actRows.length > 0) {
-                    const accountId = actRows[0].id;
+                const accountId = position.account_id;
+                if (!accountId) {
+                    this.fastify.log.error(`[MarketPoller] No account_id found for Live position ${position.id}. Cannot close.`);
+                } else {
                     const snaptradeService = new (await import('./snaptrade-service')).SnaptradeService(this.fastify);
                     const osiTicker = this.constructOSITicker(
                         position.symbol, 
@@ -744,7 +724,9 @@ export class MarketPoller {
                     
                     let limitPrice: string | undefined = undefined;
                     let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
-                    if (price > 0) {
+
+                    // Only use LIMIT order if taking profit. Stop Loss MUST be MARKET to guarantee exit.
+                    if (exitTriggerType === 'TAKE_PROFIT' && price > 0) {
                         limitPrice = price.toFixed(2);
                         orderType = 'LIMIT';
                     }

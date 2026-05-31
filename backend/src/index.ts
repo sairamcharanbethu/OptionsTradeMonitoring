@@ -108,7 +108,8 @@ const ensureSchema = async (instance: any) => {
       { name: 'suggested_take_profit_1', type: 'DECIMAL(10, 2)' },
       { name: 'suggested_take_profit_2', type: 'DECIMAL(10, 2)' },
       { name: 'analysis_data', type: 'JSONB' },
-      { name: 'is_simulated', type: 'BOOLEAN DEFAULT FALSE' }
+      { name: 'is_simulated', type: 'BOOLEAN DEFAULT FALSE' },
+      { name: 'account_id', type: 'VARCHAR(255)' }
     ];
 
     for (const col of columns) {
