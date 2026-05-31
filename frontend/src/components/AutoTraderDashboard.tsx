@@ -433,6 +433,40 @@ export default function AutoTraderDashboard() {
                   </p>
                 </div>
 
+                {/* Account Selection */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">Execution Account</label>
+                  <select
+                    className="w-full p-2.5 rounded-lg border bg-slate-50 dark:bg-slate-900 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    value={settings.accountId || ''}
+                    onChange={(e) => updateSettings(settings.mode, settings.maxContracts, settings.symbols, e.target.value)}
+                    disabled={isUpdatingSettings || accounts.length === 0}
+                  >
+                    <option value="">-- Select SnapTrade Account --</option>
+                    {accounts.filter(acc => {
+                        const isStatusOpen = acc.status?.toLowerCase() === "open" || acc.meta?.status?.toLowerCase() === "open";
+                        const unifiedType = (acc.meta?.unifiedAccountType || acc.unified_type || "").toLowerCase();
+                        const isSelfDirected = unifiedType.includes("self_directed") || unifiedType.includes("self directed");
+                        return isStatusOpen && isSelfDirected;
+                    }).map(acc => (
+                      <option key={acc.id} value={acc.id}>
+                        {acc.name} ({acc.number})
+                      </option>
+                    ))}
+                  </select>
+                  {accounts.length === 0 && (
+                    <p className="text-[10px] text-red-500">No connected SnapTrade accounts found. Please sync portfolio.</p>
+                  )}
+                  {accounts.length > 0 && accounts.filter(acc => {
+                        const isStatusOpen = acc.status?.toLowerCase() === "open" || acc.meta?.status?.toLowerCase() === "open";
+                        const unifiedType = (acc.meta?.unifiedAccountType || acc.unified_type || "").toLowerCase();
+                        const isSelfDirected = unifiedType.includes("self_directed") || unifiedType.includes("self directed");
+                        return isStatusOpen && isSelfDirected;
+                  }).length === 0 && (
+                    <p className="text-[10px] text-red-500">No open, self-directed accounts found in SnapTrade portfolio.</p>
+                  )}
+                </div>
+
                 {/* Risk Management Limits */}
                 <div className="space-y-4">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block border-b pb-1">Risk Management</label>
