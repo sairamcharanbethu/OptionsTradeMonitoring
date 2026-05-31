@@ -6,6 +6,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AIService = void 0;
 const yahoo_finance2_1 = __importDefault(require("yahoo-finance2"));
 const yahooFinance = new yahoo_finance2_1.default({ suppressNotices: ['ripHistorical'] });
+function toCavemanStyle(text) {
+    if (!text)
+        return '';
+    // Strip common filler words/articles/prepositions/auxiliary verbs
+    const fillers = /\b(the|a|an|and|of|to|for|with|on|in|at|by|as|after|about|from|into|over|through|is|are|was|were|be|been|being)\b/gi;
+    return text
+        .replace(fillers, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 class AIService {
     fastify;
     ollamaUrl;
@@ -88,7 +98,7 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
                         const hasInTitle = titleLower.includes(tickerLower) || titleLower.includes(baseLower);
                         return hasRelatedTicker || hasInTitle;
                     });
-                    const headlines = relevantNews.slice(0, 2).map((n) => `- "${n.title}"`).join('\n      ');
+                    const headlines = relevantNews.slice(0, 2).map((n) => `- "${toCavemanStyle(n.title)}"`).join('\n      ');
                     return `  [${ticker}] P/E: ${pe} | 52w High: $${fiftyTwoHigh} | Current: $${price}\n      Recent News:\n      ${headlines || 'No recent news.'}`;
                 }
                 catch (e) {
@@ -116,10 +126,10 @@ ${insightsText}
 Task: Provide a high-level summary of this equity/crypto portfolio utilizing a simulated Multi-Agent Debate for the top holdings.
 1. Portfolio Summary: Briefly highlight the biggest winners and losers by PnL, and discuss the asset allocation.
 2. Top Holdings Debate: For EACH of the top holdings with provided news/fundamentals, simulate a rigorous debate between two AI agents:
-   - 🐂 Bull Agent: Exactly one high-density, 1-sentence bullish argument leveraging the provided news, P/E ratio, or recent highs.
-   - 🐻 Bear Agent: Exactly one high-density, 1-sentence bearish counter-argument focusing on valuation risks or negative news.
-   - ⚖️ Manager Verdict: A brief, punchy decision (Hold, Trim, Buy) and exactly 1-sentence of direct rationale.
-Style: Extremely direct, high-density, 'Caveman Mode' (ultra-concise, zero pleasantries, no conversational fillers or fluff). Keep every section highly condensed and focused strictly on the facts to optimize readability and speed.
+   - 🐂 Bull Agent: Provide a comprehensive and highly analytical bullish argument leveraging the provided news, P/E ratio, and recent highs.
+   - 🐻 Bear Agent: Provide a comprehensive and analytical bearish counter-argument focusing on valuation risks or negative news.
+   - ⚖️ Manager Verdict: The final decision on whether to hold, trim, or buy more, with a clear, detailed rebalancing rationale.
+Style: Professional wealth manager tone, highly sophisticated, structured with clear Markdown headers for each holding. Write in beautiful, natural, grammatically complete English. Do NOT use caveman mode or simple short phrases in your output. The briefing should be rich and thoroughly detailed.
 Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
         const response = await this.generateAnalysisInternal(prompt, 2048);
         return {
