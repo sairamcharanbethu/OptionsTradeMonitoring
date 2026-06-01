@@ -48,8 +48,11 @@ export default function AutoTraderDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
-  const [showLiveConfirm, setShowLiveConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Countdown & Messages
+  const [countdown, setCountdown] = useState(30);
+  const [actionMessage, setActionMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
 
   // Integration Health Check States
   const [healthCheck, setHealthCheck] = useState<any>(null);
@@ -110,29 +113,36 @@ export default function AutoTraderDashboard() {
   useEffect(() => {
     fetchData();
     fetchHealthCheck();
-    const interval = setInterval(() => {
+    
+    // Data refresh every 30s
+    const dataInterval = setInterval(() => {
       fetchData();
       fetchHealthCheck();
-    }, 15000); // Poll every 15s
-    return () => clearInterval(interval);
+    }, 30000); 
+
+    // UI Countdown every 1s
+    const countdownInterval = setInterval(() => {
+      setCountdown(prev => (prev <= 1 ? 30 : prev - 1));
+    }, 1000);
+
+    return () => {
+      clearInterval(dataInterval);
+      clearInterval(countdownInterval);
+    };
   }, []);
+
+  // Clear action message after 5 seconds
+  useEffect(() => {
+    if (actionMessage) {
+      const t = setTimeout(() => setActionMessage(null), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [actionMessage]);
 
   const handleModeToggle = async () => {
     if (!settings) return;
     const nextMode = settings.mode === 'simulation' ? 'live' : 'simulation';
-    
-    if (nextMode === 'live') {
-      // Prompt safety confirm modal
-      setShowLiveConfirm(true);
-    } else {
-      await updateSettings('simulation', settings.maxContracts);
-    }
-  };
-
-  const handleLiveConfirm = async () => {
-    setShowLiveConfirm(false);
-    if (!settings) return;
-    await updateSettings('live', settings.maxContracts);
+    await updateSettings(nextMode, settings.maxContracts);
   };
 
   const handleContractSliderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -168,7 +178,7 @@ export default function AutoTraderDashboard() {
       setSettings(updated);
     } catch (err: any) {
       console.error(err);
-      alert('Failed to update Auto Trader settings: ' + err.message);
+      setActionMessage({ type: 'error', text: 'Failed to update settings: ' + err.message });
       // Revert local state
       fetchData();
     } finally {
@@ -181,11 +191,12 @@ export default function AutoTraderDashboard() {
     try {
       const result = await api.triggerAutoTraderScan();
       if (result.success && result.executedTrades.length > 0) {
-        alert(`Scan complete! Executed ${result.executedTrades.length} trade(s).`);
+        setActionMessage({ type: 'success', text: `Scan complete! Executed ${result.executedTrades.length} trade(s).` });
       } else {
-        alert('Scan complete! No matching option trade setups detected.');
+        setActionMessage({ type: 'success', text: 'Scan complete! No matching option trade setups detected.' });
       }
       await fetchData();
+      setCountdown(30); // reset countdown since we just scanned
     } finally {
       setIsScanning(false);
     }
@@ -323,23 +334,35 @@ export default function AutoTraderDashboard() {
             Quantitative options day trading system targeting SPY & QQQ. Day trades 0 DTE contracts before 1 PM ET (10% SL) and 1 DTE after 1 PM ET. Fully flat overnight.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => { fetchData(); fetchHealthCheck(); }} className="gap-2">
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </Button>
-          <Button 
-            variant="default" 
-            size="sm" 
-            onClick={handleManualTrigger} 
-            disabled={isScanning || !marketOpen} 
-            className="gap-2 bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/25"
-          >
-            {isScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
-            {isScanning ? 'Scanning...' : 'Scan Now'}
-          </Button>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => { fetchData(); fetchHealthCheck(); }} className="gap-2">
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </Button>
+            <Button 
+              variant="default" 
+              size="sm" 
+              onClick={handleManualTrigger} 
+              disabled={isScanning || !marketOpen} 
+              className="gap-2 bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-600/25"
+            >
+              {isScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
+              {isScanning ? 'Scanning...' : 'Scan Now'}
+            </Button>
+          </div>
+          <span className="text-xs font-mono font-medium text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md border border-slate-200 dark:border-slate-700">
+            Next scan in: {countdown}s
+          </span>
         </div>
       </div>
+
+      {actionMessage && (
+        <div className={`p-3 rounded-lg text-sm font-bold flex items-center gap-2 shadow-sm transition-all animate-in fade-in slide-in-from-top-2 ${actionMessage.type === 'success' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-600 border border-rose-500/20'}`}>
+          {actionMessage.type === 'success' ? <Activity className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+          {actionMessage.text}
+        </div>
+      )}
 
       {/* Tab Switcher */}
       <div className="flex border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 p-1 rounded-xl">
