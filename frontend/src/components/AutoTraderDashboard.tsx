@@ -58,6 +58,9 @@ export default function AutoTraderDashboard() {
   const [healthCheck, setHealthCheck] = useState<any>(null);
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
 
+  // Live Confirmation State
+  const [showLiveConfirm, setShowLiveConfirm] = useState(false);
+
   // Tab State
   const [activeTab, setActiveTab] = useState<'live' | 'backtest'>('live');
 
@@ -141,8 +144,17 @@ export default function AutoTraderDashboard() {
 
   const handleModeToggle = async () => {
     if (!settings) return;
-    const nextMode = settings.mode === 'simulation' ? 'live' : 'simulation';
-    await updateSettings(nextMode, settings.maxContracts);
+    if (settings.mode === 'simulation') {
+      setShowLiveConfirm(true);
+    } else {
+      await updateSettings('simulation', settings.maxContracts);
+    }
+  };
+
+  const handleLiveConfirm = async () => {
+    if (!settings) return;
+    setShowLiveConfirm(false);
+    await updateSettings('live', settings.maxContracts);
   };
 
   const handleContractSliderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
