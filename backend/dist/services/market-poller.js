@@ -41,7 +41,6 @@ const node_cron_1 = __importDefault(require("node-cron"));
 const stop_loss_engine_1 = require("./stop-loss-engine");
 const redis_1 = require("../lib/redis");
 const ai_service_1 = require("./ai-service");
-const auto_trader_service_1 = require("./auto-trader-service");
 class MarketPoller {
     fastify;
     aiService;
@@ -377,32 +376,8 @@ class MarketPoller {
         const marketCloseMinutes = 16 * 60 + 15;
         return currentTimeMinutes >= marketOpenMinutes && currentTimeMinutes <= marketCloseMinutes;
     }
-    async runAutoTraderScans() {
-        try {
-            this.fastify.log.info('[MarketPoller] Running scheduled Auto Trader Scans...');
-            const { rows: users } = await this.fastify.pg.query("SELECT DISTINCT user_id FROM settings WHERE key = 'auto_trader_mode' AND value IN ('simulation', 'live')");
-            if (users.length === 0) {
-                return;
-            }
-            const traderService = new auto_trader_service_1.AutoTraderService(this.fastify);
-            for (const user of users) {
-                try {
-                    await traderService.scanAndTrade(user.user_id);
-                }
-                catch (err) {
-                    this.fastify.log.error(`[MarketPoller] Auto trader scan failed for user ${user.user_id}: ${err.message}`);
-                }
-            }
-        }
-        catch (err) {
-            this.fastify.log.error(`[MarketPoller] Failed to run Auto Trader scans: ${err.message}`);
-        }
-    }
     async poll(force = false) {
         this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
-        if (force || this.isMarketOpen()) {
-            await this.runAutoTraderScans();
-        }
         const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'");
         if (positions.length === 0) {
             this.fastify.log.info('[MarketPoller] No active positions to poll.');

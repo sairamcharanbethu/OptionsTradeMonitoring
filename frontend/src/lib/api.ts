@@ -380,15 +380,6 @@ export const api = {
     return res.json();
   },
 
-  async predictStock(symbol: string): Promise<any> {
-    const res = await authFetch(`${API_BASE}/ai/predict/${symbol}`);
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(txt || 'Failed to fetch prediction');
-    }
-    return res.json();
-  },
-
   async getPortfolioBriefing(): Promise<{ briefing: string; discord_message: string }> {
     const res = await authFetch(`${API_BASE}/ai/briefing`);
     if (!res.ok) throw new Error('Failed to fetch portfolio briefing');
@@ -530,50 +521,6 @@ export const api = {
   async getSnaptradeBriefing(): Promise<{ briefing: string }> {
     const res = await authFetch(`${API_BASE}/snaptrade/briefing`);
     if (!res.ok) throw new Error('Failed to generate Wealthsimple AI briefing');
-    return res.json();
-  },
-
-  // --- Auto Trader ---
-  async getAutoTraderSettings(): Promise<{ mode: 'simulation' | 'live'; maxContracts: number; symbols: string; accountId: string; dailyLossLimit: number; maxRiskPct: number }> {
-    const res = await authFetch(`${API_BASE}/auto-trader/settings`);
-    if (!res.ok) throw new Error('Failed to fetch Auto Trader settings');
-    return res.json();
-  },
-
-  async updateAutoTraderSettings(mode: 'simulation' | 'live', maxContracts: number, symbols?: string, accountId?: string, dailyLossLimit?: number, maxRiskPct?: number): Promise<void> {
-    const res = await authFetch(`${API_BASE}/auto-trader/settings`, {
-      method: 'POST',
-      body: JSON.stringify({ mode, maxContracts, symbols, accountId, dailyLossLimit, maxRiskPct })
-    });
-    if (!res.ok) throw new Error('Failed to update Auto Trader settings');
-  },
-
-  async triggerAutoTraderScan(): Promise<any> {
-    const res = await authFetch(`${API_BASE}/auto-trader/trigger`, { method: 'POST' });
-    if (!res.ok) throw new Error('Failed to trigger Auto Trader scan');
-    return res.json();
-  },
-
-  async getAutoTraderStatus(): Promise<any> {
-    const res = await authFetch(`${API_BASE}/auto-trader/status`);
-    if (!res.ok) throw new Error('Failed to fetch Auto Trader status');
-    return res.json();
-  },
-  async getAutoTraderHealth(): Promise<any> {
-    const res = await authFetch(`${API_BASE}/auto-trader/health`);
-    if (!res.ok) throw new Error('Failed to fetch Auto Trader health status');
-    return res.json();
-  },
-
-  async runBacktest(symbol: string, startDate: string, endDate: string, mode: 'rule-based' | 'ai', contractSize: number): Promise<any> {
-    const res = await authFetch(`${API_BASE}/auto-trader/backtest`, {
-      method: 'POST',
-      body: JSON.stringify({ symbol, startDate, endDate, mode, contractSize })
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to run backtest');
-    }
     return res.json();
   },
 

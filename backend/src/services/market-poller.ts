@@ -3,7 +3,6 @@ import { FastifyInstance } from 'fastify';
 import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
-import { AutoTraderService } from './auto-trader-service';
 
 export class MarketPoller {
   private fastify: FastifyInstance;
@@ -398,36 +397,8 @@ export class MarketPoller {
     return currentTimeMinutes >= marketOpenMinutes && currentTimeMinutes <= marketCloseMinutes;
   }
 
-  private async runAutoTraderScans() {
-    try {
-      this.fastify.log.info('[MarketPoller] Running scheduled Auto Trader Scans...');
-      const { rows: users } = await (this.fastify as any).pg.query(
-        "SELECT DISTINCT user_id FROM settings WHERE key = 'auto_trader_mode' AND value IN ('simulation', 'live')"
-      );
-
-      if (users.length === 0) {
-        return;
-      }
-
-      const traderService = new AutoTraderService(this.fastify);
-      for (const user of users) {
-        try {
-          await traderService.scanAndTrade(user.user_id);
-        } catch (err: any) {
-          this.fastify.log.error(`[MarketPoller] Auto trader scan failed for user ${user.user_id}: ${err.message}`);
-        }
-      }
-    } catch (err: any) {
-      this.fastify.log.error(`[MarketPoller] Failed to run Auto Trader scans: ${err.message}`);
-    }
-  }
-
   public async poll(force: boolean = false) {
     this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
-
-    if (force || this.isMarketOpen()) {
-      await this.runAutoTraderScans();
-    }
 
     const { rows: positions } = await (this.fastify as any).pg.query(
       "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'"
