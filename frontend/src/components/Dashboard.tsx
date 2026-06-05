@@ -466,36 +466,38 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               valueClassName={totalRealizedPnL >= 0 ? 'text-green-500' : 'text-red-500'}
             />
             {/* Performance Chart Card */}
-            <Card className="md:col-span-2 hover:shadow-md transition-shadow">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex justify-between">
-                  Performance (Cumulative PnL)
-                  <BarChart3 className="h-4 w-4" />
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="h-[60px] p-0 px-6">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={
-                    positions
-                      .filter(p => p.status === 'CLOSED')
-                      .sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime())
-                      .reduce((acc: any[], p: any) => {
-                        const prev = acc.length > 0 ? acc[acc.length - 1].pnl : 0;
-                        acc.push({ pnl: prev + p.realized_pnl });
-                        return acc;
-                      }, [])
-                  }>
-                    <defs>
-                      <linearGradient id="pnlColor" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <Area type="monotone" dataKey="pnl" stroke="#10b981" fillOpacity={1} fill="url(#pnlColor)" isAnimationActive={false} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
+            <div className="md:col-span-2 double-bezel-shell hover-glow">
+              <div className="double-bezel-core flex flex-col justify-between h-full bg-zinc-50/50 dark:bg-zinc-950/40 border border-black/[0.02] dark:border-white/[0.02] p-6">
+                <div className="flex justify-between items-center pb-2">
+                  <span className="text-[10px] uppercase tracking-[0.15em] font-bold text-muted-foreground/90">Performance (Cumulative PnL)</span>
+                  <div className="p-1.5 bg-black/5 dark:bg-white/5 rounded-lg border border-black/[0.03] dark:border-white/[0.06] flex items-center justify-center">
+                    <BarChart3 className="h-3.5 w-3.5 text-foreground/85" />
+                  </div>
+                </div>
+                <div className="h-[60px] p-0 w-full mt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={
+                      positions
+                        .filter(p => p.status === 'CLOSED')
+                        .sort((a, b) => new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime())
+                        .reduce((acc: any[], p: any) => {
+                          const prev = acc.length > 0 ? acc[acc.length - 1].pnl : 0;
+                          acc.push({ pnl: prev + p.realized_pnl });
+                          return acc;
+                          }, [])
+                    }>
+                      <defs>
+                        <linearGradient id="pnlColor" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                          <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <Area type="monotone" dataKey="pnl" stroke="#10b981" fillOpacity={1} fill="url(#pnlColor)" isAnimationActive={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="space-y-6">

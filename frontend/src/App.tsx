@@ -48,28 +48,30 @@ function App() {
   return (
     <ThemeProvider defaultTheme="system" storageKey="options-trade-ui-theme">
       <div className="min-h-screen bg-background text-foreground transition-colors duration-300">
-        <header className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 bg-primary rounded-lg flex items-center justify-center">
-                <span className="text-primary-foreground font-bold italic">SS</span>
+        <div className="pt-4">
+          <header className="sticky top-4 z-50 mx-auto max-w-7xl w-[95%] bg-background/70 dark:bg-zinc-950/70 backdrop-blur-md rounded-full border border-black/[0.03] dark:border-white/[0.06] shadow-sm px-6 py-3.5 flex justify-between items-center transition-all duration-300">
+            <div className="flex justify-between items-center w-full">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 bg-gradient-to-tr from-emerald-500 to-indigo-600 rounded-full flex items-center justify-center">
+                  <span className="text-white font-extrabold italic text-xs tracking-tighter">OM</span>
+                </div>
+                <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-foreground/90">Options Monitor</h1>
               </div>
-              <h1 className="text-xl font-bold tracking-tight">Options Monitor</h1>
-            </div>
 
-            <div className="flex items-center gap-3">
-              <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-muted rounded-full text-xs font-medium">
-                <UserIcon className="h-3 w-3" />
-                <span>{user.username}</span>
+              <div className="flex items-center gap-2">
+                <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-black/5 dark:bg-white/5 border border-black/[0.02] dark:border-white/[0.04] rounded-full text-[10px] font-bold uppercase tracking-wider">
+                  <UserIcon className="h-2.5 w-2.5 text-muted-foreground" />
+                  <span className="text-foreground/90">{user.username}</span>
+                </div>
+                <Button variant="ghost" size="icon" className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5" onClick={() => api.logout()} title="Sign Out">
+                  <LogOut className="h-3.5 w-3.5" />
+                </Button>
+                <ThemeToggle />
               </div>
-              <Button variant="ghost" size="icon" className="rounded-full" onClick={() => api.logout()} title="Sign Out">
-                <LogOut className="h-4 w-4" />
-              </Button>
-              <ThemeToggle />
             </div>
-          </div>
-        </header>
-        <main>
+          </header>
+        </div>
+        <main className="pt-2">
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
