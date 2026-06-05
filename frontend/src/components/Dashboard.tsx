@@ -85,6 +85,7 @@ import Prediction from '@/pages/Prediction';
 import GoalTracker from './GoalTracker';
 import WealthsimplePortfolio from './WealthsimplePortfolio';
 import AutoTraderDashboard from './AutoTraderDashboard';
+import DayTradingTerminal from '@/pages/DayTradingTerminal';
 import { StatsCard } from './StatsCard';
 import { PositionsTable } from './PositionsTable';
 import { cn, getDte, getPnL, getRoi } from '@/lib/utils';
@@ -388,6 +389,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               <TabsTrigger value="goals">Goals</TabsTrigger>
               <TabsTrigger value="prediction">AI Prediction</TabsTrigger>
               <TabsTrigger value="autotrader">Auto-Trader</TabsTrigger>
+              <TabsTrigger value="day-trading">Day Trading</TabsTrigger>
               {user.role === 'ADMIN' && (
                 <TabsTrigger value="users">Users</TabsTrigger>
               )}
@@ -404,6 +406,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   <SelectItem value="goals">Goals</SelectItem>
                   <SelectItem value="prediction">AI Prediction</SelectItem>
                   <SelectItem value="autotrader">Auto-Trader</SelectItem>
+                  <SelectItem value="day-trading">Day Trading</SelectItem>
                   {user.role === 'ADMIN' && (
                     <SelectItem value="users">Users</SelectItem>
                   )}
@@ -861,6 +864,10 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
         <TabsContent value="prediction" className="mt-0">
           <Prediction />
+        </TabsContent>
+
+        <TabsContent value="day-trading" className="mt-0">
+          <DayTradingTerminal />
         </TabsContent>
 
         {user.role === 'ADMIN' && (

@@ -52,6 +52,15 @@ async function settingsRoutes(fastify) {
                         fastify.poller.updateInterval(newInterval);
                     }
                 }
+                // If polling toggle was updated, stop/resume the poller
+                if (updates.polling_enabled !== undefined && fastify.poller) {
+                    if (updates.polling_enabled === 'true') {
+                        fastify.poller.resume();
+                    }
+                    else {
+                        fastify.poller.stop();
+                    }
+                }
                 return { status: 'ok', message: 'Settings updated' };
             }
             catch (err) {

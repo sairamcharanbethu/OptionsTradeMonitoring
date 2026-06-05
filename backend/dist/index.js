@@ -48,10 +48,12 @@ const market_1 = require("./routes/market");
 const ai_1 = require("./routes/ai");
 const settings_1 = require("./routes/settings");
 const goals_1 = require("./routes/goals");
+const signals_1 = require("./routes/signals");
 const jwt_1 = __importDefault(require("@fastify/jwt"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = require("./routes/admin");
 const snaptrade_1 = require("./routes/snaptrade");
+const auto_trader_1 = require("./routes/auto-trader");
 const fastify = (0, fastify_1.default)({
     logger: {
         level: 'info',
@@ -118,6 +120,29 @@ const ensureSchema = async (instance) => {
         UNIQUE(goal_id, entry_date)
       );
     `);
+        // 2.5 Create trade signals table
+        await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS signals (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(10) NOT NULL,
+        signal_type VARCHAR(10) NOT NULL,
+        trade_bias VARCHAR(50) NOT NULL,
+        current_price NUMERIC(10, 2) NOT NULL,
+        entry_trigger NUMERIC(10, 2),
+        stop_loss NUMERIC(10, 2),
+        target_price NUMERIC(10, 2),
+        confidence_score INTEGER NOT NULL,
+        setup_grade VARCHAR(50),
+        status VARCHAR(20) DEFAULT 'PENDING',
+        indicators JSONB,
+        gex JSONB,
+        volatility JSONB,
+        no_trade_reasons TEXT[],
+        option_expiration_date DATE,
+        market_date VARCHAR(20),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
         // 3. Ensure all extra columns are added to positions table
         const columns = [
             { name: 'delta', type: 'DECIMAL(10, 4)' },
@@ -131,7 +156,9 @@ const ensureSchema = async (instance) => {
             { name: 'suggested_stop_loss', type: 'DECIMAL(10, 2)' },
             { name: 'suggested_take_profit_1', type: 'DECIMAL(10, 2)' },
             { name: 'suggested_take_profit_2', type: 'DECIMAL(10, 2)' },
-            { name: 'analysis_data', type: 'JSONB' }
+            { name: 'analysis_data', type: 'JSONB' },
+            { name: 'is_simulated', type: 'BOOLEAN DEFAULT FALSE' },
+            { name: 'account_id', type: 'VARCHAR(255)' }
         ];
         for (const col of columns) {
             await instance.pg.query(`
@@ -189,6 +216,26 @@ const ensureSchema = async (instance) => {
         catch (e) {
             instance.log.warn('[Database] Could not alter some snaptrade columns (might not exist yet or conflicting constraint).');
         }
+        // 5. Ensure default auto-trader settings exist for all users
+        try {
+            const { rows: dbUsers } = await instance.pg.query('SELECT id FROM users');
+            for (const u of dbUsers) {
+                await instance.pg.query(`
+          INSERT INTO settings (user_id, key, value)
+          VALUES ($1, 'auto_trader_mode', 'simulation')
+          ON CONFLICT (user_id, key) DO NOTHING
+        `, [u.id]);
+                await instance.pg.query(`
+          INSERT INTO settings (user_id, key, value)
+          VALUES ($1, 'auto_trader_max_contracts', '5')
+          ON CONFLICT (user_id, key) DO NOTHING
+        `, [u.id]);
+            }
+        }
+        catch (e) {
+            instance.log.warn(`[Database] Could not seed default settings: ${e.message}`);
+        }
+        instance.log.info('[Database] Schema verification completed successfully.');
     }
     catch (err) {
         instance.log.error(`[Database] Schema verification failed: ${err.message}`);
@@ -292,6 +339,8 @@ const start = async () => {
         fastify.register(settings_1.settingsRoutes, { prefix: '/api/settings' });
         fastify.register(goals_1.goalRoutes, { prefix: '/api/goals' });
         fastify.register(snaptrade_1.snaptradeRoutes, { prefix: '/api/snaptrade' });
+        fastify.register(auto_trader_1.autoTraderRoutes, { prefix: '/api/auto-trader' });
+        fastify.register(signals_1.signalRoutes, { prefix: '/api/signals' });
         fastify.get('/health', async () => {
             return { status: 'ok' };
         });

@@ -150,6 +150,26 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
             analysis: response.analysis
         };
     }
+    async askClaudeForTrading(prompt) {
+        try {
+            const settings = await this.getSettings();
+            if (settings.ai_provider === 'openrouter' && settings.openrouter_key) {
+                // Route trade decisions through the user's selected model (or default to Claude 3.5 Sonnet)
+                const model = settings.ai_model || 'anthropic/claude-3.5-sonnet';
+                const response = await this.callOpenRouter(model, settings.openrouter_key, prompt, 120);
+                return {
+                    verdict: response.verdict,
+                    analysis: response.analysis
+                };
+            }
+            // Fallback to standard selected provider if OpenRouter or key isn't active
+            return this.askAI(prompt);
+        }
+        catch (err) {
+            console.error("[AIService] Failed to invoke configured model for trading, falling back:", err);
+            return this.askAI(prompt);
+        }
+    }
     async getSettings() {
         let currentProvider = 'ollama';
         let openRouterKey = '';

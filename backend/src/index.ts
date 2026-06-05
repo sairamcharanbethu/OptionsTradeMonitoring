@@ -10,6 +10,7 @@ import { marketRoutes } from './routes/market';
 import { aiRoutes } from './routes/ai';
 import { settingsRoutes } from './routes/settings';
 import { goalRoutes } from './routes/goals';
+import { signalRoutes } from './routes/signals';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -91,6 +92,30 @@ const ensureSchema = async (instance: any) => {
         notes TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         UNIQUE(goal_id, entry_date)
+      );
+    `);
+
+    // 2.5 Create trade signals table
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS signals (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(10) NOT NULL,
+        signal_type VARCHAR(10) NOT NULL,
+        trade_bias VARCHAR(50) NOT NULL,
+        current_price NUMERIC(10, 2) NOT NULL,
+        entry_trigger NUMERIC(10, 2),
+        stop_loss NUMERIC(10, 2),
+        target_price NUMERIC(10, 2),
+        confidence_score INTEGER NOT NULL,
+        setup_grade VARCHAR(50),
+        status VARCHAR(20) DEFAULT 'PENDING',
+        indicators JSONB,
+        gex JSONB,
+        volatility JSONB,
+        no_trade_reasons TEXT[],
+        option_expiration_date DATE,
+        market_date VARCHAR(20),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
@@ -305,6 +330,7 @@ const start = async () => {
     fastify.register(goalRoutes, { prefix: '/api/goals' });
     fastify.register(snaptradeRoutes, { prefix: '/api/snaptrade' });
     fastify.register(autoTraderRoutes, { prefix: '/api/auto-trader' });
+    fastify.register(signalRoutes, { prefix: '/api/signals' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
