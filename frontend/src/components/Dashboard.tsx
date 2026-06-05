@@ -81,10 +81,8 @@ import UserManagement from './UserManagement';
 import PositionForm from './PositionForm';
 
 import SettingsDialog from './SettingsDialog';
-import Prediction from '@/pages/Prediction';
 import GoalTracker from './GoalTracker';
 import WealthsimplePortfolio from './WealthsimplePortfolio';
-import AutoTraderDashboard from './AutoTraderDashboard';
 import DayTradingTerminal from '@/pages/DayTradingTerminal';
 import { StatsCard } from './StatsCard';
 import { PositionsTable } from './PositionsTable';
@@ -387,8 +385,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
               <TabsTrigger value="wealthsimple">Wealthsimple</TabsTrigger>
               <TabsTrigger value="goals">Goals</TabsTrigger>
-              <TabsTrigger value="prediction">AI Prediction</TabsTrigger>
-              <TabsTrigger value="autotrader">Auto-Trader</TabsTrigger>
               <TabsTrigger value="day-trading">Day Trading</TabsTrigger>
               {user.role === 'ADMIN' && (
                 <TabsTrigger value="users">Users</TabsTrigger>
@@ -404,8 +400,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   <SelectItem value="portfolio">Portfolio</SelectItem>
                   <SelectItem value="wealthsimple">Wealthsimple</SelectItem>
                   <SelectItem value="goals">Goals</SelectItem>
-                  <SelectItem value="prediction">AI Prediction</SelectItem>
-                  <SelectItem value="autotrader">Auto-Trader</SelectItem>
                   <SelectItem value="day-trading">Day Trading</SelectItem>
                   {user.role === 'ADMIN' && (
                     <SelectItem value="users">Users</SelectItem>
@@ -858,14 +852,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
         <TabsContent value="wealthsimple" className="space-y-6 mt-0">
           <WealthsimplePortfolio />
-        </TabsContent>
-
-        <TabsContent value="autotrader" className="space-y-6 mt-0">
-          <AutoTraderDashboard />
-        </TabsContent>
-
-        <TabsContent value="prediction" className="mt-0">
-          <Prediction />
         </TabsContent>
 
         <TabsContent value="day-trading" className="mt-0">

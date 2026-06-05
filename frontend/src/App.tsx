@@ -53,9 +53,9 @@ function App() {
             <div className="flex justify-between items-center w-full">
               <div className="flex items-center gap-2.5">
                 <div className="h-8 w-8 bg-gradient-to-tr from-emerald-500 to-indigo-600 rounded-full flex items-center justify-center">
-                  <span className="text-white font-extrabold italic text-xs tracking-tighter">OM</span>
+                  <span className="text-white font-extrabold italic text-xs tracking-tighter">SS</span>
                 </div>
-                <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-foreground/90">Options Monitor</h1>
+                <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-foreground/90">SS Trading Platform</h1>
               </div>
 
               <div className="flex items-center gap-2">
