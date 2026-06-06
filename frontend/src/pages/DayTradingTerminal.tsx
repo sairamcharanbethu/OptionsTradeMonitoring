@@ -42,15 +42,6 @@ export default function DayTradingTerminal() {
   // States
   const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY'>('QQQ');
   const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
-  const [cliInput, setCliInput] = useState('');
-  const [cliLogs, setCliLogs] = useState<string[]>([
-    'SS-CLI [Version 2.0.0]',
-    '(c) 2026 Options Monitor. All rights reserved.',
-    '',
-    'System status: ONLINE',
-    'Connection status: CONNECTED TO POSTGRES DB',
-    'Type "help" to list terminal commands.'
-  ]);
   const [countdown, setCountdown] = useState(300); // 5 minute countdown
   const [healthData, setHealthData] = useState<ApiHealthState>({
     yahooFinance: { status: 'UP', latencyMs: 95 },
@@ -59,8 +50,6 @@ export default function DayTradingTerminal() {
     openRouter: { status: 'UP', latencyMs: 310 }
   });
   const [healthLoading, setHealthLoading] = useState(false);
-
-  const logEndRef = useRef<HTMLDivElement>(null);
 
   // Fetch Health on mount and on refresh
   const fetchHealth = async () => {
@@ -100,13 +89,7 @@ export default function DayTradingTerminal() {
     refetch();
     fetchHealth();
     setCountdown(300);
-    setCliLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] Triggered manual database and health sync. timer reset.`]);
   };
-
-  // Scroll logs to bottom
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [cliLogs]);
 
   // Filter signals based on selected active tab (QQQ or SPY)
   const filteredSignals = signals.filter(s => s.symbol === selectedSymbol);
@@ -126,129 +109,10 @@ export default function DayTradingTerminal() {
   // Find the single LATEST actionable signal for QQQ or SPY (within the last 24h)
   const latestActionableSignal = filteredSignals.find(s => s.signal_type !== 'NONE' && s.status === 'PENDING') || null;
 
-  // Helper to add log line
-  const addLog = (message: string) => {
-    setCliLogs(prev => [...prev, `> ${message}`]);
-  };
-
-  // Commands Handler
-  const handleCommand = async (cmdStr: string) => {
-    const trimmed = cmdStr.trim();
-    if (!trimmed) return;
-
-    addLog(`options-monitor:~$ ${trimmed}`);
-    const parts = trimmed.split(' ');
-    const command = parts[0].toLowerCase();
-    const arg = parts[1];
-
-    switch (command) {
-      case 'help':
-        setCliLogs(prev => [
-          ...prev,
-          'Available Commands:',
-          '  help               - Display this help message',
-          '  seed               - Seed the database with sample trade signals',
-          '  clear              - Wipe all signals in the database',
-          '  exec <id>          - Execute trade for signal with given ID',
-          '  cancel <id>        - Cancel trade for signal with given ID',
-          '  refresh            - Refetch trade signals from the database',
-          '  cls / clear_screen - Clear the terminal output log'
-        ]);
-        break;
-
-      case 'cls':
-      case 'clear_screen':
-        setCliLogs([]);
-        break;
-
-      case 'seed':
-        try {
-          addLog('Executing database seeding...');
-          const res = await api.seedSignals();
-          if (res.success) {
-            setCliLogs(prev => [...prev, `SUCCESS: Seeded ${res.insertedCount} mock signals into Postgres.`]);
-            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
-          }
-        } catch (err: any) {
-          setCliLogs(prev => [...prev, `ERROR: ${err.message || 'Seeding failed'}`]);
-        }
-        break;
-
-      case 'clear':
-        try {
-          addLog('Wiping signals table...');
-          const res = await api.clearSignals();
-          if (res.success) {
-            setCliLogs(prev => [...prev, `SUCCESS: ${res.message}`]);
-            setSelectedSignalId(null);
-            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
-          }
-        } catch (err: any) {
-          setCliLogs(prev => [...prev, `ERROR: ${err.message || 'Clear failed'}`]);
-        }
-        break;
-
-      case 'exec':
-      case 'execute':
-        if (!arg) {
-          setCliLogs(prev => [...prev, 'ERROR: Missing ID argument. Usage: exec <id>']);
-          break;
-        }
-        const execId = parseInt(arg);
-        if (isNaN(execId)) {
-          setCliLogs(prev => [...prev, 'ERROR: ID must be a numeric value.']);
-          break;
-        }
-        try {
-          addLog(`Setting signal ${execId} status to EXECUTED...`);
-          await api.updateSignalStatus(execId, 'EXECUTED');
-          setCliLogs(prev => [...prev, `SUCCESS: Signal #${execId} is now EXECUTED.`]);
-          queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
-        } catch (err: any) {
-          setCliLogs(prev => [...prev, `ERROR: ${err.message || 'Execution failed'}`]);
-        }
-        break;
-
-      case 'cancel':
-        if (!arg) {
-          setCliLogs(prev => [...prev, 'ERROR: Missing ID argument. Usage: cancel <id>']);
-          break;
-        }
-        const cancelId = parseInt(arg);
-        if (isNaN(cancelId)) {
-          setCliLogs(prev => [...prev, 'ERROR: ID must be a numeric value.']);
-          break;
-        }
-        try {
-          addLog(`Setting signal ${cancelId} status to CANCELLED...`);
-          await api.updateSignalStatus(cancelId, 'CANCELLED');
-          setCliLogs(prev => [...prev, `SUCCESS: Signal #${cancelId} has been CANCELLED.`]);
-          queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
-        } catch (err: any) {
-          setCliLogs(prev => [...prev, `ERROR: ${err.message || 'Cancellation failed'}`]);
-        }
-        break;
-
-      case 'refresh':
-        addLog('Querying Postgres DB manually...');
-        refetch();
-        fetchHealth();
-        setCliLogs(prev => [...prev, 'Refetched signals successfully.']);
-        break;
-
-      default:
-        setCliLogs(prev => [...prev, `Command not recognized: "${command}". Type "help" for a list of commands.`]);
-        break;
-    }
-
-    setCliInput('');
-  };
-
   // Click handler wrapper
   const handleQuickStatus = async (id: number, status: 'EXECUTED' | 'CANCELLED') => {
     try {
       await api.updateSignalStatus(id, status);
-      setCliLogs(prev => [...prev, `CLI EVENT: Updated signal #${id} status to ${status}.`]);
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
     } catch (err: any) {
       alert(`Failed to update status: ${err.message}`);
@@ -550,36 +414,82 @@ export default function DayTradingTerminal() {
         </div>
       </div>
 
+      {/* TradingView Chart Embed - Horizontal Full Width */}
+      <div className="border border-emerald-500/20 rounded bg-zinc-900/30 overflow-hidden flex flex-col h-[500px]">
+        <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
+          <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5 font-mono">
+            <Activity className="h-4 w-4 text-emerald-400 animate-pulse" />
+            LIVE {selectedSymbol} OPTIONS-INTEGRATED CHART (5M EMA9/EMA21/VWAP)
+          </span>
+          <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400 font-semibold font-mono">
+            Real-Time Feed
+          </Badge>
+        </div>
+        <div className="flex-1 w-full h-full bg-zinc-950">
+          <iframe
+            title="TradingView Real-Time Chart"
+            src={`https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=${selectedSymbol === 'QQQ' ? 'NASDAQ:QQQ' : 'AMEX:SPY'}&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%22STD%3BEMA%22%2C%22STD%3BVWAP%22%5D&theme=dark&style=1&timezone=America%2FNew_York`}
+            width="100%"
+            height="100%"
+            style={{ border: 'none' }}
+          />
+        </div>
+      </div>
+
       {/* Row 3: Signals Process Table + Detailed Inspector */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         
-        {/* TradingView Chart Embed */}
-        <div className="xl:col-span-2 border border-emerald-500/20 rounded bg-zinc-900/30 overflow-hidden flex flex-col h-[450px]">
-          <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
-            <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
-              <Activity className="h-4 w-4 text-emerald-400" />
-              LIVE {selectedSymbol} OPTIONS-INTEGRATED CHART
-            </span>
-            <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400 font-semibold">
-              Real-Time Feed
-            </Badge>
-          </div>
-          <div className="flex-1 w-full h-full bg-zinc-950">
-            <iframe
-              title="TradingView Real-Time Chart"
-              src={`https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=${selectedSymbol === 'QQQ' ? 'NASDAQ:QQQ' : 'AMEX:SPY'}&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%5D&theme=dark&style=1&timezone=America%2FNew_York`}
-              width="100%"
-              height="100%"
-              style={{ border: 'none' }}
-            />
-          </div>
-        </div>
-        
         {/* Table List (Process Monitor) */}
         <div className="xl:col-span-2 overflow-hidden flex flex-col border border-emerald-500/20 rounded bg-zinc-900/30">
-          <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
-            <span className="text-xs font-bold text-emerald-300">HISTORICAL DAY TRADING ALERTS (PROCESS_TABLE)</span>
-            <span className="text-[10px] text-emerald-500/60">Click row to inspect details</span>
+          <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex flex-wrap justify-between items-center gap-2">
+            <div className="flex flex-col">
+              <span className="text-xs font-bold text-emerald-300">HISTORICAL DAY TRADING ALERTS (PROCESS_TABLE)</span>
+              <span className="text-[10px] text-emerald-500/60">Click row to inspect details</span>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[10px] font-bold border-emerald-500/30 text-emerald-400 hover:bg-emerald-950/20 gap-1 bg-zinc-950/40"
+                onClick={async () => {
+                  if (confirm("Are you sure you want to seed mock data?")) {
+                    try {
+                      const res = await api.seedSignals();
+                      if (res.success) {
+                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+                      }
+                    } catch (err: any) {
+                      alert(`Failed to seed data: ${err.message}`);
+                    }
+                  }
+                }}
+              >
+                <Sparkles className="h-3.5 w-3.5 text-emerald-400 animate-pulse" />
+                SEED DATA
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[10px] font-bold border-red-500/30 text-red-400 hover:bg-red-950/25 hover:text-red-300 gap-1 bg-zinc-950/40"
+                onClick={async () => {
+                  if (confirm("Wipe all day trading signals from database?")) {
+                    try {
+                      const res = await api.clearSignals();
+                      if (res.success) {
+                        setSelectedSignalId(null);
+                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+                      }
+                    } catch (err: any) {
+                      alert(`Failed to clear signals: ${err.message}`);
+                    }
+                  }
+                }}
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                WIPE TABLE
+              </Button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -613,7 +523,7 @@ export default function DayTradingTerminal() {
                     <td colSpan={12} className="p-12 text-center text-red-500/80">
                       [NO SIGNALS FOUND IN DATABASE FOR {selectedSymbol}]
                       <div className="text-[10px] text-emerald-600 mt-2">
-                        Type 'seed' in command line below to insert sample data.
+                        Click 'SEED DATA' above to insert sample data.
                       </div>
                     </td>
                   </tr>
@@ -857,54 +767,6 @@ export default function DayTradingTerminal() {
              )}
            </div>
          </div>
-       </div>
- 
-       {/* Terminal Command Line Interface (CLI Panel) */}
-       <div className="flex flex-col border border-emerald-500/20 rounded overflow-hidden">
-         <div className="p-2 bg-zinc-900 border-b border-emerald-500/20 text-xs text-emerald-300 font-bold flex items-center gap-1.5">
-           <TerminalIcon className="h-3.5 w-3.5" />
-           INTERACTIVE_SHELL_LOGGER
-         </div>
- 
-         {/* CLI Logs Display */}
-         <div className="h-44 bg-zinc-950 p-3 overflow-y-auto font-mono text-xs leading-relaxed text-emerald-400/90 select-text selection:bg-emerald-800 selection:text-white">
-           {cliLogs.map((log, index) => (
-             <div key={index} className="whitespace-pre-wrap">
-               {log}
-             </div>
-           ))}
-           <div ref={logEndRef} />
-         </div>
- 
-         {/* CLI Input Form */}
-         <form
-           onSubmit={e => {
-             e.preventDefault();
-             handleCommand(cliInput);
-           }}
-           className="flex bg-zinc-900/60 border-t border-emerald-500/10"
-         >
-           <div className="flex items-center px-3 text-emerald-500 font-bold select-none border-r border-emerald-500/10 text-xs">
-             options-monitor:~$
-           </div>
-           <input
-             type="text"
-             value={cliInput}
-             onChange={e => setCliInput(e.target.value)}
-             placeholder='Type "help" for a list of available commands...'
-             className="flex-1 bg-transparent p-2.5 text-xs text-emerald-300 font-mono focus:outline-none placeholder-emerald-800/60"
-             autoComplete="off"
-             autoCorrect="off"
-             autoCapitalize="off"
-             spellCheck={false}
-           />
-           <button
-             type="submit"
-             className="px-4 text-xs font-bold text-emerald-500 hover:text-emerald-300 border-l border-emerald-500/10 hover:bg-emerald-950/20 transition-colors"
-           >
-             EXECUTE
-           </button>
-         </form>
        </div>
      </div>
    );

@@ -387,7 +387,7 @@ export class MarketPoller {
     const minute = parseInt(getPart('minute') || '0', 10);
 
     // Weekend check
-    if (weekday === 'Sat' || weekday === 'Sun') return false;
+    // if (weekday === 'Sat' || weekday === 'Sun') return false;
 
     // Market hours: 9:30 AM - 4:15 PM (16:15) ET
     const currentTimeMinutes = hour * 60 + minute;
