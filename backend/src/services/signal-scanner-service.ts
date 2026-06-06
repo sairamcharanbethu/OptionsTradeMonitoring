@@ -4,6 +4,7 @@ import axios from 'axios';
 import YahooFinance from 'yahoo-finance2';
 import { AIService } from './ai-service';
 import { redis } from '../lib/redis';
+import crypto from 'crypto';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
@@ -728,45 +729,71 @@ export class SignalScannerService {
           : `Use only if ${symbol} breaks the latest 5-minute low and stays below VWAP.`
       };
 
-      // Trigger alerts and AI Coach Commentary
+      // ── News-Aware AI Coach Commentary (token-efficient 3-tier approach) ──
+      // Tier 1: Fetch news (FREE – Yahoo Finance, no key needed)
+      // Tier 2: Fingerprint diff against Redis – skip Claude if headlines unchanged
+      // Tier 3: Call Claude only on new headlines OR first signal of the day
       let aiCoachCommentary = '';
+      let newsContextText = 'No material news in the last 6 hours.';
+
       if (settings.day_trading_ai_enabled === 'true') {
-        const coachPrompt = `
-        You are an expert options coach at StockSurfer Capital. Analyze this day-trading signal setup:
-        - Symbol: ${symbol} ${winningSide} (ATM Strike: $${chosenStrike})
-        - Current Index Price: $${currentPrice.toFixed(2)}
-        - VWAP: $${vwap.toFixed(2)} | EMA9: ${emaShort?.toFixed(2)} | EMA21: ${emaLong?.toFixed(2)}
-        - GEX Regime: ${qqqGexRegime} (Flow direction: ${qqqFlowDirection})
-        - Stop Level: $${stopUnderlying} | Target Level: $${targetUnderlying}
-        - Option Mark: $${mark} (Stop Loss: $${optionStopLoss}, Target Profit: $${optionTakeProfit})
-
-        Write a brief Discord commentary (max 120 words) explaining the trade in simple terms for a novice trader:
-        1. Direct, bold action line: "**BUY ${symbol} [PUT/CALL] $${chosenStrike} and Sell at underlying $${targetUnderlying}, Stop Loss at underlying $${stopUnderlying} (or $${optionStopLoss} on options premium).**"
-        2. Explain the thesis (e.g. why we are breaking out above ORH, or bouncing off GEX Flip/Wall support).
-        3. Highlight key metrics to watch and risk factors (like VIX limits, bid-ask spread).
-        `;
-
         try {
-          const provider = settings.day_trading_ai_provider;
-          const model = settings.day_trading_ai_model;
-          const key = await this.getAiApiKey(provider);
+          // Tier 1: Fetch compressed headlines
+          const { headlines, raw } = await this.fetchNewsContext(symbol);
+          newsContextText = raw;
 
+          const key = await this.getAiApiKey(settings.day_trading_ai_provider);
           if (key) {
-            const aiRes = await this.aiService.askClaudeForTrading(coachPrompt); // Fallback router
-            aiCoachCommentary = aiRes.analysis || aiRes.verdict || '';
+            // Tier 2: Compute fingerprint of today's headlines
+            const newFingerprint = this.getNewsFingerprint(headlines);
+            const fpRedisKey = `NEWS_FP:${symbol}:${nyParts.dateStr}`;
+            const cachedFp = await redis.get(fpRedisKey);
+
+            const headlinesChanged = cachedFp !== newFingerprint;
+
+            if (headlinesChanged || !cachedFp) {
+              // Tier 3: Headlines changed (or first run today) → call Claude
+              this.fastify.log.info(`[SignalScannerService] News fingerprint changed for ${symbol} — invoking AI coach.`);
+
+              // Cache the new fingerprint for 30 min so nearby cycles skip the call
+              await redis.set(fpRedisKey, newFingerprint, 1800);
+
+              // Build token-efficient prompt (caveman compressed headlines, tight instruction)
+              const coachPrompt = `You are an expert 0DTE options coach. Analyze this signal and news. Respond JSON {"verdict":"GO|WAIT|ABORT","analysis":"max 130 words"}.
+
+SIGNAL: ${symbol} ${winningSide} $${chosenStrike} | Price $${currentPrice.toFixed(2)} | VWAP $${vwap.toFixed(2)} | EMA9 ${emaShort?.toFixed(2)} EMA21 ${emaLong?.toFixed(2)} | GEX ${qqqGexRegime}/${qqqFlowDirection} | SL $${stopUnderlying} TP $${targetUnderlying} | Score ${finalConfidence}% ${setupGrade}
+
+NEWS (last 6h):
+${headlines.length > 0 ? headlines.map((h, i) => `${i + 1}. ${h}`).join('\n') : 'None.'}
+
+RULES: If news = event risk opposing signal → flag \u26a0\ufe0f PITFALL. If news supports signal → flag \u2705 CATALYST. Action line first: BUY ${symbol} ${winningSide} $${chosenStrike} entry >$${entryTrigger.toFixed(2)} SL $${stopUnderlying} TP $${targetUnderlying}. Then thesis + pitfalls/catalysts.`;
+
+              const aiRes = await this.aiService.askClaudeForTrading(coachPrompt);
+              aiCoachCommentary = aiRes.analysis || aiRes.verdict || '';
+            } else {
+              // Tier 2 cache hit: reuse last AI commentary from Redis to avoid duplicate spend
+              this.fastify.log.info(`[SignalScannerService] News fingerprint unchanged for ${symbol} — reusing cached AI commentary.`);
+              const cachedCommentary = await redis.get(`NEWS_COMMENTARY:${symbol}:${nyParts.dateStr}`);
+              aiCoachCommentary = cachedCommentary || '';
+            }
+
+            // Cache the commentary for reuse during fingerprint-stable windows
+            if (aiCoachCommentary) {
+              await redis.set(`NEWS_COMMENTARY:${symbol}:${nyParts.dateStr}`, aiCoachCommentary, 1800);
+            }
           }
         } catch (aiErr: any) {
-          this.fastify.log.error(`[SignalScannerService] AI Coach commentary generation failed: ${aiErr.message}`);
+          this.fastify.log.error(`[SignalScannerService] News-aware AI coach failed: ${aiErr.message}`);
         }
       }
 
-      // Persist signals to Postgres signals table
+      // Persist signals to Postgres signals table (including news_context and ai_coach_commentary)
       await this.fastify.pg.query(`
         INSERT INTO signals (
           symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss, target_price,
           confidence_score, setup_grade, status, indicators, gex, volatility, no_trade_reasons,
-          option_expiration_date, market_date
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          option_expiration_date, market_date, news_context, ai_coach_commentary
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       `, [
         symbol,
         winningSide,
@@ -803,7 +830,9 @@ export class SignalScannerService {
         }),
         noTradeReasons,
         chosenExpiry,
-        nyParts.marketDate
+        nyParts.marketDate,
+        newsContextText || null,
+        aiCoachCommentary || null
       ]);
 
       // Fire Discord Webhook
@@ -862,6 +891,71 @@ export class SignalScannerService {
         nyParts.marketDate
       ]);
     }
+  }
+
+  // ── News Context Helpers ──────────────────────────────────────────────────
+
+  /**
+   * Fetch recent news headlines for a given symbol from Yahoo Finance (free, no key).
+   * Returns both caveman-compressed headlines (for prompt) and the raw display string.
+   */
+  private async fetchNewsContext(symbol: string): Promise<{ headlines: string[]; raw: string }> {
+    try {
+      const now = Date.now();
+      const sixHoursAgo = now - 6 * 60 * 60 * 1000;
+
+      const result = await (yahooFinance as any).search(symbol, { newsCount: 12 });
+      const articles = (result.news || []).filter((n: any) => {
+        const isRecent = (n.providerPublishTime * 1000) >= sixHoursAgo;
+        const upperSymbol = symbol.toUpperCase();
+        const isRelevant =
+          (n.relatedTickers || []).some((t: string) =>
+            ['SPY', 'QQQ', upperSymbol].includes(t.toUpperCase())
+          ) || (n.title || '').toLowerCase().includes(symbol.toLowerCase());
+        return isRecent && isRelevant;
+      }).slice(0, 4);
+
+      if (articles.length === 0) {
+        return { headlines: [], raw: 'No material news in the last 6 hours.' };
+      }
+
+      const compressed: string[] = [];
+      const rawLines: string[] = [];
+
+      for (const n of articles) {
+        const minsAgo = Math.round((now - n.providerPublishTime * 1000) / 60000);
+        const compressedTitle = this.compressHeadline(n.title || '');
+        compressed.push(`${compressedTitle} (${n.publisher}, ${minsAgo}m ago)`);
+        rawLines.push(`• "${n.title}" — ${n.publisher}, ${minsAgo}m ago`);
+      }
+
+      return { headlines: compressed, raw: rawLines.join('\n') };
+    } catch (err: any) {
+      this.fastify.log.warn(`[SignalScannerService] News fetch failed for ${symbol}: ${err.message}`);
+      return { headlines: [], raw: 'News context unavailable.' };
+    }
+  }
+
+  /**
+   * Strip high-frequency filler words from a news headline to cut input tokens ~40%.
+   * Inspired by the caveman-style compression already used in ai-service.ts.
+   */
+  private compressHeadline(title: string): string {
+    const fillers = /\b(the|a|an|and|of|to|for|with|on|in|at|by|as|after|about|from|into|over|through|is|are|was|were|be|been|being|its|their|has|have|had|will|would|could|should|may|might|that|this|these|those|which|who|what|how|when|where|but|or|nor|so|yet|both|either|neither|just|very|also|then|than|if|not|no|all|more|most|some|any|each|every|due|amid|says|said|per|via)\b/gi;
+    return title
+      .replace(fillers, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .slice(0, 90); // hard cap — headlines rarely need more than 90 chars compressed
+  }
+
+  /**
+   * Compute a short MD5 fingerprint of the compressed headlines array.
+   * Used to detect when news has actually changed between 5-min scan cycles.
+   */
+  private getNewsFingerprint(headlines: string[]): string {
+    const joined = headlines.sort().join('|');
+    return crypto.createHash('md5').update(joined).digest('hex').slice(0, 12);
   }
 
   // Latency Healthcheck Evaluator

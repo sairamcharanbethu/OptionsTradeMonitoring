@@ -397,15 +397,57 @@ export default function DayTradingTerminal() {
                 )}
               </div>
 
-              {/* Coach Thesis */}
+              {/* News-Aware AI Coach Panel */}
               <div className="p-3 rounded border border-emerald-500/10 bg-zinc-950/30 flex flex-col justify-between gap-2.5">
                 <div>
-                  <span className="text-[9px] text-emerald-500/60 block uppercase font-bold flex items-center gap-1 mb-1">
-                    <Zap className="h-3 w-3 text-amber-400 animate-pulse" /> AI_OPTIONS_COACH_THESIS
+                  <span className="text-[9px] text-emerald-500/60 block uppercase font-bold flex items-center gap-1 mb-1.5">
+                    <Zap className="h-3 w-3 text-amber-400 animate-pulse" /> AI_OPTIONS_COACH · NEWS-AWARE
                   </span>
-                  <p className="leading-relaxed text-zinc-300 italic text-[10px]">
-                    "BUY QQQ CALL options matching the index breakout above VWAP. Mega-caps (AAPL/NVDA) are flashing net bullish inflows, and dealer walls indicate minor gamma gravity until resistance at $485. Hold stop at underlying support $481.20."
-                  </p>
+
+                  {latestActionableSignal.ai_coach_commentary ? (
+                    <div className="space-y-1.5">
+                      {/* Render commentary line-by-line, highlight PITFALL/CATALYST tokens */}
+                      {latestActionableSignal.ai_coach_commentary.split('\n').filter(Boolean).map((line, i) => {
+                        const isPitfall = line.includes('⚠️') || line.toUpperCase().includes('PITFALL');
+                        const isCatalyst = line.includes('✅') || line.toUpperCase().includes('CATALYST');
+                        return (
+                          <p
+                            key={i}
+                            className={`leading-relaxed text-[10px] ${
+                              isPitfall
+                                ? 'text-amber-300 bg-amber-950/20 px-1.5 py-0.5 rounded border border-amber-500/20'
+                                : isCatalyst
+                                ? 'text-green-300 bg-green-950/20 px-1.5 py-0.5 rounded border border-green-500/20'
+                                : 'text-zinc-300 italic'
+                            }`}
+                          >
+                            {line}
+                          </p>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="leading-relaxed text-zinc-500 italic text-[10px]">
+                      AI commentary will appear when the next scanner cycle fires with news context...
+                    </p>
+                  )}
+
+                  {/* News Context accordion */}
+                  {latestActionableSignal.news_context && latestActionableSignal.news_context !== 'No material news in the last 6 hours.' && (
+                    <div className="mt-2 border-t border-emerald-500/10 pt-1.5">
+                      <span className="text-[8px] text-zinc-500 uppercase font-bold flex items-center gap-1 mb-1">
+                        📰 NEWS CONTEXT (used for this analysis)
+                      </span>
+                      <div className="text-[9px] text-zinc-500 leading-relaxed space-y-0.5">
+                        {latestActionableSignal.news_context.split('\n').map((line, i) => (
+                          <div key={i}>{line}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {latestActionableSignal.news_context === 'No material news in the last 6 hours.' && (
+                    <div className="mt-1.5 text-[8px] text-zinc-600 italic">📰 No material news in last 6h — technical-only analysis.</div>
+                  )}
                 </div>
                 <div className="flex justify-end gap-2 border-t border-emerald-500/10 pt-2">
                   <Button
@@ -787,6 +829,38 @@ export default function DayTradingTerminal() {
                          </li>
                        ))}
                      </ul>
+                   </div>
+                 )}
+
+                 {/* AI Coach Commentary */}
+                 {selectedSignal.ai_coach_commentary && (
+                   <div className="space-y-1">
+                     <span className="text-[10px] font-bold text-amber-400 uppercase flex items-center gap-1">
+                       <Zap className="h-3 w-3 text-amber-400 animate-pulse" /> AI_COACH_COMMENTARY
+                     </span>
+                     <div className="bg-zinc-950/60 border border-amber-500/15 p-2.5 rounded text-[10px] space-y-1">
+                       {selectedSignal.ai_coach_commentary.split('\n').filter(Boolean).map((line, i) => {
+                         const isPitfall = line.includes('⚠️') || line.toUpperCase().includes('PITFALL');
+                         const isCatalyst = line.includes('✅') || line.toUpperCase().includes('CATALYST');
+                         return (
+                           <p key={i} className={isPitfall ? 'text-amber-300' : isCatalyst ? 'text-green-300' : 'text-zinc-300 italic'}>
+                             {line}
+                           </p>
+                         );
+                       })}
+                     </div>
+                   </div>
+                 )}
+
+                 {/* News Context */}
+                 {selectedSignal.news_context && selectedSignal.news_context !== 'No material news in the last 6 hours.' && (
+                   <div className="space-y-1">
+                     <span className="text-[10px] font-bold text-zinc-400 uppercase flex items-center gap-1">
+                       📰 NEWS_CONTEXT_AT_SCAN
+                     </span>
+                     <div className="bg-zinc-950/40 border border-zinc-700/30 p-2 rounded text-[9px] text-zinc-500 space-y-0.5 leading-relaxed">
+                       {selectedSignal.news_context.split('\n').map((line, i) => <div key={i}>{line}</div>)}
+                     </div>
                    </div>
                  )}
                </div>

@@ -623,6 +623,8 @@ export interface Signal {
   option_expiration_date?: string;
   market_date?: string;
   created_at: string;
+  news_context?: string | null;
+  ai_coach_commentary?: string | null;
 }
 
 export interface Goal {
