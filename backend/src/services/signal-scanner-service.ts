@@ -896,14 +896,21 @@ RULES: If news = event risk opposing signal → flag \u26a0\ufe0f PITFALL. If ne
   // ── News Context Helpers ──────────────────────────────────────────────────
 
   /**
-   * Fetch recent news headlines for a given symbol from Yahoo Finance (free, no key).
-   * Returns both caveman-compressed headlines (for prompt) and the raw display string.
+   * Dual-source news fetcher (both free, no API keys required):
+   *   Source 1 — Yahoo Finance search: ticker-specific news (QQQ/SPY/etc)
+   *   Source 2 — FinancialJuice RSS:   macro/geopolitical market-moving headlines
+   *
+   * Returns caveman-compressed headlines for the AI prompt and raw text for display.
    */
   private async fetchNewsContext(symbol: string): Promise<{ headlines: string[]; raw: string }> {
-    try {
-      const now = Date.now();
-      const sixHoursAgo = now - 6 * 60 * 60 * 1000;
+    const now = Date.now();
+    const sixHoursAgo = now - 6 * 60 * 60 * 1000;
 
+    const compressed: string[] = [];
+    const rawLines: string[] = [];
+
+    // ── Source 1: Yahoo Finance (ticker-specific) ──────────────────────────
+    try {
       const result = await (yahooFinance as any).search(symbol, { newsCount: 12 });
       const articles = (result.news || []).filter((n: any) => {
         const isRecent = (n.providerPublishTime * 1000) >= sixHoursAgo;
@@ -913,27 +920,65 @@ RULES: If news = event risk opposing signal → flag \u26a0\ufe0f PITFALL. If ne
             ['SPY', 'QQQ', upperSymbol].includes(t.toUpperCase())
           ) || (n.title || '').toLowerCase().includes(symbol.toLowerCase());
         return isRecent && isRelevant;
-      }).slice(0, 4);
-
-      if (articles.length === 0) {
-        return { headlines: [], raw: 'No material news in the last 6 hours.' };
-      }
-
-      const compressed: string[] = [];
-      const rawLines: string[] = [];
+      }).slice(0, 3); // max 3 ticker headlines
 
       for (const n of articles) {
         const minsAgo = Math.round((now - n.providerPublishTime * 1000) / 60000);
-        const compressedTitle = this.compressHeadline(n.title || '');
-        compressed.push(`${compressedTitle} (${n.publisher}, ${minsAgo}m ago)`);
-        rawLines.push(`• "${n.title}" — ${n.publisher}, ${minsAgo}m ago`);
+        const c = this.compressHeadline(n.title || '');
+        compressed.push(`${c} (Yahoo/${n.publisher}, ${minsAgo}m ago)`);
+        rawLines.push(`• [${symbol}] "${n.title}" — ${n.publisher}, ${minsAgo}m ago`);
       }
-
-      return { headlines: compressed, raw: rawLines.join('\n') };
     } catch (err: any) {
-      this.fastify.log.warn(`[SignalScannerService] News fetch failed for ${symbol}: ${err.message}`);
-      return { headlines: [], raw: 'News context unavailable.' };
+      this.fastify.log.warn(`[SignalScannerService] Yahoo news fetch failed for ${symbol}: ${err.message}`);
     }
+
+    // ── Source 2: FinancialJuice RSS (macro/geopolitical headlines) ────────
+    // Free public RSS feed — no API key, no registration required.
+    // Parses the XML with a lightweight regex to avoid adding an npm dependency.
+    try {
+      const fjRes = await axios.get(
+        'https://www.financialjuice.com/feed.ashx?action=main&culture=en-US&pager=0&format=json',
+        { timeout: 5000, headers: { 'User-Agent': 'OptionsTradeMonitor/1.0' } }
+      );
+
+      const xml: string = String(fjRes.data);
+      // Extract all <item> blocks then pull <title> and <pubDate>
+      const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+
+      const macroKeywords = /fed|fomc|rates?|cpi|pce|gdp|jobs|payroll|inflation|tariff|recession|bank|treasury|yields?|nasdaq|s&p|market|economy|trade|war|escalat|geopolit|china|russia|iran|oil|energy|crash|rally|selloff|rout|powell|yellen|fiscal|deficit|debt/i;
+
+      let macroCount = 0;
+      for (const item of itemMatches) {
+        if (macroCount >= 3) break; // max 3 macro headlines
+        const titleMatch = item.match(/<title>([\s\S]*?)<\/title>/);
+        const dateMatch  = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+        if (!titleMatch || !dateMatch) continue;
+
+        // Strip "FinancialJuice: " prefix and CDATA if present
+        const rawTitle = titleMatch[1]
+          .replace(/<!\[CDATA\[|\]\]>/g, '')
+          .replace(/^FinancialJuice:\s*/i, '')
+          .trim();
+
+        const pubDate = new Date(dateMatch[1].trim());
+        if (isNaN(pubDate.getTime()) || pubDate.getTime() < sixHoursAgo) continue;
+        if (!macroKeywords.test(rawTitle)) continue; // only market-moving macro headlines
+
+        const minsAgo = Math.round((now - pubDate.getTime()) / 60000);
+        const c = this.compressHeadline(rawTitle);
+        compressed.push(`[MACRO] ${c} (FinancialJuice, ${minsAgo}m ago)`);
+        rawLines.push(`• [MACRO] "${rawTitle}" — FinancialJuice, ${minsAgo}m ago`);
+        macroCount++;
+      }
+    } catch (err: any) {
+      this.fastify.log.warn(`[SignalScannerService] FinancialJuice fetch failed: ${err.message}`);
+    }
+
+    if (compressed.length === 0) {
+      return { headlines: [], raw: 'No material news in the last 6 hours.' };
+    }
+
+    return { headlines: compressed, raw: rawLines.join('\n') };
   }
 
   /**
