@@ -530,6 +530,7 @@ export const api = {
     sscgexPortal: { status: string; latencyMs: number };
     polygon: { status: string; latencyMs: number };
     openRouter: { status: string; latencyMs: number };
+    discord: { status: string; latencyMs: number };
   }> {
     const res = await authFetch(`${API_BASE}/signals/health`);
     if (!res.ok) throw new Error('Failed to fetch day trading API health');

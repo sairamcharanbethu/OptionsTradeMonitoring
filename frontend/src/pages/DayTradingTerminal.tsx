@@ -33,6 +33,7 @@ interface ApiHealthState {
   sscgexPortal: { status: string; latencyMs: number };
   polygon: { status: string; latencyMs: number };
   openRouter: { status: string; latencyMs: number };
+  discord: { status: string; latencyMs: number };
 }
 
 export default function DayTradingTerminal() {
@@ -47,7 +48,8 @@ export default function DayTradingTerminal() {
     yahooFinance: { status: 'UP', latencyMs: 95 },
     sscgexPortal: { status: 'UP', latencyMs: 140 },
     polygon: { status: 'UP', latencyMs: 110 },
-    openRouter: { status: 'UP', latencyMs: 310 }
+    openRouter: { status: 'UP', latencyMs: 310 },
+    discord: { status: 'UP', latencyMs: 120 }
   });
   const [healthLoading, setHealthLoading] = useState(false);
 
@@ -303,6 +305,15 @@ export default function DayTradingTerminal() {
                   ● {healthData.openRouter.status === 'UP' ? 'ONLINE' : 'OFFLINE'}
                 </span>
                 <span className="text-zinc-400 font-mono">{healthData.openRouter.latencyMs}ms</span>
+              </div>
+            </div>
+            <div className="p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex flex-col gap-0.5 col-span-2">
+              <span className="text-zinc-500 uppercase font-semibold">Discord Webhook API</span>
+              <div className="flex justify-between items-center">
+                <span className={healthData.discord?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>
+                  ● {healthData.discord?.status === 'UP' ? 'ONLINE' : 'OFFLINE'}
+                </span>
+                <span className="text-zinc-400 font-mono">{healthData.discord?.latencyMs ?? 0}ms</span>
               </div>
             </div>
           </div>

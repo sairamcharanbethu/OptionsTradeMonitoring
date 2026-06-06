@@ -920,18 +920,28 @@ export class SignalScannerService {
       }
     });
 
-    const [yahoo, sscgex, polygon, openrouter] = await Promise.all([
+    const discordCheck = checkLatency(async () => {
+      if (settings.discord_webhook_url) {
+        await axios.get(settings.discord_webhook_url, { timeout: 4000 });
+      } else {
+        throw new Error('No Discord Webhook');
+      }
+    });
+
+    const [yahoo, sscgex, polygon, openrouter, discord] = await Promise.all([
       yahooCheck,
       sscgexCheck,
       polygonCheck,
-      openrouterCheck
+      openrouterCheck,
+      discordCheck
     ]);
 
     return {
       yahooFinance: yahoo,
       sscgexPortal: sscgex,
       polygon: polygon,
-      openRouter: openrouter
+      openRouter: openrouter,
+      discord: discord
     };
   }
 

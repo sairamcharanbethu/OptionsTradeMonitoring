@@ -737,7 +737,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         <Label htmlFor="dtDiscordUrl">Discord Webhook URL</Label>
                                         <Input
                                             id="dtDiscordUrl"
-                                            type="password"
+                                            type="text"
                                             value={discordWebhookUrl}
                                             onChange={(e) => setDiscordWebhookUrl(e.target.value)}
                                             placeholder="https://discord.com/api/webhooks/..."
