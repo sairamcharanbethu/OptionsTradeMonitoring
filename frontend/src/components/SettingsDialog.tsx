@@ -31,6 +31,21 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [pollingEnabled, setPollingEnabled] = useState(true); // Master polling toggle
     const [positionPollInterval, setPositionPollInterval] = useState('2'); // Position Detail Poll (Local)
 
+    // Day Trading State
+    const [dayTradingEnabled, setDayTradingEnabled] = useState(true);
+    const [dayTradingSymbols, setDayTradingSymbols] = useState('QQQ,SPY');
+    const [strikeOffset, setStrikeOffset] = useState('0');
+    const [minSignalScore, setMinSignalScore] = useState('70');
+    const [tradingStartTime, setTradingStartTime] = useState('09:30');
+    const [tradingCutoffTime, setTradingCutoffTime] = useState('16:00');
+    const [discordAlertsEnabled, setDiscordAlertsEnabled] = useState(false);
+    const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
+    const [polygonApiKey, setPolygonApiKey] = useState('');
+    const [sscgexPassword, setSscgexPassword] = useState('');
+    const [dayTradingAiEnabled, setDayTradingAiEnabled] = useState(true);
+    const [dayTradingAiProvider, setDayTradingAiProvider] = useState('openrouter');
+    const [dayTradingAiModel, setDayTradingAiModel] = useState('meta-llama/llama-3.3-70b-instruct');
+
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
     const [currentPassword, setCurrentPassword] = useState('');
@@ -167,6 +182,21 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setPositionPollInterval(data.position_poll_interval || '2');
             setSnaptradeClientId(data.snaptrade_client_id || '');
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
+
+            // Load Day Trading settings
+            setDayTradingEnabled(data.day_trading_enabled !== 'false');
+            setDayTradingSymbols(data.day_trading_symbols || 'QQQ,SPY');
+            setStrikeOffset(data.strike_offset || '0');
+            setMinSignalScore(data.min_signal_score || '70');
+            setTradingStartTime(data.trading_start_time || '09:30');
+            setTradingCutoffTime(data.trading_cutoff_time || '16:00');
+            setDiscordAlertsEnabled(data.discord_alerts_enabled === 'true');
+            setDiscordWebhookUrl(data.discord_webhook_url || '');
+            setPolygonApiKey(data.polygon_api_key || '');
+            setSscgexPassword(data.sscgex_password || '');
+            setDayTradingAiEnabled(data.day_trading_ai_enabled !== 'false');
+            setDayTradingAiProvider(data.day_trading_ai_provider || 'openrouter');
+            setDayTradingAiModel(data.day_trading_ai_model || 'meta-llama/llama-3.3-70b-instruct');
         } catch (err) {
             console.error(err);
         } finally {
@@ -231,7 +261,20 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 polling_enabled: pollingEnabled ? 'true' : 'false',
                 position_poll_interval: positionPollInterval,
                 snaptrade_client_id: snaptradeClientId,
-                snaptrade_consumer_key: snaptradeConsumerKey
+                snaptrade_consumer_key: snaptradeConsumerKey,
+                day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
+                day_trading_symbols: dayTradingSymbols,
+                strike_offset: strikeOffset,
+                min_signal_score: minSignalScore,
+                trading_start_time: tradingStartTime,
+                trading_cutoff_time: tradingCutoffTime,
+                discord_alerts_enabled: discordAlertsEnabled ? 'true' : 'false',
+                discord_webhook_url: discordWebhookUrl,
+                polygon_api_key: polygonApiKey,
+                sscgex_password: sscgexPassword,
+                day_trading_ai_enabled: dayTradingAiEnabled ? 'true' : 'false',
+                day_trading_ai_provider: dayTradingAiProvider,
+                day_trading_ai_model: dayTradingAiModel
             });
             onUpdate(user); // Force refresh of parent if needed
             setOpen(false);
@@ -261,6 +304,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                     <TabsList className="flex-col w-64 justify-start rounded-none border-r h-full bg-muted/30 p-2 space-y-1">
                         <TabsTrigger value="ai" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
                             AI Configuration
+                        </TabsTrigger>
+                        <TabsTrigger value="daytrading" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
+                            Day Trading Settings
                         </TabsTrigger>
                         <TabsTrigger value="integrations" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
                             Integrations
@@ -583,6 +629,188 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </Button>
                                 </div>
                             </section>
+                        </TabsContent>
+
+                        <TabsContent value="daytrading" className="m-0 space-y-6">
+                            <div>
+                                <h3 className="text-lg font-medium">Day Trading Scanner</h3>
+                                <p className="text-sm text-muted-foreground">Configure the real-time options scanner and alerting parameters.</p>
+                            </div>
+                            <div className="grid gap-6">
+                                <div className="grid gap-2 pt-2">
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="dtEnabledToggle" className="flex items-center gap-2">
+                                            Day Trading Scanner
+                                            {dayTradingEnabled ? (
+                                                <Badge variant="default" className="text-[10px] h-5 bg-emerald-600">Enabled</Badge>
+                                            ) : (
+                                                <Badge variant="secondary" className="text-[10px] h-5">Disabled</Badge>
+                                            )}
+                                        </Label>
+                                        <Switch
+                                            id="dtEnabledToggle"
+                                            checked={dayTradingEnabled}
+                                            onCheckedChange={setDayTradingEnabled}
+                                        />
+                                    </div>
+                                    <p className="text-[10px] text-muted-foreground">
+                                        Enable/disable background scanning of Day Trading alerts.
+                                    </p>
+                                </div>
+
+                                <div className="grid gap-2">
+                                    <Label htmlFor="dtSymbols">Tracked Symbols (Comma-separated)</Label>
+                                    <Input
+                                        id="dtSymbols"
+                                        value={dayTradingSymbols}
+                                        onChange={(e) => setDayTradingSymbols(e.target.value)}
+                                        placeholder="QQQ, SPY"
+                                    />
+                                    <p className="text-[10px] text-muted-foreground">
+                                        Underlying indices to scan. Example: <code>QQQ, SPY</code>
+                                    </p>
+                                </div>
+
+                                <div className="grid gap-2">
+                                    <Label htmlFor="dtStrikeOffset">Options Strike Offset</Label>
+                                    <Select value={strikeOffset} onValueChange={setStrikeOffset}>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select Offset" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="-2">In-The-Money (ITM) 2 Strikes (-2)</SelectItem>
+                                            <SelectItem value="-1">In-The-Money (ITM) 1 Strike (-1)</SelectItem>
+                                            <SelectItem value="0">At-The-Money (ATM) (0)</SelectItem>
+                                            <SelectItem value="1">Out-Of-The-Money (OTM) 1 Strike (+1)</SelectItem>
+                                            <SelectItem value="2">Out-Of-The-Money (OTM) 2 Strikes (+2)</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+
+                                <div className="grid gap-2">
+                                    <Label htmlFor="dtMinScore">Minimum Signal Confidence Score</Label>
+                                    <Input
+                                        id="dtMinScore"
+                                        type="number"
+                                        value={minSignalScore}
+                                        onChange={(e) => setMinSignalScore(e.target.value)}
+                                        placeholder="70"
+                                    />
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="dtStartTime">Trading Start Time (ET)</Label>
+                                        <Input
+                                            id="dtStartTime"
+                                            type="time"
+                                            value={tradingStartTime}
+                                            onChange={(e) => setTradingStartTime(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="dtCutoffTime">Trading Cutoff Time (ET)</Label>
+                                        <Input
+                                            id="dtCutoffTime"
+                                            type="time"
+                                            value={tradingCutoffTime}
+                                            onChange={(e) => setTradingCutoffTime(e.target.value)}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid gap-2 pt-4 border-t">
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="dtDiscordAlerts" className="flex items-center gap-2">
+                                            Discord Alerts Webhook
+                                        </Label>
+                                        <Switch
+                                            id="dtDiscordAlerts"
+                                            checked={discordAlertsEnabled}
+                                            onCheckedChange={setDiscordAlertsEnabled}
+                                        />
+                                    </div>
+                                </div>
+
+                                {discordAlertsEnabled && (
+                                    <div className="grid gap-2 animate-in fade-in slide-in-from-top-2">
+                                        <Label htmlFor="dtDiscordUrl">Discord Webhook URL</Label>
+                                        <Input
+                                            id="dtDiscordUrl"
+                                            type="password"
+                                            value={discordWebhookUrl}
+                                            onChange={(e) => setDiscordWebhookUrl(e.target.value)}
+                                            placeholder="https://discord.com/api/webhooks/..."
+                                        />
+                                    </div>
+                                )}
+
+                                <div className="grid gap-2 pt-4 border-t">
+                                    <Label htmlFor="dtPolygonKey">Polygon.io API Key (Required for 0DTE Option quotes)</Label>
+                                    <Input
+                                        id="dtPolygonKey"
+                                        type="password"
+                                        value={polygonApiKey}
+                                        onChange={(e) => setPolygonApiKey(e.target.value)}
+                                        placeholder="Enter Polygon Key"
+                                    />
+                                </div>
+
+                                <div className="grid gap-2">
+                                    <Label htmlFor="dtGexPassword">GEX Portal Password (Required for GEX Walls)</Label>
+                                    <Input
+                                        id="dtGexPassword"
+                                        type="password"
+                                        value={sscgexPassword}
+                                        onChange={(e) => setSscgexPassword(e.target.value)}
+                                        placeholder="Enter GEX Portal Password"
+                                    />
+                                </div>
+
+                                <div className="grid gap-4 pt-4 border-t">
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="dtAiEnabled" className="flex items-center gap-2">
+                                            Enable AI Coach Commentary
+                                        </Label>
+                                        <Switch
+                                            id="dtAiEnabled"
+                                            checked={dayTradingAiEnabled}
+                                            onCheckedChange={setDayTradingAiEnabled}
+                                        />
+                                    </div>
+                                </div>
+
+                                {dayTradingAiEnabled && (
+                                    <div className="grid gap-4 animate-in fade-in slide-in-from-top-2">
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="dtAiProvider">AI Provider</Label>
+                                            <Select value={dayTradingAiProvider} onValueChange={setDayTradingAiProvider}>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Select Provider" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="ollama">Local Ollama</SelectItem>
+                                                    <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="dtAiModel">AI Model</Label>
+                                            <Input
+                                                id="dtAiModel"
+                                                value={dayTradingAiModel}
+                                                onChange={(e) => setDayTradingAiModel(e.target.value)}
+                                                placeholder="meta-llama/llama-3.3-70b-instruct"
+                                            />
+                                        </div>
+                                    </div>
+                                )}
+
+                                <Button className="w-full sm:w-auto" onClick={handleSaveSettings} disabled={saving || loading}>
+                                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    Save Day Trading Settings
+                                </Button>
+                            </div>
                         </TabsContent>
                     </div>
                 </Tabs>

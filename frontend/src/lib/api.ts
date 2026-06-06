@@ -525,6 +525,17 @@ export const api = {
   },
 
   // --- Day Trading Signals ---
+  async getSignalsHealth(): Promise<{
+    yahooFinance: { status: string; latencyMs: number };
+    sscgexPortal: { status: string; latencyMs: number };
+    polygon: { status: string; latencyMs: number };
+    openRouter: { status: string; latencyMs: number };
+  }> {
+    const res = await authFetch(`${API_BASE}/signals/health`);
+    if (!res.ok) throw new Error('Failed to fetch day trading API health');
+    return res.json();
+  },
+
   async getSignals(): Promise<Signal[]> {
     const res = await authFetch(`${API_BASE}/signals?t=${Date.now()}`);
     if (!res.ok) throw new Error('Failed to fetch signals');

@@ -1,0 +1,1023 @@
+import cron from 'node-cron';
+import { FastifyInstance } from 'fastify';
+import axios from 'axios';
+import YahooFinance from 'yahoo-finance2';
+import { AIService } from './ai-service';
+import { redis } from '../lib/redis';
+
+const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
+
+interface Candle {
+  datetime: string;
+  nyDateStr: string;
+  isRTH: boolean;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  timestamp: number;
+}
+
+export class SignalScannerService {
+  private fastify: FastifyInstance;
+  private aiService: AIService;
+  private isRunning: boolean = false;
+  private timerId: NodeJS.Timeout | null = null;
+  private scanIntervalMs: number = 5 * 60 * 1000; // 5 minutes
+
+  constructor(fastify: FastifyInstance) {
+    this.fastify = fastify;
+    this.aiService = new AIService(fastify);
+  }
+
+  public start() {
+    this.fastify.log.info('[SignalScannerService] Starting background signal scanner loop...');
+    this.scheduleNextScan(10000); // Wait 10 seconds before the first scan
+  }
+
+  public stop() {
+    if (this.timerId) {
+      clearTimeout(this.timerId);
+      this.timerId = null;
+    }
+    this.fastify.log.info('[SignalScannerService] Stopped background scanner loop.');
+  }
+
+  private scheduleNextScan(delayMs: number = this.scanIntervalMs) {
+    if (this.timerId) clearTimeout(this.timerId);
+    this.timerId = setTimeout(async () => {
+      try {
+        await this.scanAllActiveUsers();
+      } catch (err: any) {
+        this.fastify.log.error(`[SignalScannerService] Error during scan cycle: ${err.message}`);
+      } finally {
+        this.scheduleNextScan();
+      }
+    }, delayMs);
+  }
+
+  public async scanAllActiveUsers() {
+    if (this.isRunning) return;
+    this.isRunning = true;
+
+    try {
+      // Find all users who have enabled day trading
+      const query = `
+        SELECT DISTINCT user_id 
+        FROM settings 
+        WHERE key = 'day_trading_enabled' AND value = 'true'
+      `;
+      const { rows } = await this.fastify.pg.query(query);
+
+      for (const row of rows) {
+        const userId = row.user_id;
+        try {
+          await this.scanForUser(userId);
+        } catch (userErr: any) {
+          this.fastify.log.error(`[SignalScannerService] Scan failed for user ${userId}: ${userErr.message}`);
+        }
+      }
+    } catch (err: any) {
+      this.fastify.log.error(`[SignalScannerService] Failed to load active scanner users: ${err.message}`);
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  private async getSettingsForUser(userId: number) {
+    const { rows } = await this.fastify.pg.query(
+      'SELECT key, value FROM settings WHERE user_id = $1',
+      [userId]
+    );
+
+    const dbSettings = rows.reduce((acc: any, r: any) => {
+      acc[r.key] = r.value;
+      return acc;
+    }, {});
+
+    const defaults = {
+      day_trading_enabled: 'true',
+      day_trading_symbols: 'QQQ,SPY',
+      polygon_api_key: '',
+      sscgex_password: '',
+      discord_webhook_url: '',
+      discord_alerts_enabled: 'false',
+      trading_start_time: '09:30',
+      trading_cutoff_time: '16:00',
+      strike_offset: '0',
+      min_signal_score: '70',
+      day_trading_ai_enabled: 'true',
+      day_trading_ai_provider: 'openrouter',
+      day_trading_ai_model: 'meta-llama/llama-3.3-70b-instruct'
+    };
+
+    return { ...defaults, ...dbSettings };
+  }
+
+  private async scanForUser(userId: number) {
+    const settings = await this.getSettingsForUser(userId);
+    if (settings.day_trading_enabled !== 'true') return;
+
+    const symbols = settings.day_trading_symbols
+      .split(',')
+      .map((s: string) => s.trim().toUpperCase())
+      .filter(Boolean);
+
+    this.fastify.log.info(`[SignalScannerService] Scanning symbols: ${symbols.join(', ')} for user ${userId}`);
+
+    for (const symbol of symbols) {
+      try {
+        await this.evaluateSymbol(symbol, userId, settings);
+      } catch (err: any) {
+        this.fastify.log.error(`[SignalScannerService] Failed to scan ${symbol} for user ${userId}: ${err.message}`);
+      }
+    }
+  }
+
+  private async evaluateSymbol(symbol: string, userId: number, settings: any) {
+    const now = new Date();
+    const nyParts = this.getNyDateParts(now);
+
+    // 1. Check Trading Window Blocker
+    const startMinutes = this.parseTimeStr(settings.trading_start_time);
+    const cutoffMinutes = this.parseTimeStr(settings.trading_cutoff_time);
+    const currentMinutes = nyParts.minutes;
+
+    const noTradeReasons: string[] = [];
+
+    if (currentMinutes < startMinutes) {
+      noTradeReasons.push(`Before trade start time ${settings.trading_start_time} ET`);
+    }
+    if (currentMinutes >= cutoffMinutes) {
+      noTradeReasons.push(`After trade cutoff ${settings.trading_cutoff_time} ET`);
+    }
+
+    // 2. Fetch GEX regime token and details
+    let gexData: any = null;
+    let gexAvailable = false;
+    if (settings.sscgex_password) {
+      try {
+        const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
+          password: settings.sscgex_password
+        }, { timeout: 8000 });
+
+        const token = (tokenRes.data as any).token;
+        if (token) {
+          const gexRes = await axios.get(`https://sscgex.up.railway.app/api/gex/${symbol}?strikes=50`, {
+            headers: { Authorization: `Bearer ${token}` },
+            timeout: 8000
+          });
+          gexData = gexRes.data;
+          gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
+        }
+      } catch (err: any) {
+        this.fastify.log.warn(`[SignalScannerService] GEX Portal fetch failed for ${symbol}: ${err.message}`);
+      }
+    }
+
+    if (!gexAvailable) {
+      noTradeReasons.push('GEX data unavailable — regime unknown, skipping to prevent silent strategy flip');
+    }
+
+    // 3. Fetch Yahoo Finance Price Candles (5-minute for 5 days)
+    let sortedCandles: Candle[] = [];
+    try {
+      const chartData = await (yahooFinance as any).chart(symbol, {
+        interval: '5m',
+        range: '5d',
+        includePrePost: true
+      });
+
+      const result = chartData?.quotes || [];
+      const timestamps = chartData?.timestamp || [];
+
+      for (let i = 0; i < result.length; i++) {
+        const open = this.toNumber(result[i].open);
+        const high = this.toNumber(result[i].high);
+        const low = this.toNumber(result[i].low);
+        const close = this.toNumber(result[i].close);
+        const volume = this.toNumber(result[i].volume ?? 0) ?? 0;
+
+        if (timestamps[i] && open !== null && high !== null && low !== null && close !== null) {
+          const dateObj = new Date(timestamps[i] * 1000);
+          const datetime = dateObj.toISOString();
+          const nyCandleParts = this.getNyDateParts(dateObj);
+          const isRTH = nyCandleParts.minutes >= (9 * 60 + 30) && nyCandleParts.minutes < (16 * 60);
+
+          sortedCandles.push({
+            datetime,
+            nyDateStr: nyCandleParts.dateStr,
+            isRTH,
+            open,
+            high,
+            low,
+            close,
+            volume,
+            timestamp: timestamps[i]
+          });
+        }
+      }
+    } catch (err: any) {
+      this.fastify.log.error(`[SignalScannerService] Yahoo Finance fetch failed for ${symbol}: ${err.message}`);
+      return;
+    }
+
+    if (sortedCandles.length < 30) {
+      this.fastify.log.warn(`[SignalScannerService] Not enough candles (${sortedCandles.length}) for ${symbol}. Skipping.`);
+      return;
+    }
+
+    // Identify session groupings
+    const latestDateStr = sortedCandles[sortedCandles.length - 1].nyDateStr;
+    const rthCandles = sortedCandles.filter(c => c.isRTH);
+    const currentSessionRTHCandles = rthCandles.filter(c => c.nyDateStr === latestDateStr);
+
+    const dates = [...new Set(rthCandles.map(c => c.nyDateStr))];
+    let previousDateStr = null;
+    if (dates.length > 1) {
+      previousDateStr = dates[dates.indexOf(latestDateStr) - 1];
+    }
+
+    let pdh: number | null = null;
+    let pdl: number | null = null;
+    let onh: number | null = null;
+    let onl: number | null = null;
+
+    if (previousDateStr) {
+      const previousSessionRTH = rthCandles.filter(c => c.nyDateStr === previousDateStr);
+      if (previousSessionRTH.length > 0) {
+        pdh = Math.max(...previousSessionRTH.map(c => c.high));
+        pdl = Math.min(...previousSessionRTH.map(c => c.low));
+      }
+
+      // Overnight candles: between end of previous RTH and start of current RTH
+      const lastPrevRTH = previousSessionRTH[previousSessionRTH.length - 1];
+      const firstCurrRTH = currentSessionRTHCandles[0];
+      if (lastPrevRTH) {
+        const overnightCandles = sortedCandles.filter(c =>
+          c.timestamp > lastPrevRTH.timestamp &&
+          (!firstCurrRTH || c.timestamp < firstCurrRTH.timestamp)
+        );
+        if (overnightCandles.length > 0) {
+          onh = Math.max(...overnightCandles.map(c => c.high));
+          onl = Math.min(...overnightCandles.map(c => c.low));
+        }
+      }
+    }
+
+    const sessionCandles = currentSessionRTHCandles.length >= 2
+      ? currentSessionRTHCandles
+      : sortedCandles.filter(c => c.nyDateStr === latestDateStr);
+
+    const latest = sessionCandles[sessionCandles.length - 1] || sortedCandles[sortedCandles.length - 1];
+    const previous = sessionCandles[sessionCandles.length - 2] || sortedCandles[sortedCandles.length - 2];
+    const closes = rthCandles.map(c => c.close);
+
+    const currentPrice = latest.close;
+
+    // Technical calculations
+    const rsi5 = this.computeRsi(closes, 5) || 50;
+    const rsi14 = this.computeRsi(closes, 14) || 50;
+    const emaShort = this.computeEma(closes, 9);
+    const emaLong = this.computeEma(closes, 21);
+
+    // Calculate VWAP (RTH only)
+    let cumulativePv = 0;
+    let cumulativeVolume = 0;
+    for (const candle of sessionCandles) {
+      const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+      cumulativePv += typicalPrice * candle.volume;
+      cumulativeVolume += candle.volume;
+    }
+    const vwap = cumulativeVolume > 0 ? cumulativePv / cumulativeVolume : currentPrice;
+
+    if (cumulativeVolume === 0) {
+      noTradeReasons.push('Intraday volume unavailable, VWAP is degraded');
+    }
+
+    // Opening Range High/Low (first 15m of session)
+    const rangeMinutes = 15;
+    const candlesPerRange = Math.max(1, Math.round(rangeMinutes / 5));
+    const openingRangeCandles = sessionCandles.slice(0, Math.min(candlesPerRange, sessionCandles.length));
+    const openingRangeHigh = openingRangeCandles.length > 0
+      ? Math.max(...openingRangeCandles.map(c => c.high))
+      : latest.high;
+    const openingRangeLow = openingRangeCandles.length > 0
+      ? Math.min(...openingRangeCandles.map(c => c.low))
+      : latest.low;
+
+    // Volume Breakout Check
+    const last10 = rthCandles.slice(Math.max(0, rthCandles.length - 10));
+    const avgVolume = last10.reduce((sum, c) => sum + c.volume, 0) / (last10.length || 1);
+    const hasVolumeBreakout = latest.volume > (avgVolume * 1.5);
+    const hasBullishVolumeBreakout = hasVolumeBreakout && latest.close >= latest.open;
+    const hasBearishVolumeBreakout = hasVolumeBreakout && latest.close <= latest.open;
+
+    const atr14 = this.computeAtr(rthCandles, 14) || 1.0;
+
+    const previousClose = previous.close;
+    const sessionChangePct = ((currentPrice - previousClose) / previousClose) * 100;
+    const candleChangePct = ((latest.close - previous.close) / previous.close) * 100;
+
+    // 4. Fetch VIX Quote
+    let vixPrice: number | null = null;
+    let vixPreviousClose: number | null = null;
+    let vixChangePct: number | null = null;
+
+    try {
+      const vixData = await (yahooFinance as any).quote('^VIX');
+      vixPrice = vixData.regularMarketPrice ?? null;
+      vixPreviousClose = vixData.regularMarketPreviousClose ?? null;
+      if (vixPrice && vixPreviousClose) {
+        vixChangePct = ((vixPrice - vixPreviousClose) / vixPreviousClose) * 100;
+      }
+    } catch (vixErr: any) {
+      this.fastify.log.warn(`[SignalScannerService] Failed to fetch VIX: ${vixErr.message}`);
+    }
+
+    if (vixPrice === null) {
+      noTradeReasons.push('VIX data unavailable from Yahoo response');
+    }
+
+    // 5. Fetch Mega-Cap Internals
+    let bullishInternals = 0;
+    let bearishInternals = 0;
+    let applePct: number | null = null;
+    let microsoftPct: number | null = null;
+    let nvidiaPct: number | null = null;
+
+    try {
+      const internals = await (yahooFinance as any).quote(['AAPL', 'MSFT', 'NVDA']);
+      const internalsList = Array.isArray(internals) ? internals : [internals];
+
+      for (const stock of internalsList) {
+        const change = stock.regularMarketChangePercent ?? 0;
+        if (stock.symbol === 'AAPL') applePct = change;
+        if (stock.symbol === 'MSFT') microsoftPct = change;
+        if (stock.symbol === 'NVDA') nvidiaPct = change;
+
+        if (change > 0) bullishInternals++;
+        if (change < 0) bearishInternals++;
+      }
+    } catch (internalErr: any) {
+      this.fastify.log.warn(`[SignalScannerService] Mega-caps check failed: ${internalErr.message}`);
+    }
+
+    const hasBullishInternals = bullishInternals >= 2;
+    const hasBearishInternals = bearishInternals >= 2;
+
+    // Parse GEX
+    const qqqNetGex = gexData ? (this.toNumber(gexData.net_gex) ?? 0) : 0;
+    const qqqGexRegime = gexData ? String(gexData.regime || '').toUpperCase() : 'NEUTRAL';
+    const qqqGexFlip = gexData ? this.toNumber(gexData.flip) : null;
+    const qqqCallWall = gexData ? this.toNumber(gexData.call_wall?.strike) : null;
+    const qqqPutWall = gexData ? this.toNumber(gexData.put_wall?.strike) : null;
+    const qqqFloor = gexData ? this.toNumber(gexData.floor?.strike) : null;
+    const qqqCeiling = gexData ? this.toNumber(gexData.ceiling?.strike) : null;
+    const qqqKingNode = gexData ? this.toNumber(gexData.king_node?.strike) : null;
+    const qqqFlowDirection = gexData ? String(gexData.flow_direction || 'neutral').toLowerCase() : 'neutral';
+    const qqqNetChex = gexData ? (this.toNumber(gexData.net_chex) ?? 0) : 0;
+
+    // 6. Score setups based on Regime (BREAKOUT vs MEAN_REVERSION)
+    const callScoreParts: Array<{ points: number; reason: string }> = [];
+    const putScoreParts: Array<{ points: number; reason: string }> = [];
+
+    const addScore = (bucket: any[], condition: boolean, points: number, reason: string) => {
+      if (condition) bucket.push({ points, reason });
+    };
+
+    let regime = qqqGexRegime === 'NEGATIVE' ? 'BREAKOUT' : 'MEAN_REVERSION';
+
+    if (regime === 'BREAKOUT') {
+      // CALL
+      addScore(callScoreParts, currentPrice >= openingRangeHigh, 30, 'Price broke above Opening Range High');
+      addScore(callScoreParts, currentPrice > vwap, 20, 'Price is above VWAP');
+      addScore(callScoreParts, emaShort !== null && emaLong !== null && emaShort > emaLong && currentPrice > emaShort, 20, 'Bullish trend alignment (Price > EMA9 > EMA21)');
+      addScore(callScoreParts, rsi5 > 50 && rsi5 > rsi14, 15, 'Momentum is bullish (RSI5 > 50 and RSI5 > RSI14)');
+      addScore(callScoreParts, hasBullishVolumeBreakout, 15, 'Bullish volume breakout (high-volume green candle)');
+      addScore(callScoreParts, onh !== null && currentPrice >= onh, 20, 'Price broke above Overnight High (ONH)');
+      addScore(callScoreParts, pdh !== null && currentPrice >= pdh, 20, 'Price broke above Previous Day High (PDH)');
+      addScore(callScoreParts, hasBullishInternals, 10, 'Mega-Caps are bullish');
+      addScore(callScoreParts, qqqFlowDirection === 'bullish', 15, 'Options flow is bullish (GEX flow)');
+
+      // PUT
+      addScore(putScoreParts, currentPrice <= openingRangeLow, 30, 'Price broke below Opening Range Low');
+      addScore(putScoreParts, currentPrice < vwap, 20, 'Price is below VWAP');
+      addScore(putScoreParts, emaShort !== null && emaLong !== null && emaShort < emaLong && currentPrice < emaShort, 20, 'Bearish trend alignment (Price < EMA9 < EMA21)');
+      addScore(putScoreParts, rsi5 < 50 && rsi5 < rsi14, 15, 'Momentum is bearish (RSI5 < 50 and RSI5 < RSI14)');
+      addScore(putScoreParts, hasBearishVolumeBreakout, 15, 'Bearish volume breakout (high-volume red candle)');
+      addScore(putScoreParts, onl !== null && currentPrice <= onl, 20, 'Price broke below Overnight Low (ONL)');
+      addScore(putScoreParts, pdl !== null && currentPrice <= pdl, 20, 'Price broke below Previous Day Low (PDL)');
+      addScore(putScoreParts, hasBearishInternals, 10, 'Mega-Caps are bearish');
+      addScore(putScoreParts, qqqFlowDirection === 'bearish', 15, 'Options flow is bearish (GEX flow)');
+    } else {
+      // MEAN_REVERSION
+      // CALL
+      addScore(callScoreParts, currentPrice >= openingRangeLow && currentPrice <= openingRangeLow * 1.002, 30, 'Price holding Opening Range Low support');
+      addScore(callScoreParts, rsi5 <= 30, 25, 'Short-term RSI is oversold (RSI5 <= 30)');
+      addScore(callScoreParts, latest.close > latest.open, 20, 'Latest candle closed green (reversal)');
+      addScore(callScoreParts, currentPrice < vwap, 15, 'Price is below VWAP (oversold dip)');
+      addScore(callScoreParts, hasBullishInternals, 10, 'Mega-Caps support reversal');
+      addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqFlowDirection !== 'bearish', 15, 'Positive GEX and neutral/bullish flow');
+      addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && qqqGexFlip !== null && currentPrice > qqqGexFlip && currentPrice < qqqKingNode, 15, 'Price between GEX Flip and King Node');
+
+      // PUT
+      addScore(putScoreParts, currentPrice <= openingRangeHigh && currentPrice >= openingRangeHigh * 0.998, 30, 'Price rejecting Opening Range High resistance');
+      addScore(putScoreParts, rsi5 >= 70, 25, 'Short-term RSI is overbought (RSI5 >= 70)');
+      addScore(putScoreParts, latest.close < latest.open, 20, 'Latest candle closed red (reversal)');
+      addScore(putScoreParts, currentPrice > vwap, 15, 'Price is above VWAP (overextended rip)');
+      addScore(putScoreParts, hasBearishInternals, 10, 'Mega-Caps support rejection');
+      addScore(putScoreParts, qqqGexRegime === 'POSITIVE' && qqqFlowDirection !== 'bullish', 15, 'Positive GEX and neutral/bearish flow');
+      addScore(putScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && currentPrice > qqqKingNode, 15, 'Price above King Node');
+    }
+
+    const callScore = callScoreParts.reduce((sum, item) => sum + item.points, 0);
+    const putScore = putScoreParts.reduce((sum, item) => sum + item.points, 0);
+    const winningSide = callScore >= putScore ? 'CALL' : 'PUT';
+    const winningScore = winningSide === 'CALL' ? callScore : putScore;
+
+    // Afternoon threshold inflation
+    let dynamicMinScore = Number(settings.min_signal_score);
+    if (currentMinutes >= 13 * 60 + 30) {
+      dynamicMinScore += 15;
+    }
+
+    // 7. Check Volatility & Wall Blockers
+    const volatilityBlockers = [];
+    const maxVixForCalls = 24;
+    const minVixForPuts = 13;
+
+    if (winningSide === 'CALL' && vixPrice !== null && vixPrice > maxVixForCalls) {
+      volatilityBlockers.push(`VIX ${vixPrice.toFixed(2)} is above call risk limit ${maxVixForCalls}`);
+    }
+    if (winningSide === 'PUT' && vixPrice !== null && vixPrice < minVixForPuts) {
+      volatilityBlockers.push(`VIX ${vixPrice.toFixed(2)} is below put volatility floor ${minVixForPuts}`);
+    }
+
+    if (winningSide === 'CALL' && hasBearishInternals) {
+      volatilityBlockers.push(`Mega-Caps are bearish. Avoid going long ${symbol}.`);
+    }
+    if (winningSide === 'PUT' && hasBullishInternals) {
+      volatilityBlockers.push(`Mega-Caps are bullish. Avoid shorting ${symbol}.`);
+    }
+
+    // GEX proximity blockers
+    if (winningSide === 'CALL' && qqqCallWall !== null && currentPrice < qqqCallWall) {
+      if (qqqCallWall - currentPrice <= 0.50) {
+        volatilityBlockers.push(`Blocked: Spot ($${currentPrice.toFixed(2)}) is too close to Call Wall ($${qqqCallWall.toFixed(2)})`);
+      }
+    }
+    if (winningSide === 'PUT' && qqqPutWall !== null && currentPrice > qqqPutWall) {
+      if (currentPrice - qqqPutWall <= 0.50) {
+        volatilityBlockers.push(`Blocked: Spot ($${currentPrice.toFixed(2)}) is too close to Put Wall ($${qqqPutWall.toFixed(2)})`);
+      }
+    }
+
+    if (regime === 'BREAKOUT' && qqqFloor !== null && qqqCeiling !== null) {
+      if (qqqCeiling - qqqFloor <= 2.0) {
+        volatilityBlockers.push(`Blocked: Pinned in tight GEX range ($${qqqFloor}–$${qqqCeiling}), breakout unlikely.`);
+      }
+    }
+
+    if (qqqKingNode !== null && Math.abs(currentPrice - qqqKingNode) <= 0.50) {
+      volatilityBlockers.push(`Blocked: Spot ($${currentPrice.toFixed(2)}) is pinned to King Node ($${qqqKingNode.toFixed(2)})`);
+    }
+
+    // Append blockers to reasons
+    for (const blocker of volatilityBlockers) {
+      noTradeReasons.push(blocker);
+    }
+
+    if (winningScore < dynamicMinScore) {
+      noTradeReasons.push(`Best setup score ${winningScore} is below dynamic minimum ${dynamicMinScore}`);
+    }
+
+    // DYNAMIC OVERALL MARKET REGIME CLASSIFICATION
+    let computedRegime = 'NEUTRAL';
+    if (qqqGexRegime === 'POSITIVE' && vixPrice !== null && vixPrice <= 13.5 && hasBullishInternals) {
+      computedRegime = 'EUPHORIA';
+    } else if (qqqGexRegime === 'POSITIVE' || currentPrice > vwap) {
+      computedRegime = 'BULLISH';
+    } else if (qqqGexRegime === 'NEGATIVE' || currentPrice < vwap) {
+      computedRegime = 'BEARISH';
+    }
+
+    // Resolve Contract ATM selection if actionable
+    let signalType = 'NONE';
+    let tradeBias = 'NO_TRADE';
+    let optionTicker: string | null = null;
+    let chosenStrike: number | null = null;
+    let chosenExpiry: string | null = null;
+    let pricingData: any = null;
+    let planData: any = null;
+
+    const isActionable = noTradeReasons.length === 0;
+
+    if (isActionable) {
+      signalType = winningSide;
+      if (regime === 'BREAKOUT') {
+        tradeBias = winningSide === 'CALL' ? 'BUY_CALL_ON_BREAKOUT' : 'BUY_PUT_ON_BREAKDOWN';
+      } else {
+        tradeBias = winningSide === 'CALL' ? 'BUY_CALL_ON_DIP' : 'BUY_PUT_ON_RIP';
+      }
+
+      // Fetch ATM option contract using Polygon API
+      const polygonApiKey = settings.polygon_api_key;
+      const strikeOffset = parseInt(settings.strike_offset, 10) || 0;
+      const todayDateStr = nyParts.dateStr;
+
+      let chosenContract: any = null;
+
+      if (polygonApiKey) {
+        try {
+          const contractsRes = await axios.get('https://api.polygon.io/v3/reference/options/contracts', {
+            params: {
+              underlying_ticker: symbol,
+              contract_type: winningSide === 'CALL' ? 'call' : 'put',
+              expiration_date: todayDateStr,
+              limit: 250,
+              sort: 'strike_price',
+              order: 'asc',
+              apikey: polygonApiKey
+            },
+            timeout: 8000
+          });
+
+          const contracts = (contractsRes.data as any).results || [];
+          if (contracts.length > 0) {
+            // Parse contracts
+            const parsed = contracts
+              .map((c: any) => ({
+                ticker: c.ticker,
+                strike: Number(c.strike_price),
+                expiry: c.expiration_date
+              }))
+              .filter((c: any) => !isNaN(c.strike))
+              .sort((a: any, b: any) => a.strike - b.strike);
+
+            // Find closest ATM strike index
+            let atmIdx = 0;
+            let minDistance = Infinity;
+            for (let i = 0; i < parsed.length; i++) {
+              const dist = Math.abs(parsed[i].strike - currentPrice);
+              if (dist < minDistance) {
+                minDistance = dist;
+                atmIdx = i;
+              }
+            }
+
+            // Adjust by offset
+            let chosenIdx = atmIdx;
+            if (winningSide === 'CALL') {
+              chosenIdx = atmIdx + strikeOffset;
+            } else {
+              chosenIdx = atmIdx - strikeOffset;
+            }
+
+            chosenIdx = Math.max(0, Math.min(parsed.length - 1, chosenIdx));
+            chosenContract = parsed[chosenIdx];
+          }
+        } catch (contractErr: any) {
+          this.fastify.log.warn(`[SignalScannerService] Polygon reference option call failed: ${contractErr.message}`);
+        }
+      }
+
+      // 8. Contract pricing (Polygon snapshot or Black-Scholes fallback)
+      let bid: number | null = null;
+      let ask: number | null = null;
+      let spread: number | null = null;
+      let spreadPct: number | null = null;
+      let mark: number | null = null;
+      let volume: number | null = null;
+      let openInterest: number | null = null;
+      let usingTheoreticalPricing = true;
+
+      const defaultContractName = `${symbol}${todayDateStr.replace(/-/g, '').slice(2)}${winningSide === 'CALL' ? 'C' : 'P'}${Math.round(currentPrice)}`;
+      optionTicker = chosenContract?.ticker || defaultContractName;
+      chosenStrike = chosenContract?.strike || Math.round(currentPrice);
+      chosenExpiry = chosenContract?.expiry || todayDateStr;
+
+      if (polygonApiKey && chosenContract) {
+        try {
+          const snapRes = await axios.get(`https://api.polygon.io/v3/snapshot/options/${symbol}/${chosenContract.ticker}`, {
+            params: { apikey: polygonApiKey },
+            timeout: 8000
+          });
+
+          const snapData = snapRes.data as any;
+          if (snapData && snapData.status !== 'NOT_AUTHORIZED' && snapData.results) {
+            const snap = snapData.results;
+            const quote = snap.last_quote || {};
+            bid = this.toNumber(quote.bid);
+            ask = this.toNumber(quote.ask);
+            if (bid !== null && ask !== null) {
+              spread = ask - bid;
+              const mid = (bid + ask) / 2;
+              mark = Number(mid.toFixed(2));
+              spreadPct = Number(((spread / mid) * 100).toFixed(2));
+              usingTheoreticalPricing = false;
+            }
+            volume = snap.day?.volume ?? null;
+            openInterest = snap.open_interest ?? null;
+          }
+        } catch (snapErr: any) {
+          this.fastify.log.warn(`[SignalScannerService] Polygon option snapshot failed: ${snapErr.message}`);
+        }
+      }
+
+      if (usingTheoreticalPricing) {
+        // Black-Scholes option pricing model fallback
+        const S = currentPrice;
+        const K = chosenStrike ?? Math.round(currentPrice);
+        const minutesRemaining = Math.max(5, 16 * 60 - currentMinutes);
+        const T = minutesRemaining / (60 * 24 * 365);
+        const r = 0.05; // 5% risk free
+        const sigma = vixPrice !== null ? vixPrice / 100 : 0.18;
+
+        const nd = (x: number): number => {
+          const t = 1 / (1 + 0.2316419 * Math.abs(x));
+          const d = 0.3989423 * Math.exp(-x * x / 2);
+          const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+          return x >= 0 ? 1 - p : p;
+        };
+
+        try {
+          const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * Math.sqrt(T));
+          const d2 = d1 - sigma * Math.sqrt(T);
+          let bsPrice = 0.05;
+          if (winningSide === 'CALL') {
+            bsPrice = S * nd(d1) - K * Math.exp(-r * T) * nd(d2);
+          } else {
+            bsPrice = K * Math.exp(-r * T) * nd(-d2) - S * nd(-d1);
+          }
+          mark = Number(Math.max(0.05, bsPrice).toFixed(2));
+          bid = Number((mark * 0.95).toFixed(2));
+          ask = Number((mark * 1.05).toFixed(2));
+          spread = Number((ask - bid).toFixed(2));
+          spreadPct = Number(((spread / mark) * 100).toFixed(2));
+          volume = 1200; // Mocked
+          openInterest = 2500; // Mocked
+        } catch (bsErr) {
+          mark = 0.10;
+          bid = 0.08;
+          ask = 0.12;
+          spread = 0.04;
+          spreadPct = 40;
+        }
+      }
+
+      // Check premium actionability constraints
+      const minOptionMark = 0.30;
+      const maxBidAskSpreadPct = 12;
+      const minOptionVolume = 200;
+      const minOpenInterest = 500;
+
+      const pricingWarnings: string[] = [];
+      if (mark !== null && mark < minOptionMark) pricingWarnings.push(`Option premium $${mark} below limit $${minOptionMark}`);
+      if (spreadPct !== null && spreadPct > maxBidAskSpreadPct) pricingWarnings.push(`Spread ${spreadPct}% exceeds ceiling ${maxBidAskSpreadPct}%`);
+      if (volume !== null && volume < minOptionVolume) pricingWarnings.push(`Volume ${volume} below minimum ${minOptionVolume}`);
+      if (openInterest !== null && openInterest < minOpenInterest) pricingWarnings.push(`Open interest ${openInterest} below minimum ${minOpenInterest}`);
+
+      // Apply score adjustments for warnings
+      let finalConfidence = Math.max(0, Math.min(100, winningScore - pricingWarnings.length * 10));
+
+      let setupGrade = '🎲 B / LOTTO';
+      if (finalConfidence === 100) {
+        setupGrade = '🔥 A+ / FULL';
+      } else if (finalConfidence >= 85) {
+        setupGrade = '⚡ A / STANDARD';
+      }
+
+      const optionStopLoss = mark !== null ? Number((mark * 0.8).toFixed(2)) : null;
+      const optionTakeProfit = mark !== null ? Number((mark * 1.4).toFixed(2)) : null;
+
+      pricingData = {
+        ticker: optionTicker,
+        side: winningSide,
+        strike: chosenStrike,
+        expiry: chosenExpiry,
+        bid,
+        ask,
+        spread,
+        spreadPct,
+        mark,
+        volume,
+        openInterest,
+        suggestedStopLoss: optionStopLoss,
+        suggestedTakeProfit: optionTakeProfit,
+        usingTheoreticalPricing
+      };
+
+      const entryTrigger = winningSide === 'CALL' ? latest.high : latest.low;
+      const invalidationLevel = winningSide === 'CALL' ? latest.low : latest.high;
+      const targetUnderlying = winningSide === 'CALL'
+        ? Number((currentPrice * 1.0035).toFixed(2))
+        : Number((currentPrice * 0.9965).toFixed(2));
+      const minStopDistance = Math.max(1.0, atr14 * 0.5);
+      const stopUnderlying = winningSide === 'CALL'
+        ? Number(Math.min(invalidationLevel - 0.05, currentPrice - minStopDistance).toFixed(2))
+        : Number(Math.max(invalidationLevel + 0.05, currentPrice + minStopDistance).toFixed(2));
+
+      planData = {
+        entryTriggerUnderlying: Number(entryTrigger.toFixed(2)),
+        stopUnderlying,
+        targetUnderlying,
+        note: winningSide === 'CALL'
+          ? `Use only if ${symbol} reclaims the latest 5-minute high and holds above VWAP.`
+          : `Use only if ${symbol} breaks the latest 5-minute low and stays below VWAP.`
+      };
+
+      // Trigger alerts and AI Coach Commentary
+      let aiCoachCommentary = '';
+      if (settings.day_trading_ai_enabled === 'true') {
+        const coachPrompt = `
+        You are an expert options coach at StockSurfer Capital. Analyze this day-trading signal setup:
+        - Symbol: ${symbol} ${winningSide} (ATM Strike: $${chosenStrike})
+        - Current Index Price: $${currentPrice.toFixed(2)}
+        - VWAP: $${vwap.toFixed(2)} | EMA9: ${emaShort?.toFixed(2)} | EMA21: ${emaLong?.toFixed(2)}
+        - GEX Regime: ${qqqGexRegime} (Flow direction: ${qqqFlowDirection})
+        - Stop Level: $${stopUnderlying} | Target Level: $${targetUnderlying}
+        - Option Mark: $${mark} (Stop Loss: $${optionStopLoss}, Target Profit: $${optionTakeProfit})
+
+        Write a brief Discord commentary (max 120 words) explaining the trade in simple terms for a novice trader:
+        1. Direct, bold action line: "**BUY ${symbol} [PUT/CALL] $${chosenStrike} and Sell at underlying $${targetUnderlying}, Stop Loss at underlying $${stopUnderlying} (or $${optionStopLoss} on options premium).**"
+        2. Explain the thesis (e.g. why we are breaking out above ORH, or bouncing off GEX Flip/Wall support).
+        3. Highlight key metrics to watch and risk factors (like VIX limits, bid-ask spread).
+        `;
+
+        try {
+          const provider = settings.day_trading_ai_provider;
+          const model = settings.day_trading_ai_model;
+          const key = await this.getAiApiKey(provider);
+
+          if (key) {
+            const aiRes = await this.aiService.askClaudeForTrading(coachPrompt); // Fallback router
+            aiCoachCommentary = aiRes.analysis || aiRes.verdict || '';
+          }
+        } catch (aiErr: any) {
+          this.fastify.log.error(`[SignalScannerService] AI Coach commentary generation failed: ${aiErr.message}`);
+        }
+      }
+
+      // Persist signals to Postgres signals table
+      await this.fastify.pg.query(`
+        INSERT INTO signals (
+          symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss, target_price,
+          confidence_score, setup_grade, status, indicators, gex, volatility, no_trade_reasons,
+          option_expiration_date, market_date
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `, [
+        symbol,
+        winningSide,
+        tradeBias,
+        currentPrice,
+        Number(entryTrigger.toFixed(2)),
+        stopUnderlying,
+        targetUnderlying,
+        finalConfidence,
+        setupGrade,
+        'PENDING',
+        JSON.stringify({
+          vwap: Number(vwap.toFixed(2)),
+          openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
+          openingRangeLow: Number(openingRangeLow.toFixed(2)),
+          atr14: Number(atr14.toFixed(2)),
+          ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
+          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null
+        }),
+        JSON.stringify({
+          netGex: qqqNetGex,
+          regime: qqqGexRegime,
+          flipStrike: qqqGexFlip,
+          callWall: qqqCallWall,
+          putWall: qqqPutWall,
+          kingNode: qqqKingNode,
+          flowDirection: qqqFlowDirection,
+          ceiling: qqqCeiling,
+          floor: qqqFloor
+        }),
+        JSON.stringify({
+          vixQuote: vixPrice,
+          vixChangePercent: vixChangePct
+        }),
+        noTradeReasons,
+        chosenExpiry,
+        nyParts.marketDate
+      ]);
+
+      // Fire Discord Webhook
+      if (settings.discord_alerts_enabled === 'true' && settings.discord_webhook_url) {
+        try {
+          const embedMessage = {
+            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Spot **$${currentPrice.toFixed(2)}** | VIX **${vixPrice?.toFixed(2)}** | Spread ${spreadPct}%\n📊 GEX **${qqqGexRegime}** · **${qqqFlowDirection}** flow | VWAP $${vwap.toFixed(2)}\n🎯 Score **${finalConfidence}** | ${setupGrade}\n\n${aiCoachCommentary ? `🧠 **Coach Commentary:**\n${aiCoachCommentary}` : ''}`
+          };
+          await axios.post(settings.discord_webhook_url, embedMessage, { timeout: 8000 });
+        } catch (discErr: any) {
+          this.fastify.log.error(`[SignalScannerService] Discord Webhook failed: ${discErr.message}`);
+        }
+      }
+    } else {
+      // Save NO_TRADE signal to signals table
+      await this.fastify.pg.query(`
+        INSERT INTO signals (
+          symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss, target_price,
+          confidence_score, setup_grade, status, indicators, gex, volatility, no_trade_reasons,
+          option_expiration_date, market_date
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `, [
+        symbol,
+        'NONE',
+        'NO_TRADE',
+        currentPrice,
+        null,
+        null,
+        null,
+        winningScore,
+        'C / LOTTO',
+        'CANCELLED',
+        JSON.stringify({
+          vwap: Number(vwap.toFixed(2)),
+          openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
+          openingRangeLow: Number(openingRangeLow.toFixed(2)),
+          atr14: Number(atr14.toFixed(2)),
+          ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
+          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null
+        }),
+        JSON.stringify({
+          netGex: qqqNetGex,
+          regime: qqqGexRegime,
+          flipStrike: qqqGexFlip,
+          callWall: qqqCallWall,
+          putWall: qqqPutWall,
+          kingNode: qqqKingNode,
+          flowDirection: qqqFlowDirection
+        }),
+        JSON.stringify({
+          vixQuote: vixPrice,
+          vixChangePercent: vixChangePct
+        }),
+        noTradeReasons,
+        null,
+        nyParts.marketDate
+      ]);
+    }
+  }
+
+  // Latency Healthcheck Evaluator
+  public async runHealthCheck(userId: number): Promise<any> {
+    const settings = await this.getSettingsForUser(userId);
+
+    const checkLatency = async (fn: () => Promise<void>): Promise<{ status: string; latencyMs: number }> => {
+      const start = Date.now();
+      try {
+        await fn();
+        return { status: 'UP', latencyMs: Date.now() - start };
+      } catch (e) {
+        return { status: 'DOWN', latencyMs: Date.now() - start };
+      }
+    };
+
+    const yahooCheck = checkLatency(async () => {
+      await (yahooFinance as any).quote('QQQ');
+    });
+
+    const sscgexCheck = checkLatency(async () => {
+      if (settings.sscgex_password) {
+        const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
+          password: settings.sscgex_password
+        }, { timeout: 4000 });
+        const token = (tokenRes.data as any).token;
+        await axios.get('https://sscgex.up.railway.app/api/gex/QQQ?strikes=10', {
+          headers: { Authorization: `Bearer ${token}` },
+          timeout: 4000
+        });
+      } else {
+        throw new Error('No password');
+      }
+    });
+
+    const polygonCheck = checkLatency(async () => {
+      if (settings.polygon_api_key) {
+        await axios.get('https://api.polygon.io/v3/reference/options/contracts', {
+          params: { underlying_ticker: 'QQQ', limit: 1, apikey: settings.polygon_api_key },
+          timeout: 4000
+        });
+      } else {
+        throw new Error('No API Key');
+      }
+    });
+
+    const openrouterCheck = checkLatency(async () => {
+      const key = await this.getAiApiKey(settings.day_trading_ai_provider);
+      if (settings.day_trading_ai_provider === 'openrouter' && key) {
+        await axios.get('https://openrouter.ai/api/v1/models', {
+          headers: { Authorization: `Bearer ${key}` },
+          timeout: 4000
+        });
+      } else {
+        throw new Error('No Key');
+      }
+    });
+
+    const [yahoo, sscgex, polygon, openrouter] = await Promise.all([
+      yahooCheck,
+      sscgexCheck,
+      polygonCheck,
+      openrouterCheck
+    ]);
+
+    return {
+      yahooFinance: yahoo,
+      sscgexPortal: sscgex,
+      polygon: polygon,
+      openRouter: openrouter
+    };
+  }
+
+  private async getAiApiKey(provider: string): Promise<string | null> {
+    const { rows } = await this.fastify.pg.query(
+      "SELECT value FROM settings WHERE key = 'openrouter_key' ORDER BY updated_at DESC LIMIT 1"
+    );
+    return rows[0]?.value || null;
+  }
+
+  // --- Utility functions ---
+  private toNumber(val: any): number | null {
+    const parsed = Number.parseFloat(val);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private parseTimeStr(timeStr: string): number {
+    const [h, m] = String(timeStr).split(':').map(part => parseInt(part, 10));
+    return h * 60 + m;
+  }
+
+  private getNyDateParts(date: Date) {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    const parts = formatter.formatToParts(date);
+    const t: any = {};
+    for (const p of parts) {
+      t[p.type] = p.value;
+    }
+    const hour = parseInt(t.hour, 10) % 24;
+    const minute = parseInt(t.minute, 10);
+    return {
+      year: t.year,
+      month: t.month,
+      day: t.day,
+      hour,
+      minute,
+      minutes: hour * 60 + minute,
+      dateStr: `${t.year}-${t.month}-${t.day}`,
+      marketDate: `${t.month}/${t.day}/${t.year}`
+    };
+  }
+
+  private computeRsi(values: number[], length: number): number | null {
+    if (values.length <= length) return null;
+    let gains = 0;
+    let losses = 0;
+    for (let i = values.length - length; i < values.length; i++) {
+      const delta = values[i] - values[i - 1];
+      if (delta >= 0) gains += delta;
+      else losses += Math.abs(delta);
+    }
+    if (losses === 0) return 100;
+    const avgGain = gains / length;
+    const avgLoss = losses / length;
+    return 100 - 100 / (1 + avgGain / avgLoss);
+  }
+
+  private computeEma(values: number[], length: number): number | null {
+    if (values.length < length) return null;
+    const k = 2 / (length + 1);
+    let ema = values.slice(0, length).reduce((sum, val) => sum + val, 0) / length;
+    for (let i = length; i < values.length; i++) {
+      ema = values[i] * k + ema * (1 - k);
+    }
+    return ema;
+  }
+
+  private computeAtr(candles: any[], length: number): number | null {
+    if (candles.length <= length) return null;
+    let trSum = 0;
+    for (let i = candles.length - length; i < candles.length; i++) {
+      const high = candles[i].high;
+      const low = candles[i].low;
+      const prevClose = candles[i - 1].close;
+      const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+      trSum += tr;
+    }
+    return trSum / length;
+  }
+}

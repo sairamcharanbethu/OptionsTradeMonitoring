@@ -230,4 +230,28 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
       client.release();
     }
   });
+
+  // GET /api/signals/health - Check health of all external APIs
+  fastify.get('/health', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Get day trading API health metrics',
+      description: 'Check connectivity status and response times of third-party options and market data APIs.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    try {
+      const { id: userId } = (request as any).user;
+      const scanner = (fastify as any).scanner;
+      if (!scanner) {
+        return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
+      }
+      const health = await scanner.runHealthCheck(userId);
+      return health;
+    } catch (err: any) {
+      fastify.log.error(err);
+      return (reply as any).code(500).send({ error: 'Failed to evaluate API health' });
+    }
+  });
 }
+

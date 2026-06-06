@@ -331,6 +331,10 @@ const start = async () => {
     const poller = new MarketPoller(fastify);
     fastify.decorate('poller', poller);
 
+    const { SignalScannerService } = await import('./services/signal-scanner-service');
+    const scanner = new SignalScannerService(fastify);
+    fastify.decorate('scanner', scanner);
+
     // --- WebSocket & Streaming Setup ---
     await fastify.register(import('@fastify/websocket'));
     const { redis } = await import('./lib/redis');
@@ -394,6 +398,7 @@ const start = async () => {
 
     // Start background services
     poller.start();
+    scanner.start();
     // streamer.start(); // Disabled: Subscriptions are on-demand via position sync
 
     fastify.log.info(`Server listening on http://localhost:${port}`);
