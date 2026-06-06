@@ -81,3 +81,11 @@ export function useSnaptradePortfolio() {
         staleTime: 60000,
     });
 }
+
+export function useSettings() {
+    return useQuery({
+        queryKey: ['settings'],
+        queryFn: () => api.getSettings(),
+        staleTime: 10000,
+    });
+}

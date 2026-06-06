@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSignals, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { useSignals, useSettings, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { api, Signal } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -39,6 +39,8 @@ interface ApiHealthState {
 export default function DayTradingTerminal() {
   const queryClient = useQueryClient();
   const { data: signals = [], isLoading, isFetching, refetch } = useSignals(10000); // Poll signals every 10s internally
+  const { data: settings = {} } = useSettings();
+  const isDayTradingEnabled = settings.day_trading_enabled !== 'false';
 
   // States
   const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY'>('QQQ');
@@ -72,6 +74,7 @@ export default function DayTradingTerminal() {
 
   // 5-minute countdown timer
   useEffect(() => {
+    if (!isDayTradingEnabled) return;
     const timer = setInterval(() => {
       setCountdown(prev => {
         if (prev <= 1) {
@@ -84,7 +87,7 @@ export default function DayTradingTerminal() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [refetch]);
+  }, [refetch, isDayTradingEnabled]);
 
   // Sync manually
   const handleManualSync = () => {
@@ -192,17 +195,24 @@ export default function DayTradingTerminal() {
             </button>
           </div>
 
-          <div className="flex items-center gap-2 text-xs bg-emerald-950/40 border border-emerald-500/30 px-3 py-1.5 rounded">
-            <Clock className="h-4 w-4 text-emerald-400 animate-spin" style={{ animationDuration: '6s' }} />
-            <span>SCAN CYCLE: {formatMinSec(countdown)}</span>
-            <button
-              onClick={handleManualSync}
-              className="ml-1 text-emerald-500 hover:text-emerald-300"
-              title="Force Sync Now"
-            >
-              <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
+          {isDayTradingEnabled ? (
+            <div className="flex items-center gap-2 text-xs bg-emerald-950/40 border border-emerald-500/30 px-3 py-1.5 rounded">
+              <Clock className="h-4 w-4 text-emerald-400 animate-spin" style={{ animationDuration: '6s' }} />
+              <span>SCAN CYCLE: {formatMinSec(countdown)}</span>
+              <button
+                onClick={handleManualSync}
+                className="ml-1 text-emerald-500 hover:text-emerald-300"
+                title="Force Sync Now"
+              >
+                <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-xs bg-zinc-900/60 border border-zinc-700 px-3 py-1.5 rounded text-zinc-500">
+              <ShieldAlert className="h-4 w-4 text-amber-500/70 animate-pulse" />
+              <span className="font-bold tracking-wider">SCANNER INACTIVE</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -330,7 +340,11 @@ export default function DayTradingTerminal() {
               LATEST ACTIONABLE SETUP ALERT
             </h3>
           </div>
-          {latestActionableSignal ? (
+          {!isDayTradingEnabled ? (
+            <Badge variant="outline" className="bg-zinc-900 text-zinc-400 border-zinc-700">
+              OFFLINE
+            </Badge>
+          ) : latestActionableSignal ? (
             <Badge variant="outline" className="animate-pulse bg-emerald-950 text-emerald-300 border-emerald-500/40">
               🚨 SIGNAL ACTIVE
             </Badge>
@@ -340,7 +354,15 @@ export default function DayTradingTerminal() {
         </div>
         
         <div className="p-4">
-          {!latestActionableSignal ? (
+          {!isDayTradingEnabled ? (
+            <div className="py-8 flex flex-col items-center justify-center text-center text-zinc-500 text-xs">
+              <ShieldAlert className="h-10 w-10 text-amber-500/80 mb-2 animate-pulse" />
+              <span className="font-bold text-zinc-300 uppercase">Day Trading Scanner is Inactive</span>
+              <span className="text-[10px] text-zinc-500 mt-1 max-w-md">
+                The options scanning engine is currently disabled for this user. You can enable it in the Settings Dialog under the "Day Trading" tab to trigger background scanner runs.
+              </span>
+            </div>
+          ) : !latestActionableSignal ? (
             <div className="py-6 flex flex-col items-center justify-center text-center text-emerald-500/40 text-xs">
               <AlertCircle className="h-10 w-10 opacity-30 mb-2" />
               <span>No trade setups generated within the current trading session.</span>

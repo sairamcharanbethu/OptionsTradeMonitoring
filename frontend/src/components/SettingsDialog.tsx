@@ -12,12 +12,15 @@ import { api } from '@/lib/api';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { User } from '@/lib/api';
 
+import { useQueryClient } from '@tanstack/react-query';
+
 interface SettingsDialogProps {
     user: User;
     onUpdate: (user: User) => void;
 }
 
 export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) {
+    const queryClient = useQueryClient();
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -276,6 +279,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 day_trading_ai_provider: dayTradingAiProvider,
                 day_trading_ai_model: dayTradingAiModel
             });
+            queryClient.invalidateQueries({ queryKey: ['settings'] });
             onUpdate(user); // Force refresh of parent if needed
             setOpen(false);
         } catch (err) {
