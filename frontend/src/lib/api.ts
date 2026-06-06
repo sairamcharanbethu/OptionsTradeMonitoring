@@ -380,15 +380,6 @@ export const api = {
     return res.json();
   },
 
-  async predictStock(symbol: string): Promise<any> {
-    const res = await authFetch(`${API_BASE}/ai/predict/${symbol}`);
-    if (!res.ok) {
-      const txt = await res.text();
-      throw new Error(txt || 'Failed to fetch prediction');
-    }
-    return res.json();
-  },
-
   async getPortfolioBriefing(): Promise<{ briefing: string; discord_message: string }> {
     const res = await authFetch(`${API_BASE}/ai/briefing`);
     if (!res.ok) throw new Error('Failed to fetch portfolio briefing');
@@ -506,8 +497,121 @@ export const api = {
     const res = await authFetch(`${API_BASE}/goals/${goalId}/insights`);
     if (!res.ok) throw new Error('Failed to fetch goal insights');
     return res.json();
+  },
+
+  // ─── Snaptrade ───
+  async connectSnaptrade(): Promise<{ redirectURI: string }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/connect`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to generate Wealthsimple connection URL');
+    return res.json();
+  },
+
+  async syncSnaptradePortfolio(): Promise<{ success: boolean; syncedAccounts: number }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/sync`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to sync Wealthsimple portfolio');
+    return res.json();
+  },
+
+  async getSnaptradePortfolio(): Promise<{ accounts: any[]; positions: any[] }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/portfolio`);
+    if (!res.ok) throw new Error('Failed to fetch Wealthsimple portfolio');
+    return res.json();
+  },
+
+  async getSnaptradeBriefing(): Promise<{ briefing: string }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/briefing`);
+    if (!res.ok) throw new Error('Failed to generate Wealthsimple AI briefing');
+    return res.json();
+  },
+
+  // --- Day Trading Signals ---
+  async getSignals(): Promise<Signal[]> {
+    const res = await authFetch(`${API_BASE}/signals?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch signals');
+    const data = await res.json();
+    return data.map((sig: any) => ({
+      ...sig,
+      current_price: Number(sig.current_price),
+      entry_trigger: sig.entry_trigger != null ? Number(sig.entry_trigger) : undefined,
+      stop_loss: sig.stop_loss != null ? Number(sig.stop_loss) : undefined,
+      target_price: sig.target_price != null ? Number(sig.target_price) : undefined,
+      confidence_score: Number(sig.confidence_score),
+    }));
+  },
+
+  async updateSignalStatus(id: number, status: 'PENDING' | 'EXECUTED' | 'CANCELLED'): Promise<{ id: number; status: string }> {
+    const res = await authFetch(`${API_BASE}/signals/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status })
+    });
+    if (!res.ok) throw new Error('Failed to update signal status');
+    return res.json();
+  },
+
+  async clearSignals(): Promise<{ success: boolean; message: string }> {
+    const res = await authFetch(`${API_BASE}/signals`, {
+      method: 'DELETE'
+    });
+    if (!res.ok) throw new Error('Failed to clear signals');
+    return res.json();
+  },
+
+  async seedSignals(): Promise<{ success: boolean; insertedCount: number }> {
+    const res = await authFetch(`${API_BASE}/signals/seed`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Failed to seed signals');
+    return res.json();
   }
 };
+
+export interface IndicatorsJSON {
+  vwap?: number;
+  openingRangeHigh?: number;
+  openingRangeLow?: number;
+  atr14?: number;
+  ema9?: number;
+  ema21?: number;
+  [key: string]: any;
+}
+
+export interface GexJSON {
+  netGex?: number;
+  regime?: string;
+  flipStrike?: number;
+  callWall?: number;
+  putWall?: number;
+  kingNode?: number;
+  flowDirection?: string;
+  [key: string]: any;
+}
+
+export interface VolatilityJSON {
+  vixQuote?: number;
+  vixChangePercent?: number;
+  [key: string]: any;
+}
+
+export interface Signal {
+  id: number;
+  symbol: string;
+  signal_type: 'CALL' | 'PUT' | 'NONE';
+  trade_bias: string;
+  current_price: number;
+  entry_trigger?: number;
+  stop_loss?: number;
+  target_price?: number;
+  confidence_score: number;
+  setup_grade?: string;
+  status: 'PENDING' | 'EXECUTED' | 'CANCELLED';
+  indicators?: IndicatorsJSON;
+  gex?: GexJSON;
+  volatility?: VolatilityJSON;
+  no_trade_reasons?: string[];
+  option_expiration_date?: string;
+  market_date?: string;
+  created_at: string;
+}
 
 export interface Goal {
   id: number;

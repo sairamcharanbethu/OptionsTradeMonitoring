@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Settings, Save, Loader2, User as UserIcon } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import { api } from '@/lib/api';
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -27,6 +28,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [model, setModel] = useState('mistral:7b-instruct-q4_K_M');
     const [briefingFrequency, setBriefingFrequency] = useState('disabled');
     const [pollInterval, setPollInterval] = useState('60'); // Market Poll (Global)
+    const [pollingEnabled, setPollingEnabled] = useState(true); // Master polling toggle
     const [positionPollInterval, setPositionPollInterval] = useState('2'); // Position Detail Poll (Local)
 
     // Security & Profile State
@@ -44,6 +46,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [qtClientId, setQtClientId] = useState('');
     const [qtConnecting, setQtConnecting] = useState(false);
     const [qtSaved, setQtSaved] = useState(false);
+
+    // SnapTrade State
+    const [snaptradeClientId, setSnaptradeClientId] = useState('');
+    const [snaptradeConsumerKey, setSnaptradeConsumerKey] = useState('');
 
     useEffect(() => {
         if (open) {
@@ -157,7 +163,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setModel(data.ai_model || 'mistral:7b-instruct-q4_K_M');
             setBriefingFrequency(data.briefing_frequency || 'disabled');
             setPollInterval(data.market_poll_interval || '60');
+            setPollingEnabled(data.polling_enabled !== 'false');
             setPositionPollInterval(data.position_poll_interval || '2');
+            setSnaptradeClientId(data.snaptrade_client_id || '');
+            setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
         } catch (err) {
             console.error(err);
         } finally {
@@ -219,7 +228,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 ai_model: model,
                 briefing_frequency: briefingFrequency,
                 market_poll_interval: pollInterval,
-                position_poll_interval: positionPollInterval
+                polling_enabled: pollingEnabled ? 'true' : 'false',
+                position_poll_interval: positionPollInterval,
+                snaptrade_client_id: snaptradeClientId,
+                snaptrade_consumer_key: snaptradeConsumerKey
             });
             onUpdate(user); // Force refresh of parent if needed
             setOpen(false);
@@ -291,15 +303,24 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </div>
                                 )}
 
-                                <div className="grid gap-2">
-                                    <Label htmlFor="model">Model Name</Label>
-                                    <Input
-                                        id="model"
-                                        value={model}
-                                        onChange={(e) => setModel(e.target.value)}
-                                        placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3-haiku'}
-                                    />
-                                </div>
+                                 <div className="grid gap-2">
+                                     <Label htmlFor="model">Model Name</Label>
+                                     <Input
+                                         id="model"
+                                         value={model}
+                                         onChange={(e) => setModel(e.target.value)}
+                                         placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3.5-sonnet'}
+                                     />
+                                     {provider === 'openrouter' && (
+                                         <p className="text-[10px] text-muted-foreground mt-1 leading-normal">
+                                             Recommended OpenRouter slugs:<br/>
+                                             1. <strong>Claude 3.5 Sonnet</strong>: <code>anthropic/claude-3.5-sonnet</code><br/>
+                                             2. <strong>DeepSeek R1 / V3</strong>: <code>deepseek/deepseek-r1</code> or <code>deepseek/deepseek-chat</code><br/>
+                                             3. <strong>OpenAI GPT-4o</strong>: <code>openai/gpt-4o</code><br/>
+                                             4. <strong>Gemini 2.0 Flash / Pro 1.5</strong>: <code>google/gemini-2.0-flash-exp</code> or <code>google/gemini-pro-1.5</code>
+                                         </p>
+                                     )}
+                                 </div>
 
                                 <div className="grid gap-2">
                                     <Label htmlFor="frequency">Morning Briefing Frequency</Label>
@@ -322,14 +343,37 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 </div>
 
                                 <div className="grid gap-2 pt-4 border-t">
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="pollingToggle" className="flex items-center gap-2">
+                                            Market Polling
+                                            {pollingEnabled ? (
+                                                <Badge variant="default" className="text-[10px] h-5 bg-emerald-600">Active</Badge>
+                                            ) : (
+                                                <Badge variant="secondary" className="text-[10px] h-5">Paused</Badge>
+                                            )}
+                                        </Label>
+                                        <Switch
+                                            id="pollingToggle"
+                                            checked={pollingEnabled}
+                                            onCheckedChange={setPollingEnabled}
+                                        />
+                                    </div>
+                                    <p className={`text-[10px] ${!pollingEnabled ? 'text-amber-500 font-semibold' : 'text-muted-foreground'}`}>
+                                        {!pollingEnabled
+                                            ? 'Polling is paused. No API calls will be made to fetch prices or Greeks.'
+                                            : 'Master toggle for all server-side market data polling.'}
+                                    </p>
+                                </div>
+
+                                <div className="grid gap-2">
                                     <Label htmlFor="pollInterval" className="flex items-center gap-2">
                                         Market Poll Interval
                                         {parseInt(pollInterval) < 30 && (
                                             <Badge variant="destructive" className="text-[10px] h-5">High Risk</Badge>
                                         )}
                                     </Label>
-                                    <Select value={pollInterval} onValueChange={setPollInterval}>
-                                        <SelectTrigger>
+                                    <Select value={pollInterval} onValueChange={setPollInterval} disabled={!pollingEnabled}>
+                                        <SelectTrigger className={!pollingEnabled ? 'opacity-50' : ''}>
                                             <SelectValue placeholder="Select Interval" />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -423,6 +467,46 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
                                     <p className="text-[10px] text-center text-muted-foreground italic">
                                         The application will automatically detect, verify, and rotate your token directly.
+                                    </p>
+                                </div>
+                                
+                                <div className="flex items-center justify-between p-4 border rounded-lg bg-card mt-6">
+                                    <div className="space-y-1">
+                                        <h4 className="font-medium">Wealthsimple (via SnapTrade)</h4>
+                                        <p className="text-sm text-muted-foreground">Connect your SnapTrade App credentials to enable Wealthsimple.</p>
+                                    </div>
+                                    <Badge variant={snaptradeClientId && snaptradeConsumerKey ? "default" : "secondary"}>
+                                        {snaptradeClientId && snaptradeConsumerKey ? "Configured" : "Not Linked"}
+                                    </Badge>
+                                </div>
+
+                                <div className="grid gap-4 p-6 border rounded-lg bg-muted/30">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="st-client">SnapTrade Client ID</Label>
+                                        <Input
+                                            id="st-client"
+                                            value={snaptradeClientId}
+                                            onChange={(e) => setSnaptradeClientId(e.target.value)}
+                                            placeholder="PERS-..."
+                                            type="text"
+                                        />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="st-key">SnapTrade Consumer Key</Label>
+                                        <Input
+                                            id="st-key"
+                                            value={snaptradeConsumerKey}
+                                            onChange={(e) => setSnaptradeConsumerKey(e.target.value)}
+                                            placeholder="6KyYeW..."
+                                            type="password"
+                                        />
+                                    </div>
+                                    <Button className="w-full mt-2" onClick={handleSaveSettings} disabled={saving}>
+                                        {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                        Save SnapTrade Keys
+                                    </Button>
+                                    <p className="text-[10px] text-muted-foreground">
+                                        Once saved, go to the Wealthsimple dashboard to securely connect your broker.
                                     </p>
                                 </div>
                             </div>

@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -11,8 +44,9 @@ const ai_service_1 = require("./ai-service");
 class MarketPoller {
     fastify;
     aiService;
-    currentIntervalSeconds = 60; // Default 1 min
+    currentIntervalSeconds = 30; // Default 30s
     timerId = null;
+    pollingEnabled = true;
     redisClient;
     constructor(fastify, redisClient) {
         this.fastify = fastify;
@@ -21,16 +55,22 @@ class MarketPoller {
     }
     LOCK_KEY = 'MARKET_POLLER_LEADER';
     async start() {
-        // 1. Fetch the preferred interval from settings
+        // 1. Fetch the preferred interval and polling enabled state from settings
         try {
-            const { rows } = await this.fastify.pg.query("SELECT value FROM settings WHERE key = 'market_poll_interval' ORDER BY updated_at DESC LIMIT 1");
-            if (rows.length > 0) {
-                this.currentIntervalSeconds = parseInt(rows[0].value, 10) || 60;
+            const { rows } = await this.fastify.pg.query("SELECT key, value FROM settings WHERE key IN ('market_poll_interval', 'polling_enabled') ORDER BY updated_at DESC");
+            for (const row of rows) {
+                if (row.key === 'market_poll_interval') {
+                    this.currentIntervalSeconds = parseInt(row.value, 10) || 60;
+                }
+                else if (row.key === 'polling_enabled') {
+                    this.pollingEnabled = row.value !== 'false';
+                }
             }
         }
         catch (err) {
-            this.fastify.log.error(`[MarketPoller] Failed to load poll interval from DB: ${err}`);
+            this.fastify.log.error(`[MarketPoller] Failed to load poll settings from DB: ${err}`);
         }
+        this.fastify.log.info(`[MarketPoller] Starting with polling ${this.pollingEnabled ? 'ENABLED' : 'DISABLED'}, interval: ${this.currentIntervalSeconds}s`);
         // Start recursive loop
         this.scheduleNextPoll();
         this.startBriefingJob();
@@ -40,17 +80,16 @@ class MarketPoller {
             clearTimeout(this.timerId);
         this.timerId = setTimeout(async () => {
             try {
+                if (!this.pollingEnabled) {
+                    // Skip polling but keep the timer alive so we can resume
+                    return;
+                }
                 // Distributed Lock Check
                 // Attempt to acquire lock for slightly longer than the interval
                 const lockDuration = this.currentIntervalSeconds + 5;
                 const acquired = await this.redisClient.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
                 if (acquired) {
                     await this.poll();
-                    // Keep lock alive if poll took time? The EX is set on acquire.
-                    // Ideally we extend it during long polls, but for now this is sufficient for leadership election.
-                }
-                else {
-                    // this.fastify.log.debug('[MarketPoller] Standby (Lock held by another instance).');
                 }
             }
             catch (err) {
@@ -65,6 +104,27 @@ class MarketPoller {
         this.fastify.log.info(`[MarketPoller] Updating poll interval to: ${seconds}s`);
         this.currentIntervalSeconds = seconds;
         this.scheduleNextPoll(); // Reschedule immediately
+    }
+    /**
+     * Stop polling. The timer loop stays alive but skips actual poll calls.
+     */
+    stop() {
+        this.pollingEnabled = false;
+        this.fastify.log.info('[MarketPoller] Polling DISABLED by user.');
+    }
+    /**
+     * Resume polling after being stopped.
+     */
+    resume() {
+        this.pollingEnabled = true;
+        this.fastify.log.info('[MarketPoller] Polling ENABLED by user.');
+        this.scheduleNextPoll(); // Kick off immediately
+    }
+    /**
+     * Returns whether polling is currently active.
+     */
+    isRunning() {
+        return this.pollingEnabled;
     }
     // Called by QuestradeStreamService via Index.ts
     async handlePriceUpdate(quote) {
@@ -323,7 +383,76 @@ class MarketPoller {
             this.fastify.log.info('[MarketPoller] No active positions to poll.');
             return;
         }
-        const symbols = [...new Set(positions.map((p) => p.symbol))];
+        // 0. Hard Time-based Day Trading Cutoffs Enforcements
+        const now = new Date();
+        const etFormatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            hour: 'numeric',
+            minute: 'numeric',
+            hour12: false
+        });
+        const [etHourStr, etMinuteStr] = etFormatter.format(now).split(':');
+        const etHour = parseInt(etHourStr, 10);
+        const etMinute = parseInt(etMinuteStr, 10);
+        const etTimeMinutes = etHour * 60 + etMinute;
+        const todayStr = now.toISOString().split('T')[0];
+        const isEodCutoff = etTimeMinutes >= 15 * 60 + 50; // 3:50 PM ET or later
+        const isMorningCutoff = etTimeMinutes >= 13 * 60; // 1:00 PM ET or later
+        for (const pos of positions) {
+            let shouldForceClose = false;
+            let reason = '';
+            const expDateStr = pos.expiration_date instanceof Date
+                ? pos.expiration_date.toISOString().split('T')[0]
+                : new Date(pos.expiration_date).toISOString().split('T')[0];
+            const is0Dte = expDateStr === todayStr;
+            if (isEodCutoff) {
+                shouldForceClose = true;
+                reason = 'EOD Hard Cutoff (3:50 PM ET)';
+            }
+            else if (isMorningCutoff && is0Dte) {
+                shouldForceClose = true;
+                reason = 'Morning 0 DTE Hard Cutoff (1:00 PM ET)';
+            }
+            if (shouldForceClose) {
+                this.fastify.log.info(`[MarketPoller] Force closing position ${pos.id} (${pos.symbol}) due to ${reason}.`);
+                let currentPrice = Number(pos.current_price || pos.entry_price);
+                if (!pos.is_simulated) {
+                    try {
+                        const accountId = pos.account_id;
+                        if (!accountId) {
+                            this.fastify.log.error(`[MarketPoller] No account_id found for Live position ${pos.id}. Cannot force close.`);
+                        }
+                        else {
+                            const snaptradeService = new (await Promise.resolve().then(() => __importStar(require('./snaptrade-service')))).SnaptradeService(this.fastify);
+                            const osiTicker = this.constructOSITicker(pos.symbol, Number(pos.strike_price), pos.option_type, pos.expiration_date);
+                            // Hard cutoffs always use MARKET orders to guarantee exit before bell
+                            let limitPrice = undefined;
+                            let orderType = 'MARKET';
+                            await snaptradeService.placeOptionOrder(pos.user_id, accountId, osiTicker, 'SELL_TO_CLOSE', pos.quantity, orderType, limitPrice);
+                        }
+                    }
+                    catch (err) {
+                        this.fastify.log.error(`[MarketPoller] Failed to execute Live force-close for position ${pos.id}: ${err.message}`);
+                    }
+                }
+                const realizedPnl = (currentPrice - Number(pos.entry_price)) * pos.quantity * 100;
+                await this.fastify.pg.query(`UPDATE positions 
+                 SET status = 'CLOSED', 
+                     realized_pnl = $1,
+                     notes = COALESCE(notes, '') || $2,
+                     updated_at = CURRENT_TIMESTAMP 
+                 WHERE id = $3`, [realizedPnl, ` [Force closed: ${reason}]`, pos.id]);
+                await this.notifyN8n(pos, currentPrice, realizedPnl, 0, 'FORCE_CLOSE', `Position force closed due to ${reason}`, `**[FORCE CLOSE]** Position closed due to ${reason}. Current price: $${currentPrice}. P&L: $${realizedPnl.toFixed(2)}`);
+                pos.status = 'CLOSED';
+            }
+        }
+        // Refresh active positions list after cutoffs
+        const activePositions = positions.filter((p) => p.status !== 'CLOSED');
+        if (activePositions.length === 0) {
+            this.fastify.log.info('[MarketPoller] All active positions were force-closed by cutoffs.');
+            return;
+        }
+        const symbols = [...new Set(activePositions.map((p) => p.symbol))];
         const isMarketOpen = this.isMarketOpen();
         if (!force && !isMarketOpen) {
             this.fastify.log.info('[MarketPoller] Market is closed. Will only perform housekeeping (auto-expiry).');
@@ -370,6 +499,92 @@ class MarketPoller {
             trailing_high_price: Number(position.trailing_high_price || position.entry_price),
             trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
         });
+        let triggered = engineResult.triggered;
+        let triggerType = engineResult.triggerType;
+        let lossAvoided = engineResult.lossAvoided;
+        // Strategy 1: Underlying-Triggered Stops (Structural Exit Strategy)
+        const underlyingStop = position.suggested_stop_loss ? Number(position.suggested_stop_loss) : null;
+        const underlyingTarget = position.suggested_take_profit_1 ? Number(position.suggested_take_profit_1) : null;
+        if (underlyingPrice && underlyingStop) {
+            if (position.option_type === 'CALL' && underlyingPrice <= underlyingStop) {
+                triggered = true;
+                triggerType = 'STOP_LOSS';
+                lossAvoided = Number(position.entry_price) - price;
+                this.fastify.log.info(`[MarketPoller] Strategy 1 STOP_LOSS triggered via underlying index price: ${underlyingPrice} <= ${underlyingStop}`);
+            }
+            else if (position.option_type === 'PUT' && underlyingPrice >= underlyingStop) {
+                triggered = true;
+                triggerType = 'STOP_LOSS';
+                lossAvoided = Number(position.entry_price) - price;
+                this.fastify.log.info(`[MarketPoller] Strategy 1 STOP_LOSS triggered via underlying index price: ${underlyingPrice} >= ${underlyingStop}`);
+            }
+        }
+        if (underlyingPrice && underlyingTarget && !triggered) {
+            // Parse analysis_data to check for Negative GEX Regime dynamic trailing stop
+            let analysis = {};
+            try {
+                if (position.analysis_data) {
+                    analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data;
+                }
+            }
+            catch (e) {
+                this.fastify.log.warn(`[MarketPoller] Failed to parse analysis_data for position ${position.id}`);
+            }
+            const gexRegime = analysis.gexRegime || 'POSITIVE';
+            if (gexRegime === 'NEGATIVE') {
+                // Dynamic Trailing profit target active
+                if (position.option_type === 'CALL') {
+                    // Check if we already hit target and activated trailing
+                    const hasReachedTarget = analysis.underlyingTrailingHigh !== undefined || underlyingPrice >= underlyingTarget;
+                    if (hasReachedTarget) {
+                        const currentTrailingHigh = analysis.underlyingTrailingHigh || underlyingPrice;
+                        const newTrailingHigh = Math.max(currentTrailingHigh, underlyingPrice);
+                        analysis.underlyingTrailingHigh = newTrailingHigh;
+                        // Trailing stop at 0.2% below trailing high
+                        const trailingStopPrice = newTrailingHigh * (1 - 0.002);
+                        this.fastify.log.info(`[MarketPoller] Negative GEX Dynamic Trailing active on position ${position.id}. High: ${newTrailingHigh.toFixed(2)}, Stop: ${trailingStopPrice.toFixed(2)}, Spot: ${underlyingPrice.toFixed(2)}`);
+                        if (underlyingPrice <= trailingStopPrice) {
+                            triggered = true;
+                            triggerType = 'TAKE_PROFIT';
+                            this.fastify.log.info(`[MarketPoller] Dynamic Trailing TAKE_PROFIT triggered for CALL: Spot ${underlyingPrice.toFixed(2)} <= Trailing Stop ${trailingStopPrice.toFixed(2)}`);
+                        }
+                        // Save updated analysis data back to the database
+                        await this.fastify.pg.query("UPDATE positions SET analysis_data = $1 WHERE id = $2", [JSON.stringify(analysis), position.id]);
+                    }
+                }
+                else if (position.option_type === 'PUT') {
+                    const hasReachedTarget = analysis.underlyingTrailingLow !== undefined || underlyingPrice <= underlyingTarget;
+                    if (hasReachedTarget) {
+                        const currentTrailingLow = analysis.underlyingTrailingLow || underlyingPrice;
+                        const newTrailingLow = Math.min(currentTrailingLow, underlyingPrice);
+                        analysis.underlyingTrailingLow = newTrailingLow;
+                        // Trailing stop at 0.2% above trailing low
+                        const trailingStopPrice = newTrailingLow * (1 + 0.002);
+                        this.fastify.log.info(`[MarketPoller] Negative GEX Dynamic Trailing active on position ${position.id}. Low: ${newTrailingLow.toFixed(2)}, Stop: ${trailingStopPrice.toFixed(2)}, Spot: ${underlyingPrice.toFixed(2)}`);
+                        if (underlyingPrice >= trailingStopPrice) {
+                            triggered = true;
+                            triggerType = 'TAKE_PROFIT';
+                            this.fastify.log.info(`[MarketPoller] Dynamic Trailing TAKE_PROFIT triggered for PUT: Spot ${underlyingPrice.toFixed(2)} >= Trailing Stop ${trailingStopPrice.toFixed(2)}`);
+                        }
+                        // Save updated analysis data
+                        await this.fastify.pg.query("UPDATE positions SET analysis_data = $1 WHERE id = $2", [JSON.stringify(analysis), position.id]);
+                    }
+                }
+            }
+            else {
+                // Standard fixed take-profit target for Positive GEX mean-reversion
+                if (position.option_type === 'CALL' && underlyingPrice >= underlyingTarget) {
+                    triggered = true;
+                    triggerType = 'TAKE_PROFIT';
+                    this.fastify.log.info(`[MarketPoller] Strategy 1 Fixed TAKE_PROFIT triggered via underlying index price: ${underlyingPrice} >= ${underlyingTarget}`);
+                }
+                else if (position.option_type === 'PUT' && underlyingPrice <= underlyingTarget) {
+                    triggered = true;
+                    triggerType = 'TAKE_PROFIT';
+                    this.fastify.log.info(`[MarketPoller] Strategy 1 Fixed TAKE_PROFIT triggered via underlying index price: ${underlyingPrice} <= ${underlyingTarget}`);
+                }
+            }
+        }
         // Update Price AND Greeks
         await this.fastify.pg.query(`UPDATE positions 
        SET current_price = $1, 
@@ -391,22 +606,49 @@ class MarketPoller {
             position.id
         ]);
         await this.fastify.pg.query('INSERT INTO price_history (position_id, price) VALUES ($1, $2)', [position.id, price]);
-        if (engineResult.triggered) {
-            // Logic Change: Do NOT close automatically. Just set status to STOP_TRIGGERED or PROFIT_TRIGGERED.
-            // Only notify if we haven't already set it to STOP_TRIGGERED/PROFIT_TRIGGERED (avoid spamming n8n every 15 mins)
+        if (triggered) {
             if (position.status === 'OPEN') {
-                const triggerType = engineResult.triggerType || 'STOP_LOSS';
-                const newStatus = triggerType === 'TAKE_PROFIT' ? 'PROFIT_TRIGGERED' : 'STOP_TRIGGERED';
+                const exitTriggerType = triggerType || 'STOP_LOSS';
+                const newStatus = 'CLOSED';
+                const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
+                // Execute Live SnapTrade order if not simulated
+                if (!position.is_simulated) {
+                    this.fastify.log.info(`[MarketPoller] LIVE position exit triggered for position ${position.id} (${position.symbol}). Executing SELL_TO_CLOSE via SnapTrade...`);
+                    try {
+                        const accountId = position.account_id;
+                        if (!accountId) {
+                            this.fastify.log.error(`[MarketPoller] No account_id found for Live position ${position.id}. Cannot close.`);
+                        }
+                        else {
+                            const snaptradeService = new (await Promise.resolve().then(() => __importStar(require('./snaptrade-service')))).SnaptradeService(this.fastify);
+                            const osiTicker = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+                            let limitPrice = undefined;
+                            let orderType = 'MARKET';
+                            // Only use LIMIT order if taking profit. Stop Loss MUST be MARKET to guarantee exit.
+                            if (exitTriggerType === 'TAKE_PROFIT' && price > 0) {
+                                limitPrice = price.toFixed(2);
+                                orderType = 'LIMIT';
+                            }
+                            await snaptradeService.placeOptionOrder(position.user_id, accountId, osiTicker, 'SELL_TO_CLOSE', position.quantity, orderType, limitPrice);
+                            this.fastify.log.info(`[MarketPoller] Live exit execution successful for position ${position.id} using ${orderType} order at limit price: ${limitPrice}.`);
+                        }
+                    }
+                    catch (err) {
+                        this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${err.message}`);
+                    }
+                }
                 const updateResult = await this.fastify.pg.query(`UPDATE positions 
-             SET status = $1, 
-             loss_avoided = $2,
-             updated_at = CURRENT_TIMESTAMP 
-             WHERE id = $3 AND status = 'OPEN'`, [newStatus, engineResult.lossAvoided, position.id]);
+              SET status = $1, 
+              loss_avoided = $2,
+              realized_pnl = $3,
+              notes = COALESCE(notes, '') || $4,
+              updated_at = CURRENT_TIMESTAMP 
+              WHERE id = $5 AND status = 'OPEN'`, [newStatus, lossAvoided, realizedPnl, ` [Closed via Underlying-Triggered ${exitTriggerType} Strategy]`, position.id]);
                 if (updateResult.rowCount === 0) {
                     // Already updated or state mismatch, skip AI alert
                     return;
                 }
-                await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, triggerType, triggerType === 'TAKE_PROFIT' ? position.take_profit_trigger : position.stop_loss_trigger, price]);
+                await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT' ? (position.suggested_take_profit_1 || position.take_profit_trigger) : (position.suggested_stop_loss || position.stop_loss_trigger), price]);
                 // Generate AI Summary for the alert (Discord Message)
                 let aiData = { summary: '', discord_message: '' };
                 try {
@@ -415,7 +657,7 @@ class MarketPoller {
                         type: position.option_type,
                         strike: position.strike_price,
                         expiration: position.expiration_date,
-                        event: triggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+                        event: exitTriggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
                         price: price,
                         pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
                         greeks: {
@@ -429,9 +671,7 @@ class MarketPoller {
                 catch (err) {
                     this.fastify.log.error(`[MarketPoller] AI Summary generation failed: ${err}`);
                 }
-                // Calculate realized PnL
-                const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
-                this.notifyN8n(position, price, realizedPnl, engineResult.lossAvoided, triggerType, aiData.summary, aiData.discord_message, greeks, iv);
+                this.notifyN8n(position, price, realizedPnl, lossAvoided, exitTriggerType, aiData.summary, aiData.discord_message, greeks, iv);
             }
         }
         else if (engineResult.newHigh || engineResult.newStopLoss) {

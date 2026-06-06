@@ -48,10 +48,11 @@ const market_1 = require("./routes/market");
 const ai_1 = require("./routes/ai");
 const settings_1 = require("./routes/settings");
 const goals_1 = require("./routes/goals");
-const live_analysis_1 = require("./routes/live-analysis");
+const signals_1 = require("./routes/signals");
 const jwt_1 = __importDefault(require("@fastify/jwt"));
 const auth_1 = __importDefault(require("./routes/auth"));
 const admin_1 = require("./routes/admin");
+const snaptrade_1 = require("./routes/snaptrade");
 const fastify = (0, fastify_1.default)({
     logger: {
         level: 'info',
@@ -118,6 +119,29 @@ const ensureSchema = async (instance) => {
         UNIQUE(goal_id, entry_date)
       );
     `);
+        // 2.5 Create trade signals table
+        await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS signals (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(10) NOT NULL,
+        signal_type VARCHAR(10) NOT NULL,
+        trade_bias VARCHAR(50) NOT NULL,
+        current_price NUMERIC(10, 2) NOT NULL,
+        entry_trigger NUMERIC(10, 2),
+        stop_loss NUMERIC(10, 2),
+        target_price NUMERIC(10, 2),
+        confidence_score INTEGER NOT NULL,
+        setup_grade VARCHAR(50),
+        status VARCHAR(20) DEFAULT 'PENDING',
+        indicators JSONB,
+        gex JSONB,
+        volatility JSONB,
+        no_trade_reasons TEXT[],
+        option_expiration_date DATE,
+        market_date VARCHAR(20),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
         // 3. Ensure all extra columns are added to positions table
         const columns = [
             { name: 'delta', type: 'DECIMAL(10, 4)' },
@@ -131,12 +155,65 @@ const ensureSchema = async (instance) => {
             { name: 'suggested_stop_loss', type: 'DECIMAL(10, 2)' },
             { name: 'suggested_take_profit_1', type: 'DECIMAL(10, 2)' },
             { name: 'suggested_take_profit_2', type: 'DECIMAL(10, 2)' },
-            { name: 'analysis_data', type: 'JSONB' }
+            { name: 'analysis_data', type: 'JSONB' },
+            { name: 'is_simulated', type: 'BOOLEAN DEFAULT FALSE' },
+            { name: 'account_id', type: 'VARCHAR(255)' }
         ];
         for (const col of columns) {
             await instance.pg.query(`
         ALTER TABLE positions ADD COLUMN IF NOT EXISTS ${col.name} ${col.type};
       `);
+        }
+        instance.log.info('[Database] Schema verification completed successfully.');
+        // 4. Create snaptrade tables
+        await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS snaptrade_accounts (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        name VARCHAR(255),
+        number VARCHAR(100),
+        status VARCHAR(50),
+        unified_type VARCHAR(100),
+        raw_data JSONB,
+        last_synced_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+        await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS snaptrade_positions (
+        id VARCHAR(255) PRIMARY KEY,
+        account_id VARCHAR(255) REFERENCES snaptrade_accounts(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        symbol VARCHAR(255) NOT NULL,
+        description TEXT,
+        asset_type VARCHAR(100),
+        price DECIMAL(15, 4),
+        units DECIMAL(15, 4),
+        average_purchase_price DECIMAL(15, 4),
+        open_pnl DECIMAL(15, 4),
+        currency VARCHAR(10),
+        raw_data JSONB,
+        last_synced_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+        // Ensure columns are altered in case they were already created with a smaller size
+        try {
+            await instance.pg.query(`
+        ALTER TABLE snaptrade_accounts ALTER COLUMN id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN name TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN number TYPE VARCHAR(100);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN status TYPE VARCHAR(50);
+        ALTER TABLE snaptrade_accounts ALTER COLUMN unified_type TYPE VARCHAR(100);
+        
+        ALTER TABLE snaptrade_positions ALTER COLUMN id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN account_id TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN symbol TYPE VARCHAR(255);
+        ALTER TABLE snaptrade_positions ALTER COLUMN asset_type TYPE VARCHAR(100);
+      `);
+        }
+        catch (e) {
+            instance.log.warn('[Database] Could not alter some snaptrade columns (might not exist yet or conflicting constraint).');
         }
         instance.log.info('[Database] Schema verification completed successfully.');
     }
@@ -240,8 +317,9 @@ const start = async () => {
         fastify.register(market_1.marketRoutes, { prefix: '/api/market' });
         fastify.register(ai_1.aiRoutes, { prefix: '/api/ai' });
         fastify.register(settings_1.settingsRoutes, { prefix: '/api/settings' });
-        fastify.register(live_analysis_1.liveAnalysisRoutes, { prefix: '/api/live-analysis' });
         fastify.register(goals_1.goalRoutes, { prefix: '/api/goals' });
+        fastify.register(snaptrade_1.snaptradeRoutes, { prefix: '/api/snaptrade' });
+        fastify.register(signals_1.signalRoutes, { prefix: '/api/signals' });
         fastify.get('/health', async () => {
             return { status: 'ok' };
         });
@@ -310,7 +388,7 @@ const start = async () => {
         await fastify.listen({ port, host: '0.0.0.0' });
         // Start background services
         poller.start();
-        // streamer.start(); // Disabled: Subscriptions are now on-demand via Live Analysis only
+        // streamer.start(); // Disabled: Subscriptions are on-demand via position sync
         fastify.log.info(`Server listening on http://localhost:${port}`);
     }
     catch (err) {

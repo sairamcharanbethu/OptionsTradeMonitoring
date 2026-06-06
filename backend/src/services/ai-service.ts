@@ -1,5 +1,18 @@
 
 import { FastifyInstance } from 'fastify';
+import YahooFinance from 'yahoo-finance2';
+
+const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
+
+function toCavemanStyle(text: string): string {
+    if (!text) return '';
+    // Strip common filler words/articles/prepositions/auxiliary verbs
+    const fillers = /\b(the|a|an|and|of|to|for|with|on|in|at|by|as|after|about|from|into|over|through|is|are|was|were|be|been|being)\b/gi;
+    return text
+        .replace(fillers, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 
 interface AIAnalysisRequest {
     symbol: string;
@@ -63,10 +76,96 @@ Task: Provide a high-level summary of the portfolio's health, highlight position
 Style: Professional trader tone, concise but insightful.
 Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discord message with emojis..." }`;
 
-        const response = await this.generateAnalysisInternal(prompt);
+        const response = await this.generateAnalysisInternal(prompt, 2048);
         return {
             briefing: response.analysis,
             discord_message: response.discord || response.analysis
+        };
+    }
+
+    async generateWealthsimpleBriefing(positions: any[]): Promise<{ briefing: string }> {
+        if (positions.length === 0) return { briefing: "No active Wealthsimple positions." };
+
+        // Sort by value descending and take top 10 to avoid rate limits
+        const sortedPositions = [...positions].sort((a, b) => {
+            const valA = Number(a.price) * Number(a.units);
+            const valB = Number(b.price) * Number(b.units);
+            return valB - valA;
+        });
+
+        const topPositions = sortedPositions.slice(0, 10);
+        
+        let insightsText = "";
+        try {
+            const promises = topPositions.map(async (p) => {
+                // Only lookup equities/ETFs, skip pure crypto if Yahoo doesn't support the exact ticker easily
+                // Though Yahoo supports BTC-USD, the raw symbol might not match. We'll try anyway.
+                const ticker = p.symbol;
+                try {
+                    const quote = await yahooFinance.quoteSummary(ticker, { modules: ['summaryDetail', 'price'] });
+                    const news = await yahooFinance.search(ticker, { newsCount: 5 });
+                    
+                    const price = quote.price?.regularMarketPrice || p.price;
+                    const pe = quote.summaryDetail?.trailingPE?.toFixed(2) || 'N/A';
+                    const fiftyTwoHigh = quote.summaryDetail?.fiftyTwoWeekHigh?.toFixed(2) || 'N/A';
+                    
+                    // Filter news relevant to this specific ticker to prevent general financial news fallbacks
+                    const baseSymbol = ticker.split('.')[0];
+                    const uppercaseTicker = ticker.toUpperCase();
+                    const uppercaseBase = baseSymbol.toUpperCase();
+
+                    const relevantNews = (news.news || []).filter((n: any) => {
+                        const hasRelatedTicker = n.relatedTickers?.some((t: string) => {
+                            const uppercaseT = t.toUpperCase();
+                            return uppercaseT === uppercaseTicker || uppercaseT === uppercaseBase;
+                        });
+
+                        const titleLower = (n.title || '').toLowerCase();
+                        const tickerLower = ticker.toLowerCase();
+                        const baseLower = baseSymbol.toLowerCase();
+                        const hasInTitle = titleLower.includes(tickerLower) || titleLower.includes(baseLower);
+
+                        return hasRelatedTicker || hasInTitle;
+                    });
+
+                    const headlines = relevantNews.slice(0, 2).map((n: any) => `- "${toCavemanStyle(n.title)}"`).join('\n      ');
+                    
+                    return `  [${ticker}] P/E: ${pe} | 52w High: $${fiftyTwoHigh} | Current: $${price}\n      Recent News:\n      ${headlines || 'No recent news.'}`;
+                } catch (e) {
+                    return `  [${ticker}] No extended data available.`;
+                }
+            });
+
+            const resolvedInsights = await Promise.all(promises);
+            insightsText = resolvedInsights.join('\n\n');
+        } catch (e) {
+            console.error("[AIService] Failed to fetch Yahoo Finance insights for Wealthsimple briefing", e);
+        }
+
+        const posSummary = positions.map(p => {
+            const pnl = p.open_pnl ? Number(p.open_pnl).toFixed(2) : '0.00';
+            const val = (Number(p.price) * Number(p.units)).toFixed(2);
+            return `- ${p.symbol} (${p.asset_type}): ${p.units} units @ $${p.average_purchase_price} | Current: $${p.price} | Value: $${val} | PnL: $${pnl}`;
+        }).join('\n');
+
+        const prompt = `Wealthsimple Portfolio Briefing
+Positions:
+${posSummary}
+
+Fundamental & News Insights (Top Holdings):
+${insightsText}
+
+Task: Provide a high-level summary of this equity/crypto portfolio and detailed rebalancing recommendations for the top holdings.
+1. Portfolio Summary: Briefly highlight the biggest winners and losers by PnL, and discuss the asset allocation.
+2. Rebalancing Recommendations: For EACH of the top holdings with provided news/fundamentals, internally weigh the bullish factors against the bearish risks, and output ONLY the final verdict and rebalancing recommendation:
+   - ⚖️ Portfolio Manager Verdict: A clear decision (Hold, Trim, Buy) and a comprehensive, detailed rebalancing rationale/action plan based on your analysis.
+Do NOT output any Bull Agent or Bear Agent sections. Only show the final Portfolio Manager Verdict and direct recommendations for each holding.
+Style: Professional wealth manager tone, highly sophisticated, structured with clear Markdown headers for each holding. Write in beautiful, natural, grammatically complete English. The recommendations should be rich and thoroughly detailed.
+Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
+
+        const response = await this.generateAnalysisInternal(prompt, 2048);
+        return {
+            briefing: response.analysis
         };
     }
 
@@ -85,6 +184,26 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
             verdict: response.verdict,
             analysis: response.analysis
         };
+    }
+
+    async askClaudeForTrading(prompt: string): Promise<{ verdict: string; analysis: string }> {
+        try {
+            const settings = await this.getSettings();
+            if (settings.ai_provider === 'openrouter' && settings.openrouter_key) {
+                // Route trade decisions through the user's selected model (or default to Claude 3.5 Sonnet)
+                const model = settings.ai_model || 'anthropic/claude-3.5-sonnet';
+                const response = await this.callOpenRouter(model, settings.openrouter_key, prompt, 120);
+                return {
+                    verdict: response.verdict,
+                    analysis: response.analysis
+                };
+            }
+            // Fallback to standard selected provider if OpenRouter or key isn't active
+            return this.askAI(prompt);
+        } catch (err) {
+            console.error("[AIService] Failed to invoke configured model for trading, falling back:", err);
+            return this.askAI(prompt);
+        }
     }
 
     public async getSettings(): Promise<{ ai_provider: string; openrouter_key: string; ai_model: string }> {
@@ -152,7 +271,7 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         }
     }
 
-    private async generateAnalysisInternal(prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
+    private async generateAnalysisInternal(prompt: string, maxTokens: number = 300): Promise<{ verdict: string; analysis: string; discord?: string }> {
         try {
             // 1. Fetch settings from DB
             const settings = await this.getSettings();
@@ -160,9 +279,9 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
             // 2. Route based on provider
             if (settings.ai_provider === 'openrouter') {
                 if (!settings.openrouter_key) throw new Error('OpenRouter selected but no API Key found.');
-                return this.callOpenRouter(settings.ai_model, settings.openrouter_key, prompt);
+                return this.callOpenRouter(settings.ai_model, settings.openrouter_key, prompt, maxTokens);
             } else {
-                return this.callOllama(settings.ai_model, prompt);
+                return this.callOllama(settings.ai_model, prompt, maxTokens);
             }
 
         } catch (error: any) {
@@ -171,8 +290,8 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         }
     }
 
-    private async callOpenRouter(model: string, apiKey: string, prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
-        console.log(`[AIService] Using OpenRouter (${model}) [Token Efficient]`);
+    private async callOpenRouter(model: string, apiKey: string, prompt: string, maxTokens: number = 300): Promise<{ verdict: string; analysis: string; discord?: string }> {
+        console.log(`[AIService] Using OpenRouter (${model}) [Token limit: ${maxTokens}]`);
 
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
@@ -190,7 +309,7 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
                 ],
                 response_format: { type: 'json_object' },
                 temperature: 0,
-                max_tokens: 300 // Token efficiency
+                max_tokens: maxTokens
             })
         });
 
@@ -203,10 +322,22 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         const text = data.choices[0].message.content;
 
         try {
-            const parsed = JSON.parse(text);
+            // Strip markdown json blocks if present
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            } else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+
+            const parsed = JSON.parse(cleanText);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || cleanText;
+            if (typeof analysisText === 'object') {
+                analysisText = JSON.stringify(analysisText, null, 2);
+            }
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
+                analysis: analysisText,
                 discord: parsed.discord
             };
         } catch (e) {
@@ -214,8 +345,8 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         }
     }
 
-    private async callOllama(model: string, prompt: string): Promise<{ verdict: string; analysis: string; discord?: string }> {
-        console.log(`[AIService] Using Ollama (${model}) [Token Efficient]`);
+    private async callOllama(model: string, prompt: string, maxTokens: number = 300): Promise<{ verdict: string; analysis: string; discord?: string }> {
+        console.log(`[AIService] Using Ollama (${model}) [Token limit: ${maxTokens}]`);
 
         const response = await fetch(`${this.ollamaUrl}/api/generate`, {
             method: 'POST',
@@ -227,7 +358,7 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
                 format: 'json',
                 options: {
                     temperature: 0,
-                    num_predict: 300 // Token efficiency
+                    num_predict: maxTokens
                 }
             })
         });
@@ -240,10 +371,22 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         const text = result.response;
 
         try {
-            const parsed = JSON.parse(text);
+            // Strip markdown json blocks if present
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            } else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+
+            const parsed = JSON.parse(cleanText);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || cleanText;
+            if (typeof analysisText === 'object') {
+                analysisText = JSON.stringify(analysisText, null, 2);
+            }
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
+                analysis: analysisText,
                 discord: parsed.discord
             };
         } catch (e) {

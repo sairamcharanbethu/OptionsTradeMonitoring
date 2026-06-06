@@ -1,0 +1,256 @@
+[
+  {
+    "id": "dfb17a40-dc7a-44fc-b4df-851aee29e71d",
+    "brokerage_authorization": "eb1e5854-0072-4fd3-9a01-4c779d225d18",
+    "portfolio_group": "e33f680f-4532-416b-8277-6c26d8e824c1",
+    "name": "Wealthsimple Trade TFSA",
+    "number": "tfsa-aavvqizw",
+    "institution_account_id": null,
+    "institution_name": "Wealthsimple Trade",
+    "meta": {
+      "type": "tfsa",
+      "status": "open",
+      "currency": "CAD",
+      "institution_name": "Wealthsimple Trade",
+      "linked_account_id": "tfsa-AWKVWk_1Pg",
+      "unifiedAccountType": "SELF_DIRECTED_TFSA"
+    },
+    "cash_restrictions": [],
+    "created_date": "2026-05-30T21:08:52.658749Z",
+    "funding_date": null,
+    "opening_date": null,
+    "sync_status": {
+      "holdings": {
+        "last_successful_sync": "2026-05-30T21:08:56.441883+00:00",
+        "initial_sync_completed": true
+      },
+      "transactions": {
+        "last_successful_sync": "2026-05-29",
+        "first_transaction_date": "2023-07-17",
+        "initial_sync_completed": true
+      }
+    },
+    "balance": {
+      "total": {
+        "amount": 72032.82850115,
+        "currency": "CAD"
+      }
+    },
+    "raw_data": null,
+    "raw_type": "TFSA",
+    "status": "open",
+    "is_paper": false,
+    "account_category": null
+  },
+  {
+    "id": "9e70b4b4-b576-4943-abfe-238efc6f88ce",
+    "brokerage_authorization": "eb1e5854-0072-4fd3-9a01-4c779d225d18",
+    "portfolio_group": "5d2ffa84-5246-4fba-b2f0-fed6e6114acb",
+    "name": "Wealthsimple Trade FHSA",
+    "number": "fhsa-J2gd_nOAfg",
+    "institution_account_id": null,
+    "institution_name": "Wealthsimple Trade",
+    "meta": {
+      "type": "fhsa",
+      "status": "open",
+      "currency": "CAD",
+      "institution_name": "Wealthsimple Trade",
+      "unifiedAccountType": "SELF_DIRECTED_FHSA"
+    },
+    "cash_restrictions": [],
+    "created_date": "2026-05-30T21:08:52.497832Z",
+    "funding_date": null,
+    "opening_date": null,
+    "sync_status": {
+      "holdings": {
+        "last_successful_sync": "2026-05-30T21:08:55.713891+00:00",
+        "initial_sync_completed": true
+      },
+      "transactions": {
+        "last_successful_sync": "2026-05-29",
+        "first_transaction_date": "2025-07-09",
+        "initial_sync_completed": true
+      }
+    },
+    "balance": {
+      "total": {
+        "amount": 14141.844965,
+        "currency": "CAD"
+      }
+    },
+    "raw_data": null,
+    "raw_type": "FHSA",
+    "status": "open",
+    "is_paper": false,
+    "account_category": null
+  },
+  {
+    "id": "953e7791-4811-42ea-a82d-42f2935635df",
+    "brokerage_authorization": "eb1e5854-0072-4fd3-9a01-4c779d225d18",
+    "portfolio_group": "c2ac290a-fd89-4829-96f2-4d7a6aa4f4d7",
+    "name": "Wealthsimple Trade RRSP",
+    "number": "rrsp-_G0wOpMATg",
+    "institution_account_id": null,
+    "institution_name": "Wealthsimple Trade",
+    "meta": {
+      "type": "rrsp",
+      "status": "open",
+      "currency": "CAD",
+      "institution_name": "Wealthsimple Trade",
+      "linked_account_id": "rrsp-gQrarLNwsw",
+      "unifiedAccountType": "SELF_DIRECTED_RRSP"
+    },
+    "cash_restrictions": [],
+    "created_date": "2026-05-30T21:08:52.626517Z",
+    "funding_date": null,
+    "opening_date": null,
+    "sync_status": {
+      "holdings": {
+        "last_successful_sync": "2026-05-30T21:08:55.802292+00:00",
+        "initial_sync_completed": true
+      },
+      "transactions": {
+        "last_successful_sync": "2026-05-29",
+        "first_transaction_date": "2024-06-07",
+        "initial_sync_completed": true
+      }
+    },
+    "balance": {
+      "total": {
+        "amount": 5751.303208,
+        "currency": "CAD"
+      }
+    },
+    "raw_data": null,
+    "raw_type": "RRSP",
+    "status": "open",
+    "is_paper": false,
+    "account_category": null
+  },
+  {
+    "id": "4ab34ab7-c3aa-447e-998a-78d5279606a3",
+    "brokerage_authorization": "eb1e5854-0072-4fd3-9a01-4c779d225d18",
+    "portfolio_group": "4e7a65cd-5267-4026-a0f5-8a2c33656d45",
+    "name": "Wealthsimple Trade CRYPTO",
+    "number": "non-registered-crypto-k73zjggh",
+    "institution_account_id": null,
+    "institution_name": "Wealthsimple Trade",
+    "meta": {
+      "type": "non_registered_crypto",
+      "status": "open",
+      "currency": "CAD",
+      "institution_name": "Wealthsimple Trade",
+      "unifiedAccountType": "SELF_DIRECTED_CRYPTO"
+    },
+    "cash_restrictions": [],
+    "created_date": "2026-05-30T21:08:52.691040Z",
+    "funding_date": null,
+    "opening_date": null,
+    "sync_status": {
+      "holdings": {
+        "last_successful_sync": "2026-05-30T21:08:56.299213+00:00",
+        "initial_sync_completed": true
+      },
+      "transactions": {
+        "last_successful_sync": "2026-05-29",
+        "first_transaction_date": "2021-08-07",
+        "initial_sync_completed": true
+      }
+    },
+    "balance": {
+      "total": {
+        "amount": 7334.53712003,
+        "currency": "CAD"
+      }
+    },
+    "raw_data": null,
+    "raw_type": "CRYPTO",
+    "status": "open",
+    "is_paper": false,
+    "account_category": null
+  },
+  {
+    "id": "18323066-2491-4863-95b8-a64c3a3ea14b",
+    "brokerage_authorization": "eb1e5854-0072-4fd3-9a01-4c779d225d18",
+    "portfolio_group": "49629606-037f-42b4-93ab-6d4d4bef7cfd",
+    "name": "Wealthsimple Trade PERSONAL",
+    "number": "non-registered-9_mK9fOGtA",
+    "institution_account_id": null,
+    "institution_name": "Wealthsimple Trade",
+    "meta": {
+      "type": "non_registered",
+      "status": "open",
+      "currency": "CAD",
+      "institution_name": "Wealthsimple Trade",
+      "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED"
+    },
+    "cash_restrictions": [],
+    "created_date": "2026-05-30T21:08:52.420909Z",
+    "funding_date": null,
+    "opening_date": null,
+    "sync_status": {
+      "holdings": {
+        "last_successful_sync": "2026-05-30T21:08:55.878888+00:00",
+        "initial_sync_completed": true
+      },
+      "transactions": {
+        "last_successful_sync": "2026-05-29",
+        "first_transaction_date": "2025-12-06",
+        "initial_sync_completed": true
+      }
+    },
+    "balance": {
+      "total": {
+        "amount": 1455.300504,
+        "currency": "CAD"
+      }
+    },
+    "raw_data": null,
+    "raw_type": "PERSONAL",
+    "status": "open",
+    "is_paper": false,
+    "account_category": null
+  },
+  {
+    "id": "acf44407-99b7-4f3c-808e-1c43b97624df",
+    "brokerage_authorization": "eb1e5854-0072-4fd3-9a01-4c779d225d18",
+    "portfolio_group": "22b4f707-09ea-4b0e-ad92-1c24815aa990",
+    "name": "Wealthsimple Trade PERSONAL",
+    "number": "non-registered-w0lBitW4jg",
+    "institution_account_id": null,
+    "institution_name": "Wealthsimple Trade",
+    "meta": {
+      "type": "non_registered",
+      "status": "open",
+      "currency": "CAD",
+      "institution_name": "Wealthsimple Trade",
+      "unifiedAccountType": "SELF_DIRECTED_NON_REGISTERED_MARGIN"
+    },
+    "cash_restrictions": [],
+    "created_date": "2026-05-30T21:08:52.463532Z",
+    "funding_date": null,
+    "opening_date": null,
+    "sync_status": {
+      "holdings": {
+        "last_successful_sync": "2026-05-30T21:08:57.721284+00:00",
+        "initial_sync_completed": true
+      },
+      "transactions": {
+        "last_successful_sync": "2026-05-29",
+        "first_transaction_date": "2025-01-31",
+        "initial_sync_completed": true
+      }
+    },
+    "balance": {
+      "total": {
+        "amount": 41386.01172142,
+        "currency": "CAD"
+      }
+    },
+    "raw_data": null,
+    "raw_type": "PERSONAL",
+    "status": "open",
+    "is_paper": false,
+    "account_category": null
+  }
+]

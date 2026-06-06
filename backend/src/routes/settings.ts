@@ -41,12 +41,13 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 await client.query('BEGIN');
 
                 for (const [key, value] of Object.entries(updates)) {
+                    const trimmedValue = typeof value === 'string' ? value.trim() : value;
                     await client.query(
                         `INSERT INTO settings (user_id, key, value, updated_at) 
                          VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
                          ON CONFLICT (user_id, key) DO UPDATE 
                          SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                        [userId, key, value]
+                        [userId, key, trimmedValue]
                     );
                 }
 
@@ -60,6 +61,15 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     const newInterval = parseInt(updates.market_poll_interval, 10);
                     if (!isNaN(newInterval) && (fastify as any).poller) {
                         (fastify as any).poller.updateInterval(newInterval);
+                    }
+                }
+
+                // If polling toggle was updated, stop/resume the poller
+                if (updates.polling_enabled !== undefined && (fastify as any).poller) {
+                    if (updates.polling_enabled === 'true') {
+                        (fastify as any).poller.resume();
+                    } else {
+                        (fastify as any).poller.stop();
                     }
                 }
 

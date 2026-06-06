@@ -2,7 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.aiRoutes = aiRoutes;
 const ai_service_1 = require("../services/ai-service");
-const prediction_service_1 = require("../services/prediction-service");
 async function aiRoutes(fastify, options) {
     fastify.addHook('onRequest', fastify.authenticate);
     const aiService = new ai_service_1.AIService(fastify);
@@ -39,10 +38,19 @@ async function aiRoutes(fastify, options) {
         }
         catch (err) {
             fastify.log.error(err);
-            if (err.message?.includes('Too Many') || err.message?.includes('429') || err.message?.includes('Rate')) {
+            const msg = err.message || '';
+            const isRateLimit = msg.includes('Too Many') || msg.includes('429') || msg.includes('Rate');
+            if (isRateLimit) {
+                if (msg.includes('OpenRouter')) {
+                    return reply.code(429).send({
+                        error: 'Rate Limited (OpenRouter)',
+                        message: 'OpenRouter AI service rate limit reached. Please check your limits or wait a few minutes.',
+                        retryAfter: 60
+                    });
+                }
                 return reply.code(429).send({
                     error: 'Rate Limited',
-                    message: 'Questrade API rate limit reached. Please wait a few minutes.',
+                    message: 'AI service rate limit reached. Please wait a few minutes.',
                     retryAfter: 60
                 });
             }
@@ -66,30 +74,6 @@ async function aiRoutes(fastify, options) {
         catch (err) {
             fastify.log.error(err);
             return reply.code(500).send({ error: err.message || 'AI Briefing Failed' });
-        }
-    });
-    fastify.get('/predict/:symbol', async (request, reply) => {
-        const { symbol } = request.params;
-        const predictionService = new prediction_service_1.PredictionService(fastify);
-        try {
-            const result = await predictionService.analyzeStock(symbol);
-            return result;
-        }
-        catch (err) {
-            // Check for rate limit errors and return user-friendly response
-            if (err.message?.includes('Too Many') || err.message?.includes('429') || err.message?.includes('Rate')) {
-                return reply.code(429).send({
-                    error: 'Rate Limited',
-                    message: 'Questrade API rate limit reached. Please wait 2-3 minutes before trying again. The system processes many market data requests for historical analysis.',
-                    retryAfter: 180 // 3 minutes in seconds
-                });
-            }
-            // For other errors, return 500 with message
-            fastify.log.error(err);
-            return reply.code(500).send({
-                error: 'Prediction Failed',
-                message: err.message || 'An unexpected error occurred during stock analysis.'
-            });
         }
     });
 }

@@ -1,6 +1,21 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AIService = void 0;
+const yahoo_finance2_1 = __importDefault(require("yahoo-finance2"));
+const yahooFinance = new yahoo_finance2_1.default({ suppressNotices: ['ripHistorical'] });
+function toCavemanStyle(text) {
+    if (!text)
+        return '';
+    // Strip common filler words/articles/prepositions/auxiliary verbs
+    const fillers = /\b(the|a|an|and|of|to|for|with|on|in|at|by|as|after|about|from|into|over|through|is|are|was|were|be|been|being)\b/gi;
+    return text
+        .replace(fillers, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 class AIService {
     fastify;
     ollamaUrl;
@@ -40,10 +55,84 @@ ${posSummary}
 Task: Provide a high-level summary of the portfolio's health, highlight positions needing immediate attention (due to PnL or Greek shifts), and suggest next steps.
 Style: Professional trader tone, concise but insightful.
 Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discord message with emojis..." }`;
-        const response = await this.generateAnalysisInternal(prompt);
+        const response = await this.generateAnalysisInternal(prompt, 2048);
         return {
             briefing: response.analysis,
             discord_message: response.discord || response.analysis
+        };
+    }
+    async generateWealthsimpleBriefing(positions) {
+        if (positions.length === 0)
+            return { briefing: "No active Wealthsimple positions." };
+        // Sort by value descending and take top 10 to avoid rate limits
+        const sortedPositions = [...positions].sort((a, b) => {
+            const valA = Number(a.price) * Number(a.units);
+            const valB = Number(b.price) * Number(b.units);
+            return valB - valA;
+        });
+        const topPositions = sortedPositions.slice(0, 10);
+        let insightsText = "";
+        try {
+            const promises = topPositions.map(async (p) => {
+                // Only lookup equities/ETFs, skip pure crypto if Yahoo doesn't support the exact ticker easily
+                // Though Yahoo supports BTC-USD, the raw symbol might not match. We'll try anyway.
+                const ticker = p.symbol;
+                try {
+                    const quote = await yahooFinance.quoteSummary(ticker, { modules: ['summaryDetail', 'price'] });
+                    const news = await yahooFinance.search(ticker, { newsCount: 5 });
+                    const price = quote.price?.regularMarketPrice || p.price;
+                    const pe = quote.summaryDetail?.trailingPE?.toFixed(2) || 'N/A';
+                    const fiftyTwoHigh = quote.summaryDetail?.fiftyTwoWeekHigh?.toFixed(2) || 'N/A';
+                    // Filter news relevant to this specific ticker to prevent general financial news fallbacks
+                    const baseSymbol = ticker.split('.')[0];
+                    const uppercaseTicker = ticker.toUpperCase();
+                    const uppercaseBase = baseSymbol.toUpperCase();
+                    const relevantNews = (news.news || []).filter((n) => {
+                        const hasRelatedTicker = n.relatedTickers?.some((t) => {
+                            const uppercaseT = t.toUpperCase();
+                            return uppercaseT === uppercaseTicker || uppercaseT === uppercaseBase;
+                        });
+                        const titleLower = (n.title || '').toLowerCase();
+                        const tickerLower = ticker.toLowerCase();
+                        const baseLower = baseSymbol.toLowerCase();
+                        const hasInTitle = titleLower.includes(tickerLower) || titleLower.includes(baseLower);
+                        return hasRelatedTicker || hasInTitle;
+                    });
+                    const headlines = relevantNews.slice(0, 2).map((n) => `- "${toCavemanStyle(n.title)}"`).join('\n      ');
+                    return `  [${ticker}] P/E: ${pe} | 52w High: $${fiftyTwoHigh} | Current: $${price}\n      Recent News:\n      ${headlines || 'No recent news.'}`;
+                }
+                catch (e) {
+                    return `  [${ticker}] No extended data available.`;
+                }
+            });
+            const resolvedInsights = await Promise.all(promises);
+            insightsText = resolvedInsights.join('\n\n');
+        }
+        catch (e) {
+            console.error("[AIService] Failed to fetch Yahoo Finance insights for Wealthsimple briefing", e);
+        }
+        const posSummary = positions.map(p => {
+            const pnl = p.open_pnl ? Number(p.open_pnl).toFixed(2) : '0.00';
+            const val = (Number(p.price) * Number(p.units)).toFixed(2);
+            return `- ${p.symbol} (${p.asset_type}): ${p.units} units @ $${p.average_purchase_price} | Current: $${p.price} | Value: $${val} | PnL: $${pnl}`;
+        }).join('\n');
+        const prompt = `Wealthsimple Portfolio Briefing
+Positions:
+${posSummary}
+
+Fundamental & News Insights (Top Holdings):
+${insightsText}
+
+Task: Provide a high-level summary of this equity/crypto portfolio and detailed rebalancing recommendations for the top holdings.
+1. Portfolio Summary: Briefly highlight the biggest winners and losers by PnL, and discuss the asset allocation.
+2. Rebalancing Recommendations: For EACH of the top holdings with provided news/fundamentals, internally weigh the bullish factors against the bearish risks, and output ONLY the final verdict and rebalancing recommendation:
+   - ⚖️ Portfolio Manager Verdict: A clear decision (Hold, Trim, Buy) and a comprehensive, detailed rebalancing rationale/action plan based on your analysis.
+Do NOT output any Bull Agent or Bear Agent sections. Only show the final Portfolio Manager Verdict and direct recommendations for each holding.
+Style: Professional wealth manager tone, highly sophisticated, structured with clear Markdown headers for each holding. Write in beautiful, natural, grammatically complete English. The recommendations should be rich and thoroughly detailed.
+Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
+        const response = await this.generateAnalysisInternal(prompt, 2048);
+        return {
+            briefing: response.analysis
         };
     }
     async generateAnalysis(data) {
@@ -61,36 +150,104 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
             analysis: response.analysis
         };
     }
-    async generateAnalysisInternal(prompt) {
+    async askClaudeForTrading(prompt) {
         try {
-            // 1. Fetch settings from DB
-            let currentProvider = 'ollama';
-            let openRouterKey = '';
-            let currentModel = this.model;
+            const settings = await this.getSettings();
+            if (settings.ai_provider === 'openrouter' && settings.openrouter_key) {
+                // Route trade decisions through the user's selected model (or default to Claude 3.5 Sonnet)
+                const model = settings.ai_model || 'anthropic/claude-3.5-sonnet';
+                const response = await this.callOpenRouter(model, settings.openrouter_key, prompt, 120);
+                return {
+                    verdict: response.verdict,
+                    analysis: response.analysis
+                };
+            }
+            // Fallback to standard selected provider if OpenRouter or key isn't active
+            return this.askAI(prompt);
+        }
+        catch (err) {
+            console.error("[AIService] Failed to invoke configured model for trading, falling back:", err);
+            return this.askAI(prompt);
+        }
+    }
+    async getSettings() {
+        let currentProvider = 'ollama';
+        let openRouterKey = '';
+        let currentModel = this.model;
+        try {
+            const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings');
+            const settings = rows.reduce((acc, row) => {
+                acc[row.key] = row.value;
+                return acc;
+            }, {});
+            if (settings.ai_provider)
+                currentProvider = settings.ai_provider;
+            if (settings.openrouter_key)
+                openRouterKey = settings.openrouter_key;
+            if (settings.ai_model)
+                currentModel = settings.ai_model;
+        }
+        catch (err) {
+            console.warn('[AIService] Failed to fetch settings, using defaults:', err);
+        }
+        return {
+            ai_provider: currentProvider,
+            openrouter_key: openRouterKey,
+            ai_model: currentModel
+        };
+    }
+    async checkHealth() {
+        const settings = await this.getSettings();
+        if (settings.ai_provider === 'openrouter') {
+            if (!settings.openrouter_key) {
+                throw new Error('OpenRouter selected but no API Key found in settings.');
+            }
             try {
-                const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings');
-                const settings = rows.reduce((acc, row) => {
-                    acc[row.key] = row.value;
-                    return acc;
-                }, {});
-                if (settings.ai_provider)
-                    currentProvider = settings.ai_provider;
-                if (settings.openrouter_key)
-                    openRouterKey = settings.openrouter_key;
-                if (settings.ai_model)
-                    currentModel = settings.ai_model;
+                const response = await fetch('https://openrouter.ai/api/v1/key', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${settings.openrouter_key}`
+                    }
+                });
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`OpenRouter accessibility check failed: ${response.status} - ${errText}`);
+                }
+                const data = await response.json();
+                if (data && data.error) {
+                    throw new Error(`OpenRouter API Key check returned error: ${JSON.stringify(data.error)}`);
+                }
             }
             catch (err) {
-                console.warn('[AIService] Failed to fetch settings, using defaults:', err);
+                throw new Error(`OpenRouter is not accessible. Error: ${err.message}`);
             }
+        }
+        else if (settings.ai_provider === 'ollama') {
+            try {
+                const response = await fetch(`${this.ollamaUrl}/api/tags`, {
+                    method: 'GET'
+                });
+                if (!response.ok) {
+                    throw new Error(`Ollama health check failed: ${response.status} ${response.statusText}`);
+                }
+            }
+            catch (err) {
+                throw new Error(`Ollama is not accessible at ${this.ollamaUrl}. Error: ${err.message}`);
+            }
+        }
+    }
+    async generateAnalysisInternal(prompt, maxTokens = 300) {
+        try {
+            // 1. Fetch settings from DB
+            const settings = await this.getSettings();
             // 2. Route based on provider
-            if (currentProvider === 'openrouter') {
-                if (!openRouterKey)
+            if (settings.ai_provider === 'openrouter') {
+                if (!settings.openrouter_key)
                     throw new Error('OpenRouter selected but no API Key found.');
-                return this.callOpenRouter(currentModel, openRouterKey, prompt);
+                return this.callOpenRouter(settings.ai_model, settings.openrouter_key, prompt, maxTokens);
             }
             else {
-                return this.callOllama(currentModel, prompt);
+                return this.callOllama(settings.ai_model, prompt, maxTokens);
             }
         }
         catch (error) {
@@ -98,8 +255,8 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
             throw new Error(`AI Analysis Failed: ${error.message}`);
         }
     }
-    async callOpenRouter(model, apiKey, prompt) {
-        console.log(`[AIService] Using OpenRouter (${model}) [Token Efficient]`);
+    async callOpenRouter(model, apiKey, prompt, maxTokens = 300) {
+        console.log(`[AIService] Using OpenRouter (${model}) [Token limit: ${maxTokens}]`);
         const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
             method: 'POST',
             headers: {
@@ -116,7 +273,7 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
                 ],
                 response_format: { type: 'json_object' },
                 temperature: 0,
-                max_tokens: 300 // Token efficiency
+                max_tokens: maxTokens
             })
         });
         if (!response.ok) {
@@ -126,10 +283,22 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         const data = await response.json();
         const text = data.choices[0].message.content;
         try {
-            const parsed = JSON.parse(text);
+            // Strip markdown json blocks if present
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            }
+            else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+            const parsed = JSON.parse(cleanText);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || cleanText;
+            if (typeof analysisText === 'object') {
+                analysisText = JSON.stringify(analysisText, null, 2);
+            }
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
+                analysis: analysisText,
                 discord: parsed.discord
             };
         }
@@ -137,8 +306,8 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
             return { verdict: 'Review', analysis: text };
         }
     }
-    async callOllama(model, prompt) {
-        console.log(`[AIService] Using Ollama (${model}) [Token Efficient]`);
+    async callOllama(model, prompt, maxTokens = 300) {
+        console.log(`[AIService] Using Ollama (${model}) [Token limit: ${maxTokens}]`);
         const response = await fetch(`${this.ollamaUrl}/api/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -149,7 +318,7 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
                 format: 'json',
                 options: {
                     temperature: 0,
-                    num_predict: 300 // Token efficiency
+                    num_predict: maxTokens
                 }
             })
         });
@@ -159,10 +328,22 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         const result = await response.json();
         const text = result.response;
         try {
-            const parsed = JSON.parse(text);
+            // Strip markdown json blocks if present
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            }
+            else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+            const parsed = JSON.parse(cleanText);
+            let analysisText = parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || cleanText;
+            if (typeof analysisText === 'object') {
+                analysisText = JSON.stringify(analysisText, null, 2);
+            }
             return {
                 verdict: parsed.verdict || 'UNKNOWN',
-                analysis: parsed.analysis || parsed.reasoning || parsed.summary || parsed.briefing || text,
+                analysis: analysisText,
                 discord: parsed.discord
             };
         }

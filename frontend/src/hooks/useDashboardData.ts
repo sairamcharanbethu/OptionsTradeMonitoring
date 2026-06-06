@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, Position } from '@/lib/api';
+import { api, Position, Signal } from '@/lib/api';
 import { useRef, useEffect } from 'react';
 
 // Keys
@@ -8,6 +8,7 @@ export const QUERY_KEYS = {
     portfolioStats: ['portfolioStats'],
     marketStatus: ['marketStatus'],
     briefing: ['briefing'],
+    signals: ['signals'],
     history: (page: number, limit: number) => ['positionHistory', page, limit],
 };
 
@@ -17,6 +18,15 @@ export function usePositions(refreshInterval = 30000) {
         queryFn: () => api.getPositions(),
         refetchInterval: refreshInterval,
         staleTime: 10000,
+    });
+}
+
+export function useSignals(refreshInterval = 5000) {
+    return useQuery({
+        queryKey: QUERY_KEYS.signals,
+        queryFn: () => api.getSignals(),
+        refetchInterval: refreshInterval,
+        staleTime: 2000,
     });
 }
 
@@ -61,4 +71,13 @@ export function usePrefetchDashboard() {
     };
 
     return prefetch;
+}
+
+export function useSnaptradePortfolio() {
+    return useQuery({
+        queryKey: ['snaptradePortfolio'],
+        queryFn: () => api.getSnaptradePortfolio(),
+        refetchInterval: 300000, // Refresh every 5 minutes
+        staleTime: 60000,
+    });
 }
