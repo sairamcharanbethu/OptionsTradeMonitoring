@@ -47,7 +47,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [sscgexPassword, setSscgexPassword] = useState('');
     const [dayTradingAiEnabled, setDayTradingAiEnabled] = useState(true);
     const [dayTradingAiProvider, setDayTradingAiProvider] = useState('openrouter');
-    const [dayTradingAiModel, setDayTradingAiModel] = useState('meta-llama/llama-3.3-70b-instruct');
+    const [dayTradingAiModel, setDayTradingAiModel] = useState('meta-llama/llama-3.1-70b-instruct');
+    const [dayTradingCoachModel, setDayTradingCoachModel] = useState('anthropic/claude-sonnet-4-5');
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -199,7 +200,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setSscgexPassword(data.sscgex_password || '');
             setDayTradingAiEnabled(data.day_trading_ai_enabled !== 'false');
             setDayTradingAiProvider(data.day_trading_ai_provider || 'openrouter');
-            setDayTradingAiModel(data.day_trading_ai_model || 'meta-llama/llama-3.3-70b-instruct');
+            setDayTradingAiModel(data.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct');
+            setDayTradingCoachModel(data.day_trading_coach_model || 'anthropic/claude-sonnet-4-5');
         } catch (err) {
             console.error(err);
         } finally {
@@ -277,7 +279,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 sscgex_password: sscgexPassword,
                 day_trading_ai_enabled: dayTradingAiEnabled ? 'true' : 'false',
                 day_trading_ai_provider: dayTradingAiProvider,
-                day_trading_ai_model: dayTradingAiModel
+                day_trading_ai_model: dayTradingAiModel,
+                day_trading_coach_model: dayTradingCoachModel
             });
             queryClient.invalidateQueries({ queryKey: ['settings'] });
             onUpdate(user); // Force refresh of parent if needed
@@ -799,12 +802,27 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             </Select>
                                         </div>
                                         <div className="grid gap-2">
-                                            <Label htmlFor="dtAiModel">AI Model</Label>
+                                            <Label htmlFor="dtAiModel">
+                                              News Classifier Model
+                                              <span className="ml-2 text-xs text-zinc-500 font-normal">(fast, cheap — Llama, Hermes)</span>
+                                            </Label>
                                             <Input
                                                 id="dtAiModel"
                                                 value={dayTradingAiModel}
                                                 onChange={(e) => setDayTradingAiModel(e.target.value)}
-                                                placeholder="meta-llama/llama-3.3-70b-instruct"
+                                                placeholder="meta-llama/llama-3.1-70b-instruct"
+                                            />
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="dtCoachModel">
+                                              Signal Coach Model
+                                              <span className="ml-2 text-xs text-zinc-500 font-normal">(deep reasoning — Claude Sonnet)</span>
+                                            </Label>
+                                            <Input
+                                                id="dtCoachModel"
+                                                value={dayTradingCoachModel}
+                                                onChange={(e) => setDayTradingCoachModel(e.target.value)}
+                                                placeholder="anthropic/claude-sonnet-4-5"
                                             />
                                         </div>
                                     </div>

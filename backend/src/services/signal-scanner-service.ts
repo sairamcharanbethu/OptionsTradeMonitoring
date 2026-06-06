@@ -110,7 +110,8 @@ export class SignalScannerService {
       min_signal_score: '70',
       day_trading_ai_enabled: 'true',
       day_trading_ai_provider: 'openrouter',
-      day_trading_ai_model: 'meta-llama/llama-3.3-70b-instruct'
+      day_trading_ai_model: 'meta-llama/llama-3.1-70b-instruct',  // news classifier
+      day_trading_coach_model: 'anthropic/claude-sonnet-4-5'       // signal coach
     };
 
     return { ...defaults, ...dbSettings };
@@ -729,71 +730,16 @@ export class SignalScannerService {
           : `Use only if ${symbol} breaks the latest 5-minute low and stays below VWAP.`
       };
 
-      // ── News-Aware AI Coach Commentary (token-efficient 3-tier approach) ──
-      // Tier 1: Fetch news (FREE – Yahoo Finance, no key needed)
-      // Tier 2: Fingerprint diff against Redis – skip Claude if headlines unchanged
-      // Tier 3: Call Claude only on new headlines OR first signal of the day
-      let aiCoachCommentary = '';
-      let newsContextText = 'No material news in the last 6 hours.';
-
-      if (settings.day_trading_ai_enabled === 'true') {
-        try {
-          // Tier 1: Fetch compressed headlines
-          const { headlines, raw } = await this.fetchNewsContext(symbol);
-          newsContextText = raw;
-
-          const key = await this.getAiApiKey(settings.day_trading_ai_provider);
-          if (key) {
-            // Tier 2: Compute fingerprint of today's headlines
-            const newFingerprint = this.getNewsFingerprint(headlines);
-            const fpRedisKey = `NEWS_FP:${symbol}:${nyParts.dateStr}`;
-            const cachedFp = await redis.get(fpRedisKey);
-
-            const headlinesChanged = cachedFp !== newFingerprint;
-
-            if (headlinesChanged || !cachedFp) {
-              // Tier 3: Headlines changed (or first run today) → call Claude
-              this.fastify.log.info(`[SignalScannerService] News fingerprint changed for ${symbol} — invoking AI coach.`);
-
-              // Cache the new fingerprint for 30 min so nearby cycles skip the call
-              await redis.set(fpRedisKey, newFingerprint, 1800);
-
-              // Build token-efficient prompt (caveman compressed headlines, tight instruction)
-              const coachPrompt = `You are an expert 0DTE options coach. Analyze this signal and news. Respond JSON {"verdict":"GO|WAIT|ABORT","analysis":"max 130 words"}.
-
-SIGNAL: ${symbol} ${winningSide} $${chosenStrike} | Price $${currentPrice.toFixed(2)} | VWAP $${vwap.toFixed(2)} | EMA9 ${emaShort?.toFixed(2)} EMA21 ${emaLong?.toFixed(2)} | GEX ${qqqGexRegime}/${qqqFlowDirection} | SL $${stopUnderlying} TP $${targetUnderlying} | Score ${finalConfidence}% ${setupGrade}
-
-NEWS (last 6h):
-${headlines.length > 0 ? headlines.map((h, i) => `${i + 1}. ${h}`).join('\n') : 'None.'}
-
-RULES: If news = event risk opposing signal → flag \u26a0\ufe0f PITFALL. If news supports signal → flag \u2705 CATALYST. Action line first: BUY ${symbol} ${winningSide} $${chosenStrike} entry >$${entryTrigger.toFixed(2)} SL $${stopUnderlying} TP $${targetUnderlying}. Then thesis + pitfalls/catalysts.`;
-
-              const aiRes = await this.aiService.askClaudeForTrading(coachPrompt);
-              aiCoachCommentary = aiRes.analysis || aiRes.verdict || '';
-            } else {
-              // Tier 2 cache hit: reuse last AI commentary from Redis to avoid duplicate spend
-              this.fastify.log.info(`[SignalScannerService] News fingerprint unchanged for ${symbol} — reusing cached AI commentary.`);
-              const cachedCommentary = await redis.get(`NEWS_COMMENTARY:${symbol}:${nyParts.dateStr}`);
-              aiCoachCommentary = cachedCommentary || '';
-            }
-
-            // Cache the commentary for reuse during fingerprint-stable windows
-            if (aiCoachCommentary) {
-              await redis.set(`NEWS_COMMENTARY:${symbol}:${nyParts.dateStr}`, aiCoachCommentary, 1800);
-            }
-          }
-        } catch (aiErr: any) {
-          this.fastify.log.error(`[SignalScannerService] News-aware AI coach failed: ${aiErr.message}`);
-        }
-      }
-
-      // Persist signals to Postgres signals table (including news_context and ai_coach_commentary)
-      await this.fastify.pg.query(`
+      // ── STEP 1: Persist signal IMMEDIATELY (signal-first, AI follows async) ──
+      // Signal is saved to DB right away so the UI shows it in real-time.
+      // AI enrichment (news + coaching) happens in a fire-and-forget background task.
+      const insertResult = await this.fastify.pg.query(`
         INSERT INTO signals (
           symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss, target_price,
           confidence_score, setup_grade, status, indicators, gex, volatility, no_trade_reasons,
-          option_expiration_date, market_date, news_context, ai_coach_commentary
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+          option_expiration_date, market_date
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        RETURNING id
       `, [
         symbol,
         winningSide,
@@ -830,21 +776,49 @@ RULES: If news = event risk opposing signal → flag \u26a0\ufe0f PITFALL. If ne
         }),
         noTradeReasons,
         chosenExpiry,
-        nyParts.marketDate,
-        newsContextText || null,
-        aiCoachCommentary || null
+        nyParts.marketDate
       ]);
 
-      // Fire Discord Webhook
+      const signalId: number = insertResult.rows[0].id;
+      this.fastify.log.info(`[SignalScannerService] Signal #${signalId} saved instantly for ${symbol} ${winningSide}.`);
+
+      // ── STEP 2: Discord – signal alert fires immediately, no AI wait ──
       if (settings.discord_alerts_enabled === 'true' && settings.discord_webhook_url) {
         try {
           const embedMessage = {
-            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Spot **$${currentPrice.toFixed(2)}** | VIX **${vixPrice?.toFixed(2)}** | Spread ${spreadPct}%\n📊 GEX **${qqqGexRegime}** · **${qqqFlowDirection}** flow | VWAP $${vwap.toFixed(2)}\n🎯 Score **${finalConfidence}** | ${setupGrade}\n\n${aiCoachCommentary ? `🧠 **Coach Commentary:**\n${aiCoachCommentary}` : ''}`
+            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Spot **$${currentPrice.toFixed(2)}** | VIX **${vixPrice?.toFixed(2)}** | Spread ${spreadPct}%\n📊 GEX **${qqqGexRegime}** · **${qqqFlowDirection}** flow | VWAP $${vwap.toFixed(2)}\n🎯 Score **${finalConfidence}** | ${setupGrade}\n🧠 _AI coaching arriving shortly..._`
           };
           await axios.post(settings.discord_webhook_url, embedMessage, { timeout: 8000 });
         } catch (discErr: any) {
-          this.fastify.log.error(`[SignalScannerService] Discord Webhook failed: ${discErr.message}`);
+          this.fastify.log.error(`[SignalScannerService] Discord signal alert failed: ${discErr.message}`);
         }
+      }
+
+      // ── STEP 3: Fire-and-forget AI enrichment (runs in background, never blocks signal) ──
+      if (settings.day_trading_ai_enabled === 'true') {
+        setImmediate(() => {
+          this.enrichSignalAsync({
+            signalId,
+            symbol,
+            winningSide,
+            chosenStrike: chosenStrike as number,
+            currentPrice,
+            vwap,
+            emaShort,
+            emaLong,
+            qqqGexRegime,
+            qqqFlowDirection,
+            stopUnderlying,
+            targetUnderlying,
+            finalConfidence,
+            setupGrade,
+            entryTrigger: Number(entryTrigger.toFixed(2)),
+            nyDateStr: nyParts.dateStr,
+            settings
+          }).catch((err: any) => {
+            this.fastify.log.error(`[SignalScannerService] enrichSignalAsync failed for #${signalId}: ${err.message}`);
+          });
+        });
       }
     } else {
       // Save NO_TRADE signal to signals table
@@ -893,7 +867,243 @@ RULES: If news = event risk opposing signal → flag \u26a0\ufe0f PITFALL. If ne
     }
   }
 
+  // ── Async Signal Enrichment (fires after signal is already saved) ─────────
+
+  /**
+   * Two-stage AI enrichment pipeline. Runs in the background after signal INSERT.
+   *
+   * Stage 1 — Meta-Llama 3.1 70B (cheap, fast):
+   *   Classifies macro news as RISK_ON / RISK_OFF / NEUTRAL relative to signal direction.
+   *   Uses Redis fingerprint to skip if headlines haven't changed since last cycle.
+   *
+   * Stage 2 — Claude Sonnet (signal understanding):
+   *   Writes the full coaching commentary combining signal technicals + Llama's macro verdict.
+   *   Produces: action line, thesis, ⚠️ PITFALL / ✅ CATALYST tags, concise coaching.
+   *
+   * Final result is written back to the signals row via UPDATE and posted to Discord.
+   */
+  private async enrichSignalAsync(ctx: {
+    signalId: number;
+    symbol: string;
+    winningSide: string;
+    chosenStrike: number;
+    currentPrice: number;
+    vwap: number;
+    emaShort: number | null;
+    emaLong: number | null;
+    qqqGexRegime: string;
+    qqqFlowDirection: string;
+    stopUnderlying: number;
+    targetUnderlying: number;
+    finalConfidence: number;
+    setupGrade: string;
+    entryTrigger: number;
+    nyDateStr: string;
+    settings: any;
+  }): Promise<void> {
+    const {
+      signalId, symbol, winningSide, chosenStrike, currentPrice, vwap, emaShort, emaLong,
+      qqqGexRegime, qqqFlowDirection, stopUnderlying, targetUnderlying, finalConfidence,
+      setupGrade, entryTrigger, nyDateStr, settings
+    } = ctx;
+
+    const key = await this.getAiApiKey(settings.day_trading_ai_provider);
+    if (!key) {
+      this.fastify.log.warn(`[SignalScannerService] No API key — skipping AI enrichment for signal #${signalId}`);
+      return;
+    }
+
+    // ── Fetch news (dual-source, free) ────────────────────────────────────────
+    const { headlines, raw: newsContextText } = await this.fetchNewsContext(symbol);
+
+    // ── Stage 1: Llama 3.1 70B — macro news classifier ───────────────────────
+    // Check Redis fingerprint first — skip classifier if headlines unchanged
+    const newFingerprint = this.getNewsFingerprint(headlines);
+    const fpRedisKey = `NEWS_FP:${symbol}:${nyDateStr}`;
+    const cachedFp = await redis.get(fpRedisKey);
+    const headlinesChanged = cachedFp !== newFingerprint;
+
+    let macroVerdict = 'NEUTRAL';
+    let macroRationale = 'No conflicting macro news detected.';
+
+    if (headlines.length > 0 && (headlinesChanged || !cachedFp)) {
+      await redis.set(fpRedisKey, newFingerprint, 1800);
+
+      const classifierModel = settings.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct';
+      const classifierPrompt = `You are a macro news classifier for equity options trading. Given the signal direction and recent headlines, classify the macro environment.
+
+SIGNAL: ${symbol} ${winningSide} — directional bias is ${winningSide === 'CALL' ? 'BULLISH' : 'BEARISH'}
+
+HEADLINES (last 6h):
+${headlines.map((h, i) => `${i + 1}. ${h}`).join('\n')}
+
+Respond ONLY with valid JSON:
+{"verdict":"RISK_ON|RISK_OFF|NEUTRAL","rationale":"1 sentence max, cite specific headline if relevant"}
+
+Rules:
+- RISK_ON = headlines support a bullish/Nasdaq-positive environment
+- RISK_OFF = headlines create downside pressure (geopolitical, Fed hawkish, macro fear)
+- NEUTRAL = no material market-moving news`;
+
+      try {
+        const llamaRes = await this.callModelDirect(
+          classifierModel, key, classifierPrompt, 80
+        );
+        if (llamaRes.verdict && ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(llamaRes.verdict)) {
+          macroVerdict = llamaRes.verdict;
+          macroRationale = llamaRes.rationale || llamaRes.analysis || macroRationale;
+        }
+        this.fastify.log.info(`[SignalScannerService] Llama macro verdict for ${symbol}: ${macroVerdict} — ${macroRationale}`);
+      } catch (llamaErr: any) {
+        this.fastify.log.warn(`[SignalScannerService] Llama classifier failed: ${llamaErr.message}`);
+      }
+    } else if (cachedFp) {
+      // Headlines unchanged — reuse cached macro verdict
+      const cachedVerdict = await redis.get(`NEWS_VERDICT:${symbol}:${nyDateStr}`);
+      if (cachedVerdict) {
+        try {
+          const parsed = JSON.parse(cachedVerdict);
+          macroVerdict = parsed.verdict || 'NEUTRAL';
+          macroRationale = parsed.rationale || macroRationale;
+        } catch { /* use defaults */ }
+      }
+    }
+
+    // Cache the macro verdict for 30 min
+    await redis.set(
+      `NEWS_VERDICT:${symbol}:${nyDateStr}`,
+      JSON.stringify({ verdict: macroVerdict, rationale: macroRationale }),
+      1800
+    );
+
+    // ── Stage 2: Claude Sonnet — full signal coaching ─────────────────────────
+    // Check if we have a cached coaching commentary for this fingerprint
+    const commentaryCacheKey = `COACHING:${symbol}:${newFingerprint}`;
+    const cachedCommentary = await redis.get(commentaryCacheKey);
+    let finalCommentary = cachedCommentary || '';
+
+    if (!finalCommentary) {
+      const coachModel = settings.day_trading_coach_model || 'anthropic/claude-sonnet-4-5';
+
+      // Macro context badge for Sonnet
+      const macroBadge =
+        macroVerdict === 'RISK_OFF' ? `⚠️ MACRO RISK-OFF: ${macroRationale}` :
+        macroVerdict === 'RISK_ON'  ? `✅ MACRO RISK-ON: ${macroRationale}` :
+        `ℹ️ MACRO NEUTRAL: ${macroRationale}`;
+
+      const coachPrompt = `You are an expert 0DTE options coach at StockSurfer Capital. Analyze this signal and produce coaching for a novice trader.
+
+SIGNAL: ${symbol} ${winningSide} $${chosenStrike}
+Price $${currentPrice.toFixed(2)} | VWAP $${vwap.toFixed(2)} | EMA9 ${emaShort?.toFixed(2)} | EMA21 ${emaLong?.toFixed(2)}
+GEX Regime: ${qqqGexRegime} | Flow: ${qqqFlowDirection}
+Entry >$${entryTrigger} | SL $${stopUnderlying} | TP $${targetUnderlying}
+Score: ${finalConfidence}% | ${setupGrade}
+
+MACRO CONTEXT (classified by Llama 3.1):
+${macroBadge}
+
+RECENT HEADLINES:
+${headlines.length > 0 ? headlines.map((h, i) => `${i + 1}. ${h}`).join('\n') : 'None in last 6h.'}
+
+Write coaching commentary (max 140 words). Format:
+1. Bold action line: **BUY ${symbol} ${winningSide} $${chosenStrike} — Entry >$${entryTrigger}, SL $${stopUnderlying}, TP $${targetUnderlying}**
+2. Signal thesis (why the technicals support this trade)
+3. If macro = RISK_OFF and signal = CALL, add: ⚠️ PITFALL: [specific risk]
+   If macro = RISK_ON, add: ✅ CATALYST: [what supports the move]
+4. One key metric to watch
+
+Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
+
+      try {
+        const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 220);
+        finalCommentary = sonnetRes.analysis || sonnetRes.verdict || '';
+        if (finalCommentary) {
+          await redis.set(commentaryCacheKey, finalCommentary, 1800);
+        }
+        this.fastify.log.info(`[SignalScannerService] Sonnet coaching ready for signal #${signalId}: ${sonnetRes.verdict || 'OK'}`);
+      } catch (sonnetErr: any) {
+        this.fastify.log.error(`[SignalScannerService] Sonnet coach failed for #${signalId}: ${sonnetErr.message}`);
+      }
+    } else {
+      this.fastify.log.info(`[SignalScannerService] Reusing cached coaching commentary for signal #${signalId}`);
+    }
+
+    // ── Write back to DB ──────────────────────────────────────────────────────
+    try {
+      await this.fastify.pg.query(
+        `UPDATE signals SET news_context = $1, ai_coach_commentary = $2 WHERE id = $3`,
+        [newsContextText || null, finalCommentary || null, signalId]
+      );
+      this.fastify.log.info(`[SignalScannerService] Signal #${signalId} enriched with AI commentary.`);
+    } catch (dbErr: any) {
+      this.fastify.log.error(`[SignalScannerService] DB update failed for signal #${signalId}: ${dbErr.message}`);
+    }
+
+    // ── Discord follow-up: post AI coaching as a second message ──────────────
+    if (settings.discord_alerts_enabled === 'true' && settings.discord_webhook_url && finalCommentary) {
+      try {
+        const macroIcon = macroVerdict === 'RISK_OFF' ? '⚠️' : macroVerdict === 'RISK_ON' ? '✅' : 'ℹ️';
+        await axios.post(settings.discord_webhook_url, {
+          content: `🧠 **AI Coach · ${symbol} #${signalId}** ${macroIcon} Macro: ${macroVerdict}\n\n${finalCommentary}`
+        }, { timeout: 8000 });
+      } catch (discErr: any) {
+        this.fastify.log.error(`[SignalScannerService] Discord coaching follow-up failed: ${discErr.message}`);
+      }
+    }
+  }
+
+  /**
+   * Direct OpenRouter call with an explicit model — used for multi-model routing
+   * (Llama for classification, Claude for coaching) without going through AIService's
+   * settings-based routing which only reads a single model from the DB.
+   */
+  private async callModelDirect(
+    model: string,
+    apiKey: string,
+    prompt: string,
+    maxTokens: number
+  ): Promise<{ verdict: string; analysis: string; [key: string]: any }> {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'http://localhost:3000',
+        'X-Title': 'OptionsTradeMonitor',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
+          { role: 'user', content: prompt }
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0,
+        max_tokens: maxTokens
+      })
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`OpenRouter [${model}] error ${response.status}: ${err}`);
+    }
+
+    const data = await response.json() as any;
+    const text: string = data.choices?.[0]?.message?.content || '{}';
+    try {
+      const parsed = JSON.parse(text.trim());
+      return {
+        verdict: parsed.verdict || 'UNKNOWN',
+        analysis: parsed.analysis || parsed.rationale || parsed.summary || text,
+        ...parsed
+      };
+    } catch {
+      return { verdict: 'Review', analysis: text };
+    }
+  }
+
   // ── News Context Helpers ──────────────────────────────────────────────────
+
 
   /**
    * Dual-source news fetcher (both free, no API keys required):
