@@ -46,6 +46,7 @@ export default function DayTradingTerminal() {
   const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY'>('QQQ');
   const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
   const [countdown, setCountdown] = useState(300); // 5 minute countdown
+  const [showChart, setShowChart] = useState(true);
   const [healthData, setHealthData] = useState<ApiHealthState>({
     yahooFinance: { status: 'UP', latencyMs: 95 },
     sscgexPortal: { status: 'UP', latencyMs: 140 },
@@ -217,114 +218,94 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* Row 1: Dashboard Gauges / Widgets */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         
         {/* Widget 1: Glowing Market Regime Gauge */}
-        <div className={`flex flex-col justify-between p-4 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 ${regimeGlowColor}`}>
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-[10px] text-emerald-500/70 block uppercase tracking-wider font-semibold">MARKET REGIME</span>
-            <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400 font-bold uppercase">
-              {selectedSymbol} Index
-            </Badge>
-          </div>
-          <div className="my-auto py-2 text-center">
-            <span className="text-3xl font-extrabold tracking-widest block uppercase drop-shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+        <div className={`flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] ${regimeGlowColor}`}>
+          <div className="flex flex-col justify-center">
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-emerald-500/70 uppercase tracking-wider font-semibold">REGIME</span>
+              <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400 font-bold uppercase">
+                {selectedSymbol}
+              </Badge>
+            </div>
+            <span className="text-xl font-extrabold tracking-widest block uppercase drop-shadow-[0_0_10px_rgba(16,185,129,0.2)] mt-0.5">
               {marketRegime}
             </span>
-            <span className="text-[10px] text-zinc-400 mt-1 block">
-              GEX Regime: {currentGexRegime} · VIX: {vixValue.toFixed(2)}
+            <span className="text-[9px] text-zinc-400 block">
+              GEX: {currentGexRegime} · VIX: {vixValue.toFixed(1)}
             </span>
           </div>
-          <div className="mt-2 text-center">
-            <span className={`px-3 py-1.5 rounded text-[9px] font-extrabold uppercase select-none ${regimeBadgeBg}`}>
-              {marketRegime === 'EUPHORIA' ? '🔥 ULTRA RISK-ON' : marketRegime === 'BULLISH' ? '🟢 BUY THE DIPS' : marketRegime === 'BEARISH' ? '🔴 FADE THE RIPS' : '🟡 TRADING RANGE'}
+          <div className="flex items-center">
+            <span className={`px-2 py-1 rounded text-[9px] font-extrabold uppercase select-none ${regimeBadgeBg}`}>
+              {marketRegime === 'EUPHORIA' ? '🔥 ULTRA RISK-ON' : marketRegime === 'BULLISH' ? '🟢 BUY THE DIPS' : marketRegime === 'BEARISH' ? '🔴 FADE THE RIPS' : '🟡 RANGE'}
             </span>
           </div>
         </div>
 
         {/* Widget 2: Mega Caps Tracking Panel */}
-        <div className="p-4 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-between">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-[10px] text-emerald-500/70 block uppercase tracking-wider font-semibold">MEGA-CAPS CO-TREND</span>
-            <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400">NASDAQ Weight</Badge>
+        <div className="p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
+          <div className="flex justify-between items-center mb-1.5">
+            <span className="text-[9px] text-emerald-500/70 block uppercase tracking-wider font-semibold">MEGA-CAPS CO-TREND</span>
+            <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400">NASDAQ Heavy</Badge>
           </div>
-          <div className="space-y-2 font-mono text-xs">
-            <div className="flex justify-between items-center p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded">
-              <span className="font-semibold text-emerald-300">AAPL (Apple)</span>
+          <div className="grid grid-cols-3 gap-2 font-mono text-[10px]">
+            <div className="flex flex-col justify-between p-1 border border-emerald-500/5 bg-zinc-950/40 rounded text-center">
+              <span className="font-semibold text-zinc-400">AAPL</span>
               <span className={AAPL_change >= 0 ? 'text-green-400' : 'text-red-400'}>
-                {AAPL_change >= 0 ? '▲' : '▼'} {AAPL_change.toFixed(2)}%
+                {AAPL_change >= 0 ? '▲' : '▼'} {AAPL_change.toFixed(1)}%
               </span>
             </div>
-            <div className="flex justify-between items-center p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded">
-              <span className="font-semibold text-emerald-300">MSFT (Microsoft)</span>
+            <div className="flex flex-col justify-between p-1 border border-emerald-500/5 bg-zinc-950/40 rounded text-center">
+              <span className="font-semibold text-zinc-400">MSFT</span>
               <span className={MSFT_change >= 0 ? 'text-green-400' : 'text-red-400'}>
-                {MSFT_change >= 0 ? '▲' : '▼'} {MSFT_change.toFixed(2)}%
+                {MSFT_change >= 0 ? '▲' : '▼'} {MSFT_change.toFixed(1)}%
               </span>
             </div>
-            <div className="flex justify-between items-center p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded">
-              <span className="font-semibold text-emerald-300">NVDA (Nvidia)</span>
+            <div className="flex flex-col justify-between p-1 border border-emerald-500/5 bg-zinc-950/40 rounded text-center">
+              <span className="font-semibold text-zinc-400">NVDA</span>
               <span className={NVDA_change >= 0 ? 'text-green-400' : 'text-red-400'}>
-                {NVDA_change >= 0 ? '▲' : '▼'} {NVDA_change.toFixed(2)}%
+                {NVDA_change >= 0 ? '▲' : '▼'} {NVDA_change.toFixed(1)}%
               </span>
             </div>
           </div>
         </div>
 
         {/* Widget 3: Real-Time API Health Panel */}
-        <div className="p-4 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-between">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-[10px] text-emerald-500/70 block uppercase tracking-wider font-semibold">INTEGRATION HEALTH STATUS</span>
+        <div className="p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
+          <div className="flex justify-between items-center mb-1.5">
+            <span className="text-[9px] text-emerald-500/70 block uppercase tracking-wider font-semibold">INTEGRATION HEALTH STATUS</span>
             {healthLoading ? (
               <Loader2 className="h-3 w-3 animate-spin text-emerald-500" />
             ) : (
-              <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400">All Systems Normal</Badge>
+              <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400 font-mono">Normal</Badge>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-2 text-[10px]">
-            <div className="p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex flex-col gap-0.5">
-              <span className="text-zinc-500 uppercase font-semibold">Yahoo Finance</span>
-              <div className="flex justify-between items-center">
-                <span className={healthData.yahooFinance.status === 'UP' ? 'text-green-400' : 'text-red-400'}>
-                  ● {healthData.yahooFinance.status === 'UP' ? 'ONLINE' : 'OFFLINE'}
-                </span>
-                <span className="text-zinc-400 font-mono">{healthData.yahooFinance.latencyMs}ms</span>
-              </div>
+          <div className="flex flex-wrap gap-1 text-[9px] font-mono justify-between">
+            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Yahoo Finance">
+              <span className={healthData.yahooFinance.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+              <span className="text-zinc-500 font-bold">YF</span>
+              <span className="text-zinc-300">{healthData.yahooFinance.latencyMs}ms</span>
             </div>
-            <div className="p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex flex-col gap-0.5">
-              <span className="text-zinc-500 uppercase font-semibold">GEX Portal API</span>
-              <div className="flex justify-between items-center">
-                <span className={healthData.sscgexPortal.status === 'UP' ? 'text-green-400' : 'text-red-400'}>
-                  ● {healthData.sscgexPortal.status === 'UP' ? 'ONLINE' : 'OFFLINE'}
-                </span>
-                <span className="text-zinc-400 font-mono">{healthData.sscgexPortal.latencyMs}ms</span>
-              </div>
+            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="GEX Portal API">
+              <span className={healthData.sscgexPortal.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+              <span className="text-zinc-500 font-bold">GEX</span>
+              <span className="text-zinc-300">{healthData.sscgexPortal.latencyMs}ms</span>
             </div>
-            <div className="p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex flex-col gap-0.5">
-              <span className="text-zinc-500 uppercase font-semibold">Polygon API</span>
-              <div className="flex justify-between items-center">
-                <span className={healthData.polygon.status === 'UP' ? 'text-green-400' : 'text-red-400'}>
-                  ● {healthData.polygon.status === 'UP' ? 'ONLINE' : 'OFFLINE'}
-                </span>
-                <span className="text-zinc-400 font-mono">{healthData.polygon.latencyMs}ms</span>
-              </div>
+            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Polygon API">
+              <span className={healthData.polygon.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+              <span className="text-zinc-500 font-bold">POLY</span>
+              <span className="text-zinc-300">{healthData.polygon.latencyMs}ms</span>
             </div>
-            <div className="p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex flex-col gap-0.5">
-              <span className="text-zinc-500 uppercase font-semibold">OpenRouter AI</span>
-              <div className="flex justify-between items-center">
-                <span className={healthData.openRouter.status === 'UP' ? 'text-green-400' : 'text-red-400'}>
-                  ● {healthData.openRouter.status === 'UP' ? 'ONLINE' : 'OFFLINE'}
-                </span>
-                <span className="text-zinc-400 font-mono">{healthData.openRouter.latencyMs}ms</span>
-              </div>
+            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="OpenRouter AI">
+              <span className={healthData.openRouter.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+              <span className="text-zinc-500 font-bold">AI</span>
+              <span className="text-zinc-300">{healthData.openRouter.latencyMs}ms</span>
             </div>
-            <div className="p-1.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex flex-col gap-0.5 col-span-2">
-              <span className="text-zinc-500 uppercase font-semibold">Discord Webhook API</span>
-              <div className="flex justify-between items-center">
-                <span className={healthData.discord?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>
-                  ● {healthData.discord?.status === 'UP' ? 'ONLINE' : 'OFFLINE'}
-                </span>
-                <span className="text-zinc-400 font-mono">{healthData.discord?.latencyMs ?? 0}ms</span>
-              </div>
+            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Discord Webhook API">
+              <span className={healthData.discord?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+              <span className="text-zinc-500 font-bold">DISC</span>
+              <span className="text-zinc-300">{healthData.discord?.latencyMs ?? 0}ms</span>
             </div>
           </div>
         </div>
@@ -332,75 +313,77 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* Row 2: Separated Prominent LATEST setup notification */}
-      <div className="border border-emerald-500/30 rounded-lg bg-zinc-900/20 shadow-[0_0_20px_rgba(16,185,129,0.02)] overflow-hidden">
-        <div className="bg-emerald-950/30 border-b border-emerald-500/20 p-3.5 flex justify-between items-center">
+      <div className={`border rounded-lg bg-zinc-900/20 shadow-[0_0_20px_rgba(16,185,129,0.02)] overflow-hidden transition-all duration-300 ${
+        latestActionableSignal ? 'border-emerald-500/45 shadow-[0_0_15px_rgba(16,185,129,0.08)]' : 'border-emerald-500/20'
+      }`}>
+        <div className="bg-emerald-950/20 border-b border-emerald-500/15 p-2.5 px-3 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-4.5 w-4.5 text-emerald-400 animate-bounce" />
-            <h3 className="text-sm font-extrabold tracking-widest text-emerald-300 uppercase">
+            <Sparkles className={`h-4 w-4 text-emerald-400 ${latestActionableSignal ? 'animate-bounce' : ''}`} />
+            <h3 className="text-xs font-extrabold tracking-widest text-emerald-300 uppercase">
               LATEST ACTIONABLE SETUP ALERT
             </h3>
           </div>
           {!isDayTradingEnabled ? (
-            <Badge variant="outline" className="bg-zinc-900 text-zinc-400 border-zinc-700">
+            <Badge variant="outline" className="bg-zinc-900 text-zinc-400 border-zinc-700 text-[8px] px-1.5 py-0.5">
               OFFLINE
             </Badge>
           ) : latestActionableSignal ? (
-            <Badge variant="outline" className="animate-pulse bg-emerald-950 text-emerald-300 border-emerald-500/40">
+            <Badge variant="outline" className="animate-pulse bg-emerald-950 text-emerald-300 border-emerald-500/40 text-[8px] px-1.5 py-0.5 font-bold">
               🚨 SIGNAL ACTIVE
             </Badge>
           ) : (
-            <span className="text-[10px] text-emerald-500/40">No active signals found</span>
+            <span className="text-[9px] text-emerald-500/40 uppercase font-bold">No active signals</span>
           )}
         </div>
         
-        <div className="p-4">
+        <div className="p-3">
           {!isDayTradingEnabled ? (
-            <div className="py-8 flex flex-col items-center justify-center text-center text-zinc-500 text-xs">
-              <ShieldAlert className="h-10 w-10 text-amber-500/80 mb-2 animate-pulse" />
+            <div className="py-6 flex flex-col items-center justify-center text-center text-zinc-500 text-xs">
+              <ShieldAlert className="h-8 w-8 text-amber-500/80 mb-2 animate-pulse" />
               <span className="font-bold text-zinc-300 uppercase">Day Trading Scanner is Inactive</span>
               <span className="text-[10px] text-zinc-500 mt-1 max-w-md">
                 The options scanning engine is currently disabled for this user. You can enable it in the Settings Dialog under the "Day Trading" tab to trigger background scanner runs.
               </span>
             </div>
           ) : !latestActionableSignal ? (
-            <div className="py-6 flex flex-col items-center justify-center text-center text-emerald-500/40 text-xs">
-              <AlertCircle className="h-10 w-10 opacity-30 mb-2" />
+            <div className="py-5 flex flex-col items-center justify-center text-center text-emerald-500/40 text-xs">
+              <AlertCircle className="h-8 w-8 opacity-30 mb-2" />
               <span>No trade setups generated within the current trading session.</span>
               <span className="text-[10px] text-zinc-500 mt-1">Waiting for next 5-minute background scanning block...</span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 text-xs">
-              <div className="lg:col-span-2 space-y-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className={`px-2.5 py-1 rounded text-sm font-extrabold uppercase ${
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-xs">
+              <div className="lg:col-span-2 space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`px-2 py-0.5 rounded text-[11px] font-extrabold uppercase ${
                     latestActionableSignal.signal_type === 'CALL' ? 'bg-green-950 text-green-300 border border-green-500/30' : 'bg-red-950 text-red-300 border border-red-500/30'
                   }`}>
                     {latestActionableSignal.signal_type} SIGNAL
                   </span>
-                  <span className="text-sm font-bold text-emerald-200">
+                  <span className="text-xs font-bold text-emerald-200">
                     {latestActionableSignal.symbol} ${latestActionableSignal.current_price.toFixed(2)}
                   </span>
-                  <span className="text-[10px] text-emerald-400/70 ml-auto bg-zinc-950/60 p-1 border border-emerald-500/5 rounded">
+                  <span className="text-[9px] text-emerald-400/70 ml-auto bg-zinc-950/60 p-1 border border-emerald-500/5 rounded">
                     Score: {latestActionableSignal.confidence_score}% ({latestActionableSignal.setup_grade || 'B'})
                   </span>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4 border-t border-emerald-500/15 pt-3 text-center">
-                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2.5 rounded">
-                    <span className="text-[10px] text-emerald-500/60 block">ENTRY TRIGGER</span>
-                    <span className="text-sm font-bold font-mono text-emerald-200">
+                <div className="grid grid-cols-3 gap-3 border-t border-emerald-500/10 pt-2.5 text-center">
+                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2 rounded">
+                    <span className="text-[9px] text-emerald-500/60 block uppercase font-semibold">ENTRY TRIGGER</span>
+                    <span className="text-xs font-bold font-mono text-emerald-200">
                       &gt;${latestActionableSignal.entry_trigger?.toFixed(2)}
                     </span>
                   </div>
-                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2.5 rounded">
-                    <span className="text-[10px] text-emerald-500/60 block">STOP LOSS</span>
-                    <span className="text-sm font-bold font-mono text-red-400">
+                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2 rounded">
+                    <span className="text-[9px] text-emerald-500/60 block uppercase font-semibold">STOP LOSS</span>
+                    <span className="text-xs font-bold font-mono text-red-400">
                       ${latestActionableSignal.stop_loss?.toFixed(2)}
                     </span>
                   </div>
-                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2.5 rounded">
-                    <span className="text-[10px] text-emerald-500/60 block">TARGET LEVEL</span>
-                    <span className="text-sm font-bold font-mono text-green-400">
+                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2 rounded">
+                    <span className="text-[9px] text-emerald-500/60 block uppercase font-semibold">TARGET LEVEL</span>
+                    <span className="text-xs font-bold font-mono text-green-400">
                       ${latestActionableSignal.target_price?.toFixed(2)}
                     </span>
                   </div>
@@ -408,26 +391,26 @@ export default function DayTradingTerminal() {
 
                 {/* Option premium suggestion */}
                 {latestActionableSignal.gex && (
-                  <div className="bg-zinc-950/60 border border-emerald-500/10 p-3 rounded font-mono text-[11px] text-sky-400">
+                  <div className="bg-zinc-950/60 border border-emerald-500/10 p-2 rounded font-mono text-[10px] text-sky-400">
                     💡 Suggested 0DTE Options Plan: Buy Premium Mark at ~${latestActionableSignal.indicators?.vwap ? (Number(latestActionableSignal.indicators.vwap) * 0.003).toFixed(2) : '1.50'} | Stop loss premium at -20% | Sell profit target at +40%
                   </div>
                 )}
               </div>
 
               {/* Coach Thesis */}
-              <div className="p-4 rounded border border-emerald-500/15 bg-zinc-950/30 flex flex-col justify-between gap-3">
+              <div className="p-3 rounded border border-emerald-500/10 bg-zinc-950/30 flex flex-col justify-between gap-2.5">
                 <div>
-                  <span className="text-[10px] text-emerald-500/60 block uppercase font-bold flex items-center gap-1 mb-1">
-                    <Zap className="h-3.5 w-3.5 text-amber-400 animate-pulse" /> AI_OPTIONS_COACH_THESIS
+                  <span className="text-[9px] text-emerald-500/60 block uppercase font-bold flex items-center gap-1 mb-1">
+                    <Zap className="h-3 w-3 text-amber-400 animate-pulse" /> AI_OPTIONS_COACH_THESIS
                   </span>
-                  <p className="leading-relaxed text-zinc-300 italic text-[11px]">
+                  <p className="leading-relaxed text-zinc-300 italic text-[10px]">
                     "BUY QQQ CALL options matching the index breakout above VWAP. Mega-caps (AAPL/NVDA) are flashing net bullish inflows, and dealer walls indicate minor gamma gravity until resistance at $485. Hold stop at underlying support $481.20."
                   </p>
                 </div>
-                <div className="flex justify-end gap-2 border-t border-emerald-500/10 pt-3">
+                <div className="flex justify-end gap-2 border-t border-emerald-500/10 pt-2">
                   <Button
                     size="sm"
-                    className="h-7 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-xs"
+                    className="h-6 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-[10px]"
                     onClick={() => handleQuickStatus(latestActionableSignal.id, 'EXECUTED')}
                   >
                     Execute Trade
@@ -435,7 +418,7 @@ export default function DayTradingTerminal() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-7 text-red-400 hover:text-red-300 hover:bg-red-950/25"
+                    className="h-6 text-red-400 hover:text-red-300 hover:bg-red-950/25 text-[10px]"
                     onClick={() => handleQuickStatus(latestActionableSignal.id, 'CANCELLED')}
                   >
                     Dismiss
@@ -448,25 +431,35 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* TradingView Chart Embed - Horizontal Full Width */}
-      <div className="border border-emerald-500/20 rounded bg-zinc-900/30 overflow-hidden flex flex-col h-[500px]">
-        <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
+      <div className="border border-emerald-500/20 rounded bg-zinc-900/30 overflow-hidden flex flex-col">
+        <div className="p-2.5 px-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
           <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5 font-mono">
             <Activity className="h-4 w-4 text-emerald-400 animate-pulse" />
             LIVE {selectedSymbol} OPTIONS-INTEGRATED CHART (5M EMA9/EMA21/VWAP)
           </span>
-          <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400 font-semibold font-mono">
-            Real-Time Feed
-          </Badge>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowChart(!showChart)}
+              className="text-[9px] font-bold border border-emerald-500/35 text-emerald-400 hover:bg-emerald-950/20 px-2 py-0.5 rounded bg-zinc-950/40 transition-colors uppercase font-mono"
+            >
+              {showChart ? '[ COLLAPSE CHART ]' : '[ EXPAND CHART ]'}
+            </button>
+            <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400 font-semibold font-mono">
+              Real-Time Feed
+            </Badge>
+          </div>
         </div>
-        <div className="flex-1 w-full h-full bg-zinc-950">
-          <iframe
-            title="TradingView Real-Time Chart"
-            src={`https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=${selectedSymbol === 'QQQ' ? 'NASDAQ:QQQ' : 'AMEX:SPY'}&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%22STD%3BEMA%22%2C%22STD%3BVWAP%22%5D&theme=dark&style=1&timezone=America%2FNew_York`}
-            width="100%"
-            height="100%"
-            style={{ border: 'none' }}
-          />
-        </div>
+        {showChart && (
+          <div className="w-full h-[380px] bg-zinc-950 animate-in fade-in slide-in-from-top-1 duration-200">
+            <iframe
+              title="TradingView Real-Time Chart"
+              src={`https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=${selectedSymbol === 'QQQ' ? 'NASDAQ:QQQ' : 'AMEX:SPY'}&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%22STD%3BEMA%22%2C%22STD%3BVWAP%22%5D&theme=dark&style=1&timezone=America%2FNew_York`}
+              width="100%"
+              height="100%"
+              style={{ border: 'none' }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Row 3: Signals Process Table + Detailed Inspector */}
@@ -529,31 +522,31 @@ export default function DayTradingTerminal() {
             <table className="w-full text-xs text-left border-collapse">
               <thead>
                 <tr className="bg-zinc-900/80 border-b border-emerald-500/10 text-emerald-500/80 font-bold">
-                  <th className="p-3">ID</th>
-                  <th className="p-3">SYMBOL</th>
-                  <th className="p-3">TYPE</th>
-                  <th className="p-3">BIAS</th>
-                  <th className="p-3">PRICE</th>
-                  <th className="p-3">TRIGGER</th>
-                  <th className="p-3">SL</th>
-                  <th className="p-3">TP</th>
-                  <th className="p-3">CONF</th>
-                  <th className="p-3 text-center">GRADE</th>
-                  <th className="p-3">STATUS</th>
-                  <th className="p-3 text-right">CONTROLS</th>
+                  <th className="px-2 py-1.5 text-[10px]">ID</th>
+                  <th className="px-2 py-1.5 text-[10px]">SYMBOL</th>
+                  <th className="px-2 py-1.5 text-[10px]">TYPE</th>
+                  <th className="px-2 py-1.5 text-[10px]">BIAS</th>
+                  <th className="px-2 py-1.5 text-[10px]">PRICE</th>
+                  <th className="px-2 py-1.5 text-[10px]">TRIGGER</th>
+                  <th className="px-2 py-1.5 text-[10px]">SL</th>
+                  <th className="px-2 py-1.5 text-[10px]">TP</th>
+                  <th className="px-2 py-1.5 text-[10px]">CONF</th>
+                  <th className="px-2 py-1.5 text-[10px] text-center">GRADE</th>
+                  <th className="px-2 py-1.5 text-[10px]">STATUS</th>
+                  <th className="px-2 py-1.5 text-[10px] text-right">CONTROLS</th>
                 </tr>
               </thead>
               <tbody>
                 {isLoading && signals.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="p-12 text-center text-emerald-500/60">
-                      <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-emerald-400" />
+                    <td colSpan={12} className="px-2 py-8 text-center text-emerald-500/60">
+                      <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-emerald-400" />
                       RETRIEVING FROM POSTGRES...
                     </td>
                   </tr>
                 ) : filteredSignals.length === 0 ? (
                   <tr>
-                    <td colSpan={12} className="p-12 text-center text-red-500/80">
+                    <td colSpan={12} className="px-2 py-8 text-center text-red-500/80">
                       [NO SIGNALS FOUND IN DATABASE FOR {selectedSymbol}]
                       <div className="text-[10px] text-emerald-600 mt-2">
                         Click 'SEED DATA' above to insert sample data.
@@ -585,49 +578,49 @@ export default function DayTradingTerminal() {
                            isSelected ? 'bg-emerald-950/25 border-l-2 border-l-emerald-400' : ''
                          }`}
                        >
-                         <td className="p-3 font-semibold text-emerald-500">#{sig.id}</td>
-                         <td className="p-3 font-bold text-emerald-200 underline decoration-dotted">{sig.symbol}</td>
-                         <td className={`p-3 font-bold ${biasColor}`}>{sig.signal_type}</td>
-                         <td className="p-3 text-[10px] tracking-tighter text-emerald-400/80">
+                         <td className="px-2 py-1.5 font-semibold text-emerald-500">#{sig.id}</td>
+                         <td className="px-2 py-1.5 font-bold text-emerald-200 underline decoration-dotted">{sig.symbol}</td>
+                         <td className={`px-2 py-1.5 font-bold ${biasColor}`}>{sig.signal_type}</td>
+                         <td className="px-2 py-1.5 text-[10px] tracking-tighter text-emerald-400/80">
                            {sig.trade_bias}
                          </td>
-                         <td className="p-3 text-emerald-300 font-mono">${Number(sig.current_price).toFixed(2)}</td>
-                         <td className="p-3 font-mono">
+                         <td className="px-2 py-1.5 text-emerald-300 font-mono">${Number(sig.current_price).toFixed(2)}</td>
+                         <td className="px-2 py-1.5 font-mono">
                            {sig.entry_trigger ? `$${Number(sig.entry_trigger).toFixed(2)}` : '-'}
                          </td>
-                         <td className="p-3 font-mono text-red-400/95">
+                         <td className="px-2 py-1.5 font-mono text-red-400/95">
                            {sig.stop_loss ? `$${Number(sig.stop_loss).toFixed(2)}` : '-'}
                          </td>
-                         <td className="p-3 font-mono text-green-400/95">
+                         <td className="px-2 py-1.5 font-mono text-green-400/95">
                            {sig.target_price ? `$${Number(sig.target_price).toFixed(2)}` : '-'}
                          </td>
-                         <td className="p-3 font-mono font-bold text-sky-400">{sig.confidence_score}%</td>
-                         <td className="p-3 text-center">
+                         <td className="px-2 py-1.5 font-mono font-bold text-sky-400">{sig.confidence_score}%</td>
+                         <td className="px-2 py-1.5 text-center">
                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-300 font-semibold">
                              {sig.setup_grade || 'B'}
                            </span>
                          </td>
-                         <td className="p-3">
+                         <td className="px-2 py-1.5">
                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${statusBadgeClass}`}>
                              {sig.status}
                            </span>
                          </td>
-                         <td className="p-3 text-right" onClick={e => e.stopPropagation()}>
+                         <td className="px-2 py-1.5 text-right" onClick={e => e.stopPropagation()}>
                            {sig.status === 'PENDING' ? (
                              <div className="flex justify-end gap-1">
                                <button
                                  onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
-                                 className="h-6 w-6 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors"
+                                 className="h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors"
                                  title="Execute Setup"
-                               >
-                                 <Play className="h-3 w-3" />
+                                >
+                                 <Play className="h-2.5 w-2.5" />
                                </button>
                                <button
                                  onClick={() => handleQuickStatus(sig.id, 'CANCELLED')}
-                                 className="h-6 w-6 flex items-center justify-center rounded bg-red-950/80 hover:bg-red-900/80 border border-red-500/30 text-red-400 transition-colors"
+                                 className="h-5 w-5 flex items-center justify-center rounded bg-red-950/80 hover:bg-red-900/80 border border-red-500/30 text-red-400 transition-colors"
                                  title="Cancel Setup"
                                >
-                                 <X className="h-3 w-3" />
+                                 <X className="h-2.5 w-2.5" />
                                </button>
                              </div>
                            ) : (

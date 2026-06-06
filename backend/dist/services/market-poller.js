@@ -454,8 +454,16 @@ class MarketPoller {
         }
         const symbols = [...new Set(activePositions.map((p) => p.symbol))];
         const isMarketOpen = this.isMarketOpen();
+        const etWeekday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date());
+        const isWeekend = etWeekday === 'Sat' || etWeekday === 'Sun';
+        const allowSync = isMarketOpen || isWeekend;
         if (!force && !isMarketOpen) {
-            this.fastify.log.info('[MarketPoller] Market is closed. Will only perform housekeeping (auto-expiry).');
+            if (isWeekend) {
+                this.fastify.log.info('[MarketPoller] Market is closed (Weekend), but weekend testing bypass is active. Price syncing allowed.');
+            }
+            else {
+                this.fastify.log.info('[MarketPoller] Market is closed. Will only perform housekeeping (auto-expiry).');
+            }
         }
         for (const symbol of symbols) {
             // 1. Auto-Close Expired Logic
@@ -484,7 +492,7 @@ class MarketPoller {
             // 2. Price Sync (Only if Market Open or Forced)
             // Filter out positions we just closed
             const activePositions = symbolPositions.filter((p) => p.status !== 'CLOSED');
-            if ((force || isMarketOpen) && activePositions.length > 0) {
+            if ((force || allowSync) && activePositions.length > 0) {
                 await this.syncPrice(symbol, force);
                 // Stay within limits, sequential delay
                 await new Promise(resolve => setTimeout(() => resolve(), 5000));

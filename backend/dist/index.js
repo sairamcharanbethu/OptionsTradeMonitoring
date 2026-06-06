@@ -334,6 +334,9 @@ const start = async () => {
         const { MarketPoller } = await Promise.resolve().then(() => __importStar(require('./services/market-poller')));
         const poller = new MarketPoller(fastify);
         fastify.decorate('poller', poller);
+        const { SignalScannerService } = await Promise.resolve().then(() => __importStar(require('./services/signal-scanner-service')));
+        const scanner = new SignalScannerService(fastify);
+        fastify.decorate('scanner', scanner);
         // --- WebSocket & Streaming Setup ---
         await fastify.register(Promise.resolve().then(() => __importStar(require('@fastify/websocket'))));
         const { redis } = await Promise.resolve().then(() => __importStar(require('./lib/redis')));
@@ -388,6 +391,7 @@ const start = async () => {
         await fastify.listen({ port, host: '0.0.0.0' });
         // Start background services
         poller.start();
+        scanner.start();
         // streamer.start(); // Disabled: Subscriptions are on-demand via position sync
         fastify.log.info(`Server listening on http://localhost:${port}`);
     }
