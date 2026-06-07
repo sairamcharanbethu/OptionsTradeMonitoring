@@ -73,7 +73,7 @@ export default function DayTradingTerminal() {
   const isDayTradingEnabled = settings.day_trading_enabled !== 'false';
 
   // Live real-time WebSocket signals updates integration
-  const { lastMessage } = useWebSocket();
+  const { isConnected, lastMessage } = useWebSocket();
   useEffect(() => {
     if (lastMessage && (lastMessage.type === 'NEW_SIGNAL' || lastMessage.type === 'SIGNAL_UPDATED')) {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
@@ -390,6 +390,11 @@ export default function DayTradingTerminal() {
               <span className={healthData.discord?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
               <span className="text-zinc-500 font-bold">DISC</span>
               <span className="text-zinc-300">{healthData.discord?.latencyMs ?? 0}ms</span>
+            </div>
+            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Real-Time Streaming WebSocket">
+              <span className={isConnected ? 'text-green-400' : 'text-red-400 animate-pulse'}>●</span>
+              <span className="text-zinc-500 font-bold">STREAM</span>
+              <span className="text-zinc-300">{isConnected ? 'LIVE' : 'CONN...'}</span>
             </div>
           </div>
         </div>
