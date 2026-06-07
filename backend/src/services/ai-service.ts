@@ -98,8 +98,12 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         let insightsText = "";
         try {
             const promises = topPositions.map(async (p) => {
-                // Only lookup equities/ETFs, skip pure crypto if Yahoo doesn't support the exact ticker easily
-                const ticker = p.symbol;
+                let ticker = p.symbol.trim().toUpperCase();
+                const isCrypto = p.asset_type?.toLowerCase() === 'crypto' || ['XRP', 'BTC', 'ETH', 'LTC', 'SOL', 'ADA', 'DOGE', 'DOT'].includes(ticker);
+                if (isCrypto && !ticker.endsWith('-USD')) {
+                    ticker = `${ticker}-USD`;
+                }
+
                 try {
                     const quote = await yahooFinance.quoteSummary(ticker, { modules: ['summaryDetail', 'price'] });
                     const news = await yahooFinance.search(ticker, { newsCount: 5 });
@@ -109,7 +113,7 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
                     const fiftyTwoHigh = quote.summaryDetail?.fiftyTwoWeekHigh?.toFixed(2) || 'N/A';
                     
                     // Filter news relevant to this specific ticker
-                    const baseSymbol = ticker.split('.')[0];
+                    const baseSymbol = ticker.split('.')[0].split('-')[0];
                     const uppercaseTicker = ticker.toUpperCase();
                     const uppercaseBase = baseSymbol.toUpperCase();
 

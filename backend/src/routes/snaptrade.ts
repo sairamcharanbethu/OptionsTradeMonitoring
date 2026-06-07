@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { SnaptradeService } from '../services/snaptrade-service';
 import { AIService } from '../services/ai-service';
+import { redis } from '../lib/redis';
 
 export async function snaptradeRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
@@ -54,17 +55,41 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
       tags: ['SnapTrade'],
       summary: 'Get Wealthsimple AI Briefing',
       description: 'Generates an AI briefing for the Wealthsimple portfolio.',
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }],
+      querystring: {
+        type: 'object',
+        properties: {
+          refresh: { type: 'string' }
+        }
+      }
     }
   }, async (request, reply) => {
     const { id: userId } = (request as any).user;
+    const forceRefresh = (request.query as any)?.refresh === 'true';
+    const cacheKey = `WEALTHSIMPLE_BRIEFING:${userId}`;
+
     try {
+      if (!forceRefresh) {
+        const cachedBriefing = await redis.get(cacheKey);
+        if (cachedBriefing) {
+          try {
+            return JSON.parse(cachedBriefing);
+          } catch (e) {
+            // Ignore parse error and rebuild cache
+          }
+        }
+      }
+
       const portfolio = await snaptradeService.getPortfolio(userId);
       
       // We need the AIService to generate the briefing
       const aiService = new AIService(fastify);
       
       const briefing = await aiService.generateWealthsimpleBriefing(portfolio.positions);
+      
+      // Cache the briefing for 15 minutes (900 seconds)
+      await redis.set(cacheKey, JSON.stringify(briefing), 900);
+      
       return briefing;
     } catch (err: any) {
       fastify.log.error(`[SnapTradeBriefing] Failed to generate briefing: ${err.message}`);
