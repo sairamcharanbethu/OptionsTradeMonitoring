@@ -242,14 +242,16 @@ Rules:
 
     try {
       const res = await this.callModelDirect(classifierModel, apiKey, classifierPrompt, 80);
-      if (res.verdict && ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(res.verdict)) {
         await redis.set(
           `NEWS_VERDICT:${symbol}:${nyDateStr}`,
-          JSON.stringify({ verdict: res.verdict, rationale: res.rationale || res.analysis || '' }),
+          JSON.stringify({
+            verdict: res.verdict,
+            rationale: res.rationale || res.analysis || '',
+            usage: res.usage || null
+          }),
           1800
         );
-        this.fastify.log.info(`[NewsPreWarm] ${symbol} pre-warmed: ${res.verdict} — ${res.rationale || ''}`);
-      }
+        this.fastify.log.info(`[NewsPreWarm] ${symbol} pre-warmed: ${res.verdict} — ${res.rationale || ''} | Tokens: ${res.usage?.total_tokens || 0}`);
     } catch (e: any) {
       this.fastify.log.warn(`[NewsPreWarm] Llama failed for ${symbol}: ${e.message}`);
     }
@@ -1136,6 +1138,8 @@ Rules:
     let macroVerdict = 'NEUTRAL';
     let macroRationale = 'No conflicting macro news detected.';
     let newFingerprint = '';
+    let llamaUsage: any = null;
+    let claudeUsage: any = null;
 
     if (preWarmVerdict && preWarmFp) {
       // ✅ Cache hit: pre-warm loop already did the work
@@ -1143,6 +1147,7 @@ Rules:
         const parsed = JSON.parse(preWarmVerdict);
         macroVerdict = parsed.verdict || 'NEUTRAL';
         macroRationale = parsed.rationale || macroRationale;
+        llamaUsage = parsed.usage || null;
         newFingerprint = preWarmFp;
         this.fastify.log.info(`[SignalScannerService] Using pre-warmed cache for ${symbol}: ${macroVerdict} — skipping fetch+Llama.`);
       } catch { /* use defaults */ }
@@ -1188,8 +1193,9 @@ Rules:
           if (llamaRes.verdict && ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(llamaRes.verdict)) {
             macroVerdict = llamaRes.verdict;
             macroRationale = llamaRes.rationale || llamaRes.analysis || macroRationale;
+            llamaUsage = llamaRes.usage || null;
           }
-          this.fastify.log.info(`[SignalScannerService] Llama macro verdict for ${symbol}: ${macroVerdict} — ${macroRationale}`);
+          this.fastify.log.info(`[SignalScannerService] Llama macro verdict for ${symbol}: ${macroVerdict} — ${macroRationale} | Tokens: ${llamaRes.usage?.total_tokens || 0}`);
         } catch (llamaErr: any) {
           this.fastify.log.warn(`[SignalScannerService] Llama classifier failed: ${llamaErr.message}`);
         }
@@ -1201,6 +1207,7 @@ Rules:
             const parsed = JSON.parse(cachedVerdict);
             macroVerdict = parsed.verdict || 'NEUTRAL';
             macroRationale = parsed.rationale || macroRationale;
+            llamaUsage = parsed.usage || null;
           } catch { /* use defaults */ }
         }
       }
@@ -1258,10 +1265,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
       try {
         const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 220);
         finalCommentary = sonnetRes.analysis || sonnetRes.verdict || '';
+        claudeUsage = sonnetRes.usage || null;
         if (finalCommentary) {
           await redis.set(commentaryCacheKey, finalCommentary, 1800);
         }
-        this.fastify.log.info(`[SignalScannerService] Sonnet coaching ready for signal #${signalId}: ${sonnetRes.verdict || 'OK'}`);
+        this.fastify.log.info(`[SignalScannerService] Sonnet coaching ready for signal #${signalId}: ${sonnetRes.verdict || 'OK'} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
       } catch (sonnetErr: any) {
         this.fastify.log.error(`[SignalScannerService] Sonnet coach failed for #${signalId}: ${sonnetErr.message}`);
       }
@@ -1271,11 +1279,15 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
 
     // ── Write back to DB ──────────────────────────────────────────────────────
     try {
+      const tokenUsage = {
+        llama: llamaUsage,
+        claude: claudeUsage
+      };
       await this.fastify.pg.query(
-        `UPDATE signals SET news_context = $1, ai_coach_commentary = $2 WHERE id = $3`,
-        [newsContextText || null, finalCommentary || null, signalId]
+        `UPDATE signals SET news_context = $1, ai_coach_commentary = $2, token_usage = $3 WHERE id = $4`,
+        [newsContextText || null, finalCommentary || null, JSON.stringify(tokenUsage), signalId]
       );
-      this.fastify.log.info(`[SignalScannerService] Signal #${signalId} enriched with AI commentary.`);
+      this.fastify.log.info(`[SignalScannerService] Signal #${signalId} enriched with AI commentary. Token usage tracked.`);
     } catch (dbErr: any) {
       this.fastify.log.error(`[SignalScannerService] DB update failed for signal #${signalId}: ${dbErr.message}`);
     }
@@ -1336,10 +1348,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
       return {
         verdict: parsed.verdict || 'UNKNOWN',
         analysis: parsed.analysis || parsed.rationale || parsed.summary || text,
+        usage: data.usage || null,
         ...parsed
       };
     } catch {
-      return { verdict: 'Review', analysis: text };
+      return { verdict: 'Review', analysis: text, usage: data.usage || null };
     }
   }
 

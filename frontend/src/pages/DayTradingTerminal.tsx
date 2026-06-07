@@ -36,6 +36,59 @@ interface ApiHealthState {
   discord: { status: string; latencyMs: number };
 }
 
+// AI Token Cost Estimator
+const getEstimatedCost = (usage: any) => {
+  if (!usage) return null;
+  let cost = 0;
+  
+  // Llama usage
+  if (usage.llama) {
+    const prompt = usage.llama.prompt_tokens || 0;
+    const completion = usage.llama.completion_tokens || 0;
+    // Llama 3.1 70B: $0.60 per M tokens
+    cost += (prompt + completion) * 0.0000006;
+  }
+  
+  // Claude usage
+  if (usage.claude) {
+    const prompt = usage.claude.prompt_tokens || 0;
+    const completion = usage.claude.completion_tokens || 0;
+    // Claude 3.5 Sonnet: $3.00/M input, $15.00/M output
+    cost += (prompt * 0.000003) + (completion * 0.000015);
+  }
+  
+  return cost;
+};
+
+const renderTokenUsageBadge = (usage: any) => {
+  if (!usage || (!usage.llama && !usage.claude)) return null;
+  const cost = getEstimatedCost(usage);
+  const totalTokens = (usage.llama?.total_tokens || 0) + (usage.claude?.total_tokens || 0);
+  
+  return (
+    <div className="flex flex-wrap gap-2.5 mt-2 items-center text-[9px] text-zinc-400 font-mono bg-zinc-950/60 p-2 px-2.5 rounded border border-emerald-500/10 w-full animate-in fade-in duration-300">
+      <div className="flex items-center gap-1">
+        <Sparkles className="h-3 w-3 text-emerald-400 animate-pulse" />
+        <span>COST: <strong className="text-emerald-400 font-extrabold">${cost ? cost.toFixed(4) : '0.0000'}</strong></span>
+      </div>
+      <span className="text-zinc-700">|</span>
+      <span>TOKENS: <strong className="text-zinc-200">{totalTokens}</strong></span>
+      {usage.llama && (
+        <>
+          <span className="text-zinc-700">|</span>
+          <span>LLAMA: <strong className="text-purple-400 font-bold">{usage.llama.total_tokens}</strong> ({usage.llama.prompt_tokens} in/{usage.llama.completion_tokens} out)</span>
+        </>
+      )}
+      {usage.claude && (
+        <>
+          <span className="text-zinc-700">|</span>
+          <span>CLAUDE: <strong className="text-amber-400 font-bold">{usage.claude.total_tokens}</strong> ({usage.claude.prompt_tokens} in/{usage.claude.completion_tokens} out)</span>
+        </>
+      )}
+    </div>
+  );
+};
+
 export default function DayTradingTerminal() {
   const queryClient = useQueryClient();
   // Smart poll: 3s for 3 mins after a signal with no AI commentary; otherwise 10s
@@ -497,6 +550,8 @@ export default function DayTradingTerminal() {
                   {latestActionableSignal.news_context === 'No material news in the last 6 hours.' && (
                     <div className="mt-1.5 text-[8px] text-zinc-600 italic">📰 No material news in last 6h — technical-only analysis.</div>
                   )}
+
+                  {renderTokenUsageBadge(latestActionableSignal.token_usage)}
                 </div>
                 <div className="flex justify-end gap-2 border-t border-emerald-500/10 pt-2">
                   <Button
@@ -776,6 +831,7 @@ export default function DayTradingTerminal() {
                                       </div>
                                     </details>
                                   )}
+                                  {renderTokenUsageBadge(sig.token_usage)}
                                 </div>
                               ) : (
                                 <span className="text-[10px] text-zinc-600 italic">No AI commentary for this signal (NO_TRADE or AI disabled).</span>
@@ -977,6 +1033,8 @@ export default function DayTradingTerminal() {
                      </div>
                    </div>
                  )}
+
+                 {renderTokenUsageBadge(selectedSignal.token_usage)}
                </div>
              )}
            </div>

@@ -632,6 +632,10 @@ export interface Signal {
   created_at: string;
   news_context?: string | null;
   ai_coach_commentary?: string | null;
+  token_usage?: {
+    llama?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; model?: string } | null;
+    claude?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; model?: string } | null;
+  } | null;
 }
 
 export interface Goal {

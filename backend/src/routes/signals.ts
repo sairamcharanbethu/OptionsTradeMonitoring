@@ -38,6 +38,9 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
               no_trade_reasons: { type: 'array', items: { type: 'string' }, nullable: true },
               option_expiration_date: { type: 'string', format: 'date', nullable: true },
               market_date: { type: 'string', nullable: true },
+              news_context: { type: 'string', nullable: true },
+              ai_coach_commentary: { type: 'string', nullable: true },
+              token_usage: { type: 'object', nullable: true, additionalProperties: true },
               created_at: { type: 'string', format: 'date-time' }
             }
           }
@@ -65,6 +68,9 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           no_trade_reasons, 
           option_expiration_date, 
           market_date, 
+          news_context,
+          ai_coach_commentary,
+          token_usage,
           created_at 
         FROM signals 
         ORDER BY created_at DESC 
