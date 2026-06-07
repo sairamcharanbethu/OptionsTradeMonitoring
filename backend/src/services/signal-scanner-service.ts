@@ -5,6 +5,8 @@ import YahooFinance from 'yahoo-finance2';
 import { AIService } from './ai-service';
 import { redis } from '../lib/redis';
 import crypto from 'crypto';
+import { execFile } from 'child_process';
+import path from 'path';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
@@ -113,10 +115,79 @@ export class SignalScannerService {
     this.aiService = new AIService(fastify);
   }
 
+  private runLocalMLPredictor(features: {
+    signal_score: number;
+    vix_price: number;
+    rsi5: number;
+    rsi14: number;
+    vwap_dist_pct: number;
+    flow_direction: number;
+    trend_aligned: number;
+    internals_aligned: number;
+    signal_type: string;
+  }): Promise<number | null> {
+    return new Promise((resolve) => {
+      const scriptPath = path.join(__dirname, '..', 'scripts', 'predict.py');
+      const featuresJson = JSON.stringify(features);
+
+      execFile('python3', [scriptPath, featuresJson], { env: process.env, timeout: 1000 }, (error, stdout, stderr) => {
+        if (error) {
+          this.fastify.log.warn(`[MLPredictor] Execution error: ${error.message}`);
+          resolve(null);
+          return;
+        }
+        try {
+          const res = JSON.parse(stdout.trim());
+          if (res.error) {
+            this.fastify.log.warn(`[MLPredictor] Python script error: ${res.error}`);
+            resolve(null);
+          } else {
+            resolve(typeof res.probability === 'number' ? res.probability : null);
+          }
+        } catch (e: any) {
+          this.fastify.log.warn(`[MLPredictor] Failed to parse output: ${stdout}. Error: ${e.message}`);
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  private runNightlyModelTraining(): Promise<void> {
+    const scriptPath = path.join(__dirname, '..', 'scripts', 'train.py');
+    return new Promise((resolve) => {
+      execFile('python3', [scriptPath], { env: process.env }, (error, stdout, stderr) => {
+        if (error) {
+          this.fastify.log.error(`[NightlyTraining] Retraining execution failed: ${error.message}`);
+          resolve();
+          return;
+        }
+        try {
+          const res = JSON.parse(stdout.trim());
+          if (res.error) {
+            this.fastify.log.error(`[NightlyTraining] Training failed: ${res.error}`);
+          } else {
+            this.fastify.log.info(`[NightlyTraining] Retraining completed: ${res.status} | Msg: ${res.message} | Accuracy: ${res.accuracy || 'N/A'}`);
+          }
+        } catch (e: any) {
+          this.fastify.log.error(`[NightlyTraining] Failed to parse output: ${stdout}. Error: ${e.message}`);
+        }
+        resolve();
+      });
+    });
+  }
+
   public start() {
     this.fastify.log.info('[SignalScannerService] Starting background signal scanner loop...');
     this.scheduleNextScan(10000); // Wait 10s before first scan
     this.scheduleNextNewsWarm(8000); // Pre-warm news 8s after start (before first scan)
+
+    // Schedule nightly model training at midnight ET
+    cron.schedule('0 0 * * *', async () => {
+      this.fastify.log.info('[SignalScannerService] Triggering nightly model training...');
+      await this.runNightlyModelTraining();
+    }, {
+      timezone: "America/New_York"
+    });
   }
 
   public stop() {
@@ -254,6 +325,34 @@ Rules:
         this.fastify.log.info(`[NewsPreWarm] ${symbol} pre-warmed: ${res.verdict} — ${res.rationale || ''} | Tokens: ${res.usage?.total_tokens || 0}`);
     } catch (e: any) {
       this.fastify.log.warn(`[NewsPreWarm] Llama failed for ${symbol}: ${e.message}`);
+    }
+  }
+
+  private getIndicatorWeights(regime: string, vix: number | null): Record<string, number> {
+    const isHighVix = vix !== null && vix > 20;
+
+    if (regime === 'BREAKOUT') {
+      return {
+        rangeBreak: isHighVix ? 35 : 30,         // ORH/ORL breakouts
+        trendAlignment: 20,                       // Price > EMA9 > EMA21
+        volumeBreakout: 15,                       // high-volume candle
+        overnightBreak: 20,                       // ONH/ONL breakouts
+        pdBreak: 20,                              // PDH/PDL breakouts
+        internals: 10,                            // AAPL/MSFT/NVDA co-trend
+        flowDirection: 15,                        // GEX flow
+        rsiMomentum: 15                           // RSI5 > 50
+      };
+    } else {
+      // MEAN_REVERSION
+      return {
+        supportResistanceHold: isHighVix ? 25 : 35, // holding ORL/ORH support/resistance
+        rsiReversal: isHighVix ? 20 : 30,           // RSI5 <= 30 / RSI5 >= 70
+        candleReversal: 20,                         // Reversal close color
+        oversoldDip: 15,                            // Spot under/above VWAP
+        internals: 10,                              // AAPL/MSFT/NVDA alignment
+        flowDirection: 15,                          // GEX flow support
+        gravityNode: 15                             // Spot between Flip and King / above King
+      };
     }
   }
 
@@ -602,48 +701,49 @@ Rules:
     };
 
     let regime = qqqGexRegime === 'NEGATIVE' ? 'BREAKOUT' : 'MEAN_REVERSION';
+    const weights = this.getIndicatorWeights(regime, vixPrice);
 
     if (regime === 'BREAKOUT') {
       // CALL
-      addScore(callScoreParts, currentPrice >= openingRangeHigh, 30, 'Price broke above Opening Range High');
-      addScore(callScoreParts, currentPrice > vwap, 20, 'Price is above VWAP');
-      addScore(callScoreParts, emaShort !== null && emaLong !== null && emaShort > emaLong && currentPrice > emaShort, 20, 'Bullish trend alignment (Price > EMA9 > EMA21)');
-      addScore(callScoreParts, rsi5 > 50 && rsi5 > rsi14, 15, 'Momentum is bullish (RSI5 > 50 and RSI5 > RSI14)');
-      addScore(callScoreParts, hasBullishVolumeBreakout, 15, 'Bullish volume breakout (high-volume green candle)');
-      addScore(callScoreParts, onh !== null && currentPrice >= onh, 20, 'Price broke above Overnight High (ONH)');
-      addScore(callScoreParts, pdh !== null && currentPrice >= pdh, 20, 'Price broke above Previous Day High (PDH)');
-      addScore(callScoreParts, hasBullishInternals, 10, 'Mega-Caps are bullish');
-      addScore(callScoreParts, qqqFlowDirection === 'bullish', 15, 'Options flow is bullish (GEX flow)');
+      addScore(callScoreParts, currentPrice >= openingRangeHigh, weights.rangeBreak, 'Price broke above Opening Range High');
+      addScore(callScoreParts, currentPrice > vwap, weights.trendAlignment, 'Price is above VWAP');
+      addScore(callScoreParts, emaShort !== null && emaLong !== null && emaShort > emaLong && currentPrice > emaShort, weights.trendAlignment, 'Bullish trend alignment (Price > EMA9 > EMA21)');
+      addScore(callScoreParts, rsi5 > 50 && rsi5 > rsi14, weights.rsiMomentum, 'Momentum is bullish (RSI5 > 50 and RSI5 > RSI14)');
+      addScore(callScoreParts, hasBullishVolumeBreakout, weights.volumeBreakout, 'Bullish volume breakout (high-volume green candle)');
+      addScore(callScoreParts, onh !== null && currentPrice >= onh, weights.overnightBreak, 'Price broke above Overnight High (ONH)');
+      addScore(callScoreParts, pdh !== null && currentPrice >= pdh, weights.pdBreak, 'Price broke above Previous Day High (PDH)');
+      addScore(callScoreParts, hasBullishInternals, weights.internals, 'Mega-Caps are bullish');
+      addScore(callScoreParts, qqqFlowDirection === 'bullish', weights.flowDirection, 'Options flow is bullish (GEX flow)');
 
       // PUT
-      addScore(putScoreParts, currentPrice <= openingRangeLow, 30, 'Price broke below Opening Range Low');
-      addScore(putScoreParts, currentPrice < vwap, 20, 'Price is below VWAP');
-      addScore(putScoreParts, emaShort !== null && emaLong !== null && emaShort < emaLong && currentPrice < emaShort, 20, 'Bearish trend alignment (Price < EMA9 < EMA21)');
-      addScore(putScoreParts, rsi5 < 50 && rsi5 < rsi14, 15, 'Momentum is bearish (RSI5 < 50 and RSI5 < RSI14)');
-      addScore(putScoreParts, hasBearishVolumeBreakout, 15, 'Bearish volume breakout (high-volume red candle)');
-      addScore(putScoreParts, onl !== null && currentPrice <= onl, 20, 'Price broke below Overnight Low (ONL)');
-      addScore(putScoreParts, pdl !== null && currentPrice <= pdl, 20, 'Price broke below Previous Day Low (PDL)');
-      addScore(putScoreParts, hasBearishInternals, 10, 'Mega-Caps are bearish');
-      addScore(putScoreParts, qqqFlowDirection === 'bearish', 15, 'Options flow is bearish (GEX flow)');
+      addScore(putScoreParts, currentPrice <= openingRangeLow, weights.rangeBreak, 'Price broke below Opening Range Low');
+      addScore(putScoreParts, currentPrice < vwap, weights.trendAlignment, 'Price is below VWAP');
+      addScore(putScoreParts, emaShort !== null && emaLong !== null && emaShort < emaLong && currentPrice < emaShort, weights.trendAlignment, 'Bearish trend alignment (Price < EMA9 < EMA21)');
+      addScore(putScoreParts, rsi5 < 50 && rsi5 < rsi14, weights.rsiMomentum, 'Momentum is bearish (RSI5 < 50 and RSI5 < RSI14)');
+      addScore(putScoreParts, hasBearishVolumeBreakout, weights.volumeBreakout, 'Bearish volume breakout (high-volume red candle)');
+      addScore(putScoreParts, onl !== null && currentPrice <= onl, weights.overnightBreak, 'Price broke below Overnight Low (ONL)');
+      addScore(putScoreParts, pdl !== null && currentPrice <= pdl, weights.pdBreak, 'Price broke below Previous Day Low (PDL)');
+      addScore(putScoreParts, hasBearishInternals, weights.internals, 'Mega-Caps are bearish');
+      addScore(putScoreParts, qqqFlowDirection === 'bearish', weights.flowDirection, 'Options flow is bearish (GEX flow)');
     } else {
       // MEAN_REVERSION
       // CALL
-      addScore(callScoreParts, currentPrice >= openingRangeLow && currentPrice <= openingRangeLow * 1.002, 30, 'Price holding Opening Range Low support');
-      addScore(callScoreParts, rsi5 <= 30, 25, 'Short-term RSI is oversold (RSI5 <= 30)');
-      addScore(callScoreParts, latest.close > latest.open, 20, 'Latest candle closed green (reversal)');
-      addScore(callScoreParts, currentPrice < vwap, 15, 'Price is below VWAP (oversold dip)');
-      addScore(callScoreParts, hasBullishInternals, 10, 'Mega-Caps support reversal');
-      addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqFlowDirection !== 'bearish', 15, 'Positive GEX and neutral/bullish flow');
-      addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && qqqGexFlip !== null && currentPrice > qqqGexFlip && currentPrice < qqqKingNode, 15, 'Price between GEX Flip and King Node');
+      addScore(callScoreParts, currentPrice >= openingRangeLow && currentPrice <= openingRangeLow * 1.002, weights.supportResistanceHold, 'Price holding Opening Range Low support');
+      addScore(callScoreParts, rsi5 <= 30, weights.rsiReversal, 'Short-term RSI is oversold (RSI5 <= 30)');
+      addScore(callScoreParts, latest.close > latest.open, weights.candleReversal, 'Latest candle closed green (reversal)');
+      addScore(callScoreParts, currentPrice < vwap, weights.oversoldDip, 'Price is below VWAP (oversold dip)');
+      addScore(callScoreParts, hasBullishInternals, weights.internals, 'Mega-Caps support reversal');
+      addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqFlowDirection !== 'bearish', weights.flowDirection, 'Positive GEX and neutral/bullish flow');
+      addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && qqqGexFlip !== null && currentPrice > qqqGexFlip && currentPrice < qqqKingNode, weights.gravityNode, 'Price between GEX Flip and King Node');
 
       // PUT
-      addScore(putScoreParts, currentPrice <= openingRangeHigh && currentPrice >= openingRangeHigh * 0.998, 30, 'Price rejecting Opening Range High resistance');
-      addScore(putScoreParts, rsi5 >= 70, 25, 'Short-term RSI is overbought (RSI5 >= 70)');
-      addScore(putScoreParts, latest.close < latest.open, 20, 'Latest candle closed red (reversal)');
-      addScore(putScoreParts, currentPrice > vwap, 15, 'Price is above VWAP (overextended rip)');
-      addScore(putScoreParts, hasBearishInternals, 10, 'Mega-Caps support rejection');
-      addScore(putScoreParts, qqqGexRegime === 'POSITIVE' && qqqFlowDirection !== 'bullish', 15, 'Positive GEX and neutral/bearish flow');
-      addScore(putScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && currentPrice > qqqKingNode, 15, 'Price above King Node');
+      addScore(putScoreParts, currentPrice <= openingRangeHigh && currentPrice >= openingRangeHigh * 0.998, weights.supportResistanceHold, 'Price rejecting Opening Range High resistance');
+      addScore(putScoreParts, rsi5 >= 70, weights.rsiReversal, 'Short-term RSI is overbought (RSI5 >= 70)');
+      addScore(putScoreParts, latest.close < latest.open, weights.candleReversal, 'Latest candle closed red (reversal)');
+      addScore(putScoreParts, currentPrice > vwap, weights.oversoldDip, 'Price is above VWAP (overextended rip)');
+      addScore(putScoreParts, hasBearishInternals, weights.internals, 'Mega-Caps support rejection');
+      addScore(putScoreParts, qqqGexRegime === 'POSITIVE' && qqqFlowDirection !== 'bullish', weights.flowDirection, 'Positive GEX and neutral/bearish flow');
+      addScore(putScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && currentPrice > qqqKingNode, weights.gravityNode, 'Price above King Node');
     }
 
     const callScore = callScoreParts.reduce((sum, item) => sum + item.points, 0);
@@ -942,6 +1042,28 @@ Rules:
           : `Use only if ${symbol} breaks the latest 5-minute low and stays below VWAP.`
       };
 
+      // Extract features for ML predictor
+      const flowDirNum = qqqFlowDirection === 'bullish' ? 1.0 : (qqqFlowDirection === 'bearish' ? -1.0 : 0.0);
+      const vwapDistPct = vwap ? ((currentPrice - vwap) / vwap) * 100 : 0.0;
+      const trendAlignedNum = (winningSide === 'CALL' && emaShort !== null && emaLong !== null && emaShort > emaLong) ||
+                              (winningSide === 'PUT' && emaShort !== null && emaLong !== null && emaShort < emaLong) ? 1.0 : 0.0;
+      const internalsAlignedNum = (winningSide === 'CALL' && hasBullishInternals) ||
+                                  (winningSide === 'PUT' && hasBearishInternals) ? 1.0 : 0.0;
+
+      const mlFeatures = {
+        signal_score: finalConfidence,
+        vix_price: vixPrice ?? 15,
+        rsi5,
+        rsi14,
+        vwap_dist_pct: Number(vwapDistPct.toFixed(4)),
+        flow_direction: flowDirNum,
+        trend_aligned: trendAlignedNum,
+        internals_aligned: internalsAlignedNum,
+        signal_type: winningSide
+      };
+
+      const mlProbability = await this.runLocalMLPredictor(mlFeatures);
+
       // ── STEP 1: Persist signal IMMEDIATELY (signal-first, AI follows async) ──
       // Signal is saved to DB right away so the UI shows it in real-time.
       // AI enrichment (news + coaching) happens in a fire-and-forget background task.
@@ -949,8 +1071,8 @@ Rules:
         INSERT INTO signals (
           symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss, target_price,
           confidence_score, setup_grade, status, indicators, gex, volatility, no_trade_reasons,
-          option_expiration_date, market_date
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          option_expiration_date, market_date, ml_probability
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING id
       `, [
         symbol,
@@ -969,7 +1091,11 @@ Rules:
           openingRangeLow: Number(openingRangeLow.toFixed(2)),
           atr14: Number(atr14.toFixed(2)),
           ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
-          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null
+          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null,
+          rsi5: Number(rsi5.toFixed(2)),
+          rsi14: Number(rsi14.toFixed(2)),
+          internalsBullish: hasBullishInternals,
+          internalsBearish: hasBearishInternals
         }),
         JSON.stringify({
           netGex: qqqNetGex,
@@ -988,17 +1114,19 @@ Rules:
         }),
         noTradeReasons,
         chosenExpiry,
-        nyParts.marketDate
+        nyParts.marketDate,
+        mlProbability
       ]);
 
       const signalId: number = insertResult.rows[0].id;
-      this.fastify.log.info(`[SignalScannerService] Signal #${signalId} saved instantly for ${symbol} ${winningSide}.`);
+      this.fastify.log.info(`[SignalScannerService] Signal #${signalId} saved instantly for ${symbol} ${winningSide} with ML Probability: ${mlProbability}.`);
 
       // ── STEP 2: Discord – signal alert fires immediately, no AI wait ──
       if (settings.discord_alerts_enabled === 'true' && settings.discord_webhook_url) {
         try {
+          const mlProbStr = mlProbability !== null ? ` | ML Prob **${Math.round(mlProbability * 100)}%**` : '';
           const embedMessage = {
-            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Spot **$${currentPrice.toFixed(2)}** | VIX **${vixPrice?.toFixed(2)}** | Spread ${spreadPct}%\n📊 GEX **${qqqGexRegime}** · **${qqqFlowDirection}** flow | VWAP $${vwap.toFixed(2)}\n🎯 Score **${finalConfidence}** | ${setupGrade}\n🧠 _AI coaching arriving shortly..._`
+            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Spot **$${currentPrice.toFixed(2)}** | VIX **${vixPrice?.toFixed(2)}** | Spread ${spreadPct}%\n📊 GEX **${qqqGexRegime}** · **${qqqFlowDirection}** flow | VWAP $${vwap.toFixed(2)}\n🎯 Score **${finalConfidence}** (${setupGrade})${mlProbStr}\n🧠 _AI coaching arriving shortly..._`
           };
           await axios.post(settings.discord_webhook_url, embedMessage, { timeout: 8000 });
         } catch (discErr: any) {
@@ -1038,8 +1166,8 @@ Rules:
         INSERT INTO signals (
           symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss, target_price,
           confidence_score, setup_grade, status, indicators, gex, volatility, no_trade_reasons,
-          option_expiration_date, market_date
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          option_expiration_date, market_date, ml_probability
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       `, [
         symbol,
         'NONE',
@@ -1057,7 +1185,11 @@ Rules:
           openingRangeLow: Number(openingRangeLow.toFixed(2)),
           atr14: Number(atr14.toFixed(2)),
           ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
-          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null
+          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null,
+          rsi5: Number(rsi5.toFixed(2)),
+          rsi14: Number(rsi14.toFixed(2)),
+          internalsBullish: hasBullishInternals,
+          internalsBearish: hasBearishInternals
         }),
         JSON.stringify({
           netGex: qqqNetGex,
@@ -1074,7 +1206,8 @@ Rules:
         }),
         noTradeReasons,
         null,
-        nyParts.marketDate
+        nyParts.marketDate,
+        null
       ]);
     }
   }
@@ -1254,11 +1387,9 @@ ${headlines.length > 0 ? headlines.map((h, i) => `${i + 1}. ${h}`).join('\n') : 
 
 Write coaching commentary (max 150 words). Format:
 1. Bold action line: **BUY ${symbol} ${winningSide} $${chosenStrike} — Entry >$${entryTrigger}, SL $${stopUnderlying}, TP $${targetUnderlying}**
-2. Signal thesis (why the technicals support this trade)
-3. If FOMC/CPI/NFP is TODAY: ⚠️ PITFALL: Event risk — [specific guidance e.g. avoid holding through 2pm announcement]
-   If macro = RISK_OFF and signal = CALL: ⚠️ PITFALL: [specific risk from news/macro]
-   If macro = RISK_ON: ✅ CATALYST: [what supports the move]
-4. One key metric or level to watch
+2. Signal thesis (brief explanation of why technicals support this entry)
+3. **⚠️ PITFALL or ✅ CATALYST**: Explain the key risk/pitfall (e.g. macro conflict, key wall proximity, event risk) or the prime catalyst supporting the trade.
+4. **Position Management**: Provide explicit, actionable rules on when the trader should **SELL** (cut loss or take profit), **HOLD** (stay in), or **AVERAGE IT** (average down/up under specific technical conditions).
 
 Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
 

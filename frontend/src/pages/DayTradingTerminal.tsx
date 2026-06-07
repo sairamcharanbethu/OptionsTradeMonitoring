@@ -441,6 +441,11 @@ export default function DayTradingTerminal() {
                   <span className="text-[9px] text-emerald-400/70 ml-auto bg-zinc-950/60 p-1 border border-emerald-500/5 rounded">
                     Score: {latestActionableSignal.confidence_score}% ({latestActionableSignal.setup_grade || 'B'})
                   </span>
+                  {latestActionableSignal.ml_probability !== undefined && latestActionableSignal.ml_probability !== null && (
+                    <span className="text-[9px] text-sky-400 bg-zinc-950/60 p-1 border border-sky-500/20 rounded font-semibold">
+                      ML Confidence: {Math.round(Number(latestActionableSignal.ml_probability) * 100)}%
+                    </span>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-3 gap-3 border-t border-emerald-500/10 pt-2.5 text-center">
@@ -844,7 +849,7 @@ export default function DayTradingTerminal() {
              ) : (
                <div className="space-y-4 animate-in fade-in duration-300">
                  {/* Meta details */}
-                 <div className="grid grid-cols-2 gap-2 border-b border-emerald-500/10 pb-3">
+                 <div className="grid grid-cols-3 gap-2 border-b border-emerald-500/10 pb-3">
                    <div>
                      <span className="text-[10px] text-emerald-500/60 block">MARKET DATE</span>
                      <span className="font-semibold text-emerald-300">{selectedSignal.market_date || '-'}</span>
@@ -853,6 +858,14 @@ export default function DayTradingTerminal() {
                      <span className="text-[10px] text-emerald-500/60 block">TIME STAMP</span>
                      <span className="font-semibold text-emerald-300">
                        {new Date(selectedSignal.created_at).toLocaleTimeString('en-US')}
+                     </span>
+                   </div>
+                   <div>
+                     <span className="text-[10px] text-emerald-500/60 block">ML CONFIDENCE</span>
+                     <span className={`font-bold ${selectedSignal.ml_probability !== undefined && selectedSignal.ml_probability !== null ? 'text-sky-400' : 'text-zinc-500'}`}>
+                       {selectedSignal.ml_probability !== undefined && selectedSignal.ml_probability !== null
+                         ? `${Math.round(Number(selectedSignal.ml_probability) * 100)}%`
+                         : 'N/A'}
                      </span>
                    </div>
                  </div>

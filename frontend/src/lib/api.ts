@@ -632,6 +632,7 @@ export interface Signal {
   created_at: string;
   news_context?: string | null;
   ai_coach_commentary?: string | null;
+  ml_probability?: number | null;
   token_usage?: {
     classifier?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
     coach?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;

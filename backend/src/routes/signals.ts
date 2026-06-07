@@ -41,6 +41,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
               news_context: { type: 'string', nullable: true },
               ai_coach_commentary: { type: 'string', nullable: true },
               token_usage: { type: 'object', nullable: true, additionalProperties: true },
+              ml_probability: { type: 'number', nullable: true },
               created_at: { type: 'string', format: 'date-time' }
             }
           }
@@ -71,6 +72,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           news_context,
           ai_coach_commentary,
           token_usage,
+          ml_probability::double precision AS ml_probability,
           created_at 
         FROM signals 
         ORDER BY created_at DESC 
