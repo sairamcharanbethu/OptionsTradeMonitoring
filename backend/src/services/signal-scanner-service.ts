@@ -8,6 +8,86 @@ import crypto from 'crypto';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
+// ── 2026 High-Impact Economic Calendar ─────────────────────────────────────
+// Hardcoded from official sources: Fed Reserve, BLS, CME — no API needed.
+// Dates are in YYYY-MM-DD format (ET). Update annually.
+const HIGH_IMPACT_EVENTS_2026: Record<string, string[]> = {
+  // FOMC Meeting Dates (decision day = second day of 2-day meeting)
+  '2026-01-28': ['FOMC Rate Decision'],
+  '2026-03-18': ['FOMC Rate Decision'],
+  '2026-04-29': ['FOMC Rate Decision + Press Conference'],
+  '2026-06-17': ['FOMC Rate Decision + Press Conference + SEP'],
+  '2026-07-29': ['FOMC Rate Decision'],
+  '2026-09-16': ['FOMC Rate Decision + Press Conference + SEP'],
+  '2026-11-04': ['FOMC Rate Decision'],
+  '2026-12-16': ['FOMC Rate Decision + Press Conference + SEP'],
+  // CPI Releases (approx BLS schedule — 3rd week of month)
+  '2026-01-14': ['CPI Inflation Report (Dec 2025)'],
+  '2026-02-11': ['CPI Inflation Report (Jan 2026)'],
+  '2026-03-11': ['CPI Inflation Report (Feb 2026)'],
+  '2026-04-10': ['CPI Inflation Report (Mar 2026)'],
+  '2026-05-13': ['CPI Inflation Report (Apr 2026)'],
+  '2026-06-10': ['CPI Inflation Report (May 2026)'],
+  '2026-07-14': ['CPI Inflation Report (Jun 2026)'],
+  '2026-08-12': ['CPI Inflation Report (Jul 2026)'],
+  '2026-09-11': ['CPI Inflation Report (Aug 2026)'],
+  '2026-10-14': ['CPI Inflation Report (Sep 2026)'],
+  '2026-11-13': ['CPI Inflation Report (Oct 2026)'],
+  '2026-12-11': ['CPI Inflation Report (Nov 2026)'],
+  // NFP Jobs Report (first Friday of the month)
+  '2026-01-09': ['NFP Jobs Report (Dec 2025)'],
+  '2026-02-06': ['NFP Jobs Report (Jan 2026)'],
+  '2026-03-06': ['NFP Jobs Report (Feb 2026)'],
+  '2026-04-03': ['NFP Jobs Report (Mar 2026)'],
+  '2026-05-01': ['NFP Jobs Report (Apr 2026)'],
+  '2026-06-05': ['NFP Jobs Report (May 2026)'],
+  '2026-07-02': ['NFP Jobs Report (Jun 2026)'],
+  '2026-08-07': ['NFP Jobs Report (Jul 2026)'],
+  '2026-09-04': ['NFP Jobs Report (Aug 2026)'],
+  '2026-10-02': ['NFP Jobs Report (Sep 2026)'],
+  '2026-11-06': ['NFP Jobs Report (Oct 2026)'],
+  '2026-12-04': ['NFP Jobs Report (Nov 2026)'],
+  // PCE Price Index (monthly, end of month)
+  '2026-01-30': ['PCE Price Index (Dec 2025)'],
+  '2026-02-27': ['PCE Price Index (Jan 2026)'],
+  '2026-03-27': ['PCE Price Index (Feb 2026)'],
+  '2026-04-30': ['PCE Price Index (Mar 2026)', 'GDP Q1 Advance'],
+  '2026-05-29': ['PCE Price Index (Apr 2026)'],
+  '2026-06-26': ['PCE Price Index (May 2026)'],
+  '2026-07-31': ['PCE Price Index (Jun 2026)', 'GDP Q2 Advance'],
+  '2026-08-28': ['PCE Price Index (Jul 2026)'],
+  '2026-09-25': ['PCE Price Index (Aug 2026)'],
+  '2026-10-30': ['PCE Price Index (Sep 2026)', 'GDP Q3 Advance'],
+  '2026-11-25': ['PCE Price Index (Oct 2026)'],
+  '2026-12-23': ['PCE Price Index (Nov 2026)'],
+};
+
+/**
+ * Returns today's high-impact economic events as a formatted string.
+ * Also checks tomorrow for pre-event positioning risk (e.g., FOMC eve).
+ * Zero-cost, zero-latency — pure lookup.
+ */
+function getEconomicCalendarContext(nyDateStr: string): string {
+  const today = new Date(nyDateStr + 'T12:00:00-04:00');
+  const todayKey = today.toISOString().split('T')[0];
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowKey = tomorrow.toISOString().split('T')[0];
+
+  const todayEvents = HIGH_IMPACT_EVENTS_2026[todayKey] || [];
+  const tomorrowEvents = HIGH_IMPACT_EVENTS_2026[tomorrowKey] || [];
+
+  const parts: string[] = [];
+  if (todayEvents.length > 0) {
+    parts.push(`🔴 TODAY (${todayKey}): ${todayEvents.join(', ')} — HIGH EVENT RISK`);
+  }
+  if (tomorrowEvents.length > 0) {
+    parts.push(`🟡 TOMORROW (${tomorrowKey}): ${tomorrowEvents.join(', ')} — Pre-event caution`);
+  }
+  return parts.length > 0 ? parts.join('\n') : '🟢 No high-impact economic events today or tomorrow.';
+}
+
+
 interface Candle {
   datetime: string;
   nyDateStr: string;
@@ -999,18 +1079,22 @@ GEX Regime: ${qqqGexRegime} | Flow: ${qqqFlowDirection}
 Entry >$${entryTrigger} | SL $${stopUnderlying} | TP $${targetUnderlying}
 Score: ${finalConfidence}% | ${setupGrade}
 
+ECONOMIC CALENDAR:
+${getEconomicCalendarContext(nyDateStr)}
+
 MACRO CONTEXT (classified by Llama 3.1):
 ${macroBadge}
 
 RECENT HEADLINES:
 ${headlines.length > 0 ? headlines.map((h, i) => `${i + 1}. ${h}`).join('\n') : 'None in last 6h.'}
 
-Write coaching commentary (max 140 words). Format:
+Write coaching commentary (max 150 words). Format:
 1. Bold action line: **BUY ${symbol} ${winningSide} $${chosenStrike} — Entry >$${entryTrigger}, SL $${stopUnderlying}, TP $${targetUnderlying}**
 2. Signal thesis (why the technicals support this trade)
-3. If macro = RISK_OFF and signal = CALL, add: ⚠️ PITFALL: [specific risk]
-   If macro = RISK_ON, add: ✅ CATALYST: [what supports the move]
-4. One key metric to watch
+3. If FOMC/CPI/NFP is TODAY: ⚠️ PITFALL: Event risk — [specific guidance e.g. avoid holding through 2pm announcement]
+   If macro = RISK_OFF and signal = CALL: ⚠️ PITFALL: [specific risk from news/macro]
+   If macro = RISK_ON: ✅ CATALYST: [what supports the move]
+4. One key metric or level to watch
 
 Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
 

@@ -537,6 +537,13 @@ export const api = {
     return res.json();
   },
 
+  async triggerScan(): Promise<{ success: boolean; message: string }> {
+    const res = await authFetch(`${API_BASE}/signals/trigger`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to trigger scan');
+    return res.json();
+  },
+
+
   async getSignals(): Promise<Signal[]> {
     const res = await authFetch(`${API_BASE}/signals?t=${Date.now()}`);
     if (!res.ok) throw new Error('Failed to fetch signals');

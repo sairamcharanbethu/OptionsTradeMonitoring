@@ -253,5 +253,31 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
       return (reply as any).code(500).send({ error: 'Failed to evaluate API health' });
     }
   });
+
+  // POST /api/signals/trigger - Manually fire a scan cycle immediately (for testing/dev)
+  fastify.post('/trigger', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Manually trigger a scan cycle',
+      description: 'Fires an immediate signal scan for all active symbols. Useful for testing the enrichment pipeline without waiting for the 5-minute scheduler.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    try {
+      const scanner = (fastify as any).scanner;
+      if (!scanner) {
+        return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
+      }
+      setImmediate(() => {
+        scanner.scanAllActiveUsers().catch((err: any) => {
+          fastify.log.error(`[ManualTrigger] Scan failed: ${err.message}`);
+        });
+      });
+      return { success: true, message: 'Scan cycle triggered. Signals will appear within 15–30 seconds.' };
+    } catch (err: any) {
+      fastify.log.error(err);
+      return (reply as any).code(500).send({ error: 'Failed to trigger scan' });
+    }
+  });
 }
 
