@@ -633,8 +633,8 @@ export interface Signal {
   news_context?: string | null;
   ai_coach_commentary?: string | null;
   token_usage?: {
-    llama?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; model?: string } | null;
-    claude?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; model?: string } | null;
+    classifier?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
+    coach?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
   } | null;
 }
 

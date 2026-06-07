@@ -1280,8 +1280,8 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
     // ── Write back to DB ──────────────────────────────────────────────────────
     try {
       const tokenUsage = {
-        llama: llamaUsage,
-        claude: claudeUsage
+        classifier: llamaUsage,
+        coach: claudeUsage
       };
       await this.fastify.pg.query(
         `UPDATE signals SET news_context = $1, ai_coach_commentary = $2, token_usage = $3 WHERE id = $4`,
