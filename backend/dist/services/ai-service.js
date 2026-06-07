@@ -64,18 +64,17 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
     async generateWealthsimpleBriefing(positions) {
         if (positions.length === 0)
             return { briefing: "No active Wealthsimple positions." };
-        // Sort by value descending and take top 10 to avoid rate limits
+        // Sort by value descending and take top 5 to keep it concise and fast
         const sortedPositions = [...positions].sort((a, b) => {
             const valA = Number(a.price) * Number(a.units);
             const valB = Number(b.price) * Number(b.units);
             return valB - valA;
         });
-        const topPositions = sortedPositions.slice(0, 10);
+        const topPositions = sortedPositions.slice(0, 5);
         let insightsText = "";
         try {
             const promises = topPositions.map(async (p) => {
                 // Only lookup equities/ETFs, skip pure crypto if Yahoo doesn't support the exact ticker easily
-                // Though Yahoo supports BTC-USD, the raw symbol might not match. We'll try anyway.
                 const ticker = p.symbol;
                 try {
                     const quote = await yahooFinance.quoteSummary(ticker, { modules: ['summaryDetail', 'price'] });
@@ -83,7 +82,7 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
                     const price = quote.price?.regularMarketPrice || p.price;
                     const pe = quote.summaryDetail?.trailingPE?.toFixed(2) || 'N/A';
                     const fiftyTwoHigh = quote.summaryDetail?.fiftyTwoWeekHigh?.toFixed(2) || 'N/A';
-                    // Filter news relevant to this specific ticker to prevent general financial news fallbacks
+                    // Filter news relevant to this specific ticker
                     const baseSymbol = ticker.split('.')[0];
                     const uppercaseTicker = ticker.toUpperCase();
                     const uppercaseBase = baseSymbol.toUpperCase();
@@ -123,14 +122,28 @@ ${posSummary}
 Fundamental & News Insights (Top Holdings):
 ${insightsText}
 
-Task: Provide a high-level summary of this equity/crypto portfolio and detailed rebalancing recommendations for the top holdings.
-1. Portfolio Summary: Briefly highlight the biggest winners and losers by PnL, and discuss the asset allocation.
-2. Rebalancing Recommendations: For EACH of the top holdings with provided news/fundamentals, internally weigh the bullish factors against the bearish risks, and output ONLY the final verdict and rebalancing recommendation:
-   - ⚖️ Portfolio Manager Verdict: A clear decision (Hold, Trim, Buy) and a comprehensive, detailed rebalancing rationale/action plan based on your analysis.
-Do NOT output any Bull Agent or Bear Agent sections. Only show the final Portfolio Manager Verdict and direct recommendations for each holding.
-Style: Professional wealth manager tone, highly sophisticated, structured with clear Markdown headers for each holding. Write in beautiful, natural, grammatically complete English. The recommendations should be rich and thoroughly detailed.
+Task: Generate a highly concise (UNDER 150 WORDS TOTAL) professional wealth manager summary and rebalancing recommendations for the top 5 holdings.
+
+CRITICAL RULES:
+1. Total length MUST be under 150 words. Be extremely brief.
+2. Use the exact formatting from the example below.
+3. No headers like "Detailed Rebalancing Recommendations" or "Rationale & Action Plan" to save space.
+4. Keep the summary to 2 sentences max.
+5. Keep each holding action plan to 1 sentence max.
+
+EXAMPLE OUTPUT FORMAT:
+### Portfolio Summary
+High equity and crypto concentration. Biggest winner is CM.TO (+$12.8k) due to solid financials; biggest loser is CRCL (-$25.7k) on crypto weakness. Overall, portfolio is high-risk and needs rebalancing.
+
+### Top Holdings Recommendations
+- **CM.TO** - ⚖️ Verdict: **HOLD** | Stable dividend stock, maintain current exposure as portfolio anchor.
+- **ORCL** - ⚖️ Verdict: **HOLD** | Cloud transition is positive, but wait for correction to subside.
+- **CRCL** - ⚖️ Verdict: **SELL** | Extreme spec risk, trim 50% immediately to limit downside.
+- **COIN** - ⚖️ Verdict: **TRIM** | Crypto volatility headwind; reduce exposure by 30%.
+- **MFC.TO** - ⚖️ Verdict: **BUY** | Solid fundamentals and high interest rate benefit; accumulate on dips.
+
 Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
-        const response = await this.generateAnalysisInternal(prompt, 2048);
+        const response = await this.generateAnalysisInternal(prompt, 500);
         return {
             briefing: response.analysis
         };
