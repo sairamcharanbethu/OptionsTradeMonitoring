@@ -441,11 +441,20 @@ export default function DayTradingTerminal() {
                   <span className="text-[9px] text-emerald-400/70 ml-auto bg-zinc-950/60 p-1 border border-emerald-500/5 rounded">
                     Score: {latestActionableSignal.confidence_score}% ({latestActionableSignal.setup_grade || 'B'})
                   </span>
-                  {latestActionableSignal.ml_probability !== undefined && latestActionableSignal.ml_probability !== null && (
-                    <span className="text-[9px] text-sky-400 bg-zinc-950/60 p-1 border border-sky-500/20 rounded font-semibold">
-                      ML Confidence: {Math.round(Number(latestActionableSignal.ml_probability) * 100)}%
-                    </span>
-                  )}
+                  {latestActionableSignal.ml_probability !== undefined && latestActionableSignal.ml_probability !== null && (() => {
+                    const mlPct = Math.round(Number(latestActionableSignal.ml_probability) * 100);
+                    let colorClass = 'text-emerald-400 border-emerald-500/20 bg-emerald-950/20';
+                    if (mlPct < 50) {
+                      colorClass = 'text-amber-400 border-amber-500/20 bg-amber-950/20';
+                    } else if (mlPct < 75) {
+                      colorClass = 'text-sky-400 border-sky-500/20 bg-sky-950/20';
+                    }
+                    return (
+                      <span className={`text-[9px] px-1.5 py-0.5 border rounded font-semibold ${colorClass}`}>
+                        ML Confidence: {mlPct}%
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 <div className="grid grid-cols-3 gap-3 border-t border-emerald-500/10 pt-2.5 text-center">
@@ -861,13 +870,20 @@ export default function DayTradingTerminal() {
                      </span>
                    </div>
                    <div>
-                     <span className="text-[10px] text-emerald-500/60 block">ML CONFIDENCE</span>
-                     <span className={`font-bold ${selectedSignal.ml_probability !== undefined && selectedSignal.ml_probability !== null ? 'text-sky-400' : 'text-zinc-500'}`}>
-                       {selectedSignal.ml_probability !== undefined && selectedSignal.ml_probability !== null
-                         ? `${Math.round(Number(selectedSignal.ml_probability) * 100)}%`
-                         : 'N/A'}
-                     </span>
-                   </div>
+                      <span className="text-[10px] text-emerald-500/60 block">ML CONFIDENCE</span>
+                      {selectedSignal.ml_probability !== undefined && selectedSignal.ml_probability !== null ? (() => {
+                        const mlPct = Math.round(Number(selectedSignal.ml_probability) * 100);
+                        let colorClass = 'text-emerald-400';
+                        if (mlPct < 50) {
+                          colorClass = 'text-amber-400';
+                        } else if (mlPct < 75) {
+                          colorClass = 'text-sky-400';
+                        }
+                        return <span className={`font-bold ${colorClass}`}>{mlPct}%</span>;
+                      })() : (
+                        <span className="font-bold text-zinc-500">N/A</span>
+                      )}
+                    </div>
                  </div>
  
                  {/* Indicators Block */}

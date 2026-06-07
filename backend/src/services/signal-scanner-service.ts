@@ -7,6 +7,7 @@ import { redis } from '../lib/redis';
 import crypto from 'crypto';
 import { execFile } from 'child_process';
 import path from 'path';
+import fs from 'fs';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
 
@@ -188,6 +189,17 @@ export class SignalScannerService {
     }, {
       timezone: "America/New_York"
     });
+
+    // Check if ML model is missing, trigger background training immediately
+    const modelPath = path.join(__dirname, '..', 'scripts', 'options_model.joblib');
+    if (!fs.existsSync(modelPath)) {
+      this.fastify.log.info('[SignalScannerService] Local ML model file not found. Triggering initial training run...');
+      setImmediate(() => {
+        this.runNightlyModelTraining().catch((err) => {
+          this.fastify.log.warn(`[SignalScannerService] Initial background training failed: ${err.message}`);
+        });
+      });
+    }
   }
 
   public stop() {
