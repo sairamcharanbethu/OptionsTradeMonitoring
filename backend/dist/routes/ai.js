@@ -73,7 +73,10 @@ async function aiRoutes(fastify, options) {
         }
         catch (err) {
             fastify.log.error(err);
-            return reply.code(500).send({ error: err.message || 'AI Briefing Failed' });
+            return {
+                briefing: `⚠️ **AI Briefing Generation Failed**\n\nThe AI model was unable to analyze your options portfolio. This is typically caused by:\n- Missing or invalid OpenRouter API key in your settings\n- Insufficient OpenRouter credits/balance\n- Temporary API timeout or model rate limits\n\n*Technical Details: ${err.message}*`,
+                discord_message: `AI Briefing failed: ${err.message}`
+            };
         }
     });
 }

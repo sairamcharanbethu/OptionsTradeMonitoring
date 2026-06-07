@@ -318,8 +318,17 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
             throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
         }
 
-        const data = await response.json();
-        const text = data.choices[0].message.content;
+        const data = await response.json() as any;
+        if (data.error) {
+            throw new Error(`OpenRouter API Error: ${data.error.message || JSON.stringify(data.error)}`);
+        }
+        if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+            throw new Error(`OpenRouter response structure invalid. Response: ${JSON.stringify(data)}`);
+        }
+        const text = data.choices[0].message?.content;
+        if (text === undefined || text === null) {
+            throw new Error(`OpenRouter choice message content missing. Response: ${JSON.stringify(data)}`);
+        }
 
         try {
             // Strip markdown json blocks if present

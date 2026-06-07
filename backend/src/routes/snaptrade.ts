@@ -58,12 +58,19 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
     }
   }, async (request, reply) => {
     const { id: userId } = (request as any).user;
-    const portfolio = await snaptradeService.getPortfolio(userId);
-    
-    // We need the AIService to generate the briefing
-    const aiService = new AIService(fastify);
-    
-    const briefing = await aiService.generateWealthsimpleBriefing(portfolio.positions);
-    return briefing;
+    try {
+      const portfolio = await snaptradeService.getPortfolio(userId);
+      
+      // We need the AIService to generate the briefing
+      const aiService = new AIService(fastify);
+      
+      const briefing = await aiService.generateWealthsimpleBriefing(portfolio.positions);
+      return briefing;
+    } catch (err: any) {
+      fastify.log.error(`[SnapTradeBriefing] Failed to generate briefing: ${err.message}`);
+      return {
+        briefing: `⚠️ **AI Briefing Generation Failed**\n\nThe AI model was unable to analyze your portfolio. This is typically caused by:\n- Missing or invalid OpenRouter API key in your settings\n- Insufficient OpenRouter credits/balance\n- Temporary API timeout or model rate limits\n\n*Technical Details: ${err.message}*`
+      };
+    }
   });
 }
