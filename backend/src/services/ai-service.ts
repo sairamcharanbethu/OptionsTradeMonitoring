@@ -199,7 +199,7 @@ Format: Respond ONLY with a valid JSON object matching this schema:
 Do NOT include any extra keys or explanations outside the JSON. All JSON fields must be completed.`;
 
         try {
-            const parsedBriefing = await this.generateJSONInternal(prompt, 800);
+            const parsedBriefing = await this.generateJSONInternal(prompt, 1200);
             return {
                 briefing: parsedBriefing
             };
@@ -373,14 +373,37 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 text = result.response;
             }
 
+            if (text === undefined || text === null || text.trim() === '') {
+                throw new Error("AI returned an empty response.");
+            }
+
             let cleanText = text.trim();
             if (cleanText.startsWith('```json')) {
                 cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
             } else if (cleanText.startsWith('```')) {
                 cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
             }
+            cleanText = cleanText.trim();
 
-            return JSON.parse(cleanText);
+            // Strip trailing commas from JSON arrays/objects to make parsing more robust
+            cleanText = cleanText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']');
+
+            try {
+                return JSON.parse(cleanText);
+            } catch (e: any) {
+                // Attempt to extract the first valid JSON block if it failed to parse directly
+                const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                    try {
+                        let extracted = jsonMatch[0];
+                        extracted = extracted.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']');
+                        return JSON.parse(extracted);
+                    } catch (innerError) {
+                        // ignore and throw original error
+                    }
+                }
+                throw e;
+            }
         } catch (error: any) {
             this.fastify.log.error(error);
             throw new Error(`AI JSON Generation Failed: ${error.message}`);
