@@ -1133,6 +1133,15 @@ Rules:
       const signalId: number = insertResult.rows[0].id;
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} saved instantly for ${symbol} ${winningSide} with ML Probability: ${mlProbability}.`);
 
+      // Broadcast new signal via WebSocket
+      if (this.fastify.websocketServer) {
+        this.fastify.websocketServer.clients.forEach((client: any) => {
+          if (client.readyState === 1) {
+            client.send(JSON.stringify({ type: 'NEW_SIGNAL', data: { id: signalId, symbol } }));
+          }
+        });
+      }
+
       // ── STEP 2: Discord – signal alert fires immediately, no AI wait ──
       if (settings.discord_alerts_enabled === 'true' && settings.discord_webhook_url) {
         try {
@@ -1221,6 +1230,15 @@ Rules:
         nyParts.marketDate,
         null
       ]);
+
+      // Broadcast new signal via WebSocket
+      if (this.fastify.websocketServer) {
+        this.fastify.websocketServer.clients.forEach((client: any) => {
+          if (client.readyState === 1) {
+            client.send(JSON.stringify({ type: 'NEW_SIGNAL', data: { symbol } }));
+          }
+        });
+      }
     }
   }
 
@@ -1431,6 +1449,15 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
         [newsContextText || null, finalCommentary || null, JSON.stringify(tokenUsage), signalId]
       );
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} enriched with AI commentary. Token usage tracked.`);
+
+      // Broadcast signal update via WebSocket
+      if (this.fastify.websocketServer) {
+        this.fastify.websocketServer.clients.forEach((client: any) => {
+          if (client.readyState === 1) {
+            client.send(JSON.stringify({ type: 'SIGNAL_UPDATED', data: { id: signalId, symbol } }));
+          }
+        });
+      }
     } catch (dbErr: any) {
       this.fastify.log.error(`[SignalScannerService] DB update failed for signal #${signalId}: ${dbErr.message}`);
     }

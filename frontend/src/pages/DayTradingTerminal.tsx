@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSignals, useSettings, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { useWebSocket } from '@/hooks/useWebSocket';
 import { api, Signal } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -70,6 +71,14 @@ export default function DayTradingTerminal() {
   const { data: signals = [], isLoading, isFetching, refetch } = useSignals(pollInterval);
   const { data: settings = {} } = useSettings();
   const isDayTradingEnabled = settings.day_trading_enabled !== 'false';
+
+  // Live real-time WebSocket signals updates integration
+  const { lastMessage } = useWebSocket();
+  useEffect(() => {
+    if (lastMessage && (lastMessage.type === 'NEW_SIGNAL' || lastMessage.type === 'SIGNAL_UPDATED')) {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+    }
+  }, [lastMessage, queryClient]);
 
   // States
   const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY' | 'BOTH'>('QQQ');
