@@ -184,6 +184,14 @@ const ensureSchema = async (instance: any) => {
       );
     `);
 
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS snaptrade_briefings (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        briefing JSONB NOT NULL,
+        last_reviewed_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+      );
+    `);
+
     // Ensure columns are altered in case they were already created with a smaller size
     try {
       await instance.pg.query(`

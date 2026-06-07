@@ -518,8 +518,8 @@ export const api = {
     return res.json();
   },
 
-  async getSnaptradeBriefing(): Promise<{ briefing: string }> {
-    const res = await authFetch(`${API_BASE}/snaptrade/briefing`);
+  async getSnaptradeBriefing(refresh = false): Promise<{ briefing: any; lastReviewedAt: string | null }> {
+    const res = await authFetch(`${API_BASE}/snaptrade/briefing${refresh ? '?refresh=true' : ''}`);
     if (!res.ok) throw new Error('Failed to generate Wealthsimple AI briefing');
     return res.json();
   },

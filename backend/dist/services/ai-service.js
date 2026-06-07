@@ -62,9 +62,16 @@ Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discor
         };
     }
     async generateWealthsimpleBriefing(positions) {
-        if (positions.length === 0)
-            return { briefing: "No active Wealthsimple positions." };
-        // Sort by value descending and take top 5 to keep it concise and fast
+        if (positions.length === 0) {
+            return {
+                briefing: {
+                    summary: "No active Wealthsimple positions.",
+                    actionRequired: [],
+                    holdWatch: []
+                }
+            };
+        }
+        // Sort by value descending and take top 5 to keep it fast
         const sortedPositions = [...positions].sort((a, b) => {
             const valA = Number(a.price) * Number(a.units);
             const valB = Number(b.price) * Number(b.units);
@@ -125,31 +132,54 @@ ${posSummary}
 Fundamental & News Insights (Top Holdings):
 ${insightsText}
 
-Task: Generate a highly concise (UNDER 150 WORDS TOTAL) professional wealth manager summary and rebalancing recommendations for the top 5 holdings.
+Task: Generate a highly structured, professional wealth manager summary and classification of the entire portfolio.
+You MUST analyze the entire portfolio's risk profile, but pay special attention to the top holdings.
 
-CRITICAL RULES:
-1. Total length MUST be under 150 words. Be extremely brief.
-2. Use the exact formatting from the example below.
-3. No headers like "Detailed Rebalancing Recommendations" or "Rationale & Action Plan" to save space.
-4. Keep the summary to 2 sentences max.
-5. Keep each holding action plan to 1 sentence max.
+For each holding in the portfolio:
+1. Determine if it needs action (TRIM, BUY, SELL) or should be held (HOLD).
+2. If TRIM: specify a precise percentage or share amount to trim.
+3. If HOLD/BUY: specify a clear holding/watching timeline (e.g., "Hold for 2 weeks", "Accumulate on 5% dip", "Hold indefinitely").
+4. Provide a clear 1-sentence action plan/rationale.
 
-EXAMPLE OUTPUT FORMAT:
-### Portfolio Summary
-High equity and crypto concentration. Biggest winner is CM.TO (+$12.8k) due to solid financials; biggest loser is CRCL (-$25.7k) on crypto weakness. Overall, portfolio is high-risk and needs rebalancing.
-
-### Top Holdings Recommendations
-- **CM.TO** - ⚖️ Verdict: **HOLD** | Stable dividend stock, maintain current exposure as portfolio anchor.
-- **ORCL** - ⚖️ Verdict: **HOLD** | Cloud transition is positive, but wait for correction to subside.
-- **CRCL** - ⚖️ Verdict: **SELL** | Extreme spec risk, trim 50% immediately to limit downside.
-- **COIN** - ⚖️ Verdict: **TRIM** | Crypto volatility headwind; reduce exposure by 30%.
-- **MFC.TO** - ⚖️ Verdict: **BUY** | Solid fundamentals and high interest rate benefit; accumulate on dips.
-
-Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The value must be a single string containing your entire professional briefing formatted in Markdown. Do NOT use nested JSON.`;
-        const response = await this.generateAnalysisInternal(prompt, 500);
-        return {
-            briefing: response.analysis
-        };
+Format: Respond ONLY with a valid JSON object matching this schema:
+{
+  "summary": "A 1-2 sentence high-level summary of the overall portfolio health and asset allocation.",
+  "actionRequired": [
+    {
+      "symbol": "TICKER",
+      "verdict": "TRIM" | "BUY" | "SELL",
+      "actionPlan": "Brief 1-sentence rationale explaining the verdict.",
+      "amount": "Specific trim percentage/amount (e.g., 'Trim 30%', 'Sell 50%', or 'N/A' for BUY)",
+      "timeline": "Suggested execution window (e.g., 'Immediately', 'On next rally', 'Over next 5 days')"
+    }
+  ],
+  "holdWatch": [
+    {
+      "symbol": "TICKER",
+      "verdict": "HOLD",
+      "actionPlan": "Brief 1-sentence rationale explaining why to hold.",
+      "timeline": "Suggested monitoring timeframe (e.g., 'Hold for 3 months', 'Monitor weekly', 'Hold indefinitely')"
+    }
+  ]
+}
+Do NOT include any extra keys or explanations outside the JSON. All JSON fields must be completed.`;
+        try {
+            const parsedBriefing = await this.generateJSONInternal(prompt, 800);
+            return {
+                briefing: parsedBriefing
+            };
+        }
+        catch (err) {
+            console.error("[AIService] Failed to generate/parse structured Wealthsimple briefing", err);
+            // Fallback structured briefing
+            return {
+                briefing: {
+                    summary: "AI review failed to generate. Please check your AI provider or retry.",
+                    actionRequired: [],
+                    holdWatch: []
+                }
+            };
+        }
     }
     async generateAnalysis(data) {
         const prompt = this.buildPrompt(data);
@@ -250,6 +280,75 @@ Format: You MUST return a JSON object with EXACTLY ONE key named "analysis". The
             catch (err) {
                 throw new Error(`Ollama is not accessible at ${this.ollamaUrl}. Error: ${err.message}`);
             }
+        }
+    }
+    async generateJSONInternal(prompt, maxTokens = 600) {
+        try {
+            const settings = await this.getSettings();
+            let text = '';
+            if (settings.ai_provider === 'openrouter') {
+                if (!settings.openrouter_key)
+                    throw new Error('OpenRouter selected but no API Key found.');
+                const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${settings.openrouter_key}`,
+                        'HTTP-Referer': 'http://localhost:3000',
+                        'X-Title': 'OptionsTradeMonitor',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        model: settings.ai_model,
+                        messages: [
+                            { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
+                            { role: 'user', content: prompt }
+                        ],
+                        response_format: { type: 'json_object' },
+                        temperature: 0,
+                        max_tokens: maxTokens
+                    })
+                });
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
+                }
+                const data = await response.json();
+                if (data.error)
+                    throw new Error(data.error.message || JSON.stringify(data.error));
+                text = data.choices[0].message?.content;
+            }
+            else {
+                const response = await fetch(`${this.ollamaUrl}/api/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: settings.ai_model,
+                        prompt: `You are a concise trading bot. Respond ONLY with valid JSON.\n\n${prompt}`,
+                        stream: false,
+                        format: 'json',
+                        options: {
+                            temperature: 0,
+                            num_predict: maxTokens
+                        }
+                    })
+                });
+                if (!response.ok)
+                    throw new Error(`Ollama Error: ${response.statusText}`);
+                const result = await response.json();
+                text = result.response;
+            }
+            let cleanText = text.trim();
+            if (cleanText.startsWith('```json')) {
+                cleanText = cleanText.replace(/^```json\n?/, '').replace(/\n?```$/, '');
+            }
+            else if (cleanText.startsWith('```')) {
+                cleanText = cleanText.replace(/^```\n?/, '').replace(/\n?```$/, '');
+            }
+            return JSON.parse(cleanText);
+        }
+        catch (error) {
+            this.fastify.log.error(error);
+            throw new Error(`AI JSON Generation Failed: ${error.message}`);
         }
     }
     async generateAnalysisInternal(prompt, maxTokens = 300) {

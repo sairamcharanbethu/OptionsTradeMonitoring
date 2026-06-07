@@ -66,17 +66,18 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
   }, async (request, reply) => {
     const { id: userId } = (request as any).user;
     const forceRefresh = (request.query as any)?.refresh === 'true';
-    const cacheKey = `WEALTHSIMPLE_BRIEFING:${userId}`;
 
     try {
       if (!forceRefresh) {
-        const cachedBriefing = await redis.get(cacheKey);
-        if (cachedBriefing) {
-          try {
-            return JSON.parse(cachedBriefing);
-          } catch (e) {
-            // Ignore parse error and rebuild cache
-          }
+        const { rows } = await (fastify as any).pg.query(
+          'SELECT briefing, last_reviewed_at FROM snaptrade_briefings WHERE user_id = $1',
+          [userId]
+        );
+        if (rows.length > 0) {
+          return {
+            briefing: rows[0].briefing,
+            lastReviewedAt: rows[0].last_reviewed_at
+          };
         }
       }
 
@@ -85,16 +86,30 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
       // We need the AIService to generate the briefing
       const aiService = new AIService(fastify);
       
-      const briefing = await aiService.generateWealthsimpleBriefing(portfolio.positions);
+      const briefingResult = await aiService.generateWealthsimpleBriefing(portfolio.positions);
       
-      // Cache the briefing for 15 minutes (900 seconds)
-      await redis.set(cacheKey, JSON.stringify(briefing), 900);
-      
-      return briefing;
+      // Save or update in database
+      await (fastify as any).pg.query(
+        `INSERT INTO snaptrade_briefings (user_id, briefing, last_reviewed_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE
+         SET briefing = EXCLUDED.briefing, last_reviewed_at = NOW()`,
+        [userId, JSON.stringify(briefingResult.briefing)]
+      );
+
+      return {
+        briefing: briefingResult.briefing,
+        lastReviewedAt: new Date().toISOString()
+      };
     } catch (err: any) {
       fastify.log.error(`[SnapTradeBriefing] Failed to generate briefing: ${err.message}`);
       return {
-        briefing: `⚠️ **AI Briefing Generation Failed**\n\nThe AI model was unable to analyze your portfolio. This is typically caused by:\n- Missing or invalid OpenRouter API key in your settings\n- Insufficient OpenRouter credits/balance\n- Temporary API timeout or model rate limits\n\n*Technical Details: ${err.message}*`
+        briefing: {
+          summary: `⚠️ **AI Briefing Generation Failed**\n\nThe AI model was unable to analyze your portfolio. Technical Details: ${err.message}`,
+          actionRequired: [],
+          holdWatch: []
+        },
+        lastReviewedAt: null
       };
     }
   });

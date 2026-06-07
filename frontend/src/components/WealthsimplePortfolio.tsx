@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { useSnaptradePortfolio } from '@/hooks/useDashboardData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -20,7 +20,23 @@ export default function WealthsimplePortfolio() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isGeneratingBriefing, setIsGeneratingBriefing] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [briefing, setBriefing] = useState<string | null>(null);
+  const [briefing, setBriefing] = useState<any | null>(null);
+  const [lastReviewedAt, setLastReviewedAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    const loadPersistentBriefing = async () => {
+      try {
+        const data = await api.getSnaptradeBriefing();
+        if (data && data.briefing) {
+          setBriefing(data.briefing);
+          setLastReviewedAt(data.lastReviewedAt);
+        }
+      } catch (e) {
+        console.error('Failed to load persistent briefing:', e);
+      }
+    };
+    loadPersistentBriefing();
+  }, []);
 
   const handleSync = async () => {
     setIsSyncing(true);
@@ -38,8 +54,9 @@ export default function WealthsimplePortfolio() {
   const handleGenerateBriefing = async () => {
     setIsGeneratingBriefing(true);
     try {
-      const data = await api.getSnaptradeBriefing();
+      const data = await api.getSnaptradeBriefing(true);
       setBriefing(data.briefing);
+      setLastReviewedAt(data.lastReviewedAt);
     } catch (err) {
       console.error(err);
       alert('Failed to generate AI briefing. Please try again.');
@@ -135,11 +152,18 @@ export default function WealthsimplePortfolio() {
       {/* AI Briefing Card */}
       <Card className="border-primary/20 bg-primary/5 shadow-premium overflow-hidden group">
         <CardHeader className="pb-3 border-b border-primary/10">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-lg flex items-center gap-2 text-primary">
-              <BrainCircuit className="h-5 w-5 animate-pulse" />
-              Wealthsimple AI Manager
-            </CardTitle>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <CardTitle className="text-lg flex items-center gap-2 text-primary">
+                <BrainCircuit className="h-5 w-5 animate-pulse" />
+                Wealthsimple AI Manager
+              </CardTitle>
+              {lastReviewedAt && (
+                <p className="text-[11px] text-muted-foreground">
+                  Last Reviewed: <span className="font-semibold text-primary">{new Date(lastReviewedAt).toLocaleString()}</span>
+                </p>
+              )}
+            </div>
             <Button 
               size="sm" 
               onClick={handleGenerateBriefing} 
@@ -164,9 +188,87 @@ export default function WealthsimplePortfolio() {
               </div>
             </div>
           ) : briefing ? (
-            <div className="p-6 space-y-4 animate-in fade-in slide-in-from-top-4 duration-700">
-              <div className="p-4 rounded-xl bg-background border shadow-inner text-sm leading-relaxed whitespace-pre-wrap font-sans italic text-slate-700 dark:text-slate-300">
-                {typeof briefing === 'string' ? briefing : JSON.stringify(briefing, null, 2)}
+            <div className="p-6 space-y-6 animate-in fade-in slide-in-from-top-4 duration-700">
+              {/* Summary Banner */}
+              {briefing.summary && (
+                <div className="p-4 rounded-xl bg-background border border-primary/20 shadow-inner text-sm leading-relaxed font-sans text-slate-700 dark:text-slate-300">
+                  <span className="font-semibold text-primary block mb-1">Portfolio Summary</span>
+                  {briefing.summary}
+                </div>
+              )}
+
+              {/* Action Required & Hold/Watch Layout */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Action Required Column */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-bold text-red-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <AlertTriangle className="h-4 w-4" />
+                    Action Required ({briefing.actionRequired?.length || 0})
+                  </h3>
+                  <div className="space-y-3">
+                    {!briefing.actionRequired || briefing.actionRequired.length === 0 ? (
+                      <div className="p-4 rounded-lg border border-dashed text-center text-xs text-muted-foreground">
+                        No immediate actions required.
+                      </div>
+                    ) : (
+                      briefing.actionRequired.map((action: any, idx: number) => (
+                        <div key={idx} className="p-3.5 rounded-xl border border-red-500/10 bg-red-500/5 dark:bg-red-500/10 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-sm text-foreground">{action.symbol}</span>
+                            <div className="flex items-center gap-1.5">
+                              <Badge className="bg-red-500 hover:bg-red-600 text-white border-none text-[10px] uppercase font-bold py-0.5">
+                                {action.verdict}
+                              </Badge>
+                              {action.amount && action.amount !== 'N/A' && (
+                                <Badge variant="outline" className="text-[10px] font-semibold">
+                                  {action.amount}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{action.actionPlan}</p>
+                          {action.timeline && (
+                            <div className="text-[10px] font-mono text-red-500/80 bg-red-500/10 w-fit px-1.5 py-0.5 rounded">
+                              Timeline: {action.timeline}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Watch / Hold Column */}
+                <div className="space-y-3">
+                  <h3 className="text-sm font-bold text-sky-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <Activity className="h-4 w-4" />
+                    Watch / Hold ({briefing.holdWatch?.length || 0})
+                  </h3>
+                  <div className="space-y-3">
+                    {!briefing.holdWatch || briefing.holdWatch.length === 0 ? (
+                      <div className="p-4 rounded-lg border border-dashed text-center text-xs text-muted-foreground">
+                        No watch/hold positions listed.
+                      </div>
+                    ) : (
+                      briefing.holdWatch.map((hold: any, idx: number) => (
+                        <div key={idx} className="p-3.5 rounded-xl border border-sky-500/10 bg-sky-500/5 dark:bg-sky-500/10 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-sm text-foreground">{hold.symbol}</span>
+                            <Badge className="bg-sky-500 hover:bg-sky-600 text-white border-none text-[10px] uppercase font-bold py-0.5">
+                              {hold.verdict}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{hold.actionPlan}</p>
+                          {hold.timeline && (
+                            <div className="text-[10px] font-mono text-sky-600 dark:text-sky-400 bg-sky-500/10 w-fit px-1.5 py-0.5 rounded">
+                              Timeframe: {hold.timeline}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           ) : (
