@@ -105,6 +105,7 @@ export class SignalScannerService {
   private aiService: AIService;
   private isRunning: boolean = false;
   private timerId: NodeJS.Timeout | null = null;
+  private newsWarmTimerId: NodeJS.Timeout | null = null;
   private scanIntervalMs: number = 5 * 60 * 1000; // 5 minutes
 
   constructor(fastify: FastifyInstance) {
@@ -114,7 +115,8 @@ export class SignalScannerService {
 
   public start() {
     this.fastify.log.info('[SignalScannerService] Starting background signal scanner loop...');
-    this.scheduleNextScan(10000); // Wait 10 seconds before the first scan
+    this.scheduleNextScan(10000); // Wait 10s before first scan
+    this.scheduleNextNewsWarm(8000); // Pre-warm news 8s after start (before first scan)
   }
 
   public stop() {
@@ -122,7 +124,135 @@ export class SignalScannerService {
       clearTimeout(this.timerId);
       this.timerId = null;
     }
+    if (this.newsWarmTimerId) {
+      clearTimeout(this.newsWarmTimerId);
+      this.newsWarmTimerId = null;
+    }
     this.fastify.log.info('[SignalScannerService] Stopped background scanner loop.');
+  }
+
+  // ── News Pre-Warm Loop ────────────────────────────────────────────────────
+  // Runs every 5 minutes, offset 2 min BEFORE the signal scanner.
+  // Fetches news + runs Llama classification and caches results in Redis.
+  // When enrichSignalAsync runs, it finds everything pre-cached → only needs Claude.
+
+  private scheduleNextNewsWarm(delayMs: number = this.scanIntervalMs) {
+    if (this.newsWarmTimerId) clearTimeout(this.newsWarmTimerId);
+    this.newsWarmTimerId = setTimeout(async () => {
+      try {
+        await this.preWarmNewsForAllUsers();
+      } catch (err: any) {
+        this.fastify.log.warn(`[SignalScannerService] News pre-warm failed: ${err.message}`);
+      } finally {
+        this.scheduleNextNewsWarm();
+      }
+    }, delayMs);
+  }
+
+  private async preWarmNewsForAllUsers(): Promise<void> {
+    try {
+      const { rows } = await this.fastify.pg.query(`
+        SELECT DISTINCT user_id FROM settings
+        WHERE key = 'day_trading_enabled' AND value = 'true'
+      `);
+      for (const row of rows) {
+        await this.preWarmNewsForUser(row.user_id).catch((e: any) =>
+          this.fastify.log.warn(`[NewsPreWarm] Failed for user ${row.user_id}: ${e.message}`)
+        );
+      }
+    } catch (err: any) {
+      this.fastify.log.warn(`[NewsPreWarm] Could not load users: ${err.message}`);
+    }
+  }
+
+  private async preWarmNewsForUser(userId: number): Promise<void> {
+    const settings = await this.getSettingsForUser(userId);
+    if (settings.day_trading_ai_enabled !== 'true') return;
+
+    const key = await this.getAiApiKey(settings.day_trading_ai_provider);
+    if (!key) return;
+
+    const symbols: string[] = settings.day_trading_symbols
+      .split(',')
+      .map((s: string) => s.trim().toUpperCase())
+      .filter(Boolean);
+
+    // Get today's NY date string
+    const nyDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
+
+    for (const symbol of symbols) {
+      await this.preWarmSymbol(symbol, nyDate, key, settings).catch((e: any) =>
+        this.fastify.log.warn(`[NewsPreWarm] Failed for ${symbol}: ${e.message}`)
+      );
+    }
+  }
+
+  /**
+   * Pre-warms news cache for a single symbol:
+   *   1. Fetches Yahoo Finance + FinancialJuice RSS
+   *   2. Computes fingerprint — skips Llama if headlines haven't changed
+   *   3. Runs Llama 3.1 70B classification → caches verdict in Redis
+   * Result: enrichSignalAsync skips steps 1–3 and only calls Claude Sonnet.
+   */
+  private async preWarmSymbol(
+    symbol: string,
+    nyDateStr: string,
+    apiKey: string,
+    settings: any
+  ): Promise<void> {
+    const { headlines } = await this.fetchNewsContext(symbol);
+
+    const newFingerprint = this.getNewsFingerprint(headlines);
+    const fpRedisKey = `NEWS_FP:${symbol}:${nyDateStr}`;
+    const cachedFp = await redis.get(fpRedisKey);
+
+    if (cachedFp === newFingerprint) {
+      this.fastify.log.info(`[NewsPreWarm] ${symbol} headlines unchanged — fingerprint match, skipping Llama.`);
+      return; // Nothing to do, cache is still fresh
+    }
+
+    // Headlines changed — update fingerprint and re-run Llama
+    await redis.set(fpRedisKey, newFingerprint, 1800);
+
+    if (headlines.length === 0) {
+      await redis.set(
+        `NEWS_VERDICT:${symbol}:${nyDateStr}`,
+        JSON.stringify({ verdict: 'NEUTRAL', rationale: 'No material news.' }),
+        1800
+      );
+      this.fastify.log.info(`[NewsPreWarm] ${symbol} — no headlines, cached NEUTRAL verdict.`);
+      return;
+    }
+
+    const classifierModel = settings.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct';
+    const classifierPrompt = `You are a macro news classifier for equity options trading.
+
+SIGNAL CONTEXT: ${symbol} — classify whether the macro environment is bullish or bearish for equity markets.
+
+HEADLINES (last 6h):
+${headlines.map((h, i) => `${i + 1}. ${h}`).join('\n')}
+
+Respond ONLY with valid JSON:
+{"verdict":"RISK_ON|RISK_OFF|NEUTRAL","rationale":"1 sentence, cite specific headline"}
+
+Rules:
+- RISK_ON = bullish/Nasdaq-positive environment
+- RISK_OFF = downside pressure (geopolitical, Fed hawkish, macro fear)
+- NEUTRAL = no material market-moving news`;
+
+    try {
+      const res = await this.callModelDirect(classifierModel, apiKey, classifierPrompt, 80);
+      if (res.verdict && ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(res.verdict)) {
+        await redis.set(
+          `NEWS_VERDICT:${symbol}:${nyDateStr}`,
+          JSON.stringify({ verdict: res.verdict, rationale: res.rationale || res.analysis || '' }),
+          1800
+        );
+        this.fastify.log.info(`[NewsPreWarm] ${symbol} pre-warmed: ${res.verdict} — ${res.rationale || ''}`);
+      }
+    } catch (e: any) {
+      this.fastify.log.warn(`[NewsPreWarm] Llama failed for ${symbol}: ${e.message}`);
+    }
   }
 
   private scheduleNextScan(delayMs: number = this.scanIntervalMs) {
@@ -993,24 +1123,50 @@ export class SignalScannerService {
       return;
     }
 
-    // ── Fetch news (dual-source, free) ────────────────────────────────────────
-    const { headlines, raw: newsContextText } = await this.fetchNewsContext(symbol);
+    // ── Check pre-warmed cache first (set by news pre-warm loop) ─────────────
+    // If the pre-warm job already fetched news + ran Llama, we skip both steps
+    // and go straight to Claude Sonnet — cutting latency from ~25s to ~4s.
+    const preWarmVerdictKey = `NEWS_VERDICT:${symbol}:${nyDateStr}`;
+    const preWarmNewsKey = `NEWS_FP:${symbol}:${nyDateStr}`;
+    const preWarmVerdict = await redis.get(preWarmVerdictKey);
+    const preWarmFp = await redis.get(preWarmNewsKey);
 
-    // ── Stage 1: Llama 3.1 70B — macro news classifier ───────────────────────
-    // Check Redis fingerprint first — skip classifier if headlines unchanged
-    const newFingerprint = this.getNewsFingerprint(headlines);
-    const fpRedisKey = `NEWS_FP:${symbol}:${nyDateStr}`;
-    const cachedFp = await redis.get(fpRedisKey);
-    const headlinesChanged = cachedFp !== newFingerprint;
-
+    let headlines: string[] = [];
+    let newsContextText = 'No material news in the last 6 hours.';
     let macroVerdict = 'NEUTRAL';
     let macroRationale = 'No conflicting macro news detected.';
+    let newFingerprint = '';
 
-    if (headlines.length > 0 && (headlinesChanged || !cachedFp)) {
-      await redis.set(fpRedisKey, newFingerprint, 1800);
+    if (preWarmVerdict && preWarmFp) {
+      // ✅ Cache hit: pre-warm loop already did the work
+      try {
+        const parsed = JSON.parse(preWarmVerdict);
+        macroVerdict = parsed.verdict || 'NEUTRAL';
+        macroRationale = parsed.rationale || macroRationale;
+        newFingerprint = preWarmFp;
+        this.fastify.log.info(`[SignalScannerService] Using pre-warmed cache for ${symbol}: ${macroVerdict} — skipping fetch+Llama.`);
+      } catch { /* use defaults */ }
 
-      const classifierModel = settings.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct';
-      const classifierPrompt = `You are a macro news classifier for equity options trading. Given the signal direction and recent headlines, classify the macro environment.
+      // Fetch raw text for DB/display (lightweight, no AI call)
+      const { raw } = await this.fetchNewsContext(symbol).catch(() => ({ headlines: [], raw: 'News context unavailable.' }));
+      newsContextText = raw;
+    } else {
+      // ❌ Cache miss (first run or race): fall back to reactive fetch + classify
+      this.fastify.log.info(`[SignalScannerService] Pre-warm cache miss for ${symbol} — running reactive fetch+Llama.`);
+      const { headlines: h, raw } = await this.fetchNewsContext(symbol);
+      headlines = h;
+      newsContextText = raw;
+
+      newFingerprint = this.getNewsFingerprint(headlines);
+      const fpRedisKey = `NEWS_FP:${symbol}:${nyDateStr}`;
+      const cachedFp = await redis.get(fpRedisKey);
+      const headlinesChanged = cachedFp !== newFingerprint;
+
+      if (headlines.length > 0 && (headlinesChanged || !cachedFp)) {
+        await redis.set(fpRedisKey, newFingerprint, 1800);
+
+        const classifierModel = settings.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct';
+        const classifierPrompt = `You are a macro news classifier for equity options trading.
 
 SIGNAL: ${symbol} ${winningSide} — directional bias is ${winningSide === 'CALL' ? 'BULLISH' : 'BEARISH'}
 
@@ -1025,27 +1181,28 @@ Rules:
 - RISK_OFF = headlines create downside pressure (geopolitical, Fed hawkish, macro fear)
 - NEUTRAL = no material market-moving news`;
 
-      try {
-        const llamaRes = await this.callModelDirect(
-          classifierModel, key, classifierPrompt, 80
-        );
-        if (llamaRes.verdict && ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(llamaRes.verdict)) {
-          macroVerdict = llamaRes.verdict;
-          macroRationale = llamaRes.rationale || llamaRes.analysis || macroRationale;
-        }
-        this.fastify.log.info(`[SignalScannerService] Llama macro verdict for ${symbol}: ${macroVerdict} — ${macroRationale}`);
-      } catch (llamaErr: any) {
-        this.fastify.log.warn(`[SignalScannerService] Llama classifier failed: ${llamaErr.message}`);
-      }
-    } else if (cachedFp) {
-      // Headlines unchanged — reuse cached macro verdict
-      const cachedVerdict = await redis.get(`NEWS_VERDICT:${symbol}:${nyDateStr}`);
-      if (cachedVerdict) {
         try {
-          const parsed = JSON.parse(cachedVerdict);
-          macroVerdict = parsed.verdict || 'NEUTRAL';
-          macroRationale = parsed.rationale || macroRationale;
-        } catch { /* use defaults */ }
+          const llamaRes = await this.callModelDirect(
+            classifierModel, key, classifierPrompt, 80
+          );
+          if (llamaRes.verdict && ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(llamaRes.verdict)) {
+            macroVerdict = llamaRes.verdict;
+            macroRationale = llamaRes.rationale || llamaRes.analysis || macroRationale;
+          }
+          this.fastify.log.info(`[SignalScannerService] Llama macro verdict for ${symbol}: ${macroVerdict} — ${macroRationale}`);
+        } catch (llamaErr: any) {
+          this.fastify.log.warn(`[SignalScannerService] Llama classifier failed: ${llamaErr.message}`);
+        }
+      } else if (cachedFp) {
+        // Headlines unchanged — reuse cached macro verdict
+        const cachedVerdict = await redis.get(`NEWS_VERDICT:${symbol}:${nyDateStr}`);
+        if (cachedVerdict) {
+          try {
+            const parsed = JSON.parse(cachedVerdict);
+            macroVerdict = parsed.verdict || 'NEUTRAL';
+            macroRationale = parsed.rationale || macroRationale;
+          } catch { /* use defaults */ }
+        }
       }
     }
 

@@ -165,6 +165,9 @@ const ensureSchema = async (instance) => {
       `);
         }
         instance.log.info('[Database] Schema verification completed successfully.');
+        // 3a. Migrate signals table: add news_context and ai_coach_commentary columns (idempotent)
+        await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS news_context TEXT;`);
+        await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS ai_coach_commentary TEXT;`);
         // 4. Create snaptrade tables
         await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS snaptrade_accounts (

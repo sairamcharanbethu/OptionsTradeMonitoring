@@ -46,7 +46,7 @@ export default function DayTradingTerminal() {
   const isDayTradingEnabled = settings.day_trading_enabled !== 'false';
 
   // States
-  const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY'>('QQQ');
+  const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY' | 'BOTH'>('QQQ');
   const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<number | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
@@ -124,7 +124,7 @@ export default function DayTradingTerminal() {
 
   // Filter signals: by symbol tab, then status and grade filters
   const filteredSignals = signals
-    .filter(s => s.symbol === selectedSymbol)
+    .filter(s => selectedSymbol === 'BOTH' || s.symbol === selectedSymbol)
     .filter(s => filterStatus === 'ALL' || s.status === filterStatus)
     .filter(s => {
       if (filterGrade === 'ALL') return true;
@@ -218,14 +218,14 @@ export default function DayTradingTerminal() {
 
         {/* Ticker switcher Tabs & Sync Timer */}
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-          <div className="flex bg-zinc-900 p-1 rounded border border-emerald-500/20">
+          <div className="flex bg-zinc-900 p-1 rounded border border-emerald-500/20 animate-in fade-in duration-200">
             <button
               onClick={() => setSelectedSymbol('QQQ')}
               className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${
                 selectedSymbol === 'QQQ' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
-              QQQ Ticker
+              QQQ
             </button>
             <button
               onClick={() => setSelectedSymbol('SPY')}
@@ -233,7 +233,15 @@ export default function DayTradingTerminal() {
                 selectedSymbol === 'SPY' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
-              SPY Ticker
+              SPY
+            </button>
+            <button
+              onClick={() => setSelectedSymbol('BOTH')}
+              className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${
+                selectedSymbol === 'BOTH' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
+              }`}
+            >
+              BOTH
             </button>
           </div>
 
@@ -518,7 +526,7 @@ export default function DayTradingTerminal() {
         <div className="p-2.5 px-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
           <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5 font-mono">
             <Activity className="h-4 w-4 text-emerald-400 animate-pulse" />
-            LIVE {selectedSymbol} OPTIONS-INTEGRATED CHART (5M EMA9/EMA21/VWAP)
+            LIVE {selectedSymbol === 'BOTH' ? 'QQQ & SPY' : selectedSymbol} OPTIONS-INTEGRATED CHART{selectedSymbol === 'BOTH' ? 'S' : ''} (5M EMA9/EMA21/VWAP)
           </span>
           <div className="flex items-center gap-3">
             <button
@@ -533,14 +541,25 @@ export default function DayTradingTerminal() {
           </div>
         </div>
         {showChart && (
-          <div className="w-full h-[380px] bg-zinc-950 animate-in fade-in slide-in-from-top-1 duration-200">
-            <iframe
-              title="TradingView Real-Time Chart"
-              src={`https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=${selectedSymbol === 'QQQ' ? 'NASDAQ:QQQ' : 'AMEX:SPY'}&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%22STD%3BEMA%22%2C%22STD%3BVWAP%22%5D&theme=dark&style=1&timezone=America%2FNew_York`}
-              width="100%"
-              height="100%"
-              style={{ border: 'none' }}
-            />
+          <div className={`w-full ${selectedSymbol === 'BOTH' ? 'h-[380px] md:h-[420px] grid grid-cols-1 md:grid-cols-2 gap-2 p-2 bg-zinc-950' : 'h-[380px] bg-zinc-950'} animate-in fade-in slide-in-from-top-1 duration-200`}>
+            {(selectedSymbol === 'BOTH' || selectedSymbol === 'QQQ') && (
+              <iframe
+                title="TradingView Real-Time Chart QQQ"
+                src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart_qqq&symbol=NASDAQ:QQQ&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%22STD%3BEMA%22%2C%22STD%3BVWAP%22%5D&theme=dark&style=1&timezone=America%2FNew_York"
+                width="100%"
+                height="100%"
+                style={{ border: 'none' }}
+              />
+            )}
+            {(selectedSymbol === 'BOTH' || selectedSymbol === 'SPY') && (
+              <iframe
+                title="TradingView Real-Time Chart SPY"
+                src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart_spy&symbol=AMEX:SPY&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%22STD%3BEMA%22%2C%22STD%3BVWAP%22%5D&theme=dark&style=1&timezone=America%2FNew_York"
+                width="100%"
+                height="100%"
+                style={{ border: 'none' }}
+              />
+            )}
           </div>
         )}
       </div>
