@@ -307,27 +307,27 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                     </DialogDescription>
                 </DialogHeader>
 
-                <Tabs defaultValue="preferences" orientation="vertical" className="flex-1 flex overflow-hidden">
-                    <TabsList className="flex-col w-64 justify-start rounded-none border-r h-full bg-muted/30 p-2 space-y-1">
-                        <TabsTrigger value="preferences" className="w-full justify-start px-4 py-2 text-left gap-2 data-[state=active]:bg-background">
+                <Tabs defaultValue="preferences" className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                    <TabsList className="flex flex-row md:flex-col w-full md:w-64 overflow-x-auto md:overflow-x-visible justify-start rounded-none border-b md:border-b-0 md:border-r h-auto md:h-full bg-muted/30 p-2 space-x-1 md:space-x-0 md:space-y-1 shrink-0 scrollbar-none">
+                        <TabsTrigger value="preferences" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Sliders className="h-4 w-4 text-muted-foreground" />
                             Preferences
                         </TabsTrigger>
-                        <TabsTrigger value="daytrading" className="w-full justify-start px-4 py-2 text-left gap-2 data-[state=active]:bg-background">
+                        <TabsTrigger value="daytrading" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Zap className="h-4 w-4 text-muted-foreground" />
                             Day Trading Settings
                         </TabsTrigger>
-                        <TabsTrigger value="credentials" className="w-full justify-start px-4 py-2 text-left gap-2 data-[state=active]:bg-background">
+                        <TabsTrigger value="credentials" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Key className="h-4 w-4 text-muted-foreground" />
                             API & Credentials
                         </TabsTrigger>
-                        <TabsTrigger value="account" className="w-full justify-start px-4 py-2 text-left gap-2 data-[state=active]:bg-background">
+                        <TabsTrigger value="account" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Lock className="h-4 w-4 text-muted-foreground" />
                             Account & Security
                         </TabsTrigger>
                     </TabsList>
 
-                    <div className="flex-1 overflow-y-auto p-6">
+                    <div className="flex-1 overflow-y-auto p-4 md:p-6">
                         {/* Tab 1: General Preferences */}
                         <TabsContent value="preferences" className="m-0 space-y-6">
                             <div>
