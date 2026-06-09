@@ -581,6 +581,17 @@ export const api = {
     });
     if (!res.ok) throw new Error('Failed to seed signals');
     return res.json();
+  },
+
+  async getScannerLogs(): Promise<ScannerLog[]> {
+    const res = await authFetch(`${API_BASE}/signals/logs?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch scanner logs');
+    const data = await res.json();
+    return data.map((log: any) => ({
+      ...log,
+      spot_price: Number(log.spot_price),
+      vix: log.vix != null ? Number(log.vix) : null
+    }));
   }
 };
 
@@ -637,6 +648,19 @@ export interface Signal {
     classifier?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
     coach?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
   } | null;
+}
+
+export interface ScannerLog {
+  id: number;
+  symbol: string;
+  spot_price: number;
+  regime: string;
+  vix?: number | null;
+  gex_available: boolean;
+  indicators?: IndicatorsJSON;
+  outcome: 'SIGNAL_GENERATED' | 'BLOCKED';
+  no_trade_reasons?: string[];
+  created_at: string;
 }
 
 export interface Goal {

@@ -100,3 +100,17 @@ CREATE TABLE IF NOT EXISTS stock_history_cache (
     fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- DayTrading Scanner Execution Logs Table
+CREATE TABLE IF NOT EXISTS scanner_logs (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(10) NOT NULL,
+    spot_price NUMERIC(10, 2) NOT NULL,
+    regime VARCHAR(30) NOT NULL,
+    vix NUMERIC(5, 2),
+    gex_available BOOLEAN NOT NULL,
+    indicators JSONB,
+    outcome VARCHAR(30) NOT NULL, -- 'SIGNAL_GENERATED' or 'BLOCKED'
+    no_trade_reasons TEXT[],
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+

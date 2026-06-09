@@ -1181,25 +1181,18 @@ Rules:
           });
         });
       }
-    } else {
-      // Save NO_TRADE signal to signals table
+
+      // Also write to scanner_logs for complete historical transparency (outcome = SIGNAL_GENERATED)
       await this.fastify.pg.query(`
-        INSERT INTO signals (
-          symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss, target_price,
-          confidence_score, setup_grade, status, indicators, gex, volatility, no_trade_reasons,
-          option_expiration_date, market_date, ml_probability
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        INSERT INTO scanner_logs (
+          symbol, spot_price, regime, vix, gex_available, indicators, outcome, no_trade_reasons
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       `, [
         symbol,
-        'NONE',
-        'NO_TRADE',
         currentPrice,
-        null,
-        null,
-        null,
-        winningScore,
-        'C / LOTTO',
-        'CANCELLED',
+        qqqGexRegime,
+        vixPrice,
+        gexAvailable,
         JSON.stringify({
           vwap: Number(vwap.toFixed(2)),
           openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
@@ -1212,30 +1205,42 @@ Rules:
           internalsBullish: hasBullishInternals,
           internalsBearish: hasBearishInternals
         }),
+        'SIGNAL_GENERATED',
+        []
+      ]);
+    } else {
+      // Save to scanner_logs table
+      await this.fastify.pg.query(`
+        INSERT INTO scanner_logs (
+          symbol, spot_price, regime, vix, gex_available, indicators, outcome, no_trade_reasons
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        symbol,
+        currentPrice,
+        qqqGexRegime,
+        vixPrice,
+        gexAvailable,
         JSON.stringify({
-          netGex: qqqNetGex,
-          regime: qqqGexRegime,
-          flipStrike: qqqGexFlip,
-          callWall: qqqCallWall,
-          putWall: qqqPutWall,
-          kingNode: qqqKingNode,
-          flowDirection: qqqFlowDirection
+          vwap: Number(vwap.toFixed(2)),
+          openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
+          openingRangeLow: Number(openingRangeLow.toFixed(2)),
+          atr14: Number(atr14.toFixed(2)),
+          ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
+          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null,
+          rsi5: Number(rsi5.toFixed(2)),
+          rsi14: Number(rsi14.toFixed(2)),
+          internalsBullish: hasBullishInternals,
+          internalsBearish: hasBearishInternals
         }),
-        JSON.stringify({
-          vixQuote: vixPrice,
-          vixChangePercent: vixChangePct
-        }),
-        noTradeReasons,
-        null,
-        nyParts.marketDate,
-        null
+        'BLOCKED',
+        noTradeReasons
       ]);
 
-      // Broadcast new signal via WebSocket
+      // Broadcast new scan log via WebSocket
       if (this.fastify.websocketServer) {
         this.fastify.websocketServer.clients.forEach((client: any) => {
           if (client.readyState === 1) {
-            client.send(JSON.stringify({ type: 'NEW_SIGNAL', data: { symbol } }));
+            client.send(JSON.stringify({ type: 'NEW_SCAN_LOG', data: { symbol } }));
           }
         });
       }

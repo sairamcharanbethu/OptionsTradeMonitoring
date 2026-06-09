@@ -75,6 +75,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           ml_probability::double precision AS ml_probability,
           created_at 
         FROM signals 
+        WHERE signal_type != 'NONE'
         ORDER BY created_at DESC 
         LIMIT 100
       `;
@@ -83,6 +84,60 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     } catch (err: any) {
       fastify.log.error(err);
       return (reply as any).code(500).send({ error: 'Failed to fetch trade signals' });
+    }
+  });
+
+  // GET /api/signals/logs - Fetch latest 100 scanner logs
+  fastify.get('/logs', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Get scanner logs',
+      description: 'Retrieve latest day trading scanner runs and execution logs.',
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'integer' },
+              symbol: { type: 'string' },
+              spot_price: { type: 'number' },
+              regime: { type: 'string' },
+              vix: { type: 'number', nullable: true },
+              gex_available: { type: 'boolean' },
+              indicators: { type: 'object', nullable: true, additionalProperties: true },
+              outcome: { type: 'string' },
+              no_trade_reasons: { type: 'array', items: { type: 'string' }, nullable: true },
+              created_at: { type: 'string', format: 'date-time' }
+            }
+          }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const query = `
+        SELECT 
+          id, 
+          symbol, 
+          spot_price::double precision, 
+          regime, 
+          vix::double precision, 
+          gex_available, 
+          indicators, 
+          outcome, 
+          no_trade_reasons, 
+          created_at 
+        FROM scanner_logs 
+        ORDER BY created_at DESC 
+        LIMIT 100
+      `;
+      const { rows } = await fastify.pg.query(query);
+      return rows;
+    } catch (err: any) {
+      fastify.log.error(err);
+      return (reply as any).code(500).send({ error: 'Failed to fetch scanner logs' });
     }
   });
 
@@ -136,12 +191,12 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     }
   });
 
-  // DELETE /api/signals - Clear all signals
+  // DELETE /api/signals - Clear all signals and logs
   fastify.delete('/', {
     schema: {
       tags: ['Signals'],
-      summary: 'Clear all signals',
-      description: 'Wipe all records from the signals table.',
+      summary: 'Clear all signals and logs',
+      description: 'Wipe all records from the signals and scanner_logs tables.',
       security: [{ bearerAuth: [] }],
       response: {
         200: {
@@ -156,7 +211,8 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
   }, async (request, reply) => {
     try {
       await fastify.pg.query('DELETE FROM signals');
-      return { success: true, message: 'All day trading signals cleared successfully.' };
+      await fastify.pg.query('DELETE FROM scanner_logs');
+      return { success: true, message: 'All day trading signals and logs cleared successfully.' };
     } catch (err: any) {
       fastify.log.error(err);
       return (reply as any).code(500).send({ error: 'Failed to clear signals' });

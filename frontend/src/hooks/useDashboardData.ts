@@ -9,6 +9,7 @@ export const QUERY_KEYS = {
     marketStatus: ['marketStatus'],
     briefing: ['briefing'],
     signals: ['signals'],
+    scannerLogs: ['scannerLogs'],
     history: (page: number, limit: number) => ['positionHistory', page, limit],
 };
 
@@ -27,6 +28,15 @@ export function useSignals(refreshInterval = 5000) {
         queryFn: () => api.getSignals(),
         refetchInterval: refreshInterval,
         staleTime: 2000,
+    });
+}
+
+export function useScannerLogs(refreshInterval = 10000) {
+    return useQuery({
+        queryKey: QUERY_KEYS.scannerLogs,
+        queryFn: () => api.getScannerLogs(),
+        refetchInterval: refreshInterval,
+        staleTime: 5000,
     });
 }
 

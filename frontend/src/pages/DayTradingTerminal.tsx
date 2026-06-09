@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSignals, useSettings, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { useSignals, useSettings, useScannerLogs, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { api, Signal } from '@/lib/api';
+import { api, Signal, ScannerLog } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Terminal as TerminalIcon,
@@ -69,21 +69,30 @@ export default function DayTradingTerminal() {
   const [fastPollUntil, setFastPollUntil] = useState<number>(0);
   const pollInterval = Date.now() < fastPollUntil ? 3000 : 10000;
   const { data: signals = [], isLoading, isFetching, refetch } = useSignals(pollInterval);
+  const { data: logs = [], isLoading: logsLoading, isFetching: logsFetching, refetch: refetchLogs } = useScannerLogs(pollInterval);
   const { data: settings = {} } = useSettings();
   const isDayTradingEnabled = settings.day_trading_enabled !== 'false';
 
   // Live real-time WebSocket signals updates integration
   const { isConnected, lastMessage } = useWebSocket();
   useEffect(() => {
-    if (lastMessage && (lastMessage.type === 'NEW_SIGNAL' || lastMessage.type === 'SIGNAL_UPDATED')) {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+    if (lastMessage) {
+      if (lastMessage.type === 'NEW_SIGNAL' || lastMessage.type === 'SIGNAL_UPDATED') {
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+      }
+      if (lastMessage.type === 'NEW_SCAN_LOG') {
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
+      }
     }
   }, [lastMessage, queryClient]);
 
   // States
+  const [activeTab, setActiveTab] = useState<'signals' | 'logs'>('signals');
   const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY' | 'BOTH'>('QQQ');
   const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
+  const [selectedLogId, setSelectedLogId] = useState<number | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<number | null>(null);
+  const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterGrade, setFilterGrade] = useState<string>('ALL');
   const [countdown, setCountdown] = useState(300);
@@ -124,6 +133,7 @@ export default function DayTradingTerminal() {
         if (prev <= 1) {
           // Trigger refresh when timer reaches 0
           refetch();
+          refetchLogs();
           fetchHealth();
           return 300;
         }
@@ -131,11 +141,12 @@ export default function DayTradingTerminal() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [refetch, isDayTradingEnabled]);
+  }, [refetch, refetchLogs, isDayTradingEnabled]);
 
   // Sync manually
   const handleManualSync = () => {
     refetch();
+    refetchLogs();
     fetchHealth();
     setCountdown(300);
   };
@@ -167,8 +178,29 @@ export default function DayTradingTerminal() {
       return grade === filterGrade;
     });
 
+  const filteredLogs = logs
+    .filter(l => selectedSymbol === 'BOTH' || l.symbol === selectedSymbol);
+
   // Get currently selected signal object
-  const selectedSignal = filteredSignals.find(s => s.id === selectedSignalId) || null;
+  const realSelectedSignal = filteredSignals.find(s => s.id === selectedSignalId) || null;
+  const selectedLog = filteredLogs.find(l => l.id === selectedLogId) || null;
+
+  const selectedSignal = activeTab === 'signals'
+    ? realSelectedSignal
+    : (selectedLog ? {
+        id: selectedLog.id,
+        symbol: selectedLog.symbol,
+        market_date: new Date(selectedLog.created_at).toLocaleDateString('en-US'),
+        created_at: selectedLog.created_at,
+        indicators: selectedLog.indicators,
+        gex: { regime: selectedLog.regime },
+        volatility: { vixQuote: selectedLog.vix },
+        no_trade_reasons: selectedLog.no_trade_reasons,
+        ml_probability: null,
+        ai_coach_commentary: null,
+        news_context: null,
+        token_usage: null
+      } as unknown as Signal : null);
 
   // Set default selected signal when signals load or tab changes
   useEffect(() => {
@@ -178,6 +210,15 @@ export default function DayTradingTerminal() {
       setSelectedSignalId(null);
     }
   }, [selectedSymbol, signals]);
+
+  // Set default selected log
+  useEffect(() => {
+    if (filteredLogs.length > 0) {
+      setSelectedLogId(filteredLogs[0].id);
+    } else {
+      setSelectedLogId(null);
+    }
+  }, [selectedSymbol, logs]);
 
   // Smart fast-poll: if latest signal has no AI commentary, poll every 3s
   useEffect(() => {
@@ -625,33 +666,61 @@ export default function DayTradingTerminal() {
         
         {/* Table List (Process Monitor) */}
         <div className="xl:col-span-2 overflow-hidden flex flex-col border border-emerald-500/20 rounded bg-zinc-900/30">
+          
+          {/* Tab Selector */}
+          <div className="flex bg-zinc-950/80 border-b border-emerald-500/20 p-1">
+            <button
+              onClick={() => setActiveTab('signals')}
+              className={`flex-1 py-2 text-xs font-bold font-mono uppercase tracking-wider transition-all rounded ${
+                activeTab === 'signals' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/50 hover:text-emerald-400'
+              }`}
+            >
+              [ ACTIVE SIGNALS ]
+            </button>
+            <button
+              onClick={() => setActiveTab('logs')}
+              className={`flex-1 py-2 text-xs font-bold font-mono uppercase tracking-wider transition-all rounded ${
+                activeTab === 'logs' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/50 hover:text-emerald-400'
+              }`}
+            >
+              [ SCANNER LOG MONITOR ({filteredLogs.length}) ]
+            </button>
+          </div>
+
           {/* Filter bar + action buttons */}
           <div className="p-2.5 bg-zinc-900 border-b border-emerald-500/20 flex flex-col sm:flex-row flex-wrap gap-2 items-start sm:items-center justify-between">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[10px] font-bold text-emerald-500/70 uppercase">Filter:</span>
-              {/* Status filter */}
-              {(['ALL', 'PENDING', 'EXECUTED', 'CANCELLED'] as const).map(s => (
-                <button key={s}
-                  onClick={() => setFilterStatus(s)}
-                  className={`text-[9px] px-2 py-0.5 rounded border font-bold transition-colors ${
-                    filterStatus === s
-                      ? 'bg-emerald-900/60 text-emerald-200 border-emerald-500/60'
-                      : 'bg-zinc-950/40 text-emerald-500/50 border-emerald-500/20 hover:border-emerald-500/40'
-                  }`}
-                >{s}</button>
-              ))}
-              <span className="text-emerald-500/20">|</span>
-              {/* Grade filter */}
-              {(['ALL', 'A+', 'B', 'C'] as const).map(g => (
-                <button key={g}
-                  onClick={() => setFilterGrade(g)}
-                  className={`text-[9px] px-2 py-0.5 rounded border font-bold transition-colors ${
-                    filterGrade === g
-                      ? 'bg-sky-900/60 text-sky-200 border-sky-500/60'
-                      : 'bg-zinc-950/40 text-sky-500/50 border-sky-500/20 hover:border-sky-500/40'
-                  }`}
-                >{g === 'ALL' ? 'ALL GRADES' : g}</button>
-              ))}
+              {activeTab === 'signals' && (
+                <>
+                  <span className="text-[10px] font-bold text-emerald-500/70 uppercase">Filter:</span>
+                  {/* Status filter */}
+                  {(['ALL', 'PENDING', 'EXECUTED', 'CANCELLED'] as const).map(s => (
+                    <button key={s}
+                      onClick={() => setFilterStatus(s)}
+                      className={`text-[9px] px-2 py-0.5 rounded border font-bold transition-colors ${
+                        filterStatus === s
+                          ? 'bg-emerald-900/60 text-emerald-200 border-emerald-500/60'
+                          : 'bg-zinc-950/40 text-emerald-500/50 border-emerald-500/20 hover:border-emerald-500/40'
+                      }`}
+                    >{s}</button>
+                  ))}
+                  <span className="text-emerald-500/20">|</span>
+                  {/* Grade filter */}
+                  {(['ALL', 'A+', 'B', 'C'] as const).map(g => (
+                    <button key={g}
+                      onClick={() => setFilterGrade(g)}
+                      className={`text-[9px] px-2 py-0.5 rounded border font-bold transition-colors ${
+                        filterGrade === g
+                          ? 'bg-sky-900/60 text-sky-200 border-sky-500/60'
+                          : 'bg-zinc-950/40 text-sky-500/50 border-sky-500/20 hover:border-sky-500/40'
+                      }`}
+                    >{g === 'ALL' ? 'ALL GRADES' : g}</button>
+                  ))}
+                </>
+              )}
+              {activeTab === 'logs' && (
+                <span className="text-[10px] text-emerald-500/70 font-bold uppercase">Chronological Scan Runs (5m intervals)</span>
+              )}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               {triggerMsg && (
@@ -675,7 +744,10 @@ export default function DayTradingTerminal() {
                   if (confirm("Are you sure you want to seed mock data?")) {
                     try {
                       const res = await api.seedSignals();
-                      if (res.success) queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+                      if (res.success) {
+                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
+                      }
                     } catch (err: any) { alert(`Failed to seed data: ${err.message}`); }
                   }
                 }}
@@ -687,10 +759,15 @@ export default function DayTradingTerminal() {
                 size="sm"
                 className="h-7 text-[10px] font-bold border-red-500/30 text-red-400 hover:bg-red-950/25 hover:text-red-300 gap-1 bg-zinc-950/40"
                 onClick={async () => {
-                  if (confirm("Wipe all day trading signals from database?")) {
+                  if (confirm("Wipe all day trading signals and logs from database?")) {
                     try {
                       const res = await api.clearSignals();
-                      if (res.success) { setSelectedSignalId(null); queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals }); }
+                      if (res.success) {
+                        setSelectedSignalId(null);
+                        setSelectedLogId(null);
+                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
+                      }
                     } catch (err: any) { alert(`Failed to clear signals: ${err.message}`); }
                   }
                 }}
@@ -700,153 +777,257 @@ export default function DayTradingTerminal() {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs text-left border-collapse">
-              <thead>
-                <tr className="bg-zinc-900/80 border-b border-emerald-500/10 text-emerald-500/80 font-bold">
-                  <th className="px-2 py-1.5 text-[10px]"></th>
-                  <th className="px-2 py-1.5 text-[10px]">#</th>
-                  <th className="px-2 py-1.5 text-[10px]">SYM</th>
-                  <th className="px-2 py-1.5 text-[10px]">TYPE</th>
-                  <th className="hidden sm:table-cell px-2 py-1.5 text-[10px]">BIAS</th>
-                  <th className="px-2 py-1.5 text-[10px]">PRICE</th>
-                  <th className="hidden md:table-cell px-2 py-1.5 text-[10px]">ENTRY</th>
-                  <th className="hidden md:table-cell px-2 py-1.5 text-[10px]">SL</th>
-                  <th className="hidden md:table-cell px-2 py-1.5 text-[10px]">TP</th>
-                  <th className="px-2 py-1.5 text-[10px]">CONF</th>
-                  <th className="hidden sm:table-cell px-2 py-1.5 text-[10px] text-center">GRADE</th>
-                  <th className="px-2 py-1.5 text-[10px]">STATUS</th>
-                  <th className="px-2 py-1.5 text-[10px] text-right">ACT</th>
-                </tr>
-              </thead>
-              <tbody>
-                {isLoading && signals.length === 0 ? (
-                  <tr>
-                    <td colSpan={13} className="px-2 py-8 text-center text-emerald-500/60">
-                      <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-emerald-400" />
-                      RETRIEVING FROM POSTGRES...
-                    </td>
+          {activeTab === 'signals' ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-zinc-900/80 border-b border-emerald-500/10 text-emerald-500/80 font-bold">
+                    <th className="px-2 py-1.5 text-[10px]"></th>
+                    <th className="px-2 py-1.5 text-[10px]">#</th>
+                    <th className="px-2 py-1.5 text-[10px]">SYM</th>
+                    <th className="px-2 py-1.5 text-[10px]">TYPE</th>
+                    <th className="hidden sm:table-cell px-2 py-1.5 text-[10px]">BIAS</th>
+                    <th className="px-2 py-1.5 text-[10px]">PRICE</th>
+                    <th className="hidden md:table-cell px-2 py-1.5 text-[10px]">ENTRY</th>
+                    <th className="hidden md:table-cell px-2 py-1.5 text-[10px]">SL</th>
+                    <th className="hidden md:table-cell px-2 py-1.5 text-[10px]">TP</th>
+                    <th className="px-2 py-1.5 text-[10px]">CONF</th>
+                    <th className="hidden sm:table-cell px-2 py-1.5 text-[10px] text-center">GRADE</th>
+                    <th className="px-2 py-1.5 text-[10px]">STATUS</th>
+                    <th className="px-2 py-1.5 text-[10px] text-right">ACT</th>
                   </tr>
-                ) : filteredSignals.length === 0 ? (
-                  <tr>
-                    <td colSpan={13} className="px-2 py-8 text-center text-red-500/80">
-                      [NO SIGNALS MATCH CURRENT FILTERS]
-                      <div className="text-[10px] text-emerald-600 mt-2">
-                        Adjust filters above or click 'SEED' to insert sample data.
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredSignals.map(sig => {
-                    const isSelected = sig.id === selectedSignalId;
-                    const isExpanded = sig.id === expandedRowId;
-                    const biasColor =
-                      sig.signal_type === 'CALL'
-                        ? 'text-green-500 font-bold'
-                        : sig.signal_type === 'PUT'
-                          ? 'text-red-500 font-bold'
-                          : 'text-zinc-500';
+                </thead>
+                <tbody>
+                  {isLoading && signals.length === 0 ? (
+                    <tr>
+                      <td colSpan={13} className="px-2 py-8 text-center text-emerald-500/60">
+                        <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-emerald-400" />
+                        RETRIEVING FROM POSTGRES...
+                      </td>
+                    </tr>
+                  ) : filteredSignals.length === 0 ? (
+                    <tr>
+                      <td colSpan={13} className="px-2 py-8 text-center text-red-500/80">
+                        [NO SIGNALS MATCH CURRENT FILTERS]
+                        <div className="text-[10px] text-emerald-600 mt-2">
+                          Adjust filters above or click 'SEED' to insert sample data.
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredSignals.map(sig => {
+                      const isSelected = sig.id === selectedSignalId;
+                      const isExpanded = sig.id === expandedRowId;
+                      const biasColor =
+                        sig.signal_type === 'CALL'
+                          ? 'text-green-500 font-bold'
+                          : sig.signal_type === 'PUT'
+                            ? 'text-red-500 font-bold'
+                            : 'text-zinc-500';
 
-                    const statusBadgeClass =
-                      sig.status === 'PENDING'
-                        ? 'bg-yellow-950/80 text-yellow-400 border border-yellow-500/30'
-                        : sig.status === 'EXECUTED'
-                          ? 'bg-green-950/80 text-green-400 border border-green-500/30 animate-pulse'
-                          : 'bg-red-950/80 text-red-400 border border-red-500/30';
+                      const statusBadgeClass =
+                        sig.status === 'PENDING'
+                          ? 'bg-yellow-950/80 text-yellow-400 border border-yellow-500/30'
+                          : sig.status === 'EXECUTED'
+                            ? 'bg-green-950/80 text-green-400 border border-green-500/30 animate-pulse'
+                            : 'bg-red-950/80 text-red-400 border border-red-500/30';
 
-                    const hasAi = !!sig.ai_coach_commentary;
-                    const aiPending = sig.signal_type !== 'NONE' && !hasAi;
+                      const hasAi = !!sig.ai_coach_commentary;
+                      const aiPending = sig.signal_type !== 'NONE' && !hasAi;
 
-                    return (
-                      <React.Fragment key={sig.id}>
-                        <tr
-                          onClick={() => { setSelectedSignalId(sig.id); }}
-                          className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-colors ${
-                            isSelected ? 'bg-emerald-950/25 border-l-2 border-l-emerald-400' : ''
-                          }`}
-                        >
-                          {/* Expand toggle */}
-                          <td className="px-1 py-1.5" onClick={e => { e.stopPropagation(); setExpandedRowId(isExpanded ? null : sig.id); }}>
-                            <button className="text-emerald-500/50 hover:text-emerald-300 transition-colors">
-                              <ChevronRight className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
-                            </button>
-                          </td>
-                          <td className="px-2 py-1.5 font-semibold text-emerald-500">#{sig.id}</td>
-                          <td className="px-2 py-1.5 font-bold text-emerald-200">{sig.symbol}</td>
-                          <td className={`px-2 py-1.5 font-bold ${biasColor}`}>{sig.signal_type}</td>
-                          <td className="hidden sm:table-cell px-2 py-1.5 text-[10px] tracking-tighter text-emerald-400/80">{sig.trade_bias}</td>
-                          <td className="px-2 py-1.5 text-emerald-300 font-mono">${Number(sig.current_price).toFixed(2)}</td>
-                          <td className="hidden md:table-cell px-2 py-1.5 font-mono">{sig.entry_trigger ? `$${Number(sig.entry_trigger).toFixed(2)}` : '-'}</td>
-                          <td className="hidden md:table-cell px-2 py-1.5 font-mono text-red-400/95">{sig.stop_loss ? `$${Number(sig.stop_loss).toFixed(2)}` : '-'}</td>
-                          <td className="hidden md:table-cell px-2 py-1.5 font-mono text-green-400/95">{sig.target_price ? `$${Number(sig.target_price).toFixed(2)}` : '-'}</td>
-                          <td className="px-2 py-1.5 font-mono font-bold text-sky-400">{sig.confidence_score}%</td>
-                          <td className="hidden sm:table-cell px-2 py-1.5 text-center">
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-300 font-semibold">{sig.setup_grade || 'B'}</span>
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${statusBadgeClass}`}>{sig.status}</span>
-                          </td>
-                          <td className="px-2 py-1.5 text-right" onClick={e => e.stopPropagation()}>
-                            {sig.status === 'PENDING' ? (
-                              <div className="flex justify-end gap-1">
-                                <button onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
-                                  className="h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors" title="Execute">
-                                  <Play className="h-2.5 w-2.5" />
-                                </button>
-                                <button onClick={() => handleQuickStatus(sig.id, 'CANCELLED')}
-                                  className="h-5 w-5 flex items-center justify-center rounded bg-red-950/80 hover:bg-red-900/80 border border-red-500/30 text-red-400 transition-colors" title="Cancel">
-                                  <X className="h-2.5 w-2.5" />
-                                </button>
-                              </div>
-                            ) : (
-                              <span className="text-[10px] text-emerald-500/40 italic">LOCKED</span>
-                            )}
-                          </td>
-                        </tr>
-                        {/* Inline AI Commentary accordion */}
-                        {isExpanded && (
-                          <tr className="bg-zinc-950/60 border-b border-emerald-500/10">
-                            <td colSpan={13} className="px-4 py-3">
-                              {aiPending ? (
-                                <div className="flex items-center gap-2 text-[10px] text-amber-400/80 animate-pulse">
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                  AI coaching is being generated in the background...
-                                </div>
-                              ) : hasAi ? (
-                                <div className="space-y-2">
-                                  <span className="text-[10px] font-bold text-amber-400 uppercase flex items-center gap-1">
-                                    <Zap className="h-3 w-3" /> AI_COACH_COMMENTARY
-                                  </span>
-                                  <div className="text-[10px] text-zinc-300 space-y-0.5 leading-relaxed">
-                                    {(sig.ai_coach_commentary || '').split('\n').filter(Boolean).map((line, i) => {
-                                      const isPitfall = line.includes('⚠️') || line.toUpperCase().includes('PITFALL');
-                                      const isCatalyst = line.includes('✅') || line.toUpperCase().includes('CATALYST');
-                                      return <p key={i} className={isPitfall ? 'text-amber-300' : isCatalyst ? 'text-green-300' : 'text-zinc-300'}>{line}</p>;
-                                    })}
-                                  </div>
-                                  {sig.news_context && sig.news_context !== 'No material news in the last 6 hours.' && (
-                                    <details className="mt-1">
-                                      <summary className="text-[9px] text-zinc-500 cursor-pointer hover:text-zinc-300">📰 News context used →</summary>
-                                      <div className="mt-1 text-[9px] text-zinc-600 space-y-0.5">
-                                        {sig.news_context.split('\n').map((l, i) => <div key={i}>{l}</div>)}
-                                      </div>
-                                    </details>
-                                  )}
-                                  {renderTokenUsageBadge(sig.token_usage)}
+                      return (
+                        <React.Fragment key={sig.id}>
+                          <tr
+                            onClick={() => { setSelectedSignalId(sig.id); }}
+                            className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-colors ${
+                              isSelected ? 'bg-emerald-950/25 border-l-2 border-l-emerald-400' : ''
+                            }`}
+                          >
+                            {/* Expand toggle */}
+                            <td className="px-1 py-1.5" onClick={e => { e.stopPropagation(); setExpandedRowId(isExpanded ? null : sig.id); }}>
+                              <button className="text-emerald-500/50 hover:text-emerald-300 transition-colors">
+                                <ChevronRight className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                              </button>
+                            </td>
+                            <td className="px-2 py-1.5 font-semibold text-emerald-500">#{sig.id}</td>
+                            <td className="px-2 py-1.5 font-bold text-emerald-200">{sig.symbol}</td>
+                            <td className={`px-2 py-1.5 font-bold ${biasColor}`}>{sig.signal_type}</td>
+                            <td className="hidden sm:table-cell px-2 py-1.5 text-[10px] tracking-tighter text-emerald-400/80">{sig.trade_bias}</td>
+                            <td className="px-2 py-1.5 text-emerald-300 font-mono">${Number(sig.current_price).toFixed(2)}</td>
+                            <td className="hidden md:table-cell px-2 py-1.5 font-mono">{sig.entry_trigger ? `$${Number(sig.entry_trigger).toFixed(2)}` : '-'}</td>
+                            <td className="hidden md:table-cell px-2 py-1.5 font-mono text-red-400/95">{sig.stop_loss ? `$${Number(sig.stop_loss).toFixed(2)}` : '-'}</td>
+                            <td className="hidden md:table-cell px-2 py-1.5 font-mono text-green-400/95">{sig.target_price ? `$${Number(sig.target_price).toFixed(2)}` : '-'}</td>
+                            <td className="px-2 py-1.5 font-mono font-bold text-sky-400">{sig.confidence_score}%</td>
+                            <td className="hidden sm:table-cell px-2 py-1.5 text-center">
+                              <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-300 font-semibold">{sig.setup_grade || 'B'}</span>
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${statusBadgeClass}`}>{sig.status}</span>
+                            </td>
+                            <td className="px-2 py-1.5 text-right" onClick={e => e.stopPropagation()}>
+                              {sig.status === 'PENDING' ? (
+                                <div className="flex justify-end gap-1">
+                                  <button onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
+                                    className="h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors" title="Execute">
+                                    <Play className="h-2.5 w-2.5" />
+                                  </button>
+                                  <button onClick={() => handleQuickStatus(sig.id, 'CANCELLED')}
+                                    className="h-5 w-5 flex items-center justify-center rounded bg-red-950/80 hover:bg-red-900/80 border border-red-500/30 text-red-400 transition-colors" title="Cancel">
+                                    <X className="h-2.5 w-2.5" />
+                                  </button>
                                 </div>
                               ) : (
-                                <span className="text-[10px] text-zinc-600 italic">No AI commentary for this signal (NO_TRADE or AI disabled).</span>
+                                <span className="text-[10px] text-emerald-500/40 italic">LOCKED</span>
                               )}
                             </td>
                           </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+                          {/* Inline AI Commentary accordion */}
+                          {isExpanded && (
+                            <tr className="bg-zinc-950/60 border-b border-emerald-500/10">
+                              <td colSpan={13} className="px-4 py-3">
+                                {aiPending ? (
+                                  <div className="flex items-center gap-2 text-[10px] text-amber-400/80 animate-pulse">
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    AI coaching is being generated in the background...
+                                  </div>
+                                ) : hasAi ? (
+                                  <div className="space-y-2">
+                                    <span className="text-[10px] font-bold text-amber-400 uppercase flex items-center gap-1">
+                                      <Zap className="h-3 w-3" /> AI_COACH_COMMENTARY
+                                    </span>
+                                    <div className="text-[10px] text-zinc-300 space-y-0.5 leading-relaxed">
+                                      {(sig.ai_coach_commentary || '').split('\n').filter(Boolean).map((line, i) => {
+                                        const isPitfall = line.includes('⚠️') || line.toUpperCase().includes('PITFALL');
+                                        const isCatalyst = line.includes('✅') || line.toUpperCase().includes('CATALYST');
+                                        return <p key={i} className={isPitfall ? 'text-amber-300' : isCatalyst ? 'text-green-300' : 'text-zinc-300'}>{line}</p>;
+                                      })}
+                                    </div>
+                                    {sig.news_context && sig.news_context !== 'No material news in the last 6 hours.' && (
+                                      <details className="mt-1">
+                                        <summary className="text-[9px] text-zinc-500 cursor-pointer hover:text-zinc-300">📰 News context used →</summary>
+                                        <div className="mt-1 text-[9px] text-zinc-600 space-y-0.5">
+                                          {sig.news_context.split('\n').map((l, i) => <div key={i}>{l}</div>)}
+                                        </div>
+                                      </details>
+                                    )}
+                                    {renderTokenUsageBadge(sig.token_usage)}
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] text-zinc-600 italic">No AI commentary for this signal (NO_TRADE or AI disabled).</span>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left border-collapse">
+                <thead>
+                  <tr className="bg-zinc-900/80 border-b border-emerald-500/10 text-emerald-500/80 font-bold font-mono">
+                    <th className="px-2 py-1.5 text-[10px]"></th>
+                    <th className="px-2 py-1.5 text-[10px]">#</th>
+                    <th className="px-2 py-1.5 text-[10px]">TIME</th>
+                    <th className="px-2 py-1.5 text-[10px]">SYM</th>
+                    <th className="px-2 py-1.5 text-[10px]">SPOT</th>
+                    <th className="px-2 py-1.5 text-[10px]">REGIME</th>
+                    <th className="px-2 py-1.5 text-[10px]">VIX</th>
+                    <th className="px-2 py-1.5 text-[10px]">GEX</th>
+                    <th className="px-2 py-1.5 text-[10px]">OUTCOME</th>
+                    <th className="px-2 py-1.5 text-[10px] text-right">DETAILS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logsLoading && logs.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="px-2 py-8 text-center text-emerald-500/60">
+                        <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-emerald-400" />
+                        RETRIEVING SCANNER LOGS FROM POSTGRES...
+                      </td>
+                    </tr>
+                  ) : filteredLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="px-2 py-8 text-center text-red-500/80 font-bold">
+                        [NO SCANNER RUN LOGS FOUND]
+                        <div className="text-[10px] text-emerald-600 mt-2 font-normal">
+                          Click 'TRIGGER SCAN' above to run a live scanner evaluation cycle.
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredLogs.map(log => {
+                      const isSelected = log.id === selectedLogId;
+                      const isExpanded = log.id === expandedLogId;
+                      const outcomeColor = log.outcome === 'SIGNAL_GENERATED' ? 'text-green-400 font-bold animate-pulse' : 'text-red-400/80';
+                      
+                      return (
+                        <React.Fragment key={log.id}>
+                          <tr
+                            onClick={() => { setSelectedLogId(log.id); }}
+                            className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-colors ${
+                              isSelected ? 'bg-emerald-950/25 border-l-2 border-l-emerald-400' : ''
+                            }`}
+                          >
+                            <td className="px-1 py-1.5" onClick={e => { e.stopPropagation(); setExpandedLogId(isExpanded ? null : log.id); }}>
+                              <button className="text-emerald-500/50 hover:text-emerald-300 transition-colors">
+                                <ChevronRight className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                              </button>
+                            </td>
+                            <td className="px-2 py-1.5 font-semibold text-emerald-500">#{log.id}</td>
+                            <td className="px-2 py-1.5 text-zinc-400 font-mono">{new Date(log.created_at).toLocaleTimeString('en-US')}</td>
+                            <td className="px-2 py-1.5 font-bold text-emerald-200">{log.symbol}</td>
+                            <td className="px-2 py-1.5 font-mono text-emerald-300">${Number(log.spot_price).toFixed(2)}</td>
+                            <td className="px-2 py-1.5 text-zinc-400 uppercase">{log.regime}</td>
+                            <td className="px-2 py-1.5 text-zinc-400 font-mono">{log.vix != null ? Number(log.vix).toFixed(2) : '-'}</td>
+                            <td className="px-2 py-1.5 text-zinc-400">{log.gex_available ? 'YES' : 'NO'}</td>
+                            <td className={`px-2 py-1.5 ${outcomeColor}`}>{log.outcome}</td>
+                            <td className="px-2 py-1.5 text-right font-mono text-[9px] text-zinc-500">
+                              {log.no_trade_reasons && log.no_trade_reasons.length > 0 ? `${log.no_trade_reasons.length} blockers` : 'None'}
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-zinc-950/60 border-b border-emerald-500/10">
+                              <td colSpan={10} className="px-4 py-3">
+                                <div className="space-y-2.5">
+                                  <div className="text-[10px] font-bold text-emerald-400 uppercase">INDICATORS AT RUN:</div>
+                                  {log.indicators ? (
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px] bg-zinc-950/80 p-2 rounded border border-emerald-500/10">
+                                      <div><span className="text-zinc-500">VWAP:</span> ${Number(log.indicators.vwap).toFixed(2)}</div>
+                                      <div><span className="text-zinc-500">ATR14:</span> ${Number(log.indicators.atr14).toFixed(2)}</div>
+                                      <div><span className="text-zinc-500">EMA9:</span> {log.indicators.ema9 ? `$${Number(log.indicators.ema9).toFixed(2)}` : '-'}</div>
+                                      <div><span className="text-zinc-500">EMA21:</span> {log.indicators.ema21 ? `$${Number(log.indicators.ema21).toFixed(2)}` : '-'}</div>
+                                    </div>
+                                  ) : (
+                                    <div className="text-[10px] text-zinc-600 italic">No indicators saved for this log.</div>
+                                  )}
+                                  
+                                  {log.no_trade_reasons && log.no_trade_reasons.length > 0 && (
+                                    <div className="space-y-1">
+                                      <div className="text-[10px] font-bold text-red-400 uppercase">BLOCKERS:</div>
+                                      <ul className="text-[10px] text-red-300/95 list-disc pl-4 space-y-1">
+                                        {log.no_trade_reasons.map((r, idx) => (
+                                          <li key={idx}>{r}</li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
  
          {/* Detailed Inspector Panel */}
