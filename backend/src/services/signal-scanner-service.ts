@@ -508,9 +508,14 @@ Rules:
     // 3. Fetch Yahoo Finance Price Candles (5-minute for 5 days)
     let sortedCandles: Candle[] = [];
     try {
+      const now = new Date();
+      const fiveDaysAgo = new Date();
+      fiveDaysAgo.setDate(now.getDate() - 5);
+
       const chartData = await (yahooFinance as any).chart(symbol, {
         interval: '5m',
-        range: '5d',
+        period1: fiveDaysAgo,
+        period2: now,
         includePrePost: true
       });
 
