@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Save, Loader2, User as UserIcon } from 'lucide-react';
+import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { api } from '@/lib/api';
 
@@ -307,27 +307,32 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                     </DialogDescription>
                 </DialogHeader>
 
-                <Tabs defaultValue="ai" orientation="vertical" className="flex-1 flex overflow-hidden">
+                <Tabs defaultValue="preferences" orientation="vertical" className="flex-1 flex overflow-hidden">
                     <TabsList className="flex-col w-64 justify-start rounded-none border-r h-full bg-muted/30 p-2 space-y-1">
-                        <TabsTrigger value="ai" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
-                            AI Configuration
+                        <TabsTrigger value="preferences" className="w-full justify-start px-4 py-2 text-left gap-2 data-[state=active]:bg-background">
+                            <Sliders className="h-4 w-4 text-muted-foreground" />
+                            Preferences
                         </TabsTrigger>
-                        <TabsTrigger value="daytrading" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
+                        <TabsTrigger value="daytrading" className="w-full justify-start px-4 py-2 text-left gap-2 data-[state=active]:bg-background">
+                            <Zap className="h-4 w-4 text-muted-foreground" />
                             Day Trading Settings
                         </TabsTrigger>
-                        <TabsTrigger value="integrations" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
-                            Integrations
+                        <TabsTrigger value="credentials" className="w-full justify-start px-4 py-2 text-left gap-2 data-[state=active]:bg-background">
+                            <Key className="h-4 w-4 text-muted-foreground" />
+                            API & Credentials
                         </TabsTrigger>
-                        <TabsTrigger value="account" className="w-full justify-start px-4 py-2 text-left data-[state=active]:bg-background">
+                        <TabsTrigger value="account" className="w-full justify-start px-4 py-2 text-left gap-2 data-[state=active]:bg-background">
+                            <Lock className="h-4 w-4 text-muted-foreground" />
                             Account & Security
                         </TabsTrigger>
                     </TabsList>
 
                     <div className="flex-1 overflow-y-auto p-6">
-                        <TabsContent value="ai" className="m-0 space-y-6">
+                        {/* Tab 1: General Preferences */}
+                        <TabsContent value="preferences" className="m-0 space-y-6">
                             <div>
-                                <h3 className="text-lg font-medium">AI Configuration</h3>
-                                <p className="text-sm text-muted-foreground">Configure the AI provider and model settings.</p>
+                                <h3 className="text-lg font-medium">General Preferences</h3>
+                                <p className="text-sm text-muted-foreground">Configure the core AI provider, polling intervals, and general settings.</p>
                             </div>
                             <div className="grid gap-6">
                                 <div className="grid gap-2">
@@ -342,19 +347,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </SelectContent>
                                     </Select>
                                 </div>
-
-                                {provider === 'openrouter' && (
-                                    <div className="grid gap-2 animate-in fade-in slide-in-from-top-2">
-                                        <Label htmlFor="key">OpenRouter API Key</Label>
-                                        <Input
-                                            id="key"
-                                            type="password"
-                                            value={openRouterKey}
-                                            onChange={(e) => setOpenRouterKey(e.target.value)}
-                                            placeholder="sk-or-..."
-                                        />
-                                    </div>
-                                )}
 
                                  <div className="grid gap-2">
                                      <Label htmlFor="model">Model Name</Label>
@@ -390,9 +382,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <SelectItem value="weekly">Weekly (Monday)</SelectItem>
                                         </SelectContent>
                                     </Select>
-                                    <p className="text-[10px] text-muted-foreground">
-                                        AI-generated portfolio summary sent to Discord at 8:30 AM ET.
-                                    </p>
                                 </div>
 
                                 <div className="grid gap-2 pt-4 border-t">
@@ -439,11 +428,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <SelectItem value="900">Every 15 minutes</SelectItem>
                                         </SelectContent>
                                     </Select>
-                                    <p className={`text-[10px] ${parseInt(pollInterval) < 30 ? 'text-destructive font-bold' : 'text-muted-foreground'}`}>
-                                        {parseInt(pollInterval) < 30
-                                            ? 'Caution: Fast polling may cause Yahoo Finance to block your IP.'
-                                            : 'How often the server fetches fresh prices and Greeks.'}
-                                    </p>
                                 </div>
 
                                 <div className="grid gap-2">
@@ -469,175 +453,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         How often an individual Position page auto-refreshes data while open.
                                     </p>
                                 </div>
-
-                                <Button className="w-full sm:w-auto" onClick={handleSaveSettings} disabled={saving || loading}>
-                                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                    Save Configuration
-                                </Button>
                             </div>
                         </TabsContent>
 
-                        <TabsContent value="integrations" className="m-0 space-y-6">
-                            <div>
-                                <h3 className="text-lg font-medium">Integrations</h3>
-                                <p className="text-sm text-muted-foreground">Manage connections to external services.</p>
-                            </div>
-
-                            <div className="space-y-4">
-                                <div className="flex items-center justify-between p-4 border rounded-lg bg-card">
-                                    <div className="space-y-1">
-                                        <h4 className="font-medium">Questrade Brokerage</h4>
-                                        <p className="text-sm text-muted-foreground">Connect your Questrade account for real-time data.</p>
-                                    </div>
-                                    <Badge variant={qtSaved ? "default" : "secondary"}>
-                                        {qtSaved ? "Connected" : "Not Linked"}
-                                    </Badge>
-                                </div>
-
-                                <div className="grid gap-4 p-6 border rounded-lg bg-muted/30">
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="qt-client">Questrade API Key / Refresh Token</Label>
-                                        <Input
-                                            id="qt-client"
-                                            value={qtClientId}
-                                            onChange={(e) => setQtClientId(e.target.value)}
-                                            placeholder="Paste your manually generated Refresh Token or Consumer Key"
-                                            type="password"
-                                        />
-                                        <p className="text-[10px] text-muted-foreground leading-normal">
-                                            <strong>Recommended:</strong> Click <strong>"New manual authorization"</strong> in your Questrade API Centre, copy the Refresh Token, and paste it here. Or, enter your static **Consumer Key (Client ID)** to use the redirect flow.
-                                        </p>
-                                    </div>
-
-                                    <Button
-                                        onClick={initiateQuestradeLogin}
-                                        disabled={qtConnecting}
-                                        className="w-full bg-[#ffcc00] text-black hover:bg-[#e6b800] font-bold transition-all duration-200 shadow-md hover:shadow-lg"
-                                    >
-                                        {qtConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                        Connect Questrade
-                                    </Button>
-
-                                    <p className="text-[10px] text-center text-muted-foreground italic">
-                                        The application will automatically detect, verify, and rotate your token directly.
-                                    </p>
-                                </div>
-                                
-                                <div className="flex items-center justify-between p-4 border rounded-lg bg-card mt-6">
-                                    <div className="space-y-1">
-                                        <h4 className="font-medium">Wealthsimple (via SnapTrade)</h4>
-                                        <p className="text-sm text-muted-foreground">Connect your SnapTrade App credentials to enable Wealthsimple.</p>
-                                    </div>
-                                    <Badge variant={snaptradeClientId && snaptradeConsumerKey ? "default" : "secondary"}>
-                                        {snaptradeClientId && snaptradeConsumerKey ? "Configured" : "Not Linked"}
-                                    </Badge>
-                                </div>
-
-                                <div className="grid gap-4 p-6 border rounded-lg bg-muted/30">
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="st-client">SnapTrade Client ID</Label>
-                                        <Input
-                                            id="st-client"
-                                            value={snaptradeClientId}
-                                            onChange={(e) => setSnaptradeClientId(e.target.value)}
-                                            placeholder="PERS-..."
-                                            type="text"
-                                        />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="st-key">SnapTrade Consumer Key</Label>
-                                        <Input
-                                            id="st-key"
-                                            value={snaptradeConsumerKey}
-                                            onChange={(e) => setSnaptradeConsumerKey(e.target.value)}
-                                            placeholder="6KyYeW..."
-                                            type="password"
-                                        />
-                                    </div>
-                                    <Button className="w-full mt-2" onClick={handleSaveSettings} disabled={saving}>
-                                        {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                                        Save SnapTrade Keys
-                                    </Button>
-                                    <p className="text-[10px] text-muted-foreground">
-                                        Once saved, go to the Wealthsimple dashboard to securely connect your broker.
-                                    </p>
-                                </div>
-                            </div>
-                        </TabsContent>
-
-                        <TabsContent value="account" className="m-0 space-y-8">
-                            <div>
-                                <h3 className="text-lg font-medium">Account & Security</h3>
-                                <p className="text-sm text-muted-foreground">Update your profile and password.</p>
-                            </div>
-
-                            {/* Update Username */}
-                            <section className="space-y-4">
-                                <h3 className="text-sm font-semibold flex items-center gap-2">
-                                    <UserIcon className="h-4 w-4" />
-                                    Profile Information
-                                </h3>
-                                <div className="grid gap-2 p-4 border rounded-lg">
-                                    <Label htmlFor="username">Username</Label>
-                                    <div className="flex gap-2">
-                                        <Input
-                                            id="username"
-                                            value={username}
-                                            onChange={(e) => setUsername(e.target.value)}
-                                        />
-                                        <Button
-                                            variant="secondary"
-                                            onClick={handleUsernameChange}
-                                            disabled={updatingProfile || username === user.username}
-                                        >
-                                            {updatingProfile ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Update'}
-                                        </Button>
-                                    </div>
-                                    {profileError && <p className="text-xs text-destructive">{profileError}</p>}
-                                    {profileSuccess && <p className="text-xs text-green-500 font-medium">{profileSuccess}</p>}
-                                </div>
-                            </section>
-
-                            {/* Update Password */}
-                            <section className="space-y-4">
-                                <h3 className="text-sm font-semibold flex items-center gap-2">
-                                    <Save className="h-4 w-4" />
-                                    Change Password
-                                </h3>
-                                <div className="grid gap-4 p-4 border rounded-lg">
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="current">Current Password</Label>
-                                        <Input
-                                            id="current"
-                                            type="password"
-                                            value={currentPassword}
-                                            onChange={(e) => setCurrentPassword(e.target.value)}
-                                        />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="new">New Password</Label>
-                                        <Input
-                                            id="new"
-                                            type="password"
-                                            value={newPassword}
-                                            onChange={(e) => setNewPassword(e.target.value)}
-                                        />
-                                    </div>
-                                    {pwError && <p className="text-xs text-destructive">{pwError}</p>}
-                                    {pwSuccess && <p className="text-xs text-green-500 font-medium">{pwSuccess}</p>}
-                                    <Button
-                                        variant="outline"
-                                        className="w-full"
-                                        onClick={handlePasswordChange}
-                                        disabled={changing}
-                                    >
-                                        {changing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                        Change Password
-                                    </Button>
-                                </div>
-                            </section>
-                        </TabsContent>
-
+                        {/* Tab 2: Day Trading Scanner */}
                         <TabsContent value="daytrading" className="m-0 space-y-6">
                             <div>
                                 <h3 className="text-lg font-medium">Day Trading Scanner</h3>
@@ -660,9 +479,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             onCheckedChange={setDayTradingEnabled}
                                         />
                                     </div>
-                                    <p className="text-[10px] text-muted-foreground">
-                                        Enable/disable background scanning of Day Trading alerts.
-                                    </p>
                                 </div>
 
                                 <div className="grid gap-2">
@@ -673,9 +489,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         onChange={(e) => setDayTradingSymbols(e.target.value)}
                                         placeholder="QQQ, SPY"
                                     />
-                                    <p className="text-[10px] text-muted-foreground">
-                                        Underlying indices to scan. Example: <code>QQQ, SPY</code>
-                                    </p>
                                 </div>
 
                                 <div className="grid gap-2">
@@ -726,54 +539,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </div>
                                 </div>
 
-                                <div className="grid gap-2 pt-4 border-t">
-                                    <div className="flex items-center justify-between">
-                                        <Label htmlFor="dtDiscordAlerts" className="flex items-center gap-2">
-                                            Discord Alerts Webhook
-                                        </Label>
-                                        <Switch
-                                            id="dtDiscordAlerts"
-                                            checked={discordAlertsEnabled}
-                                            onCheckedChange={setDiscordAlertsEnabled}
-                                        />
-                                    </div>
-                                </div>
-
-                                {discordAlertsEnabled && (
-                                    <div className="grid gap-2 animate-in fade-in slide-in-from-top-2">
-                                        <Label htmlFor="dtDiscordUrl">Discord Webhook URL</Label>
-                                        <Input
-                                            id="dtDiscordUrl"
-                                            type="text"
-                                            value={discordWebhookUrl}
-                                            onChange={(e) => setDiscordWebhookUrl(e.target.value)}
-                                            placeholder="https://discord.com/api/webhooks/..."
-                                        />
-                                    </div>
-                                )}
-
-                                <div className="grid gap-2 pt-4 border-t">
-                                    <Label htmlFor="dtPolygonKey">Polygon.io API Key (Required for 0DTE Option quotes)</Label>
-                                    <Input
-                                        id="dtPolygonKey"
-                                        type="password"
-                                        value={polygonApiKey}
-                                        onChange={(e) => setPolygonApiKey(e.target.value)}
-                                        placeholder="Enter Polygon Key"
-                                    />
-                                </div>
-
-                                <div className="grid gap-2">
-                                    <Label htmlFor="dtGexPassword">GEX Portal Password (Required for GEX Walls)</Label>
-                                    <Input
-                                        id="dtGexPassword"
-                                        type="password"
-                                        value={sscgexPassword}
-                                        onChange={(e) => setSscgexPassword(e.target.value)}
-                                        placeholder="Enter GEX Portal Password"
-                                    />
-                                </div>
-
                                 <div className="grid gap-4 pt-4 border-t">
                                     <div className="flex items-center justify-between">
                                         <Label htmlFor="dtAiEnabled" className="flex items-center gap-2">
@@ -802,10 +567,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             </Select>
                                         </div>
                                         <div className="grid gap-2">
-                                            <Label htmlFor="dtAiModel">
-                                              News Classifier Model
-                                              <span className="ml-2 text-xs text-zinc-500 font-normal">(fast, cheap — Llama, Hermes)</span>
-                                            </Label>
+                                            <Label htmlFor="dtAiModel">News Classifier Model</Label>
                                             <Input
                                                 id="dtAiModel"
                                                 value={dayTradingAiModel}
@@ -814,10 +576,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             />
                                         </div>
                                         <div className="grid gap-2">
-                                            <Label htmlFor="dtCoachModel">
-                                              Signal Coach Model
-                                              <span className="ml-2 text-xs text-zinc-500 font-normal">(deep reasoning — Claude Sonnet)</span>
-                                            </Label>
+                                            <Label htmlFor="dtCoachModel">Signal Coach Model</Label>
                                             <Input
                                                 id="dtCoachModel"
                                                 value={dayTradingCoachModel}
@@ -827,15 +586,246 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </div>
                                     </div>
                                 )}
-
-                                <Button className="w-full sm:w-auto" onClick={handleSaveSettings} disabled={saving || loading}>
-                                    {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                    Save Day Trading Settings
-                                </Button>
                             </div>
+                        </TabsContent>
+
+                        {/* Tab 3: API Keys & Credentials */}
+                        <TabsContent value="credentials" className="m-0 space-y-6">
+                            <div>
+                                <h3 className="text-lg font-medium">API Keys & Credentials</h3>
+                                <p className="text-sm text-muted-foreground">Manage your secret API keys, passwords, and brokerage credentials.</p>
+                            </div>
+
+                            <div className="space-y-6">
+                                {/* API Keys & Services */}
+                                <div className="border rounded-lg p-6 bg-card space-y-4">
+                                    <h4 className="font-semibold text-sm border-b pb-2">API Keys & Cloud Services</h4>
+                                    
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="key">OpenRouter API Key</Label>
+                                        <Input
+                                            id="key"
+                                            type="password"
+                                            value={openRouterKey}
+                                            onChange={(e) => setOpenRouterKey(e.target.value)}
+                                            placeholder="sk-or-..."
+                                        />
+                                    </div>
+
+                                    <div className="grid gap-2 pt-2">
+                                        <Label htmlFor="dtPolygonKey">Polygon.io API Key</Label>
+                                        <Input
+                                            id="dtPolygonKey"
+                                            type="password"
+                                            value={polygonApiKey}
+                                            onChange={(e) => setPolygonApiKey(e.target.value)}
+                                            placeholder="Enter Polygon Key"
+                                        />
+                                    </div>
+
+                                    <div className="grid gap-2 pt-2">
+                                        <Label htmlFor="dtGexPassword">GEX Portal Password</Label>
+                                        <Input
+                                            id="dtGexPassword"
+                                            type="password"
+                                            value={sscgexPassword}
+                                            onChange={(e) => setSscgexPassword(e.target.value)}
+                                            placeholder="Enter GEX Portal Password"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Discord Webhook */}
+                                <div className="border rounded-lg p-6 bg-card space-y-4">
+                                    <h4 className="font-semibold text-sm border-b pb-2">Discord Notifications</h4>
+                                    
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="dtDiscordAlerts" className="flex items-center gap-2">
+                                            Enable Discord Alerts Webhook
+                                        </Label>
+                                        <Switch
+                                            id="dtDiscordAlerts"
+                                            checked={discordAlertsEnabled}
+                                            onCheckedChange={setDiscordAlertsEnabled}
+                                        />
+                                    </div>
+
+                                    {discordAlertsEnabled && (
+                                        <div className="grid gap-2 animate-in fade-in slide-in-from-top-2 pt-2">
+                                            <Label htmlFor="dtDiscordUrl">Discord Webhook URL</Label>
+                                            <Input
+                                                id="dtDiscordUrl"
+                                                type="text"
+                                                value={discordWebhookUrl}
+                                                onChange={(e) => setDiscordWebhookUrl(e.target.value)}
+                                                placeholder="https://discord.com/api/webhooks/..."
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Brokerage Integrations */}
+                                <div className="border rounded-lg p-6 bg-card space-y-6">
+                                    <h4 className="font-semibold text-sm border-b pb-2">Brokerage Connections</h4>
+                                    
+                                    {/* Questrade */}
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <h5 className="font-medium text-sm">Questrade Brokerage</h5>
+                                            <Badge variant={qtSaved ? "default" : "secondary"}>
+                                                {qtSaved ? "Connected" : "Not Linked"}
+                                            </Badge>
+                                        </div>
+                                        <div className="grid gap-2 p-4 border rounded-md bg-muted/30">
+                                            <Label htmlFor="qt-client">Questrade API Key / Refresh Token</Label>
+                                            <Input
+                                                id="qt-client"
+                                                value={qtClientId}
+                                                onChange={(e) => setQtClientId(e.target.value)}
+                                                placeholder="Paste your manually generated Refresh Token or Consumer Key"
+                                                type="password"
+                                            />
+                                            <p className="text-[10px] text-muted-foreground leading-normal">
+                                                <strong>Recommended:</strong> Click <strong>"New manual authorization"</strong> in your Questrade API Centre, copy the Refresh Token, and paste it here. Or, enter your static **Consumer Key (Client ID)** to use the redirect flow.
+                                            </p>
+                                            <Button
+                                                onClick={initiateQuestradeLogin}
+                                                disabled={qtConnecting}
+                                                className="w-full mt-2 bg-[#ffcc00] text-black hover:bg-[#e6b800] font-bold transition-all duration-200 shadow-md hover:shadow-lg"
+                                            >
+                                                {qtConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                                Connect Questrade
+                                            </Button>
+                                            <p className="text-[10px] text-center text-muted-foreground italic mt-1">
+                                                The application will automatically detect, verify, and rotate your token directly.
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    {/* SnapTrade */}
+                                    <div className="space-y-3 pt-4 border-t">
+                                        <div className="flex items-center justify-between">
+                                            <h5 className="font-medium text-sm">Wealthsimple (via SnapTrade)</h5>
+                                            <Badge variant={snaptradeClientId && snaptradeConsumerKey ? "default" : "secondary"}>
+                                                {snaptradeClientId && snaptradeConsumerKey ? "Configured" : "Not Linked"}
+                                            </Badge>
+                                        </div>
+                                        <div className="grid gap-3 p-4 border rounded-md bg-muted/30">
+                                            <div className="grid gap-1">
+                                                <Label htmlFor="st-client">SnapTrade Client ID</Label>
+                                                <Input
+                                                    id="st-client"
+                                                    value={snaptradeClientId}
+                                                    onChange={(e) => setSnaptradeClientId(e.target.value)}
+                                                    placeholder="PERS-..."
+                                                    type="text"
+                                                />
+                                            </div>
+                                            <div className="grid gap-1">
+                                                <Label htmlFor="st-key">SnapTrade Consumer Key</Label>
+                                                <Input
+                                                    id="st-key"
+                                                    value={snaptradeConsumerKey}
+                                                    onChange={(e) => setSnaptradeConsumerKey(e.target.value)}
+                                                    placeholder="6KyYeW..."
+                                                    type="password"
+                                                />
+                                            </div>
+                                            <p className="text-[10px] text-muted-foreground">
+                                                Once saved, go to the Wealthsimple dashboard to securely connect your broker.
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </TabsContent>
+
+                        {/* Tab 4: Account Security */}
+                        <TabsContent value="account" className="m-0 space-y-8">
+                            <div>
+                                <h3 className="text-lg font-medium">Account & Security</h3>
+                                <p className="text-sm text-muted-foreground">Update your profile and password.</p>
+                            </div>
+
+                            {/* Update Username */}
+                            <section className="space-y-4">
+                                <h3 className="text-sm font-semibold flex items-center gap-2">
+                                    <UserIcon className="h-4 w-4" />
+                                    Profile Information
+                                </h3>
+                                <div className="grid gap-2 p-4 border rounded-lg bg-card">
+                                    <Label htmlFor="username">Username</Label>
+                                    <div className="flex gap-2">
+                                        <Input
+                                            id="username"
+                                            value={username}
+                                            onChange={(e) => setUsername(e.target.value)}
+                                        />
+                                        <Button
+                                            variant="secondary"
+                                            onClick={handleUsernameChange}
+                                            disabled={updatingProfile || username === user.username}
+                                        >
+                                            {updatingProfile ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Update'}
+                                        </Button>
+                                    </div>
+                                    {profileError && <p className="text-xs text-destructive">{profileError}</p>}
+                                    {profileSuccess && <p className="text-xs text-green-500 font-medium">{profileSuccess}</p>}
+                                </div>
+                            </section>
+
+                            {/* Update Password */}
+                            <section className="space-y-4">
+                                <h3 className="text-sm font-semibold flex items-center gap-2">
+                                    <Lock className="h-4 w-4" />
+                                    Change Password
+                                </h3>
+                                <div className="grid gap-4 p-4 border rounded-lg bg-card">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="current">Current Password</Label>
+                                        <Input
+                                            id="current"
+                                            type="password"
+                                            value={currentPassword}
+                                            onChange={(e) => setCurrentPassword(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="new">New Password</Label>
+                                        <Input
+                                            id="new"
+                                            type="password"
+                                            value={newPassword}
+                                            onChange={(e) => setNewPassword(e.target.value)}
+                                        />
+                                    </div>
+                                    {pwError && <p className="text-xs text-destructive">{pwError}</p>}
+                                    {pwSuccess && <p className="text-xs text-green-500 font-medium">{pwSuccess}</p>}
+                                    <Button
+                                        variant="outline"
+                                        className="w-full"
+                                        onClick={handlePasswordChange}
+                                        disabled={changing}
+                                    >
+                                        {changing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                        Change Password
+                                    </Button>
+                                </div>
+                            </section>
                         </TabsContent>
                     </div>
                 </Tabs>
+
+                {/* Unified Footer */}
+                <div className="p-4 border-t flex justify-end gap-2 shrink-0 bg-background">
+                    <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>
+                        Cancel
+                    </Button>
+                    <Button onClick={handleSaveSettings} disabled={saving || loading}>
+                        {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Save Changes
+                    </Button>
+                </div>
             </DialogContent>
         </Dialog>
     );
