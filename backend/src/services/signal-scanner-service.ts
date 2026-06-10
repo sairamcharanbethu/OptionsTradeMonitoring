@@ -1630,9 +1630,24 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
             ['SPY', 'QQQ', upperSymbol].includes(t.toUpperCase())
           ) || (n.title || '').toLowerCase().includes(symbol.toLowerCase());
         return isRecent && isRelevant;
-      }).slice(0, 3); // max 3 ticker headlines
+      });
 
-      for (const n of articles) {
+      // Rank Yahoo articles by keyword importance score, then by time (newest first)
+      const scoredArticles = articles
+        .map((n: any) => ({
+          article: n,
+          score: this.getHeadlineScore(n.title || '')
+        }))
+        .sort((a: any, b: any) => {
+          if (b.score !== a.score) {
+            return b.score - a.score;
+          }
+          return b.article.providerPublishTime - a.article.providerPublishTime;
+        })
+        .slice(0, 3)
+        .map((x: any) => x.article);
+
+      for (const n of scoredArticles) {
         const minsAgo = Math.round((now - n.providerPublishTime * 1000) / 60000);
         const c = this.compressHeadline(n.title || '');
         compressed.push(`${c} (Yahoo/${n.publisher}, ${minsAgo}m ago)`);
@@ -1655,11 +1670,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
       // Extract all <item> blocks then pull <title> and <pubDate>
       const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
 
-      const macroKeywords = /fed|fomc|rates?|cpi|pce|gdp|jobs|payroll|inflation|tariff|recession|bank|treasury|yields?|nasdaq|s&p|market|economy|trade|war|escalat|geopolit|china|russia|iran|oil|energy|crash|rally|selloff|rout|powell|yellen|fiscal|deficit|debt/i;
+      const macroKeywords = /fed|fomc|rates?|cpi|pce|gdp|jobs|payroll|inflation|tariff|recession|bank|treasury|yields?|nasdaq|s&p|market|economy|trade|war|escalat|geopolit|china|russia|iran|oil|energy|crash|rally|selloff|rout|powell|yellen|fiscal|deficit|debt|middle east|bomber|military|strait|hormuz/i;
 
-      let macroCount = 0;
+      const candidates: Array<{ title: string; pubDate: Date; minsAgo: number; score: number }> = [];
+
       for (const item of itemMatches) {
-        if (macroCount >= 3) break; // max 3 macro headlines
         const titleMatch = item.match(/<title>([\s\S]*?)<\/title>/);
         const dateMatch  = item.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
         if (!titleMatch || !dateMatch) continue;
@@ -1675,10 +1690,30 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
         if (!macroKeywords.test(rawTitle)) continue; // only market-moving macro headlines
 
         const minsAgo = Math.round((now - pubDate.getTime()) / 60000);
-        const c = this.compressHeadline(rawTitle);
-        compressed.push(`[MACRO] ${c} (FinancialJuice, ${minsAgo}m ago)`);
-        rawLines.push(`• [MACRO] "${rawTitle}" — FinancialJuice, ${minsAgo}m ago`);
-        macroCount++;
+        const score = this.getHeadlineScore(rawTitle);
+
+        candidates.push({
+          title: rawTitle,
+          pubDate,
+          minsAgo,
+          score
+        });
+      }
+
+      // Sort candidates by score descending, then by pubDate descending (newest first)
+      const topMacro = candidates
+        .sort((a, b) => {
+          if (b.score !== a.score) {
+            return b.score - a.score;
+          }
+          return b.pubDate.getTime() - a.pubDate.getTime();
+        })
+        .slice(0, 3);
+
+      for (const item of topMacro) {
+        const c = this.compressHeadline(item.title);
+        compressed.push(`[MACRO] ${c} (FinancialJuice, ${item.minsAgo}m ago)`);
+        rawLines.push(`• [MACRO] "${item.title}" — FinancialJuice, ${item.minsAgo}m ago`);
       }
     } catch (err: any) {
       this.fastify.log.warn(`[SignalScannerService] FinancialJuice fetch failed: ${err.message}`);
@@ -1689,6 +1724,31 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
     }
 
     return { headlines: compressed, raw: rawLines.join('\n') };
+  }
+
+  /**
+   * Assigns an importance score to a news headline based on critical financial/macro/geopolitical keywords.
+   */
+  private getHeadlineScore(title: string): number {
+    const t = title.toLowerCase();
+    let score = 0;
+
+    // High Impact Macro (Tier 1): Federal Reserve, CPI/PCE inflation, Job payrolls
+    if (/\b(cpi|pce|inflation|fomc|fed\b|federal reserve|interest rates?|rate hikes?|rate cuts?|payrolls?|nfp|gdp|recession)\b/i.test(t)) {
+      score += 10;
+    }
+
+    // Medium Impact Macro / Major Geopolitics (Tier 2): Wars, oil shocks, tariffs, central bank decisions
+    if (/\b(war\b|geopolitical|missiles?|attacks?|clashes?|tariffs?|trade war|yields?|treasuries|oil prices?|crude\b|escalat|china\b|russia\b|iran\b|nuclear|sanctions?|middle east|bomber|military|strait|hormuz)\b/i.test(t)) {
+      score += 5;
+    }
+
+    // Market specific (Tier 3): Nasdaq, S&P 500, crash, rally, earnings, downgrade, upgrade
+    if (/\b(nasdaq|s&p|dow jones|crash|panic|selloff|rout|rally|earnings|guidance|upgrade|downgrade)\b/i.test(t)) {
+      score += 3;
+    }
+
+    return score;
   }
 
   /**
