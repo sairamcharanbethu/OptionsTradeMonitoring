@@ -35,6 +35,7 @@ interface ApiHealthState {
   polygon: { status: string; latencyMs: number };
   openRouter: { status: string; latencyMs: number };
   discord: { status: string; latencyMs: number };
+  alpaca?: { status: string; latencyMs: number };
 }
 
 const renderTokenUsageBadge = (usage: any) => {
@@ -104,7 +105,8 @@ export default function DayTradingTerminal() {
     sscgexPortal: { status: 'UP', latencyMs: 140 },
     polygon: { status: 'UP', latencyMs: 110 },
     openRouter: { status: 'UP', latencyMs: 310 },
-    discord: { status: 'UP', latencyMs: 120 }
+    discord: { status: 'UP', latencyMs: 120 },
+    alpaca: { status: 'N/A', latencyMs: 0 }
   });
   const [healthLoading, setHealthLoading] = useState(false);
 
@@ -407,31 +409,48 @@ export default function DayTradingTerminal() {
             )}
           </div>
           <div className="flex flex-wrap gap-1 text-[9px] font-mono justify-between">
-            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Yahoo Finance">
-              <span className={healthData.yahooFinance.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
-              <span className="text-zinc-500 font-bold">YF</span>
-              <span className="text-zinc-300">{healthData.yahooFinance.latencyMs}ms</span>
-            </div>
-            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="GEX Portal API">
-              <span className={healthData.sscgexPortal.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
-              <span className="text-zinc-500 font-bold">GEX</span>
-              <span className="text-zinc-300">{healthData.sscgexPortal.latencyMs}ms</span>
-            </div>
-            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Polygon API">
-              <span className={healthData.polygon.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
-              <span className="text-zinc-500 font-bold">POLY</span>
-              <span className="text-zinc-300">{healthData.polygon.latencyMs}ms</span>
-            </div>
-            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="OpenRouter AI">
-              <span className={healthData.openRouter.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
-              <span className="text-zinc-500 font-bold">AI</span>
-              <span className="text-zinc-300">{healthData.openRouter.latencyMs}ms</span>
-            </div>
-            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Discord Webhook API">
-              <span className={healthData.discord?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
-              <span className="text-zinc-500 font-bold">DISC</span>
-              <span className="text-zinc-300">{healthData.discord?.latencyMs ?? 0}ms</span>
-            </div>
+            {healthData.yahooFinance.status !== 'N/A' && (
+              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Yahoo Finance">
+                <span className={healthData.yahooFinance.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className="text-zinc-500 font-bold">YF</span>
+                <span className="text-zinc-300">{healthData.yahooFinance.latencyMs}ms</span>
+              </div>
+            )}
+            {healthData.sscgexPortal.status !== 'N/A' && (
+              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="GEX Portal API">
+                <span className={healthData.sscgexPortal.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className="text-zinc-500 font-bold">GEX</span>
+                <span className="text-zinc-300">{healthData.sscgexPortal.latencyMs}ms</span>
+              </div>
+            )}
+            {healthData.polygon.status !== 'N/A' && (
+              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Polygon API">
+                <span className={healthData.polygon.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className="text-zinc-500 font-bold">POLY</span>
+                <span className="text-zinc-300">{healthData.polygon.latencyMs}ms</span>
+              </div>
+            )}
+            {healthData.openRouter.status !== 'N/A' && (
+              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="OpenRouter AI">
+                <span className={healthData.openRouter.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className="text-zinc-500 font-bold">AI</span>
+                <span className="text-zinc-300">{healthData.openRouter.latencyMs}ms</span>
+              </div>
+            )}
+            {healthData.discord?.status !== 'N/A' && (
+              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Discord Webhook API">
+                <span className={healthData.discord?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className="text-zinc-500 font-bold">DISC</span>
+                <span className="text-zinc-300">{healthData.discord?.latencyMs ?? 0}ms</span>
+              </div>
+            )}
+            {healthData.alpaca?.status !== 'N/A' && (
+              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Alpaca API">
+                <span className={healthData.alpaca?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className="text-zinc-500 font-bold">ALPA</span>
+                <span className="text-zinc-300">{healthData.alpaca?.latencyMs ?? 0}ms</span>
+              </div>
+            )}
             <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Real-Time Streaming WebSocket">
               <span className={isConnected ? 'text-green-400' : 'text-red-400 animate-pulse'}>●</span>
               <span className="text-zinc-500 font-bold">STREAM</span>

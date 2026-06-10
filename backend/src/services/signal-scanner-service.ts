@@ -1651,7 +1651,10 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
   public async runHealthCheck(userId: number): Promise<any> {
     const settings = await this.getSettingsForUser(userId);
 
-    const checkLatency = async (fn: () => Promise<void>): Promise<{ status: string; latencyMs: number }> => {
+    const checkLatency = async (fn: () => Promise<void>, isConfigured = true): Promise<{ status: string; latencyMs: number }> => {
+      if (!isConfigured) {
+        return { status: 'N/A', latencyMs: 0 };
+      }
       const start = Date.now();
       try {
         await fn();
@@ -1666,34 +1669,26 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
     });
 
     const sscgexCheck = checkLatency(async () => {
-      if (settings.sscgex_password) {
-        const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
-          password: settings.sscgex_password
-        }, { timeout: 4000 });
-        const token = (tokenRes.data as any).token;
-        await axios.get('https://sscgex.up.railway.app/api/gex/QQQ?strikes=10', {
-          headers: { Authorization: `Bearer ${token}` },
-          timeout: 4000
-        });
-      } else {
-        throw new Error('No password');
-      }
-    });
+      const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
+        password: settings.sscgex_password
+      }, { timeout: 4000 });
+      const token = (tokenRes.data as any).token;
+      await axios.get('https://sscgex.up.railway.app/api/gex/QQQ?strikes=10', {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 4000
+      });
+    }, !!settings.sscgex_password);
 
     const polygonCheck = checkLatency(async () => {
-      if (settings.polygon_api_key) {
-        await axios.get('https://api.polygon.io/v3/reference/options/contracts', {
-          params: { underlying_ticker: 'QQQ', limit: 1, apikey: settings.polygon_api_key },
-          timeout: 4000
-        });
-      } else {
-        throw new Error('No API Key');
-      }
-    });
+      await axios.get('https://api.polygon.io/v3/reference/options/contracts', {
+        params: { underlying_ticker: 'QQQ', limit: 1, apikey: settings.polygon_api_key },
+        timeout: 4000
+      });
+    }, !!settings.polygon_api_key);
 
     const openrouterCheck = checkLatency(async () => {
       const key = await this.getAiApiKey(settings.day_trading_ai_provider);
-      if (settings.day_trading_ai_provider === 'openrouter' && key) {
+      if (key) {
         await axios.get('https://openrouter.ai/api/v1/models', {
           headers: { Authorization: `Bearer ${key}` },
           timeout: 4000
@@ -1701,22 +1696,37 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
       } else {
         throw new Error('No Key');
       }
-    });
+    }, settings.day_trading_ai_provider === 'openrouter');
 
     const discordCheck = checkLatency(async () => {
-      if (settings.discord_webhook_url) {
-        await axios.get(settings.discord_webhook_url, { timeout: 4000 });
-      } else {
-        throw new Error('No Discord Webhook');
-      }
-    });
+      await axios.get(settings.discord_webhook_url, { timeout: 4000 });
+    }, !!settings.discord_webhook_url);
 
-    const [yahoo, sscgex, polygon, openrouter, discord] = await Promise.all([
+    const alpacaCheck = checkLatency(async () => {
+      const keyId = settings.alpaca_key_id?.trim();
+      const secretKey = settings.alpaca_secret_key?.trim();
+      if (keyId && secretKey) {
+        const res = await fetch('https://paper-api.alpaca.markets/v2/account', {
+          headers: {
+            'APCA-API-KEY-ID': keyId,
+            'APCA-API-SECRET-KEY': secretKey
+          }
+        });
+        if (!res.ok) {
+          throw new Error(`Alpaca API returned status ${res.status}`);
+        }
+      } else {
+        throw new Error('Alpaca key/secret not set');
+      }
+    }, !!settings.alpaca_key_id && !!settings.alpaca_secret_key);
+
+    const [yahoo, sscgex, polygon, openrouter, discord, alpaca] = await Promise.all([
       yahooCheck,
       sscgexCheck,
       polygonCheck,
       openrouterCheck,
-      discordCheck
+      discordCheck,
+      alpacaCheck
     ]);
 
     return {
@@ -1724,7 +1734,8 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
       sscgexPortal: sscgex,
       polygon: polygon,
       openRouter: openrouter,
-      discord: discord
+      discord: discord,
+      alpaca: alpaca
     };
   }
 

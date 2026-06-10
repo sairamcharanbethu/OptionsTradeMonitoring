@@ -542,6 +542,7 @@ export const api = {
     polygon: { status: string; latencyMs: number };
     openRouter: { status: string; latencyMs: number };
     discord: { status: string; latencyMs: number };
+    alpaca: { status: string; latencyMs: number };
   }> {
     const res = await authFetch(`${API_BASE}/signals/health`);
     if (!res.ok) throw new Error('Failed to fetch day trading API health');
