@@ -1910,13 +1910,23 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
     this.fastify.log.info(`[SignalScannerService] Executing auto paper trade on Alpaca for ${osiTicker}...`);
 
     try {
-      const orderPayload = {
+      // Use limit order with slippage cap to prevent catastrophic fills in fast 0 DTE markets
+      // Cap at 3% above mid-price (mark). Falls back to market if mark is unavailable.
+      const useLimitOrder = mark !== null && mark > 0;
+      const limitPrice = useLimitOrder ? Number((mark * 1.03).toFixed(2)) : undefined;
+
+      const orderPayload: any = {
         symbol: osiTicker,
         qty: 1,
         side: 'buy',
-        type: 'market',
+        type: useLimitOrder ? 'limit' : 'market',
         time_in_force: 'day'
       };
+      if (limitPrice) {
+        orderPayload.limit_price = limitPrice.toString();
+      }
+
+      this.fastify.log.info(`[SignalScannerService] Placing ${orderPayload.type} order for ${osiTicker}${limitPrice ? ` @ limit $${limitPrice}` : ''}`);
 
       const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
         method: 'POST',

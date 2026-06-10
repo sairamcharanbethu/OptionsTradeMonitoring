@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify';
 import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
+import WebSocket from 'ws';
 
 export class MarketPoller {
   private fastify: FastifyInstance;
@@ -12,6 +13,12 @@ export class MarketPoller {
   private pollingEnabled: boolean = true;
 
   private redisClient: any;
+
+  // Alpaca WebSocket stream
+  private alpacaWs: WebSocket | null = null;
+  private alpacaReconnectAttempts: number = 0;
+  private alpacaReconnectTimer: NodeJS.Timeout | null = null;
+  private alpacaStreamActive: boolean = false;
 
   constructor(fastify: FastifyInstance, redisClient?: any) {
     this.fastify = fastify;
@@ -43,6 +50,9 @@ export class MarketPoller {
     // Start recursive loop
     this.scheduleNextPoll();
     this.startBriefingJob();
+
+    // Start Alpaca WebSocket stream for instant trade update notifications
+    this.startAlpacaStream();
   }
 
   private scheduleNextPoll() {
@@ -891,6 +901,22 @@ export class MarketPoller {
                         position.expiration_date
                     );
                     
+                    // Use limit order with 3% slippage floor to prevent terrible exit fills
+                    const useLimitExit = price > 0;
+                    const exitLimitPrice = useLimitExit ? Number((price * 0.97).toFixed(2)) : undefined;
+
+                    const exitPayload: any = {
+                        symbol: osiTicker,
+                        qty: position.quantity || 1,
+                        side: 'sell',
+                        type: useLimitExit ? 'limit' : 'market',
+                        time_in_force: 'day'
+                    };
+                    if (exitLimitPrice) {
+                        exitPayload.limit_price = exitLimitPrice.toString();
+                    }
+
+                    this.fastify.log.info(`[MarketPoller] Placing Alpaca ${exitPayload.type} exit for position ${position.id} (${osiTicker})${exitLimitPrice ? ` @ limit $${exitLimitPrice}` : ''}`);
                     const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
                         method: 'POST',
                         headers: {
@@ -898,13 +924,7 @@ export class MarketPoller {
                             'APCA-API-SECRET-KEY': alpacaSecretKey,
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({
-                            symbol: osiTicker,
-                            qty: position.quantity || 1,
-                            side: 'sell',
-                            type: 'market',
-                            time_in_force: 'day'
-                        })
+                        body: JSON.stringify(exitPayload)
                     });
                     if (!res.ok) {
                         const errText = await res.text();
@@ -1005,6 +1025,206 @@ export class MarketPoller {
       });
     } catch (err: any) {
       this.fastify.log.error('[MarketPoller] Failed to notify n8n:', err.message);
+    }
+  }
+  // ═══ Alpaca WebSocket Trade Updates Stream ═══════════════════════════════
+
+  /**
+   * Connects to Alpaca's paper trading WebSocket stream and subscribes
+   * to trade_updates. On fill events, instantly syncs position status
+   * in our database and broadcasts to the frontend.
+   */
+  private async startAlpacaStream() {
+    // Find any user with Alpaca credentials configured
+    try {
+      const { rows } = await (this.fastify as any).pg.query(
+        `SELECT s1.user_id, s1.value as key_id, s2.value as secret_key
+         FROM settings s1
+         JOIN settings s2 ON s1.user_id = s2.user_id AND s2.key = 'alpaca_secret_key'
+         WHERE s1.key = 'alpaca_key_id' AND s1.value != '' AND s2.value != ''
+         LIMIT 1`
+      );
+
+      if (rows.length === 0) {
+        this.fastify.log.info('[AlpacaStream] No Alpaca credentials configured. Stream not started.');
+        return;
+      }
+
+      const { key_id, secret_key } = rows[0];
+      this.connectAlpacaStream(key_id.trim(), secret_key.trim());
+    } catch (err: any) {
+      this.fastify.log.error(`[AlpacaStream] Failed to load Alpaca credentials: ${err.message}`);
+    }
+  }
+
+  private connectAlpacaStream(keyId: string, secretKey: string) {
+    if (this.alpacaWs) {
+      try { this.alpacaWs.close(); } catch (_) {}
+    }
+
+    this.fastify.log.info('[AlpacaStream] Connecting to wss://paper-api.alpaca.markets/stream...');
+    const ws = new WebSocket('wss://paper-api.alpaca.markets/stream');
+    this.alpacaWs = ws;
+
+    ws.on('open', () => {
+      this.fastify.log.info('[AlpacaStream] Connected. Authenticating...');
+      ws.send(JSON.stringify({
+        action: 'authenticate',
+        data: { key_id: keyId, secret_key: secretKey }
+      }));
+    });
+
+    ws.on('message', async (data: WebSocket.Data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+
+        // Authentication response
+        if (msg.stream === 'authorization') {
+          if (msg.data?.status === 'authorized') {
+            this.fastify.log.info('[AlpacaStream] Authenticated. Subscribing to trade_updates...');
+            this.alpacaReconnectAttempts = 0;
+            this.alpacaStreamActive = true;
+            ws.send(JSON.stringify({
+              action: 'listen',
+              data: { streams: ['trade_updates'] }
+            }));
+          } else {
+            this.fastify.log.error(`[AlpacaStream] Authentication failed: ${JSON.stringify(msg.data)}`);
+          }
+          return;
+        }
+
+        // Subscription confirmation
+        if (msg.stream === 'listening') {
+          this.fastify.log.info(`[AlpacaStream] Subscribed to streams: ${JSON.stringify(msg.data?.streams)}`);
+          return;
+        }
+
+        // Trade update events
+        if (msg.stream === 'trade_updates') {
+          await this.handleAlpacaTradeUpdate(msg.data);
+        }
+      } catch (parseErr: any) {
+        this.fastify.log.error(`[AlpacaStream] Failed to parse message: ${parseErr.message}`);
+      }
+    });
+
+    ws.on('error', (err: Error) => {
+      this.fastify.log.error(`[AlpacaStream] WebSocket error: ${err.message}`);
+    });
+
+    ws.on('close', (code: number, reason: Buffer) => {
+      this.alpacaStreamActive = false;
+      this.fastify.log.warn(`[AlpacaStream] Connection closed (code: ${code}, reason: ${reason.toString()}). Scheduling reconnect...`);
+      this.scheduleAlpacaReconnect(keyId, secretKey);
+    });
+  }
+
+  private scheduleAlpacaReconnect(keyId: string, secretKey: string) {
+    if (this.alpacaReconnectTimer) clearTimeout(this.alpacaReconnectTimer);
+
+    // Exponential backoff: 2s, 4s, 8s, 16s, 32s, max 60s
+    const delay = Math.min(60000, Math.pow(2, this.alpacaReconnectAttempts + 1) * 1000);
+    this.alpacaReconnectAttempts++;
+
+    this.fastify.log.info(`[AlpacaStream] Reconnecting in ${delay / 1000}s (attempt ${this.alpacaReconnectAttempts})...`);
+    this.alpacaReconnectTimer = setTimeout(() => {
+      this.connectAlpacaStream(keyId, secretKey);
+    }, delay);
+  }
+
+  private async handleAlpacaTradeUpdate(data: any) {
+    const event = data?.event;
+    const order = data?.order;
+
+    if (!event || !order) return;
+
+    const orderId = order.id;
+    const orderSymbol = order.symbol; // OSI ticker
+    const orderSide = order.side; // 'buy' or 'sell'
+    const filledQty = Number(order.filled_qty || 0);
+    const filledAvgPrice = Number(order.filled_avg_price || 0);
+    const orderStatus = order.status;
+
+    this.fastify.log.info(`[AlpacaStream] Trade update: ${event} | ${orderSymbol} | Side: ${orderSide} | Status: ${orderStatus} | Filled: ${filledQty} @ $${filledAvgPrice}`);
+
+    switch (event) {
+      case 'fill': {
+        // Order fully filled
+        if (orderSide === 'buy') {
+          // Entry fill — update the position's entry price with actual fill price
+          try {
+            await (this.fastify as any).pg.query(
+              `UPDATE positions SET entry_price = $1, current_price = $1, trailing_high_price = $1, updated_at = CURRENT_TIMESTAMP
+               WHERE account_id = 'alpaca_paper' AND status = 'OPEN'
+               AND notes LIKE $2`,
+              [filledAvgPrice, `%${orderId}%`]
+            );
+            this.fastify.log.info(`[AlpacaStream] Entry fill recorded: ${orderSymbol} @ $${filledAvgPrice}`);
+          } catch (err: any) {
+            this.fastify.log.error(`[AlpacaStream] Failed to update entry fill: ${err.message}`);
+          }
+        } else if (orderSide === 'sell') {
+          // Exit fill — close the position with actual exit price
+          try {
+            const { rows } = await (this.fastify as any).pg.query(
+              `SELECT id, entry_price, quantity, user_id FROM positions
+               WHERE account_id = 'alpaca_paper' AND status = 'OPEN'
+               AND symbol = $1
+               ORDER BY created_at DESC LIMIT 1`,
+              [orderSymbol.substring(0, 3)] // Extract root symbol (e.g., SPY, QQQ)
+            );
+
+            if (rows.length > 0) {
+              const pos = rows[0];
+              const realizedPnl = (filledAvgPrice - Number(pos.entry_price)) * Number(pos.quantity) * 100;
+              await (this.fastify as any).pg.query(
+                `UPDATE positions SET status = 'CLOSED', current_price = $1, exit_price = $1,
+                 realized_pnl = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+                [filledAvgPrice, realizedPnl, pos.id]
+              );
+              this.fastify.log.info(`[AlpacaStream] Exit fill recorded: ${orderSymbol} @ $${filledAvgPrice} | P&L: $${realizedPnl.toFixed(2)}`);
+
+              // Invalidate frontend caches
+              await this.redisClient.del(`USER_POSITIONS:${pos.user_id}`);
+              await this.redisClient.del(`USER_STATS:${pos.user_id}`);
+            }
+          } catch (err: any) {
+            this.fastify.log.error(`[AlpacaStream] Failed to update exit fill: ${err.message}`);
+          }
+        }
+
+        // Broadcast to frontend
+        this.broadcastToFrontend({ type: 'ALPACA_FILL', data: { event, symbol: orderSymbol, side: orderSide, price: filledAvgPrice, qty: filledQty } });
+        break;
+      }
+
+      case 'partial_fill': {
+        this.fastify.log.info(`[AlpacaStream] Partial fill: ${orderSymbol} ${filledQty} @ $${filledAvgPrice}`);
+        this.broadcastToFrontend({ type: 'ALPACA_PARTIAL_FILL', data: { event, symbol: orderSymbol, side: orderSide, price: filledAvgPrice, qty: filledQty } });
+        break;
+      }
+
+      case 'canceled':
+      case 'rejected': {
+        this.fastify.log.warn(`[AlpacaStream] Order ${event}: ${orderSymbol} | ID: ${orderId} | Reason: ${order.reject_reason || 'N/A'}`);
+        this.broadcastToFrontend({ type: 'ALPACA_ORDER_EVENT', data: { event, symbol: orderSymbol, orderId, reason: order.reject_reason } });
+        break;
+      }
+
+      default:
+        this.fastify.log.debug(`[AlpacaStream] Unhandled event: ${event}`);
+    }
+  }
+
+  private broadcastToFrontend(message: any) {
+    if (this.fastify.websocketServer) {
+      const payload = JSON.stringify(message);
+      this.fastify.websocketServer.clients.forEach((client: any) => {
+        if (client.readyState === 1) {
+          client.send(payload);
+        }
+      });
     }
   }
 }
