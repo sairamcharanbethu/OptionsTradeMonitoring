@@ -9,7 +9,7 @@ import { execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 
-const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
+const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
 // ── 2026 High-Impact Economic Calendar ─────────────────────────────────────
 // Hardcoded from official sources: Fed Reserve, BLS, CME — no API needed.
@@ -324,7 +324,7 @@ Rules:
 - NEUTRAL = no material market-moving news`;
 
     try {
-      const res = await this.callModelDirect(classifierModel, apiKey, classifierPrompt, 80);
+      const res = await this.callModelDirect(classifierModel, apiKey, classifierPrompt, 150);
         await redis.set(
           `NEWS_VERDICT:${symbol}:${nyDateStr}`,
           JSON.stringify({
@@ -1390,7 +1390,7 @@ Rules:
 
         try {
           const llamaRes = await this.callModelDirect(
-            classifierModel, key, classifierPrompt, 80
+            classifierModel, key, classifierPrompt, 150
           );
           if (llamaRes.verdict && ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(llamaRes.verdict)) {
             macroVerdict = llamaRes.verdict;
@@ -1475,7 +1475,7 @@ Write coaching commentary (max 150 words). Format:
 Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
 
       try {
-        const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 220);
+        const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 800);
         finalCommentary = sonnetRes.analysis || sonnetRes.verdict || '';
         finalVerdict = sonnetRes.verdict || 'WAIT';
         claudeUsage = sonnetRes.usage || null;

@@ -5,7 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AIService = void 0;
 const yahoo_finance2_1 = __importDefault(require("yahoo-finance2"));
-const yahooFinance = new yahoo_finance2_1.default({ suppressNotices: ['ripHistorical'] });
+const yahooFinance = new yahoo_finance2_1.default({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 function toCavemanStyle(text) {
     if (!text)
         return '';

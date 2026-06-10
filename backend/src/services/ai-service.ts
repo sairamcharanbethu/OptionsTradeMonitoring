@@ -2,7 +2,7 @@
 import { FastifyInstance } from 'fastify';
 import YahooFinance from 'yahoo-finance2';
 
-const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical'] });
+const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
 function toCavemanStyle(text: string): string {
     if (!text) return '';
