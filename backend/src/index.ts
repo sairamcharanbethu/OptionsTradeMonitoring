@@ -404,10 +404,12 @@ const start = async () => {
       fastify.log.info('[WebSocket] Client connected');
 
       socket.on('message', (message: any) => {
-        // Handle subscriptions from frontend if we want selective streaming
-        // For now, we broadcast everything we have.
         try {
           const data = JSON.parse(message.toString());
+          if (data && data.type === 'ping') {
+            socket.send(JSON.stringify({ type: 'pong' }));
+            return;
+          }
           fastify.log.info(`[WebSocket] Received: ${JSON.stringify(data)}`);
         } catch (e) {
           // Non-JSON message, ignore

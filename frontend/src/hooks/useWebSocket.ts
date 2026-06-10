@@ -12,6 +12,7 @@ const subscribers = new Set<(msg: WebSocketMessage) => void>();
 const statusSubscribers = new Set<(connected: boolean) => void>();
 let reconnectTimeout: ReturnType<typeof setTimeout> | undefined = undefined;
 let closeTimeout: ReturnType<typeof setTimeout> | undefined = undefined;
+let pingInterval: ReturnType<typeof setInterval> | undefined = undefined;
 
 const connectGlobal = (url: string) => {
     if (sharedSocket) return;
@@ -37,11 +38,22 @@ const connectGlobal = (url: string) => {
         console.log('[WebSocket] Connected');
         isConnectedGlobal = true;
         statusSubscribers.forEach(cb => cb(true));
+
+        // Start heartbeat ping every 30 seconds to keep the connection alive (avoid reverse proxy timeouts)
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+            if (sharedSocket && sharedSocket.readyState === WebSocket.OPEN) {
+                sharedSocket.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000);
     };
 
     socket.onmessage = (event) => {
         try {
             const msg = JSON.parse(event.data);
+            if (msg && msg.type === 'pong') {
+                return; // Heartbeat response, ignore
+            }
             subscribers.forEach(cb => cb(msg));
         } catch (e) {
             console.error('[WebSocket] Failed to parse message:', e);
@@ -53,6 +65,11 @@ const connectGlobal = (url: string) => {
         isConnectedGlobal = false;
         statusSubscribers.forEach(cb => cb(false));
         sharedSocket = null;
+
+        if (pingInterval) {
+            clearInterval(pingInterval);
+            pingInterval = undefined;
+        }
 
         // Only reconnect if there are active subscribers
         if (subscribers.size > 0 || statusSubscribers.size > 0) {
@@ -79,6 +96,10 @@ const disconnectGlobal = () => {
             console.log('[WebSocket] No active subscribers. Closing connection.');
             sharedSocket.close();
             sharedSocket = null;
+            if (pingInterval) {
+                clearInterval(pingInterval);
+                pingInterval = undefined;
+            }
         }
     }, 2000);
 };
