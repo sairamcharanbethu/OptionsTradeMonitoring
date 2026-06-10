@@ -205,7 +205,7 @@ export default function PositionDetailsPage() {
         : Number(position.strike_price) - Number(entryPrice);
 
     return (
-        <div className="container mx-auto p-4 sm:p-6 lg:p-8 max-w-7xl animate-in fade-in duration-500">
+        <div className="container mx-auto p-4 sm:p-6 lg:p-8 max-w-[1600px] animate-in fade-in duration-500">
             {/* Header */}
             <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
