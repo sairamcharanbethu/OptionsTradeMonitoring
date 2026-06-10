@@ -259,9 +259,71 @@ class MarketPoller {
         const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
         return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
     }
-    async getOptionPremium(symbol, strike, type, expiration, skipCache = false) {
+    async getOptionPremium(userId, symbol, strike, type, expiration, skipCache = false) {
         const ticker = this.constructOSITicker(symbol, strike, type, expiration);
         try {
+            // 0. Check for user-specific Alpaca configuration
+            const { rows: settingsRows } = await this.fastify.pg.query("SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')", [userId]);
+            const settings = settingsRows.reduce((acc, row) => {
+                acc[row.key] = row.value;
+                return acc;
+            }, {});
+            const alpacaKeyId = settings.alpaca_key_id?.trim();
+            const alpacaSecretKey = settings.alpaca_secret_key?.trim();
+            if (alpacaKeyId && alpacaSecretKey) {
+                this.fastify.log.info(`[MarketPoller] Fetching price for ${ticker} via Alpaca API...`);
+                // 1. Fetch Option Snapshot
+                const optUrl = `https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${ticker}`;
+                const optRes = await fetch(optUrl, {
+                    headers: {
+                        'APCA-API-KEY-ID': alpacaKeyId,
+                        'APCA-API-SECRET-KEY': alpacaSecretKey
+                    }
+                });
+                if (!optRes.ok) {
+                    throw new Error(`Alpaca options snapshot API error: Status ${optRes.status}`);
+                }
+                const optData = await optRes.json();
+                const snapshot = optData.snapshots?.[ticker];
+                if (!snapshot) {
+                    throw new Error(`Alpaca options snapshot not found for ${ticker}`);
+                }
+                // Calculate option price (mid-price of bid/ask if valid, else latest trade price)
+                const bid = snapshot.latestQuote?.bp || 0;
+                const ask = snapshot.latestQuote?.ap || 0;
+                const price = (bid > 0 && ask > 0) ? (bid + ask) / 2 : snapshot.latestTrade?.p || 0;
+                // 2. Fetch Underlying Price
+                let underlyingPrice = 0;
+                const stockUrl = `https://data.alpaca.markets/v2/stocks/snapshots?symbols=${symbol}`;
+                const stockRes = await fetch(stockUrl, {
+                    headers: {
+                        'APCA-API-KEY-ID': alpacaKeyId,
+                        'APCA-API-SECRET-KEY': alpacaSecretKey
+                    }
+                });
+                if (stockRes.ok) {
+                    const stockData = await stockRes.json();
+                    underlyingPrice = stockData[symbol]?.latestTrade?.p || stockData[symbol]?.latestQuote?.ap || 0;
+                }
+                else {
+                    this.fastify.log.warn(`[MarketPoller] Alpaca stock snapshot query failed: Status ${stockRes.status}`);
+                }
+                return {
+                    status: 'ok',
+                    symbol: ticker,
+                    price,
+                    iv: null,
+                    underlying_price: underlyingPrice,
+                    greeks: null,
+                    metadata: {
+                        symbol,
+                        strike,
+                        type,
+                        expiration
+                    }
+                };
+            }
+            // Fallback: Questrade Integration
             const questrade = this.fastify.questrade;
             // 1. Get/Resolve Option Symbol ID
             // We can STILL cache the symbolId for the ticker (it never changes for a specific option)
@@ -323,7 +385,7 @@ class MarketPoller {
             return result;
         }
         catch (err) {
-            this.fastify.log.error(`[MarketPoller] Questrade fetch failed for ${ticker}:`, err.message);
+            this.fastify.log.error(`[MarketPoller] Option fetch failed for ${ticker}:`, err.message);
             return null;
         }
     }
@@ -336,7 +398,7 @@ class MarketPoller {
         }
         let lastFetchedPrice = null;
         for (const position of positions) {
-            const data = await this.getOptionPremium(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date, skipCache);
+            const data = await this.getOptionPremium(position.user_id, position.symbol, Number(position.strike_price), position.option_type, position.expiration_date, skipCache);
             if (data && data.price !== null) {
                 // this.fastify.log.debug(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
                 this.fastify.log.info(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${data.underlying_price} Greeks:`, data.greeks);

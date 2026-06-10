@@ -431,6 +431,17 @@ export const api = {
     if (!res.ok) throw new Error('Failed to update settings');
   },
 
+  async testDiscordWebhook(webhookUrl: string): Promise<void> {
+    const res = await authFetch(`${API_BASE}/settings/test-discord`, {
+      method: 'POST',
+      body: JSON.stringify({ webhookUrl })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to test Discord webhook');
+    }
+  },
+
   // ─── Goals ───
   async getGoals(): Promise<Goal[]> {
     const res = await authFetch(`${API_BASE}/goals`);

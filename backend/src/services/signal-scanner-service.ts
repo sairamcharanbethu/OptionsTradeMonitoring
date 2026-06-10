@@ -1152,7 +1152,7 @@ Rules:
         try {
           const mlProbStr = mlProbability !== null ? ` | ML Prob **${Math.round(mlProbability * 100)}%**` : '';
           const embedMessage = {
-            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Spot **$${currentPrice.toFixed(2)}** | VIX **${vixPrice?.toFixed(2)}** | Spread ${spreadPct}%\n📊 GEX **${qqqGexRegime}** · **${qqqFlowDirection}** flow | VWAP $${vwap.toFixed(2)}\n🎯 Score **${finalConfidence}** (${setupGrade})${mlProbStr}\n🧠 _AI coaching arriving shortly..._`
+            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Premium **$${mark !== null ? mark.toFixed(2) : 'N/A'}** | Spot **$${currentPrice.toFixed(2)}** | VIX **${vixPrice?.toFixed(2)}** | Spread ${spreadPct}%\n📊 GEX **${qqqGexRegime}** · **${qqqFlowDirection}** flow | VWAP $${vwap.toFixed(2)}\n🎯 Score **${finalConfidence}** (${setupGrade})${mlProbStr}\n🧠 _AI coaching arriving shortly..._`
           };
           await axios.post(settings.discord_webhook_url, embedMessage, { timeout: 8000 });
         } catch (discErr: any) {

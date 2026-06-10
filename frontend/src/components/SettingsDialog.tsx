@@ -70,6 +70,29 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [snaptradeClientId, setSnaptradeClientId] = useState('');
     const [snaptradeConsumerKey, setSnaptradeConsumerKey] = useState('');
 
+    // Alpaca State
+    const [alpacaKeyId, setAlpacaKeyId] = useState('');
+    const [alpacaSecretKey, setAlpacaSecretKey] = useState('');
+
+    // Discord testing State
+    const [testingDiscord, setTestingDiscord] = useState(false);
+
+    async function handleTestDiscord() {
+        if (!discordWebhookUrl) {
+            alert('Please enter a Discord Webhook URL first.');
+            return;
+        }
+        setTestingDiscord(true);
+        try {
+            await api.testDiscordWebhook(discordWebhookUrl);
+            alert('Test notification sent successfully to Discord!');
+        } catch (err: any) {
+            alert(`Failed to send test notification: ${err.message || 'Unknown error'}`);
+        } finally {
+            setTestingDiscord(false);
+        }
+    }
+
     useEffect(() => {
         if (open) {
             loadSettings();
@@ -186,6 +209,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setPositionPollInterval(data.position_poll_interval || '2');
             setSnaptradeClientId(data.snaptrade_client_id || '');
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
+            setAlpacaKeyId(data.alpaca_key_id || '');
+            setAlpacaSecretKey(data.alpaca_secret_key || '');
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
@@ -267,6 +292,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 position_poll_interval: positionPollInterval,
                 snaptrade_client_id: snaptradeClientId,
                 snaptrade_consumer_key: snaptradeConsumerKey,
+                alpaca_key_id: alpacaKeyId,
+                alpaca_secret_key: alpacaSecretKey,
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 day_trading_symbols: dayTradingSymbols,
                 strike_offset: strikeOffset,
@@ -653,13 +680,26 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     {discordAlertsEnabled && (
                                         <div className="grid gap-2 animate-in fade-in slide-in-from-top-2 pt-2">
                                             <Label htmlFor="dtDiscordUrl">Discord Webhook URL</Label>
-                                            <Input
-                                                id="dtDiscordUrl"
-                                                type="text"
-                                                value={discordWebhookUrl}
-                                                onChange={(e) => setDiscordWebhookUrl(e.target.value)}
-                                                placeholder="https://discord.com/api/webhooks/..."
-                                            />
+                                            <div className="flex gap-2">
+                                                <Input
+                                                    id="dtDiscordUrl"
+                                                    type="text"
+                                                    value={discordWebhookUrl}
+                                                    onChange={(e) => setDiscordWebhookUrl(e.target.value)}
+                                                    placeholder="https://discord.com/api/webhooks/..."
+                                                    className="flex-1"
+                                                />
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    onClick={handleTestDiscord}
+                                                    disabled={testingDiscord || !discordWebhookUrl}
+                                                    className="shrink-0"
+                                                >
+                                                    {testingDiscord ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                                                    Test Webhook
+                                                </Button>
+                                            </div>
                                         </div>
                                     )}
                                 </div>
@@ -734,6 +774,38 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <p className="text-[10px] text-muted-foreground">
                                                 Once saved, go to the Wealthsimple dashboard to securely connect your broker.
                                             </p>
+                                        </div>
+                                    </div>
+
+                                    {/* Alpaca */}
+                                    <div className="space-y-3 pt-4 border-t">
+                                        <div className="flex items-center justify-between">
+                                            <h5 className="font-medium text-sm">Alpaca API (Paper Trading)</h5>
+                                            <Badge variant={alpacaKeyId && alpacaSecretKey ? "default" : "secondary"}>
+                                                {alpacaKeyId && alpacaSecretKey ? "Configured" : "Not Linked"}
+                                            </Badge>
+                                        </div>
+                                        <div className="grid gap-3 p-4 border rounded-md bg-muted/30">
+                                            <div className="grid gap-1">
+                                                <Label htmlFor="alpaca-key-id">Alpaca API Key ID</Label>
+                                                <Input
+                                                    id="alpaca-key-id"
+                                                    value={alpacaKeyId}
+                                                    onChange={(e) => setAlpacaKeyId(e.target.value)}
+                                                    placeholder="Enter Alpaca API Key ID"
+                                                    type="text"
+                                                />
+                                            </div>
+                                            <div className="grid gap-1">
+                                                <Label htmlFor="alpaca-secret-key">Alpaca API Secret Key</Label>
+                                                <Input
+                                                    id="alpaca-secret-key"
+                                                    value={alpacaSecretKey}
+                                                    onChange={(e) => setAlpacaSecretKey(e.target.value)}
+                                                    placeholder="Enter Alpaca API Secret Key"
+                                                    type="password"
+                                                />
+                                            </div>
                                         </div>
                                     </div>
                                 </div>

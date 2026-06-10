@@ -161,4 +161,23 @@ export async function settingsRoutes(fastify: FastifyInstance) {
             return reply.code(500).send({ error: 'Failed to initialize Questrade token' });
         }
     });
+
+    // TEST DISCORD WEBHOOK
+    fastify.post('/test-discord', async (request, reply) => {
+        const { id: userId } = (request as any).user;
+        const { webhookUrl } = request.body as { webhookUrl: string };
+        if (!webhookUrl) return reply.code(400).send({ error: 'webhookUrl required' });
+
+        try {
+            const embedMessage = {
+                content: `⚡ **Options Trade Monitoring — Discord Integration Test** ⚡\n\nThis is a test notification confirming that your Discord Webhook URL is configured correctly!\n\n🕒 **Timestamp**: ${new Date().toISOString()}`
+            };
+            const axios = require('axios');
+            await axios.post(webhookUrl, embedMessage, { timeout: 8000 });
+            return { status: 'ok', message: 'Test message sent successfully' };
+        } catch (err: any) {
+            fastify.log.error(`[Settings] Discord test failed: ${err.message}`);
+            return reply.code(400).send({ error: `Discord webhook test failed: ${err.message}` });
+        }
+    });
 }
