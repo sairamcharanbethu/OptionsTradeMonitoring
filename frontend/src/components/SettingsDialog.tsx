@@ -73,6 +73,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     // Alpaca State
     const [alpacaKeyId, setAlpacaKeyId] = useState('');
     const [alpacaSecretKey, setAlpacaSecretKey] = useState('');
+    const [alpacaAutoTrade, setAlpacaAutoTrade] = useState(false);
 
     // Discord testing State
     const [testingDiscord, setTestingDiscord] = useState(false);
@@ -211,6 +212,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
             setAlpacaKeyId(data.alpaca_key_id || '');
             setAlpacaSecretKey(data.alpaca_secret_key || '');
+            setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
@@ -294,6 +296,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 snaptrade_consumer_key: snaptradeConsumerKey,
                 alpaca_key_id: alpacaKeyId,
                 alpaca_secret_key: alpacaSecretKey,
+                alpaca_auto_trade: alpacaAutoTrade ? 'true' : 'false',
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 day_trading_symbols: dayTradingSymbols,
                 strike_offset: strikeOffset,
@@ -804,6 +807,17 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setAlpacaSecretKey(e.target.value)}
                                                     placeholder="Enter Alpaca API Secret Key"
                                                     type="password"
+                                                />
+                                            </div>
+                                            <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                                                <Label htmlFor="alpaca-auto-trade" className="flex flex-col gap-1 cursor-pointer">
+                                                    <span>Auto-Execute Paper Trades</span>
+                                                    <span className="text-[10px] font-normal text-muted-foreground">Automatically place 1-contract paper order on trade signal triggers</span>
+                                                </Label>
+                                                <Switch
+                                                    id="alpaca-auto-trade"
+                                                    checked={alpacaAutoTrade}
+                                                    onCheckedChange={setAlpacaAutoTrade}
                                                 />
                                             </div>
                                         </div>

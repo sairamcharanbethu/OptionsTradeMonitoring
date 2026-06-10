@@ -552,6 +552,50 @@ export class MarketPoller {
                 } catch (err: any) {
                     this.fastify.log.error(`[MarketPoller] Failed to execute Live force-close for position ${pos.id}: ${err.message}`);
                 }
+            } else if (pos.account_id === 'alpaca_paper') {
+                try {
+                    const { rows: settingsRows } = await (this.fastify as any).pg.query(
+                        "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')",
+                        [pos.user_id]
+                    );
+                    const userSettings = settingsRows.reduce((acc: any, r: any) => {
+                        acc[r.key] = r.value;
+                        return acc;
+                    }, {});
+                    const alpacaKeyId = userSettings.alpaca_key_id?.trim() || '';
+                    const alpacaSecretKey = userSettings.alpaca_secret_key?.trim() || '';
+
+                    if (alpacaKeyId && alpacaSecretKey) {
+                        const osiTicker = this.constructOSITicker(
+                            pos.symbol,
+                            Number(pos.strike_price),
+                            pos.option_type,
+                            pos.expiration_date
+                        );
+                        this.fastify.log.info(`[MarketPoller] Force closing Alpaca paper position ${pos.id} (${osiTicker})...`);
+                        const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+                            method: 'POST',
+                            headers: {
+                                'APCA-API-KEY-ID': alpacaKeyId,
+                                'APCA-API-SECRET-KEY': alpacaSecretKey,
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                symbol: osiTicker,
+                                qty: pos.quantity || 1,
+                                side: 'sell',
+                                type: 'market',
+                                time_in_force: 'day'
+                            })
+                        });
+                        if (!res.ok) {
+                            const errText = await res.text();
+                            throw new Error(`Alpaca paper force close failed: ${res.status} - ${errText}`);
+                        }
+                    }
+                } catch (err: any) {
+                    this.fastify.log.error(`[MarketPoller] Failed to execute Alpaca force-close for position ${pos.id}: ${err.message}`);
+                }
             }
 
             const realizedPnl = (currentPrice - Number(pos.entry_price)) * pos.quantity * 100;
@@ -824,6 +868,52 @@ export class MarketPoller {
                 }
             } catch (err: any) {
                 this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${err.message}`);
+            }
+        } else if (position.account_id === 'alpaca_paper') {
+            this.fastify.log.info(`[MarketPoller] Alpaca paper position exit triggered for position ${position.id} (${position.symbol}). Executing SELL via Alpaca...`);
+            try {
+                const { rows: settingsRows } = await (this.fastify as any).pg.query(
+                    "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')",
+                    [position.user_id]
+                );
+                const userSettings = settingsRows.reduce((acc: any, r: any) => {
+                    acc[r.key] = r.value;
+                    return acc;
+                }, {});
+                const alpacaKeyId = userSettings.alpaca_key_id?.trim() || '';
+                const alpacaSecretKey = userSettings.alpaca_secret_key?.trim() || '';
+
+                if (alpacaKeyId && alpacaSecretKey) {
+                    const osiTicker = this.constructOSITicker(
+                        position.symbol, 
+                        Number(position.strike_price), 
+                        position.option_type, 
+                        position.expiration_date
+                    );
+                    
+                    const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+                        method: 'POST',
+                        headers: {
+                            'APCA-API-KEY-ID': alpacaKeyId,
+                            'APCA-API-SECRET-KEY': alpacaSecretKey,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            symbol: osiTicker,
+                            qty: position.quantity || 1,
+                            side: 'sell',
+                            type: 'market',
+                            time_in_force: 'day'
+                        })
+                    });
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        throw new Error(`Alpaca paper exit failed: ${res.status} - ${errText}`);
+                    }
+                    this.fastify.log.info(`[MarketPoller] Alpaca paper exit execution successful for position ${position.id}.`);
+                }
+            } catch (err: any) {
+                this.fastify.log.error(`[MarketPoller] Alpaca paper exit execution failed for position ${position.id}: ${err.message}`);
             }
         }
 

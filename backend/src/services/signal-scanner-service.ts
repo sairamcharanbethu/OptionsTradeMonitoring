@@ -1180,7 +1180,10 @@ Rules:
             setupGrade,
             entryTrigger: Number(entryTrigger.toFixed(2)),
             nyDateStr: nyParts.dateStr,
-            settings
+            settings,
+            userId,
+            mark,
+            chosenExpiry: chosenExpiry || ''
           }).catch((err: any) => {
             this.fastify.log.error(`[SignalScannerService] enrichSignalAsync failed for #${signalId}: ${err.message}`);
           });
@@ -1285,11 +1288,14 @@ Rules:
     entryTrigger: number;
     nyDateStr: string;
     settings: any;
+    userId: number;
+    mark: number | null;
+    chosenExpiry: string;
   }): Promise<void> {
     const {
       signalId, symbol, winningSide, chosenStrike, currentPrice, vwap, emaShort, emaLong,
       qqqGexRegime, qqqFlowDirection, stopUnderlying, targetUnderlying, finalConfidence,
-      setupGrade, entryTrigger, nyDateStr, settings
+      setupGrade, entryTrigger, nyDateStr, settings, userId, mark, chosenExpiry
     } = ctx;
 
     const key = await this.getAiApiKey(settings.day_trading_ai_provider);
@@ -1394,10 +1400,22 @@ Rules:
     );
 
     // ── Stage 2: Claude Sonnet — full signal coaching ─────────────────────────
-    // Check if we have a cached coaching commentary for this fingerprint
-    const commentaryCacheKey = `COACHING:${symbol}:${newFingerprint}`;
-    const cachedCommentary = await redis.get(commentaryCacheKey);
-    let finalCommentary = cachedCommentary || '';
+    // Check if we have a cached coaching commentary and verdict for this fingerprint
+    const commentaryCacheKey = `COACHING_DATA:${symbol}:${newFingerprint}`;
+    const cachedData = await redis.get(commentaryCacheKey);
+    let finalCommentary = '';
+    let finalVerdict = 'WAIT';
+
+    if (cachedData) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        finalCommentary = parsed.analysis || '';
+        finalVerdict = parsed.verdict || 'WAIT';
+        this.fastify.log.info(`[SignalScannerService] Reusing cached coaching commentary and verdict (${finalVerdict}) for signal #${signalId}`);
+      } catch {
+        finalCommentary = cachedData;
+      }
+    }
 
     if (!finalCommentary) {
       const coachModel = settings.day_trading_coach_model || 'anthropic/claude-sonnet-4-5';
@@ -1436,11 +1454,16 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
       try {
         const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 220);
         finalCommentary = sonnetRes.analysis || sonnetRes.verdict || '';
+        finalVerdict = sonnetRes.verdict || 'WAIT';
         claudeUsage = sonnetRes.usage || null;
         if (finalCommentary) {
-          await redis.set(commentaryCacheKey, finalCommentary, 1800);
+          await redis.set(
+            commentaryCacheKey,
+            JSON.stringify({ verdict: finalVerdict, analysis: finalCommentary }),
+            1800
+          );
         }
-        this.fastify.log.info(`[SignalScannerService] Sonnet coaching ready for signal #${signalId}: ${sonnetRes.verdict || 'OK'} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
+        this.fastify.log.info(`[SignalScannerService] Sonnet coaching ready for signal #${signalId}: ${finalVerdict} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
       } catch (sonnetErr: any) {
         this.fastify.log.error(`[SignalScannerService] Sonnet coach failed for #${signalId}: ${sonnetErr.message}`);
       }
@@ -1459,6 +1482,21 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
         [newsContextText || null, finalCommentary || null, JSON.stringify(tokenUsage), signalId]
       );
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} enriched with AI commentary. Token usage tracked.`);
+
+      // ── Alpaca Auto-Trade Execution ──
+      if (finalVerdict === 'GO' && settings.alpaca_auto_trade === 'true') {
+        await this.executeAlpacaPaperTrade(
+          userId,
+          symbol,
+          winningSide as 'CALL' | 'PUT',
+          chosenStrike,
+          chosenExpiry,
+          stopUnderlying,
+          targetUnderlying,
+          mark,
+          signalId
+        );
+      }
 
       // Broadcast signal update via WebSocket
       if (this.fastify.websocketServer) {
@@ -1824,4 +1862,161 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
     }
     return trSum / length;
   }
+
+  private async executeAlpacaPaperTrade(
+    userId: number,
+    symbol: string,
+    winningSide: 'CALL' | 'PUT',
+    chosenStrike: number,
+    chosenExpiry: string,
+    stopUnderlying: number,
+    targetUnderlying: number,
+    mark: number | null,
+    signalId: number
+  ) {
+    const settings = await this.getSettingsForUser(userId);
+    const keyId = settings.alpaca_key_id?.trim();
+    const secretKey = settings.alpaca_secret_key?.trim();
+
+    if (!keyId || !secretKey) {
+      this.fastify.log.warn(`[SignalScannerService] Alpaca credentials not set for user ${userId}. Skipping auto-execution.`);
+      return;
+    }
+
+    const osiTicker = this.constructOSITicker(symbol, chosenStrike, winningSide, chosenExpiry);
+    this.fastify.log.info(`[SignalScannerService] Executing auto paper trade on Alpaca for ${osiTicker}...`);
+
+    try {
+      const orderPayload = {
+        symbol: osiTicker,
+        qty: 1,
+        side: 'buy',
+        type: 'market',
+        time_in_force: 'day'
+      };
+
+      const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+        method: 'POST',
+        headers: {
+          'APCA-API-KEY-ID': keyId,
+          'APCA-API-SECRET-KEY': secretKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(orderPayload)
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Alpaca API order request failed: ${res.status} - ${errorText}`);
+      }
+
+      const orderData: any = await res.json();
+      const alpacaOrderId = orderData.id;
+      this.fastify.log.info(`[SignalScannerService] Alpaca paper order placed successfully. Order ID: ${alpacaOrderId}`);
+
+      // Query current mark/mid price if not passed to use as accurate entry price
+      let entryPrice = mark || 0.0;
+      if (entryPrice <= 0) {
+        try {
+          const snapRes = await fetch(`https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${osiTicker}`, {
+            headers: {
+              'APCA-API-KEY-ID': keyId,
+              'APCA-API-SECRET-KEY': secretKey
+            }
+          });
+          if (snapRes.ok) {
+            const snapData: any = await snapRes.json();
+            const snap = snapData.snapshots?.[osiTicker];
+            if (snap) {
+              const bp = snap.latestQuote?.bp || 0;
+              const ap = snap.latestQuote?.ap || 0;
+              entryPrice = (bp > 0 && ap > 0) ? (bp + ap) / 2 : snap.latestTrade?.p || 0.0;
+            }
+          }
+        } catch (e: any) {
+          this.fastify.log.warn(`[SignalScannerService] Failed to query entry premium from Alpaca: ${e.message}`);
+        }
+      }
+
+      // Default to a fallback if still zero
+      if (entryPrice <= 0) entryPrice = 1.0;
+
+      // Insert position into DB
+      const insertQuery = `
+        INSERT INTO positions (
+          user_id, symbol, option_type, strike_price, expiration_date, 
+          entry_price, quantity, stop_loss_trigger, take_profit_trigger,
+          trailing_high_price, trailing_stop_loss_pct, current_price,
+          status, is_simulated, account_id, notes, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'OPEN', TRUE, 'alpaca_paper', $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `;
+
+      const values = [
+        userId,
+        symbol,
+        winningSide,
+        chosenStrike,
+        chosenExpiry,
+        entryPrice,
+        1, // 1 contract
+        stopUnderlying,
+        targetUnderlying,
+        entryPrice, // trailing_high
+        null, // trailing stop pct
+        entryPrice, // current_price
+        `[Alpaca Auto-executed Paper Trade #${alpacaOrderId} on Signal #${signalId}]`
+      ];
+
+      await this.fastify.pg.query(insertQuery, values);
+      this.fastify.log.info(`[SignalScannerService] Position recorded in DB for signal #${signalId}.`);
+
+      // Update signal status to EXECUTED
+      await this.fastify.pg.query(
+        'UPDATE signals SET status = $1 WHERE id = $2',
+        ['EXECUTED', signalId]
+      );
+
+      // Broadcast signal update
+      if (this.fastify.websocketServer) {
+        this.fastify.websocketServer.clients.forEach((client: any) => {
+          if (client.readyState === 1) {
+            client.send(JSON.stringify({ type: 'SIGNAL_UPDATED', data: { id: signalId, symbol } }));
+          }
+        });
+      }
+
+      // Invalidate frontend cache
+      await redis.del(`USER_POSITIONS:${userId}`);
+      await redis.del(`USER_STATS:${userId}`);
+
+    } catch (err: any) {
+      this.fastify.log.error(`[SignalScannerService] Alpaca auto-execution failed for signal #${signalId}: ${err.message}`);
+    }
+  }
+
+  private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
+    let dateStr = '';
+    if (expiration instanceof Date) {
+      const year = expiration.getFullYear();
+      const month = (expiration.getMonth() + 1).toString().padStart(2, '0');
+      const day = expiration.getDate().toString().padStart(2, '0');
+      dateStr = `${year}-${month}-${day}`;
+    } else {
+      dateStr = expiration.split('T')[0];
+    }
+
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) {
+      return `${symbol.toUpperCase()}XXXXXX${type === 'CALL' ? 'C' : 'P'}${Math.round(strike * 1000).toString().padStart(8, '0')}`;
+    }
+
+    const YY = parts[0].slice(-2);
+    const MM = parts[1].padStart(2, '0');
+    const DD = parts[2].padStart(2, '0');
+    const side = type === 'CALL' ? 'C' : 'P';
+    const strikeFormatted = Math.round(strike * 1000).toString().padStart(8, '0');
+
+    return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeFormatted}`;
+  }
 }
+
