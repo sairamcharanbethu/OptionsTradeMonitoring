@@ -434,7 +434,9 @@ Rules:
       day_trading_ai_enabled: 'true',
       day_trading_ai_provider: 'openrouter',
       day_trading_ai_model: 'meta-llama/llama-3.1-70b-instruct',  // news classifier
-      day_trading_coach_model: 'anthropic/claude-sonnet-4-5'       // signal coach
+      day_trading_coach_model: 'anthropic/claude-sonnet-4-5',       // signal coach
+      alpaca_auto_trade: 'false',
+      alpaca_auto_trade_mode: 'instant'
     };
 
     return { ...defaults, ...dbSettings };
@@ -1147,6 +1149,26 @@ Rules:
         });
       }
 
+      // ── Alpaca Auto-Trade Execution (Instant Entry, pre-AI) ──
+      const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
+      if (settings.alpaca_auto_trade === 'true' && autoTradeMode === 'instant') {
+        setImmediate(() => {
+          this.executeAlpacaPaperTrade(
+            userId,
+            symbol,
+            winningSide as 'CALL' | 'PUT',
+            chosenStrike as number,
+            chosenExpiry || '',
+            stopUnderlying,
+            targetUnderlying,
+            mark,
+            signalId
+          ).catch((err: any) => {
+            this.fastify.log.error(`[SignalScannerService] Alpaca instant auto-execution failed for signal #${signalId}: ${err.message}`);
+          });
+        });
+      }
+
       // ── STEP 2: Discord – signal alert fires immediately, no AI wait ──
       if (settings.discord_alerts_enabled === 'true' && settings.discord_webhook_url) {
         try {
@@ -1483,8 +1505,9 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
       );
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} enriched with AI commentary. Token usage tracked.`);
 
-      // ── Alpaca Auto-Trade Execution ──
-      if (finalVerdict === 'GO' && settings.alpaca_auto_trade === 'true') {
+      // ── Alpaca Auto-Trade Execution (AI-Confirmed Entry, post-AI) ──
+      const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
+      if (finalVerdict === 'GO' && settings.alpaca_auto_trade === 'true' && autoTradeMode === 'ai_confirmed') {
         await this.executeAlpacaPaperTrade(
           userId,
           symbol,

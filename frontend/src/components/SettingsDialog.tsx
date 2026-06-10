@@ -74,6 +74,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [alpacaKeyId, setAlpacaKeyId] = useState('');
     const [alpacaSecretKey, setAlpacaSecretKey] = useState('');
     const [alpacaAutoTrade, setAlpacaAutoTrade] = useState(false);
+    const [alpacaAutoTradeMode, setAlpacaAutoTradeMode] = useState('instant');
 
     // Discord testing State
     const [testingDiscord, setTestingDiscord] = useState(false);
@@ -213,6 +214,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setAlpacaKeyId(data.alpaca_key_id || '');
             setAlpacaSecretKey(data.alpaca_secret_key || '');
             setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
+            setAlpacaAutoTradeMode(data.alpaca_auto_trade_mode || 'instant');
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
@@ -297,6 +299,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 alpaca_key_id: alpacaKeyId,
                 alpaca_secret_key: alpacaSecretKey,
                 alpaca_auto_trade: alpacaAutoTrade ? 'true' : 'false',
+                alpaca_auto_trade_mode: alpacaAutoTradeMode,
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 day_trading_symbols: dayTradingSymbols,
                 strike_offset: strikeOffset,
@@ -820,6 +823,25 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onCheckedChange={setAlpacaAutoTrade}
                                                 />
                                             </div>
+                                            {alpacaAutoTrade && (
+                                                <div className="grid gap-1.5 pt-2 border-t border-border/40">
+                                                    <Label htmlFor="alpaca-auto-trade-mode">Execution Timing</Label>
+                                                    <Select value={alpacaAutoTradeMode} onValueChange={setAlpacaAutoTradeMode}>
+                                                        <SelectTrigger id="alpaca-auto-trade-mode">
+                                                            <SelectValue placeholder="Select Execution Timing" />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            <SelectItem value="instant">Instant Entry (Pre-AI) — Minimal Latency</SelectItem>
+                                                            <SelectItem value="ai_confirmed">AI-Confirmed Entry (Post-AI) — Adds 2-4s Latency</SelectItem>
+                                                        </SelectContent>
+                                                    </Select>
+                                                    <p className="text-[10px] text-muted-foreground leading-normal mt-0.5">
+                                                        {alpacaAutoTradeMode === 'instant' 
+                                                            ? "⚡ Orders are placed instantly when technical scanner identifies a trade signal, ignoring AI wait." 
+                                                            : "🧠 Orders wait for news classifier and Claude Sonnet coaching verdict. Requires a GO verdict to execute."}
+                                                    </p>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </div>
