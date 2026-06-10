@@ -16,53 +16,53 @@ const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yaho
 // Dates are in YYYY-MM-DD format (ET). Update annually.
 const HIGH_IMPACT_EVENTS_2026: Record<string, string[]> = {
   // FOMC Meeting Dates (decision day = second day of 2-day meeting)
-  '2026-01-28': ['FOMC Rate Decision'],
-  '2026-03-18': ['FOMC Rate Decision'],
-  '2026-04-29': ['FOMC Rate Decision + Press Conference'],
-  '2026-06-17': ['FOMC Rate Decision + Press Conference + SEP'],
-  '2026-07-29': ['FOMC Rate Decision'],
-  '2026-09-16': ['FOMC Rate Decision + Press Conference + SEP'],
-  '2026-11-04': ['FOMC Rate Decision'],
-  '2026-12-16': ['FOMC Rate Decision + Press Conference + SEP'],
+  '2026-01-28': ['FOMC Rate Decision at 2:00 PM ET'],
+  '2026-03-18': ['FOMC Rate Decision at 2:00 PM ET'],
+  '2026-04-29': ['FOMC Rate Decision at 2:00 PM ET + Press Conference at 2:30 PM ET'],
+  '2026-06-17': ['FOMC Rate Decision at 2:00 PM ET + Press Conference + SEP at 2:30 PM ET'],
+  '2026-07-29': ['FOMC Rate Decision at 2:00 PM ET'],
+  '2026-09-16': ['FOMC Rate Decision at 2:00 PM ET + Press Conference + SEP at 2:30 PM ET'],
+  '2026-11-04': ['FOMC Rate Decision at 2:00 PM ET'],
+  '2026-12-16': ['FOMC Rate Decision at 2:00 PM ET + Press Conference + SEP at 2:30 PM ET'],
   // CPI Releases (approx BLS schedule — 3rd week of month)
-  '2026-01-14': ['CPI Inflation Report (Dec 2025)'],
-  '2026-02-11': ['CPI Inflation Report (Jan 2026)'],
-  '2026-03-11': ['CPI Inflation Report (Feb 2026)'],
-  '2026-04-10': ['CPI Inflation Report (Mar 2026)'],
-  '2026-05-13': ['CPI Inflation Report (Apr 2026)'],
-  '2026-06-10': ['CPI Inflation Report (May 2026)'],
-  '2026-07-14': ['CPI Inflation Report (Jun 2026)'],
-  '2026-08-12': ['CPI Inflation Report (Jul 2026)'],
-  '2026-09-11': ['CPI Inflation Report (Aug 2026)'],
-  '2026-10-14': ['CPI Inflation Report (Sep 2026)'],
-  '2026-11-13': ['CPI Inflation Report (Oct 2026)'],
-  '2026-12-11': ['CPI Inflation Report (Nov 2026)'],
+  '2026-01-14': ['CPI Inflation Report (Dec 2025) at 8:30 AM ET'],
+  '2026-02-11': ['CPI Inflation Report (Jan 2026) at 8:30 AM ET'],
+  '2026-03-11': ['CPI Inflation Report (Feb 2026) at 8:30 AM ET'],
+  '2026-04-10': ['CPI Inflation Report (Mar 2026) at 8:30 AM ET'],
+  '2026-05-13': ['CPI Inflation Report (Apr 2026) at 8:30 AM ET'],
+  '2026-06-10': ['CPI Inflation Report (May 2026) at 8:30 AM ET'],
+  '2026-07-14': ['CPI Inflation Report (Jun 2026) at 8:30 AM ET'],
+  '2026-08-12': ['CPI Inflation Report (Jul 2026) at 8:30 AM ET'],
+  '2026-09-11': ['CPI Inflation Report (Aug 2026) at 8:30 AM ET'],
+  '2026-10-14': ['CPI Inflation Report (Sep 2026) at 8:30 AM ET'],
+  '2026-11-13': ['CPI Inflation Report (Oct 2026) at 8:30 AM ET'],
+  '2026-12-11': ['CPI Inflation Report (Nov 2026) at 8:30 AM ET'],
   // NFP Jobs Report (first Friday of the month)
-  '2026-01-09': ['NFP Jobs Report (Dec 2025)'],
-  '2026-02-06': ['NFP Jobs Report (Jan 2026)'],
-  '2026-03-06': ['NFP Jobs Report (Feb 2026)'],
-  '2026-04-03': ['NFP Jobs Report (Mar 2026)'],
-  '2026-05-01': ['NFP Jobs Report (Apr 2026)'],
-  '2026-06-05': ['NFP Jobs Report (May 2026)'],
-  '2026-07-02': ['NFP Jobs Report (Jun 2026)'],
-  '2026-08-07': ['NFP Jobs Report (Jul 2026)'],
-  '2026-09-04': ['NFP Jobs Report (Aug 2026)'],
-  '2026-10-02': ['NFP Jobs Report (Sep 2026)'],
-  '2026-11-06': ['NFP Jobs Report (Oct 2026)'],
-  '2026-12-04': ['NFP Jobs Report (Nov 2026)'],
+  '2026-01-09': ['NFP Jobs Report (Dec 2025) at 8:30 AM ET'],
+  '2026-02-06': ['NFP Jobs Report (Jan 2026) at 8:30 AM ET'],
+  '2026-03-06': ['NFP Jobs Report (Feb 2026) at 8:30 AM ET'],
+  '2026-04-03': ['NFP Jobs Report (Mar 2026) at 8:30 AM ET'],
+  '2026-05-01': ['NFP Jobs Report (Apr 2026) at 8:30 AM ET'],
+  '2026-06-05': ['NFP Jobs Report (May 2026) at 8:30 AM ET'],
+  '2026-07-02': ['NFP Jobs Report (Jun 2026) at 8:30 AM ET'],
+  '2026-08-07': ['NFP Jobs Report (Jul 2026) at 8:30 AM ET'],
+  '2026-09-04': ['NFP Jobs Report (Aug 2026) at 8:30 AM ET'],
+  '2026-10-02': ['NFP Jobs Report (Sep 2026) at 8:30 AM ET'],
+  '2026-11-06': ['NFP Jobs Report (Oct 2026) at 8:30 AM ET'],
+  '2026-12-04': ['NFP Jobs Report (Nov 2026) at 8:30 AM ET'],
   // PCE Price Index (monthly, end of month)
-  '2026-01-30': ['PCE Price Index (Dec 2025)'],
-  '2026-02-27': ['PCE Price Index (Jan 2026)'],
-  '2026-03-27': ['PCE Price Index (Feb 2026)'],
-  '2026-04-30': ['PCE Price Index (Mar 2026)', 'GDP Q1 Advance'],
-  '2026-05-29': ['PCE Price Index (Apr 2026)'],
-  '2026-06-26': ['PCE Price Index (May 2026)'],
-  '2026-07-31': ['PCE Price Index (Jun 2026)', 'GDP Q2 Advance'],
-  '2026-08-28': ['PCE Price Index (Jul 2026)'],
-  '2026-09-25': ['PCE Price Index (Aug 2026)'],
-  '2026-10-30': ['PCE Price Index (Sep 2026)', 'GDP Q3 Advance'],
-  '2026-11-25': ['PCE Price Index (Oct 2026)'],
-  '2026-12-23': ['PCE Price Index (Nov 2026)'],
+  '2026-01-30': ['PCE Price Index (Dec 2025) at 8:30 AM ET'],
+  '2026-02-27': ['PCE Price Index (Jan 2026) at 8:30 AM ET'],
+  '2026-03-27': ['PCE Price Index (Feb 2026) at 8:30 AM ET'],
+  '2026-04-30': ['PCE Price Index (Mar 2026) at 8:30 AM ET', 'GDP Q1 Advance at 8:30 AM ET'],
+  '2026-05-29': ['PCE Price Index (Apr 2026) at 8:30 AM ET'],
+  '2026-06-26': ['PCE Price Index (May 2026) at 8:30 AM ET'],
+  '2026-07-31': ['PCE Price Index (Jun 2026) at 8:30 AM ET', 'GDP Q2 Advance at 8:30 AM ET'],
+  '2026-08-28': ['PCE Price Index (Jul 2026) at 8:30 AM ET'],
+  '2026-09-25': ['PCE Price Index (Aug 2026) at 8:30 AM ET'],
+  '2026-10-30': ['PCE Price Index (Sep 2026) at 8:30 AM ET', 'GDP Q3 Advance at 8:30 AM ET'],
+  '2026-11-25': ['PCE Price Index (Oct 2026) at 8:30 AM ET'],
+  '2026-12-23': ['PCE Price Index (Nov 2026) at 8:30 AM ET'],
 };
 
 /**
@@ -1449,9 +1449,13 @@ Rules:
         macroVerdict === 'RISK_ON'  ? `✅ MACRO RISK-ON: ${macroRationale}` :
         `ℹ️ MACRO NEUTRAL: ${macroRationale}`;
 
+      const nowNyParts = this.getNyDateParts(new Date());
+      const formattedTimeStr = `${nowNyParts.hour.toString().padStart(2, '0')}:${nowNyParts.minute.toString().padStart(2, '0')} ET`;
+
       const coachPrompt = `You are an expert 0DTE options coach at StockSurfer Capital. Analyze this signal and produce coaching for a novice trader.
 
 SIGNAL: ${symbol} ${winningSide} $${chosenStrike}
+SIGNAL TIME: ${formattedTimeStr} (Date: ${nyDateStr})
 Price $${currentPrice.toFixed(2)} | VWAP $${vwap.toFixed(2)} | EMA9 ${emaShort?.toFixed(2)} | EMA21 ${emaLong?.toFixed(2)}
 GEX Regime: ${qqqGexRegime} | Flow: ${qqqFlowDirection}
 Entry >$${entryTrigger} | SL $${stopUnderlying} | TP $${targetUnderlying}
