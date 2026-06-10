@@ -1582,7 +1582,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
     try {
       const fjRes = await axios.get(
         'https://www.financialjuice.com/feed.ashx?action=main&culture=en-US&pager=0&format=json',
-        { timeout: 5000, headers: { 'User-Agent': 'OptionsTradeMonitor/1.0' } }
+        { timeout: 5000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } }
       );
 
       const xml: string = String(fjRes.data);
