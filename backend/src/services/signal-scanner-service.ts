@@ -522,20 +522,21 @@ Rules:
       });
 
       const result = chartData?.quotes || [];
-      const timestamps = chartData?.timestamp || [];
 
       for (let i = 0; i < result.length; i++) {
-        const open = this.toNumber(result[i].open);
-        const high = this.toNumber(result[i].high);
-        const low = this.toNumber(result[i].low);
-        const close = this.toNumber(result[i].close);
-        const volume = this.toNumber(result[i].volume ?? 0) ?? 0;
+        const quote = result[i];
+        const open = this.toNumber(quote.open);
+        const high = this.toNumber(quote.high);
+        const low = this.toNumber(quote.low);
+        const close = this.toNumber(quote.close);
+        const volume = this.toNumber(quote.volume ?? 0) ?? 0;
 
-        if (timestamps[i] && open !== null && high !== null && low !== null && close !== null) {
-          const dateObj = new Date(timestamps[i] * 1000);
+        if (quote.date && open !== null && high !== null && low !== null && close !== null) {
+          const dateObj = quote.date instanceof Date ? quote.date : new Date(quote.date);
           const datetime = dateObj.toISOString();
           const nyCandleParts = this.getNyDateParts(dateObj);
           const isRTH = nyCandleParts.minutes >= (9 * 60 + 30) && nyCandleParts.minutes < (16 * 60);
+          const timestamp = Math.floor(dateObj.getTime() / 1000);
 
           sortedCandles.push({
             datetime,
@@ -546,7 +547,7 @@ Rules:
             low,
             close,
             volume,
-            timestamp: timestamps[i]
+            timestamp
           });
         }
       }
