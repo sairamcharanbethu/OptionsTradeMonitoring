@@ -139,6 +139,7 @@ const ensureSchema = async (instance) => {
         no_trade_reasons TEXT[],
         option_expiration_date DATE,
         market_date VARCHAR(20),
+        option_details JSONB,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `);
@@ -180,11 +181,12 @@ const ensureSchema = async (instance) => {
       `);
         }
         instance.log.info('[Database] Schema verification completed successfully.');
-        // 3a. Migrate signals table: add news_context, ai_coach_commentary, token_usage, and ml_probability columns (idempotent)
+        // 3a. Migrate signals table: add news_context, ai_coach_commentary, token_usage, ml_probability, and option_details columns (idempotent)
         await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS news_context TEXT;`);
         await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS ai_coach_commentary TEXT;`);
         await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS token_usage JSONB;`);
         await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS ml_probability NUMERIC(5, 4);`);
+        await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS option_details JSONB;`);
         // 4. Create snaptrade tables
         await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS snaptrade_accounts (

@@ -634,6 +634,24 @@ export interface VolatilityJSON {
   [key: string]: any;
 }
 
+export interface OptionDetailsJSON {
+  ticker?: string;
+  side?: 'CALL' | 'PUT';
+  strike?: number;
+  expiry?: string;
+  bid?: number;
+  ask?: number;
+  spread?: number;
+  spreadPct?: number;
+  mark?: number;
+  volume?: number;
+  openInterest?: number;
+  suggestedStopLoss?: number;
+  suggestedTakeProfit?: number;
+  usingTheoreticalPricing?: boolean;
+  [key: string]: any;
+}
+
 export interface Signal {
   id: number;
   symbol: string;
@@ -656,6 +674,7 @@ export interface Signal {
   news_context?: string | null;
   ai_coach_commentary?: string | null;
   ml_probability?: number | null;
+  option_details?: OptionDetailsJSON;
   token_usage?: {
     classifier?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
     coach?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;

@@ -1091,8 +1091,8 @@ Rules:
         INSERT INTO signals (
           symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss, target_price,
           confidence_score, setup_grade, status, indicators, gex, volatility, no_trade_reasons,
-          option_expiration_date, market_date, ml_probability
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          option_expiration_date, market_date, ml_probability, option_details
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING id
       `, [
         symbol,
@@ -1135,7 +1135,8 @@ Rules:
         noTradeReasons,
         chosenExpiry,
         nyParts.marketDate,
-        mlProbability
+        mlProbability,
+        JSON.stringify(pricingData)
       ]);
 
       const signalId: number = insertResult.rows[0].id;
@@ -1174,8 +1175,11 @@ Rules:
       if (settings.discord_alerts_enabled === 'true' && settings.discord_webhook_url) {
         try {
           const mlProbStr = mlProbability !== null ? ` | ML Prob **${Math.round(mlProbability * 100)}%**` : '';
+          const premEntryStr = mark !== null ? `$${mark.toFixed(2)}` : 'N/A';
+          const premSlStr = optionStopLoss !== null ? `$${optionStopLoss.toFixed(2)}` : 'N/A';
+          const premTpStr = optionTakeProfit !== null ? `$${optionTakeProfit.toFixed(2)}` : 'N/A';
           const embedMessage = {
-            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Premium **$${mark !== null ? mark.toFixed(2) : 'N/A'}** | Spot **$${currentPrice.toFixed(2)}** | VIX **${vixPrice?.toFixed(2)}** | Spread ${spreadPct}%\n📊 GEX **${qqqGexRegime}** · **${qqqFlowDirection}** flow | VWAP $${vwap.toFixed(2)}\n🎯 Score **${finalConfidence}** (${setupGrade})${mlProbStr}\n🧠 _AI coaching arriving shortly..._`
+            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Premium: Entry: ${premEntryStr} | SL: ${premSlStr} | TP: ${premTpStr}\n🎯 Score **${finalConfidence}** (${setupGrade})${mlProbStr}`
           };
           await axios.post(settings.discord_webhook_url, embedMessage, { timeout: 8000 });
         } catch (discErr: any) {

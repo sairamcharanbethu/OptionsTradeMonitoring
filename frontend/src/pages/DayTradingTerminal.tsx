@@ -204,10 +204,18 @@ export default function DayTradingTerminal() {
         token_usage: null
       } as unknown as Signal : null);
 
+  // Find the single LATEST actionable signal for QQQ or SPY (within the last 24h)
+  const latestActionableSignal = filteredSignals.find(s => s.signal_type !== 'NONE' && s.status === 'PENDING') || null;
+
+  // Active signals table should exclude the latest actionable setup alert
+  const tableSignals = latestActionableSignal
+    ? filteredSignals.filter(s => s.id !== latestActionableSignal.id)
+    : filteredSignals;
+
   // Set default selected signal when signals load or tab changes
   useEffect(() => {
-    if (filteredSignals.length > 0) {
-      setSelectedSignalId(filteredSignals[0].id);
+    if (tableSignals.length > 0) {
+      setSelectedSignalId(tableSignals[0].id);
     } else {
       setSelectedSignalId(null);
     }
@@ -230,9 +238,6 @@ export default function DayTradingTerminal() {
       setFastPollUntil(prev => Math.max(prev, until));
     }
   }, [signals]);
-
-  // Find the single LATEST actionable signal for QQQ or SPY (within the last 24h)
-  const latestActionableSignal = filteredSignals.find(s => s.signal_type !== 'NONE' && s.status === 'PENDING') || null;
 
   // Click handler wrapper
   const handleQuickStatus = async (id: number, status: 'EXECUTED' | 'CANCELLED') => {
@@ -462,9 +467,12 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* Row 2: Separated Prominent LATEST setup notification */}
-      <div className={`border rounded-lg bg-zinc-900/20 shadow-[0_0_20px_rgba(16,185,129,0.02)] overflow-hidden transition-all duration-300 ${
-        latestActionableSignal ? 'border-emerald-500/45 shadow-[0_0_15px_rgba(16,185,129,0.08)]' : 'border-emerald-500/20'
-      }`}>
+      <div 
+        onClick={() => latestActionableSignal && setSelectedSignalId(latestActionableSignal.id)}
+        className={`border rounded-lg bg-zinc-900/20 shadow-[0_0_20px_rgba(16,185,129,0.02)] overflow-hidden transition-all duration-300 ${
+          latestActionableSignal ? 'border-emerald-500/45 shadow-[0_0_15px_rgba(16,185,129,0.08)] cursor-pointer hover:bg-zinc-900/35' : 'border-emerald-500/20'
+        }`}
+      >
         <div className="bg-emerald-950/20 border-b border-emerald-500/15 p-2.5 px-3 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <Sparkles className={`h-4 w-4 text-emerald-400 ${latestActionableSignal ? 'animate-bounce' : ''}`} />
@@ -824,7 +832,7 @@ export default function DayTradingTerminal() {
                         RETRIEVING FROM POSTGRES...
                       </td>
                     </tr>
-                  ) : filteredSignals.length === 0 ? (
+                  ) : tableSignals.length === 0 ? (
                     <tr>
                       <td colSpan={13} className="px-2 py-8 text-center text-red-500/80">
                         [NO SIGNALS MATCH CURRENT FILTERS]
@@ -834,7 +842,7 @@ export default function DayTradingTerminal() {
                       </td>
                     </tr>
                   ) : (
-                    filteredSignals.map(sig => {
+                    tableSignals.map(sig => {
                       const isSelected = sig.id === selectedSignalId;
                       const isExpanded = sig.id === expandedRowId;
                       const biasColor =
@@ -1054,7 +1062,7 @@ export default function DayTradingTerminal() {
            <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
              <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
                <Info className="h-3.5 w-3.5 text-emerald-400" />
-               LEVEL_INSPECTOR v2.0
+               OPTION DETAILS
              </span>
              {selectedSignal && (
                <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-400">
@@ -1100,6 +1108,81 @@ export default function DayTradingTerminal() {
                     </div>
                  </div>
  
+                 {/* Option Contract Details Block */}
+                 <div className="space-y-1">
+                   <span className="text-[10px] font-bold text-sky-400 uppercase flex items-center gap-1">
+                     <TrendingUp className="h-3 w-3 text-sky-400" /> OPTION_CONTRACT_DETAILS
+                   </span>
+                   {selectedSignal.option_details ? (
+                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 bg-zinc-950/60 p-2.5 rounded border border-sky-500/30 font-mono text-[11px] text-zinc-300">
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5 col-span-2">
+                         <span className="text-emerald-500/70">TICKER</span>
+                         <span className="font-bold text-sky-300">{selectedSignal.option_details.ticker || 'N/A'}</span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">OPTION TYPE</span>
+                         <span className={`font-bold ${selectedSignal.option_details.side === 'CALL' ? 'text-green-400 animate-pulse' : 'text-red-400 animate-pulse'}`}>
+                           {selectedSignal.option_details.side || 'N/A'}
+                         </span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">STRIKE</span>
+                         <span className="font-semibold text-emerald-300">
+                           {selectedSignal.option_details.strike !== undefined ? `$${Number(selectedSignal.option_details.strike).toFixed(2)}` : 'N/A'}
+                         </span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">PREMIUM (MARK)</span>
+                         <span className="font-bold text-emerald-300">
+                           {selectedSignal.option_details.mark !== undefined ? `$${Number(selectedSignal.option_details.mark).toFixed(2)}` : 'N/A'}
+                         </span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">EXPIRATION</span>
+                         <span>{selectedSignal.option_details.expiry || 'N/A'}</span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">BID / ASK</span>
+                         <span>
+                           {selectedSignal.option_details.bid !== undefined && selectedSignal.option_details.ask !== undefined
+                             ? `$${Number(selectedSignal.option_details.bid).toFixed(2)} / $${Number(selectedSignal.option_details.ask).toFixed(2)}`
+                             : 'N/A'}
+                         </span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">SPREAD</span>
+                         <span>
+                           {selectedSignal.option_details.spread !== undefined && selectedSignal.option_details.spreadPct !== undefined
+                             ? `$${Number(selectedSignal.option_details.spread).toFixed(2)} (${Number(selectedSignal.option_details.spreadPct).toFixed(1)}%)`
+                             : 'N/A'}
+                         </span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">VOLUME</span>
+                         <span>{selectedSignal.option_details.volume !== undefined ? Number(selectedSignal.option_details.volume).toLocaleString() : 'N/A'}</span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">OPEN INTEREST</span>
+                         <span>{selectedSignal.option_details.openInterest !== undefined ? Number(selectedSignal.option_details.openInterest).toLocaleString() : 'N/A'}</span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">SUGGESTED SL</span>
+                         <span className="text-red-400 font-semibold">
+                           {selectedSignal.option_details.suggestedStopLoss !== undefined ? `$${Number(selectedSignal.option_details.suggestedStopLoss).toFixed(2)}` : 'N/A'}
+                         </span>
+                       </div>
+                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                         <span className="text-emerald-500/70">SUGGESTED TP</span>
+                         <span className="text-green-400 font-semibold">
+                           {selectedSignal.option_details.suggestedTakeProfit !== undefined ? `$${Number(selectedSignal.option_details.suggestedTakeProfit).toFixed(2)}` : 'N/A'}
+                         </span>
+                       </div>
+                     </div>
+                   ) : (
+                     <div className="text-emerald-500/50 italic p-2 bg-zinc-950/40 rounded border border-emerald-500/5">No option details available for this record.</div>
+                   )}
+                 </div>
+
                  {/* Indicators Block */}
                  <div className="space-y-1">
                    <span className="text-[10px] font-bold text-emerald-500 uppercase flex items-center gap-1">
