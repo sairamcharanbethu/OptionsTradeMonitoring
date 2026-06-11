@@ -1456,7 +1456,7 @@ Rules:
       const nowNyParts = this.getNyDateParts(new Date());
       const formattedTimeStr = `${nowNyParts.hour.toString().padStart(2, '0')}:${nowNyParts.minute.toString().padStart(2, '0')} ET`;
 
-      const coachPrompt = `You are an expert 0DTE options coach at StockSurfer Capital. Analyze this signal and produce coaching for a novice trader.
+      const coachPrompt = `You are an expert 0DTE options coach at StockSurfer Capital. Analyze this signal and produce a one-sentence recommendation for a novice trader.
 
 SIGNAL: ${symbol} ${winningSide} $${chosenStrike}
 SIGNAL TIME: ${formattedTimeStr} (Date: ${nyDateStr})
@@ -1474,13 +1474,9 @@ ${macroBadge}
 RECENT HEADLINES:
 ${headlines.length > 0 ? headlines.map((h, i) => `${i + 1}. ${h}`).join('\n') : 'None in last 6h.'}
 
-Write coaching commentary (max 150 words). Format:
-1. Bold action line: **BUY ${symbol} ${winningSide} $${chosenStrike} — Entry >$${entryTrigger}, SL $${stopUnderlying}, TP $${targetUnderlying}**
-2. Signal thesis (brief explanation of why technicals support this entry)
-3. **⚠️ PITFALL or ✅ CATALYST**: Explain the key risk/pitfall (e.g. macro conflict, key wall proximity, event risk) or the prime catalyst supporting the trade.
-4. **Position Management**: Provide explicit, actionable rules on when the trader should **SELL** (cut loss or take profit), **HOLD** (stay in), or **AVERAGE IT** (average down/up under specific technical conditions).
+Write a single-sentence recommendation (maximum 25 words) advising whether the trader should HOLD (for a bounce/target), SELL (to take profit or cut loss), or WAIT/ABORT under specific technical conditions. Keep it clear, concise, and direct.
 
-Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your commentary here"}`;
+Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recommendation here"}`;
 
       try {
         const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 800);
