@@ -585,6 +585,39 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </div>
                                 </div>
 
+                                <div className="grid gap-4 pt-4 border-t">
+                                    <div className="flex items-center justify-between">
+                                        <Label htmlFor="dtAlpacaAutoTrade" className="flex flex-col gap-1 cursor-pointer">
+                                            <span className="font-semibold flex items-center gap-1.5"><Zap className="h-4 w-4 text-amber-500 animate-pulse" /> Auto-Execute Paper Trades (Alpaca)</span>
+                                            <span className="text-[10px] font-normal text-muted-foreground">Automatically place and manage 1-contract paper positions on Alpaca when signals trigger</span>
+                                        </Label>
+                                        <Switch
+                                            id="dtAlpacaAutoTrade"
+                                            checked={alpacaAutoTrade}
+                                            onCheckedChange={setAlpacaAutoTrade}
+                                        />
+                                    </div>
+                                    {alpacaAutoTrade && (
+                                        <div className="grid gap-2 animate-in fade-in slide-in-from-top-2 pt-2 pl-4 border-l-2 border-amber-500/20">
+                                            <Label htmlFor="dtAlpacaAutoTradeMode">Execution Timing</Label>
+                                            <Select value={alpacaAutoTradeMode} onValueChange={setAlpacaAutoTradeMode}>
+                                                <SelectTrigger id="dtAlpacaAutoTradeMode">
+                                                    <SelectValue placeholder="Select Execution Timing" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="instant">Instant Entry (Pre-AI) — Minimal Latency</SelectItem>
+                                                    <SelectItem value="ai_confirmed">AI-Confirmed Entry (Post-AI) — Requires AI GO Verdict</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            <p className="text-[10px] text-muted-foreground leading-normal mt-0.5">
+                                                {alpacaAutoTradeMode === 'instant' 
+                                                    ? "⚡ Orders are placed instantly when technical scanner identifies a trade signal, ignoring AI wait." 
+                                                    : "🧠 Orders wait for news classifier and Claude Sonnet coaching verdict. Requires a GO verdict to execute."}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+
                                 {dayTradingAiEnabled && (
                                     <div className="grid gap-4 animate-in fade-in slide-in-from-top-2">
                                         <div className="grid gap-2">

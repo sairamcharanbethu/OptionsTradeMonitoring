@@ -565,7 +565,7 @@ export class MarketPoller {
             } else if (pos.account_id === 'alpaca_paper') {
                 try {
                     const { rows: settingsRows } = await (this.fastify as any).pg.query(
-                        "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')",
+                        "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key', 'alpaca_auto_trade')",
                         [pos.user_id]
                     );
                     const userSettings = settingsRows.reduce((acc: any, r: any) => {
@@ -574,6 +574,12 @@ export class MarketPoller {
                     }, {});
                     const alpacaKeyId = userSettings.alpaca_key_id?.trim() || '';
                     const alpacaSecretKey = userSettings.alpaca_secret_key?.trim() || '';
+                    const alpacaAutoTrade = userSettings.alpaca_auto_trade?.trim() || 'false';
+
+                    if (alpacaAutoTrade !== 'true') {
+                        this.fastify.log.info(`[MarketPoller] Alpaca auto-trade is disabled for user ${pos.user_id}. Skipping automatic force-close for position ${pos.id}.`);
+                        continue;
+                    }
 
                     if (alpacaKeyId && alpacaSecretKey) {
                         const osiTicker = this.constructOSITicker(
@@ -605,6 +611,7 @@ export class MarketPoller {
                     }
                 } catch (err: any) {
                     this.fastify.log.error(`[MarketPoller] Failed to execute Alpaca force-close for position ${pos.id}: ${err.message}`);
+                    continue;
                 }
             }
 
@@ -880,10 +887,9 @@ export class MarketPoller {
                 this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${err.message}`);
             }
         } else if (position.account_id === 'alpaca_paper') {
-            this.fastify.log.info(`[MarketPoller] Alpaca paper position exit triggered for position ${position.id} (${position.symbol}). Executing SELL via Alpaca...`);
             try {
                 const { rows: settingsRows } = await (this.fastify as any).pg.query(
-                    "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')",
+                    "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key', 'alpaca_auto_trade')",
                     [position.user_id]
                 );
                 const userSettings = settingsRows.reduce((acc: any, r: any) => {
@@ -892,8 +898,15 @@ export class MarketPoller {
                 }, {});
                 const alpacaKeyId = userSettings.alpaca_key_id?.trim() || '';
                 const alpacaSecretKey = userSettings.alpaca_secret_key?.trim() || '';
+                const alpacaAutoTrade = userSettings.alpaca_auto_trade?.trim() || 'false';
+
+                if (alpacaAutoTrade !== 'true') {
+                    this.fastify.log.info(`[MarketPoller] Alpaca auto-trade is disabled for user ${position.user_id}. Skipping automatic exit closure for position ${position.id}.`);
+                    return;
+                }
 
                 if (alpacaKeyId && alpacaSecretKey) {
+                    this.fastify.log.info(`[MarketPoller] Alpaca paper position exit triggered for position ${position.id} (${position.symbol}). Executing SELL via Alpaca...`);
                     const osiTicker = this.constructOSITicker(
                         position.symbol, 
                         Number(position.strike_price), 
@@ -934,6 +947,7 @@ export class MarketPoller {
                 }
             } catch (err: any) {
                 this.fastify.log.error(`[MarketPoller] Alpaca paper exit execution failed for position ${position.id}: ${err.message}`);
+                return;
             }
         }
 
