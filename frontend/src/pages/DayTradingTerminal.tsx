@@ -86,6 +86,9 @@ export default function DayTradingTerminal() {
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
         setCountdown(300);
       }
+      if (lastMessage.type === 'SETTINGS_UPDATED') {
+        queryClient.invalidateQueries({ queryKey: ['settings'] });
+      }
     }
   }, [lastMessage, queryClient]);
 
@@ -260,21 +263,21 @@ export default function DayTradingTerminal() {
   const vwapValue = latestSignal?.indicators?.vwap || 0;
 
   let marketRegime = 'NEUTRAL';
-  let regimeGlowColor = 'shadow-zinc-500/20 text-zinc-400 border-zinc-500/30';
-  let regimeBadgeBg = 'bg-zinc-900 text-zinc-300 border border-zinc-500/30';
+  let regimeGlowColor = 'shadow-zinc-500/10 border-zinc-800 bg-zinc-900/40 text-zinc-400';
+  let regimeBadgeBg = 'bg-zinc-950 text-zinc-400 border border-zinc-800';
 
   if (currentGexRegime === 'POSITIVE' && vixValue <= 13.5) {
     marketRegime = 'EUPHORIA';
-    regimeGlowColor = 'shadow-purple-500/30 text-purple-400 border-purple-500/30 bg-purple-950/10';
-    regimeBadgeBg = 'bg-purple-900/60 text-purple-200 border border-purple-500/40 animate-pulse';
+    regimeGlowColor = 'shadow-[0_0_25px_rgba(168,85,247,0.12)] text-purple-400 border-purple-500/40 bg-gradient-to-br from-purple-950/20 via-zinc-900/40 to-zinc-900/60';
+    regimeBadgeBg = 'bg-purple-950 text-purple-200 border border-purple-500/50 animate-pulse';
   } else if (currentGexRegime === 'POSITIVE' || (spotPrice > 0 && spotPrice > vwapValue)) {
     marketRegime = 'BULLISH';
-    regimeGlowColor = 'shadow-emerald-500/30 text-emerald-400 border-emerald-500/30 bg-emerald-950/10';
-    regimeBadgeBg = 'bg-emerald-900/60 text-emerald-200 border border-emerald-500/40';
+    regimeGlowColor = 'shadow-[0_0_25px_rgba(16,185,129,0.12)] text-emerald-400 border-emerald-500/45 bg-gradient-to-br from-emerald-950/20 via-zinc-900/40 to-zinc-900/60';
+    regimeBadgeBg = 'bg-emerald-950 text-emerald-200 border border-emerald-500/50';
   } else if (currentGexRegime === 'NEGATIVE' || (spotPrice > 0 && spotPrice < vwapValue)) {
     marketRegime = 'BEARISH';
-    regimeGlowColor = 'shadow-red-500/30 text-red-400 border-red-500/30 bg-red-950/10';
-    regimeBadgeBg = 'bg-red-900/60 text-red-200 border border-red-500/40';
+    regimeGlowColor = 'shadow-[0_0_25px_rgba(239,68,68,0.12)] text-red-400 border-red-500/45 bg-gradient-to-br from-red-950/20 via-zinc-900/40 to-zinc-900/60';
+    regimeBadgeBg = 'bg-red-950 text-red-200 border border-red-500/50';
   }
 
   // Mega-caps change tracking (retrieve from latest signal index statistics if available, else standard fallback)
@@ -423,48 +426,48 @@ export default function DayTradingTerminal() {
           <div className="flex flex-wrap gap-1 text-[9px] font-mono justify-between">
             {healthData.yahooFinance.status !== 'N/A' && (
               <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Yahoo Finance">
-                <span className={healthData.yahooFinance.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className={healthData.yahooFinance.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
                 <span className="text-zinc-500 font-bold">YF</span>
                 <span className="text-zinc-300">{healthData.yahooFinance.latencyMs}ms</span>
               </div>
             )}
             {healthData.sscgexPortal.status !== 'N/A' && (
               <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="GEX Portal API">
-                <span className={healthData.sscgexPortal.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className={healthData.sscgexPortal.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
                 <span className="text-zinc-500 font-bold">GEX</span>
                 <span className="text-zinc-300">{healthData.sscgexPortal.latencyMs}ms</span>
               </div>
             )}
             {healthData.polygon.status !== 'N/A' && (
               <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Polygon API">
-                <span className={healthData.polygon.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className={healthData.polygon.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
                 <span className="text-zinc-500 font-bold">POLY</span>
                 <span className="text-zinc-300">{healthData.polygon.latencyMs}ms</span>
               </div>
             )}
             {healthData.openRouter.status !== 'N/A' && (
               <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="OpenRouter AI">
-                <span className={healthData.openRouter.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className={healthData.openRouter.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
                 <span className="text-zinc-500 font-bold">AI</span>
                 <span className="text-zinc-300">{healthData.openRouter.latencyMs}ms</span>
               </div>
             )}
             {healthData.discord?.status !== 'N/A' && (
               <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Discord Webhook API">
-                <span className={healthData.discord?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className={healthData.discord?.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
                 <span className="text-zinc-500 font-bold">DISC</span>
                 <span className="text-zinc-300">{healthData.discord?.latencyMs ?? 0}ms</span>
               </div>
             )}
             {healthData.alpaca?.status !== 'N/A' && (
               <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Alpaca API">
-                <span className={healthData.alpaca?.status === 'UP' ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className={healthData.alpaca?.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
                 <span className="text-zinc-500 font-bold">ALPA</span>
                 <span className="text-zinc-300">{healthData.alpaca?.latencyMs ?? 0}ms</span>
               </div>
             )}
             <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Real-Time Streaming WebSocket">
-              <span className={isConnected ? 'text-green-400' : 'text-red-400 animate-pulse'}>●</span>
+              <span className={isConnected ? 'text-green-400 animate-pulse' : 'text-red-400 animate-pulse'}>●</span>
               <span className="text-zinc-500 font-bold">STREAM</span>
               <span className="text-zinc-300">{isConnected ? 'LIVE' : 'CONN...'}</span>
             </div>
@@ -476,8 +479,10 @@ export default function DayTradingTerminal() {
       {/* Row 2: Separated Prominent LATEST setup notification */}
       <div 
         onClick={() => latestActionableSignal && setSelectedSignalId(latestActionableSignal.id)}
-        className={`border rounded-lg bg-zinc-900/20 shadow-[0_0_20px_rgba(16,185,129,0.02)] overflow-hidden transition-all duration-300 ${
-          latestActionableSignal ? 'border-emerald-500/45 shadow-[0_0_15px_rgba(16,185,129,0.08)] cursor-pointer hover:bg-zinc-900/35' : 'border-emerald-500/20'
+        className={`border rounded-lg backdrop-blur-md overflow-hidden transition-all duration-500 ${
+          latestActionableSignal 
+            ? 'border-emerald-500/50 shadow-[0_0_25px_rgba(16,185,129,0.15)] bg-zinc-900/45 cursor-pointer hover:bg-zinc-900/60 hover:shadow-[0_0_35px_rgba(16,185,129,0.25)] hover:border-emerald-400' 
+            : 'border-emerald-500/10 shadow-inner bg-zinc-900/15'
         }`}
       >
         <div className="bg-emerald-950/20 border-b border-emerald-500/15 p-2.5 px-3 flex justify-between items-center">
@@ -784,7 +789,7 @@ export default function DayTradingTerminal() {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-[10px] font-bold border-amber-500/30 text-amber-400 hover:bg-amber-950/20 gap-1 bg-zinc-950/40"
+                className="h-7 text-[10px] font-bold border-amber-500/30 text-amber-400 hover:text-amber-300 hover:border-amber-400 hover:bg-amber-950/30 hover:shadow-[0_0_12px_rgba(245,158,11,0.2)] transition-all duration-300 gap-1 bg-zinc-950/40"
                 onClick={handleTriggerScan}
                 disabled={triggerLoading}
               >
@@ -794,7 +799,7 @@ export default function DayTradingTerminal() {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-[10px] font-bold border-emerald-500/30 text-emerald-400 hover:bg-emerald-950/20 gap-1 bg-zinc-950/40"
+                className="h-7 text-[10px] font-bold border-emerald-500/30 text-emerald-400 hover:text-emerald-300 hover:border-emerald-400 hover:bg-emerald-950/30 hover:shadow-[0_0_12px_rgba(16,185,129,0.2)] transition-all duration-300 gap-1 bg-zinc-950/40"
                 onClick={async () => {
                   if (confirm("Are you sure you want to seed mock data?")) {
                     try {
@@ -812,7 +817,7 @@ export default function DayTradingTerminal() {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-[10px] font-bold border-red-500/30 text-red-400 hover:bg-red-950/25 hover:text-red-300 gap-1 bg-zinc-950/40"
+                className="h-7 text-[10px] font-bold border-red-500/30 text-red-400 hover:text-red-300 hover:border-red-400 hover:bg-red-950/30 hover:shadow-[0_0_12px_rgba(239,68,68,0.2)] transition-all duration-300 gap-1 bg-zinc-950/40"
                 onClick={async () => {
                   if (confirm("Wipe all day trading signals and logs from database?")) {
                     try {
@@ -894,8 +899,8 @@ export default function DayTradingTerminal() {
                         <React.Fragment key={sig.id}>
                           <tr
                             onClick={() => { setSelectedSignalId(sig.id); }}
-                            className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-colors ${
-                              isSelected ? 'bg-emerald-950/25 border-l-2 border-l-emerald-400' : ''
+                            className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-all duration-300 ${
+                              isSelected ? 'bg-emerald-950/30 border-l-2 border-l-emerald-400 shadow-[inset_4px_0_12px_-4px_rgba(16,185,129,0.25)]' : ''
                             }`}
                           >
                             {/* Expand toggle */}
@@ -1024,8 +1029,8 @@ export default function DayTradingTerminal() {
                         <React.Fragment key={log.id}>
                           <tr
                             onClick={() => { setSelectedLogId(log.id); }}
-                            className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-colors ${
-                              isSelected ? 'bg-emerald-950/25 border-l-2 border-l-emerald-400' : ''
+                            className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-all duration-300 ${
+                              isSelected ? 'bg-emerald-950/30 border-l-2 border-l-emerald-400 shadow-[inset_4px_0_12px_-4px_rgba(16,185,129,0.25)]' : ''
                             }`}
                           >
                             <td className="px-1 py-1.5" onClick={e => { e.stopPropagation(); setExpandedLogId(isExpanded ? null : log.id); }}>

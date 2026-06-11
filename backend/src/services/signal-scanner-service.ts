@@ -460,6 +460,33 @@ Rules:
     const settings = await this.getSettingsForUser(userId);
     if (settings.day_trading_enabled !== 'true') return;
 
+    // Auto turn off scanning after 4:30 PM ET (990 minutes)
+    const now = new Date();
+    const nyParts = this.getNyDateParts(now);
+    const cutoffMinutes = 16 * 60 + 30; // 16:30 = 990 minutes
+
+    if (nyParts.minutes >= cutoffMinutes) {
+      this.fastify.log.info(`[SignalScannerService] Current Eastern Time is past 4:30 PM ET (${nyParts.hour}:${nyParts.minute}). Auto-disabling day trading scanner for user ${userId}.`);
+      
+      await this.fastify.pg.query(
+        `INSERT INTO settings (user_id, key, value, updated_at) 
+         VALUES ($1, 'day_trading_enabled', 'false', CURRENT_TIMESTAMP) 
+         ON CONFLICT (user_id, key) DO UPDATE 
+         SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+        [userId]
+      );
+      await redis.set(`USER_SETTINGS:${userId}`, '', 1);
+
+      if (this.fastify.websocketServer) {
+        this.fastify.websocketServer.clients.forEach((client: any) => {
+          if (client.readyState === 1) {
+            client.send(JSON.stringify({ type: 'SETTINGS_UPDATED', data: { userId } }));
+          }
+        });
+      }
+      return;
+    }
+
     const symbols = settings.day_trading_symbols
       .split(',')
       .map((s: string) => s.trim().toUpperCase())
