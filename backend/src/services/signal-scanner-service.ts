@@ -381,29 +381,43 @@ Rules:
     }, delayMs);
   }
 
+  private async getPrimaryUserId(): Promise<number> {
+    // 1. Try to find the first user who has polygon_api_key set in the settings table
+    const { rows } = await this.fastify.pg.query(`
+      SELECT user_id 
+      FROM settings 
+      WHERE key = 'polygon_api_key' AND value IS NOT NULL AND value != '' 
+      ORDER BY user_id ASC
+      LIMIT 1
+    `);
+    if (rows.length > 0) {
+      return rows[0].user_id;
+    }
+
+    // 2. Fallback to the first user in the users table
+    const { rows: users } = await this.fastify.pg.query(`
+      SELECT id FROM users ORDER BY id ASC LIMIT 1
+    `);
+    if (users.length > 0) {
+      return users[0].id;
+    }
+    
+    return 1; // Default fallback ID if no users exist
+  }
+
   public async scanAllActiveUsers() {
     if (this.isRunning) return;
     this.isRunning = true;
 
     try {
-      // Find all users who have enabled day trading
-      const query = `
-        SELECT DISTINCT user_id 
-        FROM settings 
-        WHERE key = 'day_trading_enabled' AND value = 'true'
-      `;
-      const { rows } = await this.fastify.pg.query(query);
-
-      for (const row of rows) {
-        const userId = row.user_id;
-        try {
-          await this.scanForUser(userId);
-        } catch (userErr: any) {
-          this.fastify.log.error(`[SignalScannerService] Scan failed for user ${userId}: ${userErr.message}`);
-        }
+      const primaryUserId = await this.getPrimaryUserId();
+      try {
+        await this.scanForUser(primaryUserId);
+      } catch (userErr: any) {
+        this.fastify.log.error(`[SignalScannerService] Universal scan failed for user ${primaryUserId}: ${userErr.message}`);
       }
     } catch (err: any) {
-      this.fastify.log.error(`[SignalScannerService] Failed to load active scanner users: ${err.message}`);
+      this.fastify.log.error(`[SignalScannerService] Failed to execute universal scan: ${err.message}`);
     } finally {
       this.isRunning = false;
     }
@@ -1775,7 +1789,20 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
 
   // Latency Healthcheck Evaluator
   public async runHealthCheck(userId: number): Promise<any> {
-    const settings = await this.getSettingsForUser(userId);
+    let targetUserId = userId;
+    let settings = await this.getSettingsForUser(targetUserId);
+
+    // If the logged-in user hasn't configured keys, try using the primary user settings
+    if (!settings.polygon_api_key && !settings.sscgex_password) {
+      const primaryId = await this.getPrimaryUserId();
+      if (primaryId !== userId) {
+        const primarySettings = await this.getSettingsForUser(primaryId);
+        if (primarySettings.polygon_api_key || primarySettings.sscgex_password) {
+          targetUserId = primaryId;
+          settings = primarySettings;
+        }
+      }
+    }
 
     const checkLatency = async (fn: () => Promise<void>, isConfigured = true): Promise<{ status: string; latencyMs: number }> => {
       if (!isConfigured) {
