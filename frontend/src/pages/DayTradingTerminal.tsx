@@ -296,7 +296,12 @@ export default function DayTradingTerminal() {
         <div className="flex items-center gap-3">
           <TerminalIcon className="h-6 w-6 text-emerald-400 animate-pulse" />
           <div className="flex flex-col">
-            <h2 className="text-xl font-bold uppercase tracking-widest text-emerald-300">DAY_TRADING_DASHBOARD</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold uppercase tracking-widest text-emerald-300">DAY_TRADING_DASHBOARD</h2>
+              <span className="text-[9px] bg-emerald-950/60 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-500/30 font-mono">
+                v{import.meta.env.VITE_APP_VERSION || '1.4.0'}
+              </span>
+            </div>
             <span className="text-[10px] text-emerald-500/80">Active channels: QQQ, SPY | Live database scanning engine</span>
           </div>
         </div>
