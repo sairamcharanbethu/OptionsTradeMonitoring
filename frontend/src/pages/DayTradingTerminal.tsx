@@ -1211,9 +1211,13 @@ export default function DayTradingTerminal() {
                          </span>
                        </div>
                      </div>
-                   ) : (
-                     <div className="text-emerald-500/50 italic p-2 bg-zinc-950/40 rounded border border-emerald-500/5">No option details available for this record.</div>
-                   )}
+                    ) : (
+                      <div className="text-zinc-500 italic p-3 bg-zinc-950/40 rounded border border-zinc-800/50 font-mono text-[10px] leading-relaxed">
+                        {activeTab === 'logs' 
+                          ? 'INFO: Selected record is a background scanner execution log. Option contract specifications are only generated and saved for active trade signals.'
+                          : 'INFO: No option contract specifications exist for this historical record.'}
+                      </div>
+                    )}
                  </div>
 
                  {/* Indicators Block */}
