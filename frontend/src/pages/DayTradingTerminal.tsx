@@ -80,9 +80,11 @@ export default function DayTradingTerminal() {
     if (lastMessage) {
       if (lastMessage.type === 'NEW_SIGNAL' || lastMessage.type === 'SIGNAL_UPDATED') {
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+        setCountdown(300);
       }
       if (lastMessage.type === 'NEW_SCAN_LOG') {
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
+        setCountdown(300);
       }
     }
   }, [lastMessage, queryClient]);
@@ -559,6 +561,27 @@ export default function DayTradingTerminal() {
                     </span>
                   </div>
                 </div>
+
+                {latestActionableSignal.option_details && (
+                  <div className="grid grid-cols-3 gap-3 border-t border-emerald-500/10 pt-2.5 text-center text-[10px] font-mono text-sky-400 bg-zinc-950/20 p-2 rounded">
+                    <div>
+                      <span className="text-[8px] text-zinc-500 block uppercase font-semibold">OPTION CONTRACT</span>
+                      <span className="font-bold text-zinc-300">{latestActionableSignal.option_details.ticker}</span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] text-zinc-500 block uppercase font-semibold">SUGGESTED PREMIUM</span>
+                      <span className="font-bold text-sky-300">
+                        ${latestActionableSignal.option_details.mark !== undefined ? Number(latestActionableSignal.option_details.mark).toFixed(2) : 'N/A'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] text-zinc-500 block uppercase font-semibold">PREMIUM SL / TP</span>
+                      <span className="font-bold text-zinc-300">
+                        ${latestActionableSignal.option_details.suggestedStopLoss !== undefined ? Number(latestActionableSignal.option_details.suggestedStopLoss).toFixed(2) : 'N/A'} / ${latestActionableSignal.option_details.suggestedTakeProfit !== undefined ? Number(latestActionableSignal.option_details.suggestedTakeProfit).toFixed(2) : 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Option premium suggestion */}
                 {latestActionableSignal.gex && (

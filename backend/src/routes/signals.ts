@@ -178,15 +178,60 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     try {
       const { id } = request.params as { id: number };
       const { status } = UpdateStatusSchema.parse(request.body);
+      const { id: userId } = (request as any).user;
 
-      const query = 'UPDATE signals SET status = $1 WHERE id = $2 RETURNING id, status';
-      const { rows } = await fastify.pg.query(query, [status, id]);
+      if (status === 'EXECUTED') {
+        const scanner = (fastify as any).scanner;
+        if (!scanner) {
+          return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
+        }
 
-      if (rows.length === 0) {
-        return (reply as any).code(404).send({ error: 'Signal not found' });
+        // 1. Fetch signal
+        const { rows: sigRows } = await fastify.pg.query('SELECT * FROM signals WHERE id = $1', [id]);
+        if (sigRows.length === 0) {
+          return (reply as any).code(404).send({ error: 'Signal not found' });
+        }
+        const signal = sigRows[0];
+
+        // 2. Load settings
+        const settings = await scanner.getSettingsForUser(userId);
+        const hasAlpacaKeys = settings.alpaca_key_id && settings.alpaca_secret_key;
+
+        // 3. Execute
+        if (hasAlpacaKeys) {
+          // If Alpaca keys are present, place the paper order
+          const optionDetails = signal.option_details || {};
+          const chosenStrike = optionDetails.strike || Math.round(signal.current_price);
+          const chosenExpiry = optionDetails.expiry || signal.option_expiration_date || new Date().toISOString().split('T')[0];
+          const mark = optionDetails.mark || null;
+
+          await scanner.executeAlpacaPaperTrade(
+            userId,
+            signal.symbol,
+            signal.signal_type,
+            chosenStrike,
+            chosenExpiry,
+            signal.stop_loss,
+            signal.target_price,
+            mark,
+            signal.id
+          );
+        } else {
+          // Fallback: create simulated position
+          await scanner.createSimulatedPositionFromSignal(userId, id);
+        }
+
+        return { id, status: 'EXECUTED' };
+      } else {
+        const query = 'UPDATE signals SET status = $1 WHERE id = $2 RETURNING id, status';
+        const { rows } = await fastify.pg.query(query, [status, id]);
+
+        if (rows.length === 0) {
+          return (reply as any).code(404).send({ error: 'Signal not found' });
+        }
+
+        return rows[0];
       }
-
-      return rows[0];
     } catch (err: any) {
       fastify.log.error(err);
       return (reply as any).code(500).send({ error: err.message || 'Failed to update signal status' });

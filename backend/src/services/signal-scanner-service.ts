@@ -423,7 +423,7 @@ Rules:
     }
   }
 
-  private async getSettingsForUser(userId: number) {
+  public async getSettingsForUser(userId: number) {
     const { rows } = await this.fastify.pg.query(
       'SELECT key, value FROM settings WHERE user_id = $1',
       [userId]
@@ -1978,7 +1978,80 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     return trSum / length;
   }
 
-  private async executeAlpacaPaperTrade(
+  public async createSimulatedPositionFromSignal(
+    userId: number,
+    signalId: number
+  ) {
+    // 1. Fetch signal from DB
+    const { rows } = await this.fastify.pg.query(
+      'SELECT * FROM signals WHERE id = $1',
+      [signalId]
+    );
+    if (rows.length === 0) {
+      throw new Error(`Signal #${signalId} not found`);
+    }
+    const signal = rows[0];
+    
+    // 2. Extract pricing / option details
+    const optionDetails = signal.option_details || {};
+    const symbol = signal.symbol;
+    const winningSide = signal.signal_type || 'CALL';
+    const chosenStrike = optionDetails.strike || Math.round(signal.current_price);
+    const chosenExpiry = optionDetails.expiry || signal.option_expiration_date || new Date().toISOString().split('T')[0];
+    const entryPrice = optionDetails.mark || 1.0;
+    const stopUnderlying = signal.stop_loss || signal.current_price * 0.99;
+    const targetUnderlying = signal.target_price || signal.current_price * 1.01;
+
+    // 3. Insert into positions table
+    const insertQuery = `
+      INSERT INTO positions (
+        user_id, symbol, option_type, strike_price, expiration_date, 
+        entry_price, quantity, stop_loss_trigger, take_profit_trigger,
+        trailing_high_price, trailing_stop_loss_pct, current_price,
+        status, is_simulated, account_id, notes, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'OPEN', TRUE, 'simulated', $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `;
+
+    const values = [
+      userId,
+      symbol,
+      winningSide,
+      chosenStrike,
+      chosenExpiry,
+      entryPrice,
+      1, // 1 contract
+      stopUnderlying,
+      targetUnderlying,
+      entryPrice, // trailing_high
+      null, // trailing stop pct
+      entryPrice, // current_price
+      `[Manually executed Simulated Option Position from Signal #${signalId}]`
+    ];
+
+    await this.fastify.pg.query(insertQuery, values);
+    this.fastify.log.info(`[SignalScannerService] Simulated position recorded in DB for signal #${signalId}.`);
+
+    // 4. Update signal status to EXECUTED
+    await this.fastify.pg.query(
+      'UPDATE signals SET status = $1 WHERE id = $2',
+      ['EXECUTED', signalId]
+    );
+
+    // 5. Broadcast signal update
+    if (this.fastify.websocketServer) {
+      this.fastify.websocketServer.clients.forEach((client: any) => {
+        if (client.readyState === 1) {
+          client.send(JSON.stringify({ type: 'SIGNAL_UPDATED', data: { id: signalId, symbol } }));
+        }
+      });
+    }
+
+    // 6. Invalidate frontend cache
+    await redis.del(`USER_POSITIONS:${userId}`);
+    await redis.del(`USER_STATS:${userId}`);
+  }
+
+  public async executeAlpacaPaperTrade(
     userId: number,
     symbol: string,
     winningSide: 'CALL' | 'PUT',
