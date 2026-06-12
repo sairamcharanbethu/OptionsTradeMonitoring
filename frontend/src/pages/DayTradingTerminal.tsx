@@ -254,51 +254,82 @@ export default function DayTradingTerminal() {
     }
   };
 
-  // Derive active Market Regime (Euphoria, Bullish, Bearish, Neutral)
+  // Helper to derive active Market Regime (Euphoria, Bullish, Bearish, Neutral)
   // Look at the latest signal or latest log (whichever is newer)
+  const getRegimeDetails = (latestLog: ScannerLog | null, latestSignal: Signal | null) => {
+    let activeSource: 'signal' | 'log' = 'signal';
+    if (latestLog && latestSignal) {
+      activeSource = new Date(latestLog.created_at) > new Date(latestSignal.created_at) ? 'log' : 'signal';
+    } else if (latestLog) {
+      activeSource = 'log';
+    }
+
+    const currentGexRegime = activeSource === 'log'
+      ? (latestLog?.regime || 'NEUTRAL')
+      : (latestSignal?.gex?.regime || 'NEUTRAL');
+
+    const vixValue = activeSource === 'log'
+      ? (latestLog?.vix != null ? Number(latestLog.vix) : 14.5)
+      : (latestSignal?.volatility?.vixQuote || 14.5);
+
+    const spotPrice = activeSource === 'log'
+      ? (latestLog?.spot_price != null ? Number(latestLog.spot_price) : 0)
+      : (latestSignal?.current_price || 0);
+
+    const vwapValue = activeSource === 'log'
+      ? (latestLog?.indicators?.vwap != null ? Number(latestLog.indicators.vwap) : 0)
+      : (latestSignal?.indicators?.vwap || 0);
+
+    let marketRegime = 'NEUTRAL';
+    let glowColor = 'shadow-zinc-500/10 border-zinc-800 bg-zinc-900/40 text-zinc-400';
+    let badgeBg = 'bg-zinc-950 text-zinc-400 border border-zinc-800';
+
+    if (currentGexRegime === 'POSITIVE' && vixValue <= 13.5) {
+      marketRegime = 'EUPHORIA';
+      glowColor = 'shadow-[0_0_25px_rgba(168,85,247,0.12)] text-purple-400 border-purple-500/40 bg-gradient-to-br from-purple-950/20 via-zinc-900/40 to-zinc-900/60';
+      badgeBg = 'bg-purple-950 text-purple-200 border border-purple-500/50 animate-pulse';
+    } else if (currentGexRegime === 'NEGATIVE' || (spotPrice > 0 && spotPrice < vwapValue)) {
+      marketRegime = 'BEARISH';
+      glowColor = 'shadow-[0_0_25px_rgba(239,68,68,0.12)] text-red-400 border-red-500/45 bg-gradient-to-br from-red-950/20 via-zinc-900/40 to-zinc-900/60';
+      badgeBg = 'bg-red-950 text-red-200 border border-red-500/50';
+    } else if (currentGexRegime === 'POSITIVE' || (spotPrice > 0 && spotPrice > vwapValue)) {
+      marketRegime = 'BULLISH';
+      glowColor = 'shadow-[0_0_25px_rgba(16,185,129,0.12)] text-emerald-400 border-emerald-500/45 bg-gradient-to-br from-emerald-950/20 via-zinc-900/40 to-zinc-900/60';
+      badgeBg = 'bg-emerald-950 text-emerald-200 border border-emerald-500/50';
+    }
+
+    return {
+      marketRegime,
+      currentGexRegime,
+      vixValue,
+      spotPrice,
+      vwapValue,
+      glowColor,
+      badgeBg
+    };
+  };
+
+  const latestQQQSignal = signals.find(s => s.symbol === 'QQQ') || null;
+  const latestSPYSignal = signals.find(s => s.symbol === 'SPY') || null;
+  const latestQQQLog = logs.find(l => l.symbol === 'QQQ') || null;
+  const latestSPYLog = logs.find(l => l.symbol === 'SPY') || null;
+
+  const qqqDetails = getRegimeDetails(latestQQQLog, latestQQQSignal);
+  const spyDetails = getRegimeDetails(latestSPYLog, latestSPYSignal);
+
+  const activeDetails = selectedSymbol === 'SPY' ? spyDetails : qqqDetails;
+  
+  const currentGexRegime = activeDetails.currentGexRegime;
+  const vixValue = activeDetails.vixValue;
+  const spotPrice = activeDetails.spotPrice;
+  const vwapValue = activeDetails.vwapValue;
+  const marketRegime = activeDetails.marketRegime;
+  const regimeGlowColor = activeDetails.glowColor;
+  const regimeBadgeBg = activeDetails.badgeBg;
+
   const latestSignal = filteredSignals[0] || null;
   const latestLog = filteredLogs[0] || null;
 
-  let activeSource: 'signal' | 'log' = 'signal';
-  if (latestLog && latestSignal) {
-    activeSource = new Date(latestLog.created_at) > new Date(latestSignal.created_at) ? 'log' : 'signal';
-  } else if (latestLog) {
-    activeSource = 'log';
-  }
-
-  const currentGexRegime = activeSource === 'log'
-    ? (latestLog?.regime || 'NEUTRAL')
-    : (latestSignal?.gex?.regime || 'NEUTRAL');
-
-  const vixValue = activeSource === 'log'
-    ? (latestLog?.vix != null ? Number(latestLog.vix) : 14.5)
-    : (latestSignal?.volatility?.vixQuote || 14.5);
-
-  const spotPrice = activeSource === 'log'
-    ? (latestLog?.spot_price != null ? Number(latestLog.spot_price) : 0)
-    : (latestSignal?.current_price || 0);
-
-  const vwapValue = activeSource === 'log'
-    ? (latestLog?.indicators?.vwap != null ? Number(latestLog.indicators.vwap) : 0)
-    : (latestSignal?.indicators?.vwap || 0);
-
-  let marketRegime = 'NEUTRAL';
-  let regimeGlowColor = 'shadow-zinc-500/10 border-zinc-800 bg-zinc-900/40 text-zinc-400';
-  let regimeBadgeBg = 'bg-zinc-950 text-zinc-400 border border-zinc-800';
-
-  if (currentGexRegime === 'POSITIVE' && vixValue <= 13.5) {
-    marketRegime = 'EUPHORIA';
-    regimeGlowColor = 'shadow-[0_0_25px_rgba(168,85,247,0.12)] text-purple-400 border-purple-500/40 bg-gradient-to-br from-purple-950/20 via-zinc-900/40 to-zinc-900/60';
-    regimeBadgeBg = 'bg-purple-950 text-purple-200 border border-purple-500/50 animate-pulse';
-  } else if (currentGexRegime === 'POSITIVE' || (spotPrice > 0 && spotPrice > vwapValue)) {
-    marketRegime = 'BULLISH';
-    regimeGlowColor = 'shadow-[0_0_25px_rgba(16,185,129,0.12)] text-emerald-400 border-emerald-500/45 bg-gradient-to-br from-emerald-950/20 via-zinc-900/40 to-zinc-900/60';
-    regimeBadgeBg = 'bg-emerald-950 text-emerald-200 border border-emerald-500/50';
-  } else if (currentGexRegime === 'NEGATIVE' || (spotPrice > 0 && spotPrice < vwapValue)) {
-    marketRegime = 'BEARISH';
-    regimeGlowColor = 'shadow-[0_0_25px_rgba(239,68,68,0.12)] text-red-400 border-red-500/45 bg-gradient-to-br from-red-950/20 via-zinc-900/40 to-zinc-900/60';
-    regimeBadgeBg = 'bg-red-950 text-red-200 border border-red-500/50';
-  }
 
   // Mega-caps change tracking (retrieve from latest log or latest signal, else standard fallback)
   const AAPL_change = latestLog?.indicators?.megaCaps?.AAPL ?? latestSignal?.indicators?.megaCaps?.AAPL ?? 0.0; 
@@ -383,27 +414,65 @@ export default function DayTradingTerminal() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         
         {/* Widget 1: Glowing Market Regime Gauge */}
-        <div className={`flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] ${regimeGlowColor}`}>
-          <div className="flex flex-col justify-center">
-            <div className="flex items-center gap-2">
-              <span className="text-[9px] text-emerald-500/70 uppercase tracking-wider font-semibold">REGIME</span>
-              <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400 font-bold uppercase">
-                {selectedSymbol}
-              </Badge>
+        {selectedSymbol === 'BOTH' ? (
+          <div className="flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] border-zinc-800 shadow-[0_0_20px_rgba(16,185,129,0.02)]">
+            <div className="grid grid-cols-2 gap-3 w-full font-mono">
+              {/* QQQ Side */}
+              <div className="flex flex-col border-r border-zinc-800/80 pr-2">
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className="text-[9px] text-emerald-500/70 uppercase font-semibold">QQQ REGIME</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase ${qqqDetails.badgeBg}`}>
+                    {qqqDetails.marketRegime === 'EUPHORIA' ? '🔥 RISK-ON' : qqqDetails.marketRegime === 'BULLISH' ? '🟢 BUY' : qqqDetails.marketRegime === 'BEARISH' ? '🔴 FADE' : '🟡 RANGE'}
+                  </span>
+                </div>
+                <span className="text-[11px] text-zinc-300 block mt-1 font-bold tracking-wider">
+                  {qqqDetails.marketRegime}
+                </span>
+                <span className="text-[9px] text-zinc-400 block mt-0.5">
+                  GEX: {qqqDetails.currentGexRegime} · VIX: {qqqDetails.vixValue.toFixed(1)}
+                </span>
+              </div>
+              
+              {/* SPY Side */}
+              <div className="flex flex-col pl-1">
+                <div className="flex items-center justify-between gap-1.5">
+                  <span className="text-[9px] text-emerald-500/70 uppercase font-semibold">SPY REGIME</span>
+                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase ${spyDetails.badgeBg}`}>
+                    {spyDetails.marketRegime === 'EUPHORIA' ? '🔥 RISK-ON' : spyDetails.marketRegime === 'BULLISH' ? '🟢 BUY' : spyDetails.marketRegime === 'BEARISH' ? '🔴 FADE' : '🟡 RANGE'}
+                  </span>
+                </div>
+                <span className="text-[11px] text-zinc-300 block mt-1 font-bold tracking-wider">
+                  {spyDetails.marketRegime}
+                </span>
+                <span className="text-[9px] text-zinc-400 block mt-0.5">
+                  GEX: {spyDetails.currentGexRegime} · VIX: {spyDetails.vixValue.toFixed(1)}
+                </span>
+              </div>
             </div>
-            <span className="text-xl font-extrabold tracking-widest block uppercase drop-shadow-[0_0_10px_rgba(16,185,129,0.2)] mt-0.5">
-              {marketRegime}
-            </span>
-            <span className="text-[9px] text-zinc-400 block">
-              GEX: {currentGexRegime} · VIX: {vixValue.toFixed(1)}
-            </span>
           </div>
-          <div className="flex items-center">
-            <span className={`px-2 py-1 rounded text-[9px] font-extrabold uppercase select-none ${regimeBadgeBg}`}>
-              {marketRegime === 'EUPHORIA' ? '🔥 ULTRA RISK-ON' : marketRegime === 'BULLISH' ? '🟢 BUY THE DIPS' : marketRegime === 'BEARISH' ? '🔴 FADE THE RIPS' : '🟡 RANGE'}
-            </span>
+        ) : (
+          <div className={`flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] ${regimeGlowColor}`}>
+            <div className="flex flex-col justify-center">
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] text-emerald-500/70 uppercase tracking-wider font-semibold">REGIME</span>
+                <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400 font-bold uppercase">
+                  {selectedSymbol}
+                </Badge>
+              </div>
+              <span className="text-xl font-extrabold tracking-widest block uppercase drop-shadow-[0_0_10px_rgba(16,185,129,0.2)] mt-0.5">
+                {marketRegime}
+              </span>
+              <span className="text-[9px] text-zinc-400 block">
+                GEX: {currentGexRegime} · VIX: {vixValue.toFixed(1)}
+              </span>
+            </div>
+            <div className="flex items-center">
+              <span className={`px-2 py-1 rounded text-[9px] font-extrabold uppercase select-none ${regimeBadgeBg}`}>
+                {marketRegime === 'EUPHORIA' ? '🔥 ULTRA RISK-ON' : marketRegime === 'BULLISH' ? '🟢 BUY THE DIPS' : marketRegime === 'BEARISH' ? '🔴 FADE THE RIPS' : '🟡 RANGE'}
+              </span>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Widget 2: Mega Caps Tracking Panel */}
         <div className="p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">

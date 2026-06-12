@@ -952,10 +952,10 @@ Rules:
     let computedRegime = 'NEUTRAL';
     if (qqqGexRegime === 'POSITIVE' && vixPrice !== null && vixPrice <= 13.5 && hasBullishInternals) {
       computedRegime = 'EUPHORIA';
-    } else if (qqqGexRegime === 'POSITIVE' || currentPrice > vwap) {
-      computedRegime = 'BULLISH';
     } else if (qqqGexRegime === 'NEGATIVE' || currentPrice < vwap) {
       computedRegime = 'BEARISH';
+    } else if (qqqGexRegime === 'POSITIVE' || currentPrice > vwap) {
+      computedRegime = 'BULLISH';
     }
 
     // Resolve Contract ATM selection if actionable
