@@ -721,21 +721,68 @@ Rules:
     let microsoftPct: number | null = null;
     let nvidiaPct: number | null = null;
 
-    try {
-      const internals = await (yahooFinance as any).quote(['AAPL', 'MSFT', 'NVDA']);
-      const internalsList = Array.isArray(internals) ? internals : [internals];
+    let fetchedFromAlpaca = false;
+    const alpacaKeyId = settings.alpaca_key_id?.trim();
+    const alpacaSecretKey = settings.alpaca_secret_key?.trim();
 
-      for (const stock of internalsList) {
-        const change = stock.regularMarketChangePercent ?? 0;
-        if (stock.symbol === 'AAPL') applePct = change;
-        if (stock.symbol === 'MSFT') microsoftPct = change;
-        if (stock.symbol === 'NVDA') nvidiaPct = change;
+    if (alpacaKeyId && alpacaSecretKey) {
+      try {
+        this.fastify.log.info('[SignalScannerService] Fetching mega-caps snapshots from Alpaca...');
+        const stockUrl = 'https://data.alpaca.markets/v2/stocks/snapshots?symbols=AAPL,MSFT,NVDA';
+        const stockRes = await axios.get(stockUrl, {
+          headers: {
+            'APCA-API-KEY-ID': alpacaKeyId,
+            'APCA-API-SECRET-KEY': alpacaSecretKey
+          },
+          timeout: 5000
+        });
 
-        if (change > 0) bullishInternals++;
-        if (change < 0) bearishInternals++;
+        const stockData = stockRes.data as any;
+        const processAlpacaStock = (sym: string) => {
+          const snap = stockData[sym];
+          if (!snap) return null;
+          const current = snap.latestTrade?.p || snap.latestQuote?.ap || 0;
+          const prev = snap.prevDailyBar?.c || 0;
+          if (current > 0 && prev > 0) {
+            return Number((((current - prev) / prev) * 100).toFixed(2));
+          }
+          return null;
+        };
+
+        applePct = processAlpacaStock('AAPL');
+        microsoftPct = processAlpacaStock('MSFT');
+        nvidiaPct = processAlpacaStock('NVDA');
+
+        if (applePct !== null && microsoftPct !== null && nvidiaPct !== null) {
+          fetchedFromAlpaca = true;
+          this.fastify.log.info(`[SignalScannerService] Mega-caps fetched from Alpaca: AAPL=${applePct}%, MSFT=${microsoftPct}%, NVDA=${nvidiaPct}%`);
+          
+          if (applePct > 0) bullishInternals++; else if (applePct < 0) bearishInternals++;
+          if (microsoftPct > 0) bullishInternals++; else if (microsoftPct < 0) bearishInternals++;
+          if (nvidiaPct > 0) bullishInternals++; else if (nvidiaPct < 0) bearishInternals++;
+        }
+      } catch (err: any) {
+        this.fastify.log.warn(`[SignalScannerService] Failed to fetch mega-caps from Alpaca: ${err.message}`);
       }
-    } catch (internalErr: any) {
-      this.fastify.log.warn(`[SignalScannerService] Mega-caps check failed: ${internalErr.message}`);
+    }
+
+    if (!fetchedFromAlpaca) {
+      try {
+        const internals = await (yahooFinance as any).quote(['AAPL', 'MSFT', 'NVDA']);
+        const internalsList = Array.isArray(internals) ? internals : [internals];
+
+        for (const stock of internalsList) {
+          const change = stock.regularMarketChangePercent ?? 0;
+          if (stock.symbol === 'AAPL') applePct = change;
+          if (stock.symbol === 'MSFT') microsoftPct = change;
+          if (stock.symbol === 'NVDA') nvidiaPct = change;
+
+          if (change > 0) bullishInternals++;
+          if (change < 0) bearishInternals++;
+        }
+      } catch (internalErr: any) {
+        this.fastify.log.warn(`[SignalScannerService] Yahoo mega-caps check failed: ${internalErr.message}`);
+      }
     }
 
     const hasBullishInternals = bullishInternals >= 2;
@@ -1747,12 +1794,21 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     // Free public RSS feed — no API key, no registration required.
     // Parses the XML with a lightweight regex to avoid adding an npm dependency.
     try {
-      const fjRes = await axios.get(
-        'https://www.financialjuice.com/feed.ashx?action=main&culture=en-US&pager=0&format=json',
-        { timeout: 5000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } }
-      );
+      const redisCacheKey = 'CACHE:FINANCIAL_JUICE_XML';
+      let xml = await redis.get(redisCacheKey);
 
-      const xml: string = String(fjRes.data);
+      if (!xml) {
+        this.fastify.log.info('[SignalScannerService] Fetching fresh FinancialJuice RSS XML from server...');
+        const fjRes = await axios.get(
+          'https://www.financialjuice.com/feed.ashx?action=main&culture=en-US&pager=0&format=json',
+          { timeout: 5000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } }
+        );
+        xml = String(fjRes.data);
+        await redis.set(redisCacheKey, xml, 180); // cache for 180s (3 minutes)
+      } else {
+        this.fastify.log.info('[SignalScannerService] Using cached FinancialJuice RSS XML.');
+      }
+
       // Extract all <item> blocks then pull <title> and <pubDate>
       const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
 

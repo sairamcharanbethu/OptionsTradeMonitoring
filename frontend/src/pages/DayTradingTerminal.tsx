@@ -281,9 +281,9 @@ export default function DayTradingTerminal() {
   }
 
   // Mega-caps change tracking (retrieve from latest signal index statistics if available, else standard fallback)
-  const AAPL_change = latestSignal?.indicators?.megaCaps?.AAPL ?? 0.85; 
-  const MSFT_change = latestSignal?.indicators?.megaCaps?.MSFT ?? -0.32;
-  const NVDA_change = latestSignal?.indicators?.megaCaps?.NVDA ?? 1.45;
+  const AAPL_change = latestSignal?.indicators?.megaCaps?.AAPL ?? 0.0; 
+  const MSFT_change = latestSignal?.indicators?.megaCaps?.MSFT ?? 0.0;
+  const NVDA_change = latestSignal?.indicators?.megaCaps?.NVDA ?? 0.0;
 
   const formatMinSec = (secs: number) => {
     const m = Math.floor(secs / 60);
