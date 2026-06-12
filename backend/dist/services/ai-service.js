@@ -289,28 +289,66 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             if (settings.ai_provider === 'openrouter') {
                 if (!settings.openrouter_key)
                     throw new Error('OpenRouter selected but no API Key found.');
-                const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${settings.openrouter_key}`,
-                        'HTTP-Referer': 'http://localhost:3000',
-                        'X-Title': 'OptionsTradeMonitor',
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        model: settings.ai_model,
-                        messages: [
-                            { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
-                            { role: 'user', content: prompt }
-                        ],
-                        response_format: { type: 'json_object' },
-                        temperature: 0,
-                        max_tokens: maxTokens
-                    })
-                });
-                if (!response.ok) {
-                    const errText = await response.text();
-                    throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
+                let response;
+                let useJsonFormat = true;
+                try {
+                    response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${settings.openrouter_key}`,
+                            'HTTP-Referer': 'http://localhost:3000',
+                            'X-Title': 'OptionsTradeMonitor',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            model: settings.ai_model,
+                            messages: [
+                                { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
+                                { role: 'user', content: prompt }
+                            ],
+                            response_format: { type: 'json_object' },
+                            temperature: 0,
+                            max_tokens: maxTokens
+                        })
+                    });
+                    if (!response.ok) {
+                        const errText = await response.text();
+                        if (response.status === 400 || errText.includes('response_format') || errText.includes('json_object')) {
+                            console.warn(`[AIService] OpenRouter JSON format unsupported or failed (Status ${response.status}). Retrying without response_format...`);
+                            useJsonFormat = false;
+                        }
+                        else {
+                            throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
+                        }
+                    }
+                }
+                catch (fetchErr) {
+                    console.warn(`[AIService] OpenRouter JSON fetch failed, retrying without response_format: ${fetchErr.message}`);
+                    useJsonFormat = false;
+                }
+                if (!useJsonFormat) {
+                    response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${settings.openrouter_key}`,
+                            'HTTP-Referer': 'http://localhost:3000',
+                            'X-Title': 'OptionsTradeMonitor',
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            model: settings.ai_model,
+                            messages: [
+                                { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
+                                { role: 'user', content: prompt }
+                            ],
+                            temperature: 0,
+                            max_tokens: maxTokens
+                        })
+                    });
+                    if (!response.ok) {
+                        const errText = await response.text();
+                        throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
+                    }
                 }
                 const data = await response.json();
                 if (data.error)
@@ -395,28 +433,66 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
     }
     async callOpenRouter(model, apiKey, prompt, maxTokens = 300) {
         console.log(`[AIService] Using OpenRouter (${model}) [Token limit: ${maxTokens}]`);
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'HTTP-Referer': 'http://localhost:3000',
-                'X-Title': 'OptionsTradeMonitor',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                model: model,
-                messages: [
-                    { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON. Keep messages short.' },
-                    { role: 'user', content: prompt }
-                ],
-                response_format: { type: 'json_object' },
-                temperature: 0,
-                max_tokens: maxTokens
-            })
-        });
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
+        let response;
+        let useJsonFormat = true;
+        try {
+            response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'HTTP-Referer': 'http://localhost:3000',
+                    'X-Title': 'OptionsTradeMonitor',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: model,
+                    messages: [
+                        { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON. Keep messages short.' },
+                        { role: 'user', content: prompt }
+                    ],
+                    response_format: { type: 'json_object' },
+                    temperature: 0,
+                    max_tokens: maxTokens
+                })
+            });
+            if (!response.ok) {
+                const errText = await response.text();
+                if (response.status === 400 || errText.includes('response_format') || errText.includes('json_object')) {
+                    console.warn(`[AIService] OpenRouter JSON format unsupported or failed in callOpenRouter (Status ${response.status}). Retrying without response_format...`);
+                    useJsonFormat = false;
+                }
+                else {
+                    throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
+                }
+            }
+        }
+        catch (fetchErr) {
+            console.warn(`[AIService] OpenRouter JSON fetch failed in callOpenRouter, retrying without response_format: ${fetchErr.message}`);
+            useJsonFormat = false;
+        }
+        if (!useJsonFormat) {
+            response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'HTTP-Referer': 'http://localhost:3000',
+                    'X-Title': 'OptionsTradeMonitor',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    model: model,
+                    messages: [
+                        { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON. Keep messages short.' },
+                        { role: 'user', content: prompt }
+                    ],
+                    temperature: 0,
+                    max_tokens: maxTokens
+                })
+            });
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`OpenRouter Error: ${response.status} - ${errText}`);
+            }
         }
         const data = await response.json();
         if (data.error) {
