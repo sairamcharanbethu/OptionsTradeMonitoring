@@ -294,7 +294,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
       // Signal 1: QQQ Breakout CALL
       const sig1 = [
         'QQQ', 'CALL', 'BUY_CALL_ON_BREAKOUT', 482.50, 483.00, 481.20, 486.00, 88, 'A+ / FULL', 'PENDING',
-        JSON.stringify({ vwap: 481.80, ema9: 482.10, ema21: 481.50, atr14: 1.25, openingRangeHigh: 482.80, openingRangeLow: 480.90 }),
+        JSON.stringify({ vwap: 481.80, ema9: 482.10, ema21: 481.50, atr14: 1.25, openingRangeHigh: 482.80, openingRangeLow: 480.90, megaCaps: { AAPL: 1.25, MSFT: 0.45, NVDA: 2.10 } }),
         JSON.stringify({ netGex: 450000, regime: 'BULLISH', flipStrike: 480.00, callWall: 485.00, putWall: 475.00, flowDirection: 'BUYING_PRESSURE' }),
         JSON.stringify({ vixQuote: 13.42, vixChangePercent: -2.5 }),
         [], today, marketDateStr,
@@ -319,7 +319,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
       // Signal 2: SPY Rebound PUT
       const sig2 = [
         'SPY', 'PUT', 'BUY_PUT_ON_RIP', 528.10, 527.80, 529.50, 524.00, 75, 'B / LOTTO', 'PENDING',
-        JSON.stringify({ vwap: 528.90, ema9: 528.20, ema21: 528.50, atr14: 1.95, openingRangeHigh: 530.10, openingRangeLow: 527.50 }),
+        JSON.stringify({ vwap: 528.90, ema9: 528.20, ema21: 528.50, atr14: 1.95, openingRangeHigh: 530.10, openingRangeLow: 527.50, megaCaps: { AAPL: -0.65, MSFT: -1.20, NVDA: 0.15 } }),
         JSON.stringify({ netGex: -120000, regime: 'BEARISH', flipStrike: 530.00, callWall: 535.00, putWall: 525.00, flowDirection: 'SELLING_PRESSURE' }),
         JSON.stringify({ vixQuote: 13.42, vixChangePercent: -2.5 }),
         [], today, marketDateStr,
@@ -344,7 +344,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
       // Signal 3: Blocked Setup
       const sig3 = [
         'QQQ', 'NONE', 'NO_TRADE', 482.50, null, null, null, 40, 'C / LOTTO', 'CANCELLED',
-        JSON.stringify({ vwap: 482.30, ema9: 482.40, ema21: 482.50, atr14: 1.25 }),
+        JSON.stringify({ vwap: 482.30, ema9: 482.40, ema21: 482.50, atr14: 1.25, megaCaps: { AAPL: 0.10, MSFT: -0.20, NVDA: 0.35 } }),
         JSON.stringify({ netGex: 25000, regime: 'CONSOLIDATING', flipStrike: 480.00 }),
         JSON.stringify({ vixQuote: 13.42, vixChangePercent: -2.5 }),
         ['RSI overbought (>70) on 5m chart', 'Inside Opening Range 15m bracket', 'GEX Flip Strike too close'],

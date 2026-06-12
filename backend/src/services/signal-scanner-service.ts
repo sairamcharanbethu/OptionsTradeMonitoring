@@ -958,7 +958,7 @@ Rules:
         }
       }
 
-      // 8. Contract pricing (Polygon snapshot or Black-Scholes fallback)
+      // 8. Contract pricing (Alpaca live snapshot -> Polygon snapshot -> Black-Scholes fallback)
       let bid: number | null = null;
       let ask: number | null = null;
       let spread: number | null = null;
@@ -973,7 +973,47 @@ Rules:
       chosenStrike = chosenContract?.strike || Math.round(currentPrice);
       chosenExpiry = chosenContract?.expiry || todayDateStr;
 
-      if (polygonApiKey && chosenContract) {
+      // Try fetching live option contract snapshot from Alpaca API if credentials exist
+      const alpacaKeyId = settings.alpaca_key_id?.trim();
+      const alpacaSecretKey = settings.alpaca_secret_key?.trim();
+
+      if (alpacaKeyId && alpacaSecretKey && chosenContract) {
+        try {
+          const alpacaTicker = chosenContract.ticker.replace(/^O:/, '');
+          this.fastify.log.info(`[SignalScannerService] Querying Alpaca live option snapshot for ${alpacaTicker}...`);
+          const alpacaRes = await axios.get(`https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${alpacaTicker}`, {
+            headers: {
+              'APCA-API-KEY-ID': alpacaKeyId,
+              'APCA-API-SECRET-KEY': alpacaSecretKey
+            },
+            timeout: 8000
+          });
+
+          const snapData = alpacaRes.data as any;
+          const snap = snapData.snapshots?.[alpacaTicker];
+          if (snap) {
+            bid = snap.latestQuote?.bp || null;
+            ask = snap.latestQuote?.ap || null;
+            if (bid !== null && ask !== null && bid > 0 && ask > 0) {
+              spread = ask - bid;
+              const mid = (bid + ask) / 2;
+              mark = Number(mid.toFixed(2));
+              spreadPct = Number(((spread / mid) * 100).toFixed(2));
+              usingTheoreticalPricing = false;
+            } else if (snap.latestTrade?.p) {
+              mark = snap.latestTrade.p;
+              usingTheoreticalPricing = false;
+            }
+            volume = snap.day?.volume ?? null;
+            openInterest = snap.open_interest ?? null;
+            this.fastify.log.info(`[SignalScannerService] Alpaca live option price fetched successfully: mark=$${mark}, bid=$${bid}, ask=$${ask}`);
+          }
+        } catch (alpacaErr: any) {
+          this.fastify.log.warn(`[SignalScannerService] Alpaca option snapshot query failed: ${alpacaErr.message}`);
+        }
+      }
+
+      if (usingTheoreticalPricing && polygonApiKey && chosenContract) {
         try {
           const snapRes = await axios.get(`https://api.polygon.io/v3/snapshot/options/${symbol}/${chosenContract.ticker}`, {
             params: { apikey: polygonApiKey },
@@ -1156,7 +1196,12 @@ Rules:
           rsi5: Number(rsi5.toFixed(2)),
           rsi14: Number(rsi14.toFixed(2)),
           internalsBullish: hasBullishInternals,
-          internalsBearish: hasBearishInternals
+          internalsBearish: hasBearishInternals,
+          megaCaps: {
+            AAPL: applePct,
+            MSFT: microsoftPct,
+            NVDA: nvidiaPct
+          }
         }),
         JSON.stringify({
           netGex: qqqNetGex,
