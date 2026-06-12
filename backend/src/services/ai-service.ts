@@ -170,7 +170,11 @@ ${insightsText}
 Task: Generate a highly structured, professional wealth manager summary and classification of the entire portfolio.
 You MUST analyze the entire portfolio's risk profile, but pay special attention to the top holdings.
 
-For each holding in the portfolio:
+To keep the briefing concise and avoid token limits, you MUST limit the detailed actionRequired and holdWatch list to:
+- All holdings requiring active decisions (TRIM, BUY, SELL).
+- The top 10 remaining holdings (by value) for the "holdWatch" list.
+
+For each holding analyzed:
 1. Determine if it needs action (TRIM, BUY, SELL) or should be held (HOLD).
 2. If TRIM: specify a precise percentage or share amount to trim.
 3. If HOLD/BUY: specify a clear holding/watching timeline (e.g., "Hold for 2 weeks", "Accumulate on 5% dip", "Hold indefinitely").
@@ -200,7 +204,7 @@ Format: Respond ONLY with a valid JSON object matching this schema:
 Do NOT include any extra keys or explanations outside the JSON. All JSON fields must be completed.`;
 
         try {
-            const parsedBriefing = await this.generateJSONInternal(prompt, 1200, userId);
+            const parsedBriefing = await this.generateJSONInternal(prompt, 3000, userId);
             return {
                 briefing: parsedBriefing
             };
@@ -438,15 +442,20 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             try {
                 return JSON.parse(cleanText);
             } catch (e: any) {
-                // Attempt to extract the first valid JSON block if it failed to parse directly
-                const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    try {
-                        let extracted = jsonMatch[0];
-                        extracted = extracted.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']');
-                        return JSON.parse(extracted);
-                    } catch (innerError) {
-                        // ignore and throw original error
+                // If direct parse fails, try to repair the JSON first (in case it was truncated)
+                try {
+                    const repaired = this.repairJson(cleanText);
+                    return JSON.parse(repaired);
+                } catch (repairError) {
+                    // If repair fails, fall back to extracting and repairing the JSON block
+                    const jsonMatch = cleanText.match(/\{[\s\S]*/);
+                    if (jsonMatch) {
+                        try {
+                            const repairedMatch = this.repairJson(jsonMatch[0]);
+                            return JSON.parse(repairedMatch);
+                        } catch (innerError) {
+                            // ignore and throw original error
+                        }
                     }
                 }
                 throw e;
@@ -711,5 +720,84 @@ YOUR RESPONSE (valid JSON only, no other text):
 
             return "- If stock moves " + sign + pct + "%: Option price becomes ~$" + estNewPrice.toFixed(2) + " (" + pnlSign + pnlChange.toFixed(1) + "% change from current)";
         }).join('\n');
+    }
+
+    private repairJson(jsonStr: string): string {
+        let s = jsonStr.trim();
+        if (!s) return '{}';
+
+        let inString = false;
+        let isEscaped = false;
+        const stack: string[] = [];
+
+        // Track JSON structure
+        for (let i = 0; i < s.length; i++) {
+            const char = s[i];
+            if (isEscaped) {
+                isEscaped = false;
+                continue;
+            }
+
+            if (char === '\\') {
+                isEscaped = true;
+                continue;
+            }
+
+            if (char === '"') {
+                inString = !inString;
+                continue;
+            }
+
+            if (!inString) {
+                if (char === '{' || char === '[') {
+                    stack.push(char);
+                } else if (char === '}') {
+                    if (stack[stack.length - 1] === '{') {
+                        stack.pop();
+                    }
+                } else if (char === ']') {
+                    if (stack[stack.length - 1] === '[') {
+                        stack.pop();
+                    }
+                }
+            }
+        }
+
+        // If we ended inside a string, close it
+        if (inString) {
+            s += '"';
+        }
+
+        // Clean up trailing commas, colons, or incomplete object keys/values at the end of the truncated string
+        let previousLength = 0;
+        while (s.length !== previousLength) {
+            previousLength = s.length;
+            s = s.trim();
+
+            if (s.endsWith(',')) {
+                s = s.slice(0, -1);
+                continue;
+            }
+
+            if (s.endsWith(':')) {
+                s = s.slice(0, -1);
+                continue;
+            }
+
+            s = s.replace(/,\s*"[^"]*"\s*$/, '');
+            s = s.replace(/,\s*"[^"]*"\s*:\s*$/, '');
+        }
+
+        // Close any unclosed braces/brackets in reverse order
+        while (stack.length > 0) {
+            const openChar = stack.pop();
+            if (openChar === '{') {
+                s += '}';
+            } else if (openChar === '[') {
+                s += ']';
+            }
+        }
+
+        return s;
     }
 }
