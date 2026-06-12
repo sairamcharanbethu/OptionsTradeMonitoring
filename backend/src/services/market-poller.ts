@@ -989,7 +989,7 @@ export class MarketPoller {
               iv: iv ?? position.iv
             },
             underlying_price: underlyingPrice ?? position.underlying_price
-          });
+          }, position.user_id);
         } catch (err) {
           this.fastify.log.error(`[MarketPoller] AI Summary generation failed: ${err}`);
         }

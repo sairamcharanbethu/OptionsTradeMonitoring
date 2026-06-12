@@ -26,7 +26,7 @@ class AIService {
         this.ollamaUrl = process.env.OLLAMA_URL || 'http://host.docker.internal:11434';
         this.model = process.env.AI_MODEL || 'mistral:7b-instruct-q4_K_M';
     }
-    async generateAlertSummary(data) {
+    async generateAlertSummary(data, userId) {
         const prompt = `Option Alert: ${data.symbol} ${data.type} ${data.strike} Exp: ${data.expiration}
 Event: ${data.event}
 Price: $${data.price} (PnL: ${data.pnl}%)
@@ -35,7 +35,7 @@ Greeks: ${JSON.stringify(data.greeks)}
 
 Task: Concise summary (20 words) + Discord message (markdown, emoji).
 Format: JSON { "verdict": "...", "analysis": "...", "discord": "..." }`;
-        const response = await this.generateAnalysisInternal(prompt);
+        const response = await this.generateAnalysisInternal(prompt, 300, userId);
         return {
             summary: response.analysis,
             discord_message: response.discord || response.analysis
@@ -55,13 +55,14 @@ ${posSummary}
 Task: Provide a high-level summary of the portfolio's health, highlight positions needing immediate attention (due to PnL or Greek shifts), and suggest next steps.
 Style: Professional trader tone, concise but insightful.
 Format: JSON { "analysis": "Full analysis here...", "discord": "Formatted Discord message with emojis..." }`;
-        const response = await this.generateAnalysisInternal(prompt, 2048);
+        const userId = positions[0]?.user_id;
+        const response = await this.generateAnalysisInternal(prompt, 2048, userId);
         return {
             briefing: response.analysis,
             discord_message: response.discord || response.analysis
         };
     }
-    async generateWealthsimpleBriefing(positions) {
+    async generateWealthsimpleBriefing(positions, userId) {
         if (positions.length === 0) {
             return {
                 briefing: {
@@ -164,7 +165,7 @@ Format: Respond ONLY with a valid JSON object matching this schema:
 }
 Do NOT include any extra keys or explanations outside the JSON. All JSON fields must be completed.`;
         try {
-            const parsedBriefing = await this.generateJSONInternal(prompt, 1200);
+            const parsedBriefing = await this.generateJSONInternal(prompt, 1200, userId);
             return {
                 briefing: parsedBriefing
             };
@@ -181,24 +182,24 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             };
         }
     }
-    async generateAnalysis(data) {
+    async generateAnalysis(data, userId) {
         const prompt = this.buildPrompt(data);
-        const response = await this.generateAnalysisInternal(prompt);
+        const response = await this.generateAnalysisInternal(prompt, 300, userId);
         return {
             verdict: response.verdict,
             analysis: response.analysis
         };
     }
-    async askAI(prompt) {
-        const response = await this.generateAnalysisInternal(prompt);
+    async askAI(prompt, userId) {
+        const response = await this.generateAnalysisInternal(prompt, 300, userId);
         return {
             verdict: response.verdict,
             analysis: response.analysis
         };
     }
-    async askClaudeForTrading(prompt) {
+    async askClaudeForTrading(prompt, userId) {
         try {
-            const settings = await this.getSettings();
+            const settings = await this.getSettings(userId);
             if (settings.ai_provider === 'openrouter' && settings.openrouter_key) {
                 // Route trade decisions through the user's selected model (or default to Claude 3.5 Sonnet)
                 const model = settings.ai_model || 'anthropic/claude-3.5-sonnet';
@@ -209,19 +210,25 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 };
             }
             // Fallback to standard selected provider if OpenRouter or key isn't active
-            return this.askAI(prompt);
+            return this.askAI(prompt, userId);
         }
         catch (err) {
             console.error("[AIService] Failed to invoke configured model for trading, falling back:", err);
-            return this.askAI(prompt);
+            return this.askAI(prompt, userId);
         }
     }
-    async getSettings() {
+    async getSettings(userId) {
         let currentProvider = 'ollama';
         let openRouterKey = '';
         let currentModel = this.model;
         try {
-            const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings');
+            let query = 'SELECT key, value FROM settings';
+            const params = [];
+            if (userId !== undefined) {
+                query += ' WHERE user_id = $1';
+                params.push(userId);
+            }
+            const { rows } = await this.fastify.pg.query(query, params);
             const settings = rows.reduce((acc, row) => {
                 acc[row.key] = row.value;
                 return acc;
@@ -242,8 +249,8 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             ai_model: currentModel
         };
     }
-    async checkHealth() {
-        const settings = await this.getSettings();
+    async checkHealth(userId) {
+        const settings = await this.getSettings(userId);
         if (settings.ai_provider === 'openrouter') {
             if (!settings.openrouter_key) {
                 throw new Error('OpenRouter selected but no API Key found in settings.');
@@ -282,9 +289,9 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             }
         }
     }
-    async generateJSONInternal(prompt, maxTokens = 600) {
+    async generateJSONInternal(prompt, maxTokens = 600, userId) {
         try {
-            const settings = await this.getSettings();
+            const settings = await this.getSettings(userId);
             let text = '';
             if (settings.ai_provider === 'openrouter') {
                 if (!settings.openrouter_key)
@@ -412,10 +419,10 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             throw new Error(`AI JSON Generation Failed: ${error.message}`);
         }
     }
-    async generateAnalysisInternal(prompt, maxTokens = 300) {
+    async generateAnalysisInternal(prompt, maxTokens = 300, userId) {
         try {
             // 1. Fetch settings from DB
-            const settings = await this.getSettings();
+            const settings = await this.getSettings(userId);
             // 2. Route based on provider
             if (settings.ai_provider === 'openrouter') {
                 if (!settings.openrouter_key)

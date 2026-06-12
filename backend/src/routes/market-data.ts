@@ -86,7 +86,7 @@ export async function marketDataRoutes(fastify: FastifyInstance, options: Fastif
               theta: position.theta,
               iv: position.iv
             }
-          });
+          }, position.user_id);
         } catch (err) {
           fastify.log.error(err, 'AI Summary generation failed');
         }

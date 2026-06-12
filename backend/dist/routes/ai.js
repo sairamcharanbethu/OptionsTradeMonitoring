@@ -33,7 +33,7 @@ async function aiRoutes(fastify, options) {
                     iv: pos.iv ? Number(pos.iv) : null
                 },
                 underlying_price: pos.underlying_price ? Number(pos.underlying_price) : null
-            });
+            }, userId);
             return analysis;
         }
         catch (err) {

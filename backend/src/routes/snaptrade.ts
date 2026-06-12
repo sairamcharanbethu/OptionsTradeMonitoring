@@ -86,7 +86,7 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
       // We need the AIService to generate the briefing
       const aiService = new AIService(fastify);
       
-      const briefingResult = await aiService.generateWealthsimpleBriefing(portfolio.positions);
+      const briefingResult = await aiService.generateWealthsimpleBriefing(portfolio.positions, userId);
       
       // Save or update in database
       await (fastify as any).pg.query(
