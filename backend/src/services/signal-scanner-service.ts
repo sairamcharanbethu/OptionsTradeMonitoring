@@ -526,18 +526,51 @@ Rules:
     let gexAvailable = false;
     if (settings.sscgex_password) {
       try {
-        const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
-          password: settings.sscgex_password
-        }, { timeout: 8000 });
+        const tokenCacheKey = `CACHE:GEX_AUTH_TOKEN:${settings.sscgex_password}`;
+        let token = await redis.get(tokenCacheKey);
 
-        const token = (tokenRes.data as any).token;
+        if (!token) {
+          this.fastify.log.info('[SignalScannerService] Fetching fresh GEX auth token...');
+          const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
+            password: settings.sscgex_password
+          }, { timeout: 8000 });
+          token = (tokenRes.data as any).token;
+          if (token) {
+            await redis.set(tokenCacheKey, token, 600); // cache for 10 minutes
+          }
+        }
+
         if (token) {
-          const gexRes = await axios.get(`https://sscgex.up.railway.app/api/gex/${symbol}?strikes=50`, {
-            headers: { Authorization: `Bearer ${token}` },
-            timeout: 8000
-          });
-          gexData = gexRes.data;
-          gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
+          const gexCacheKey = `CACHE:GEX_DATA:${symbol}`;
+          const cachedGexStr = await redis.get(gexCacheKey);
+          let fetchSucceeded = false;
+
+          try {
+            const gexRes = await axios.get(`https://sscgex.up.railway.app/api/gex/${symbol}?strikes=50`, {
+              headers: { Authorization: `Bearer ${token}` },
+              timeout: 8000
+            });
+            gexData = gexRes.data;
+            gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
+            if (gexAvailable) {
+              fetchSucceeded = true;
+              await redis.set(gexCacheKey, JSON.stringify(gexData), 60); // cache for 60 seconds
+            }
+          } catch (fetchErr: any) {
+            this.fastify.log.warn(`[SignalScannerService] Live GEX fetch failed for ${symbol}: ${fetchErr.message}. Checking fallback cache.`);
+          }
+
+          if (!fetchSucceeded && cachedGexStr) {
+            try {
+              gexData = JSON.parse(cachedGexStr);
+              gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
+              if (gexAvailable) {
+                this.fastify.log.info(`[SignalScannerService] Successfully recovered GEX data from fallback cache for ${symbol}`);
+              }
+            } catch (err: any) {
+              this.fastify.log.error(`[SignalScannerService] Failed to parse cached GEX data: ${err.message}`);
+            }
+          }
         }
       } catch (err: any) {
         this.fastify.log.warn(`[SignalScannerService] GEX Portal fetch failed for ${symbol}: ${err.message}`);
@@ -1371,7 +1404,12 @@ Rules:
           rsi5: Number(rsi5.toFixed(2)),
           rsi14: Number(rsi14.toFixed(2)),
           internalsBullish: hasBullishInternals,
-          internalsBearish: hasBearishInternals
+          internalsBearish: hasBearishInternals,
+          megaCaps: {
+            AAPL: applePct,
+            MSFT: microsoftPct,
+            NVDA: nvidiaPct
+          }
         }),
         'SIGNAL_GENERATED',
         []
@@ -1398,7 +1436,12 @@ Rules:
           rsi5: Number(rsi5.toFixed(2)),
           rsi14: Number(rsi14.toFixed(2)),
           internalsBullish: hasBullishInternals,
-          internalsBearish: hasBearishInternals
+          internalsBearish: hasBearishInternals,
+          megaCaps: {
+            AAPL: applePct,
+            MSFT: microsoftPct,
+            NVDA: nvidiaPct
+          }
         }),
         'BLOCKED',
         noTradeReasons

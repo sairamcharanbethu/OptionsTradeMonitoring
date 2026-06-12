@@ -280,10 +280,13 @@ export default function DayTradingTerminal() {
     regimeBadgeBg = 'bg-red-950 text-red-200 border border-red-500/50';
   }
 
-  // Mega-caps change tracking (retrieve from latest signal index statistics if available, else standard fallback)
-  const AAPL_change = latestSignal?.indicators?.megaCaps?.AAPL ?? 0.0; 
-  const MSFT_change = latestSignal?.indicators?.megaCaps?.MSFT ?? 0.0;
-  const NVDA_change = latestSignal?.indicators?.megaCaps?.NVDA ?? 0.0;
+  // Get latest log's indicators if available
+  const latestLog = filteredLogs[0] || null;
+
+  // Mega-caps change tracking (retrieve from latest log or latest signal, else standard fallback)
+  const AAPL_change = latestLog?.indicators?.megaCaps?.AAPL ?? latestSignal?.indicators?.megaCaps?.AAPL ?? 0.0; 
+  const MSFT_change = latestLog?.indicators?.megaCaps?.MSFT ?? latestSignal?.indicators?.megaCaps?.MSFT ?? 0.0; 
+  const NVDA_change = latestLog?.indicators?.megaCaps?.NVDA ?? latestSignal?.indicators?.megaCaps?.NVDA ?? 0.0;
 
   const formatMinSec = (secs: number) => {
     const m = Math.floor(secs / 60);
