@@ -255,12 +255,32 @@ export default function DayTradingTerminal() {
   };
 
   // Derive active Market Regime (Euphoria, Bullish, Bearish, Neutral)
-  // Look at the latest signal or default
+  // Look at the latest signal or latest log (whichever is newer)
   const latestSignal = filteredSignals[0] || null;
-  const currentGexRegime = latestSignal?.gex?.regime || 'NEUTRAL';
-  const vixValue = latestSignal?.volatility?.vixQuote || 14.5;
-  const spotPrice = latestSignal?.current_price || 0;
-  const vwapValue = latestSignal?.indicators?.vwap || 0;
+  const latestLog = filteredLogs[0] || null;
+
+  let activeSource: 'signal' | 'log' = 'signal';
+  if (latestLog && latestSignal) {
+    activeSource = new Date(latestLog.created_at) > new Date(latestSignal.created_at) ? 'log' : 'signal';
+  } else if (latestLog) {
+    activeSource = 'log';
+  }
+
+  const currentGexRegime = activeSource === 'log'
+    ? (latestLog?.regime || 'NEUTRAL')
+    : (latestSignal?.gex?.regime || 'NEUTRAL');
+
+  const vixValue = activeSource === 'log'
+    ? (latestLog?.vix != null ? Number(latestLog.vix) : 14.5)
+    : (latestSignal?.volatility?.vixQuote || 14.5);
+
+  const spotPrice = activeSource === 'log'
+    ? (latestLog?.spot_price != null ? Number(latestLog.spot_price) : 0)
+    : (latestSignal?.current_price || 0);
+
+  const vwapValue = activeSource === 'log'
+    ? (latestLog?.indicators?.vwap != null ? Number(latestLog.indicators.vwap) : 0)
+    : (latestSignal?.indicators?.vwap || 0);
 
   let marketRegime = 'NEUTRAL';
   let regimeGlowColor = 'shadow-zinc-500/10 border-zinc-800 bg-zinc-900/40 text-zinc-400';
@@ -279,9 +299,6 @@ export default function DayTradingTerminal() {
     regimeGlowColor = 'shadow-[0_0_25px_rgba(239,68,68,0.12)] text-red-400 border-red-500/45 bg-gradient-to-br from-red-950/20 via-zinc-900/40 to-zinc-900/60';
     regimeBadgeBg = 'bg-red-950 text-red-200 border border-red-500/50';
   }
-
-  // Get latest log's indicators if available
-  const latestLog = filteredLogs[0] || null;
 
   // Mega-caps change tracking (retrieve from latest log or latest signal, else standard fallback)
   const AAPL_change = latestLog?.indicators?.megaCaps?.AAPL ?? latestSignal?.indicators?.megaCaps?.AAPL ?? 0.0; 
