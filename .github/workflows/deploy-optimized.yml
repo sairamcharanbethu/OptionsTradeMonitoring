@@ -49,8 +49,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "npm"
-          cache-dependency-path: ${{ matrix.context }}/package-lock.json
 
       - name: Install dependencies and build
         run: |
@@ -93,6 +91,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=local,src=/tmp/.buildx-cache-${{ matrix.service }}
+          cache-to: type=local,dest=/tmp/.buildx-cache-${{ matrix.service }},mode=max
 
       - name: Cleanup workspace
         if: always()
