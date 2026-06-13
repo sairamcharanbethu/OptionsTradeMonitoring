@@ -87,7 +87,9 @@
 
 @layer utilities {
   .transition-premium {
-    transition: all 700ms cubic-bezier(0.32, 0.72, 0, 1);
+    transition-property: transform, opacity, box-shadow, border-color, background-color, color;
+    transition-duration: 220ms;
+    transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
   }
 
   .hover-glow {
@@ -134,13 +136,115 @@
   .pulse-down {
     animation: pulse-red 2s cubic-bezier(0.32, 0.72, 0, 1);
   }
+
+  .motion-enter {
+    animation: motion-enter 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  }
+
+  .motion-panel {
+    transition-property: transform, opacity, box-shadow, border-color, background-color;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+    will-change: transform;
+  }
+
+  .motion-panel:hover {
+    transform: translateY(-1px);
+  }
+
+  .motion-row {
+    transition-property: transform, background-color, border-color, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+  }
+
+  .motion-row:hover {
+    transform: translateX(2px);
+  }
+
+  .motion-press {
+    transition-property: transform, background-color, border-color, box-shadow, color, opacity;
+    transition-duration: 140ms;
+    transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+  }
+
+  .motion-press:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  .terminal-scanline {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .terminal-scanline::before {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    opacity: 0.45;
+    background:
+      linear-gradient(110deg, transparent 0%, rgba(16, 185, 129, 0.06) 44%, rgba(16, 185, 129, 0.14) 50%, rgba(16, 185, 129, 0.06) 56%, transparent 100%);
+    background-size: 220% 100%;
+    animation: terminal-scanline 8s linear infinite;
+  }
+
+  .smooth-details[open] > summary + div {
+    animation: popover-enter 160ms cubic-bezier(0.23, 1, 0.32, 1) both;
+    transform-origin: top right;
+  }
+
+  @keyframes motion-enter {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes popover-enter {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  @keyframes terminal-scanline {
+    from { background-position: 140% 0; }
+    to { background-position: -120% 0; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+
+    .motion-panel:hover,
+    .motion-row:hover,
+    .motion-press:active:not(:disabled) {
+      transform: none;
+    }
+  }
 }
 
 button,
 a,
 .card,
 .badge {
-  transition-property: all;
-  transition-duration: 300ms;
-  transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  transition-property: transform, opacity, box-shadow, border-color, background-color, color;
+  transition-duration: 160ms;
+  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
 }

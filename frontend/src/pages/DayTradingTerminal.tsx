@@ -429,7 +429,7 @@ export default function DayTradingTerminal() {
   ];
 
   return (
-    <div className="flex flex-col gap-4 lg:gap-5 font-mono bg-zinc-950 text-emerald-400 p-3 sm:p-4 rounded-lg border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] max-w-full overflow-hidden">
+    <div className="terminal-scanline motion-enter flex flex-col gap-4 lg:gap-5 font-mono bg-zinc-950 text-emerald-400 p-3 sm:p-4 rounded-lg border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] max-w-full overflow-hidden">
       
       {/* Top Banner & Timer Bar */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-emerald-500/20 pb-4 gap-4">
@@ -448,7 +448,7 @@ export default function DayTradingTerminal() {
 
         {/* Ticker switcher Tabs & Sync Timer */}
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-          <div className="flex bg-zinc-900 p-1 rounded border border-emerald-500/20 animate-in fade-in duration-200">
+          <div className="motion-panel flex bg-zinc-900 p-1 rounded border border-emerald-500/20 animate-in fade-in duration-200">
             <button
               onClick={() => setSelectedSymbol('QQQ')}
               className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${
@@ -501,7 +501,7 @@ export default function DayTradingTerminal() {
         
         {/* Widget 1: Glowing Market Regime Gauge */}
         {selectedSymbol === 'BOTH' ? (
-          <div className="flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] border-zinc-800 shadow-[0_0_20px_rgba(16,185,129,0.02)]">
+          <div className="motion-panel flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] border-zinc-800 shadow-[0_0_20px_rgba(16,185,129,0.02)]">
             <div className="grid grid-cols-2 gap-3 w-full font-mono">
               {/* QQQ Side */}
               <div className="flex flex-col border-r border-zinc-800/80 pr-2">
@@ -537,7 +537,7 @@ export default function DayTradingTerminal() {
             </div>
           </div>
         ) : (
-          <div className={`flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] ${regimeGlowColor}`}>
+          <div className={`motion-panel flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] ${regimeGlowColor}`}>
             <div className="flex flex-col justify-center">
               <div className="flex items-center gap-2">
                 <span className="text-[9px] text-emerald-500/70 uppercase tracking-wider font-semibold">REGIME</span>
@@ -561,7 +561,7 @@ export default function DayTradingTerminal() {
         )}
 
         {/* Widget 2: Mega Caps Tracking Panel */}
-        <div className="p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
+        <div className="motion-panel p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
           <div className="flex justify-between items-center mb-1.5">
             <span className="text-[9px] text-emerald-500/70 block uppercase tracking-wider font-semibold">MEGA-CAPS CO-TREND</span>
             <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400">NASDAQ Heavy</Badge>
@@ -589,7 +589,7 @@ export default function DayTradingTerminal() {
         </div>
 
         {/* Widget 3: Real-Time API Health Panel */}
-        <div className="p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
+        <div className="motion-panel p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
           <div className="flex justify-between items-center mb-1.5">
             <span className="text-[9px] text-emerald-500/70 block uppercase tracking-wider font-semibold">INTEGRATION HEALTH STATUS</span>
             {healthLoading ? (
@@ -652,7 +652,7 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* Execution Readiness */}
-      <div className="border border-emerald-500/15 rounded bg-zinc-900/30 overflow-hidden">
+      <div className="motion-panel border border-emerald-500/15 rounded bg-zinc-900/30 overflow-hidden">
         <div className="p-2.5 px-3 bg-zinc-900/80 border-b border-emerald-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <ShieldAlert className={`h-4 w-4 ${isLiveBroker ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`} />
@@ -674,7 +674,7 @@ export default function DayTradingTerminal() {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-px bg-emerald-500/10">
           {readinessItems.map(item => (
-            <div key={item.label} className="bg-zinc-950/70 px-3 py-2 min-h-[54px] flex flex-col justify-center">
+            <div key={item.label} className="motion-panel bg-zinc-950/70 px-3 py-2 min-h-[54px] flex flex-col justify-center">
               <span className="text-[9px] uppercase text-zinc-500 font-bold">{item.label}</span>
               <span className={`text-xs font-bold truncate ${item.tone}`} title={item.value}>{item.value}</span>
             </div>
@@ -685,7 +685,7 @@ export default function DayTradingTerminal() {
       {/* Row 2: Separated Prominent LATEST setup notification */}
       <div 
         onClick={() => latestActionableSignal && setSelectedSignalId(latestActionableSignal.id)}
-        className={`border rounded-lg backdrop-blur-md overflow-hidden transition-all duration-500 ${
+        className={`motion-panel border rounded-lg backdrop-blur-md overflow-hidden transition-all duration-500 ${
           latestActionableSignal 
             ? 'border-emerald-500/50 shadow-[0_0_25px_rgba(16,185,129,0.15)] bg-zinc-900/45 cursor-pointer hover:bg-zinc-900/60 hover:shadow-[0_0_35px_rgba(16,185,129,0.25)] hover:border-emerald-400' 
             : 'border-emerald-500/10 shadow-inner bg-zinc-900/15'
@@ -887,7 +887,7 @@ export default function DayTradingTerminal() {
                 <div className="flex justify-end gap-2 border-t border-emerald-500/10 pt-2">
                   <Button
                     size="sm"
-                    className="h-6 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-[10px]"
+                    className="h-6 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-[10px] shadow-[0_0_0_rgba(16,185,129,0)] hover:shadow-[0_0_18px_rgba(16,185,129,0.25)]"
                     disabled={remainingTrades <= 0 || (isLiveBroker && (!settings.snaptrade_trading_account_id || settings.live_trading_acknowledged !== 'true'))}
                     onClick={() => handleQuickStatus(latestActionableSignal.id, 'EXECUTED')}
                   >
@@ -909,7 +909,7 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* TradingView Chart Embed - Horizontal Full Width */}
-      <div className="border border-emerald-500/20 rounded bg-zinc-900/30 overflow-hidden flex flex-col">
+      <div className="motion-panel border border-emerald-500/20 rounded bg-zinc-900/30 overflow-hidden flex flex-col">
         <div className="p-2.5 px-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
           <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5 font-mono">
             <Activity className="h-4 w-4 text-emerald-400 animate-pulse" />
@@ -918,7 +918,7 @@ export default function DayTradingTerminal() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowChart(!showChart)}
-              className="text-[9px] font-bold border border-emerald-500/35 text-emerald-400 hover:bg-emerald-950/20 px-2 py-0.5 rounded bg-zinc-950/40 transition-colors uppercase font-mono"
+              className="motion-press text-[9px] font-bold border border-emerald-500/35 text-emerald-400 hover:bg-emerald-950/20 px-2 py-0.5 rounded bg-zinc-950/40 transition-colors uppercase font-mono"
             >
               {showChart ? '[ COLLAPSE CHART ]' : '[ EXPAND CHART ]'}
             </button>
@@ -955,7 +955,7 @@ export default function DayTradingTerminal() {
       <div className="grid grid-cols-1 2xl:grid-cols-3 gap-4 lg:gap-6 min-w-0">
         
         {/* Table List (Process Monitor) */}
-        <div className="2xl:col-span-2 overflow-hidden flex flex-col border border-emerald-500/20 rounded bg-zinc-900/30 min-w-0">
+        <div className="motion-panel 2xl:col-span-2 overflow-hidden flex flex-col border border-emerald-500/20 rounded bg-zinc-900/30 min-w-0">
           
           {/* Tab Selector */}
           <div className="flex bg-zinc-950/80 border-b border-emerald-500/20 p-1">
@@ -1026,8 +1026,8 @@ export default function DayTradingTerminal() {
                 {triggerLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
                 {triggerLoading ? 'SCANNING...' : 'TRIGGER SCAN'}
               </Button>
-              <details className="relative">
-                <summary className="h-7 list-none cursor-pointer text-[10px] font-bold border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 rounded px-2 py-1 bg-zinc-950/40">
+              <details className="smooth-details relative">
+                <summary className="motion-press h-7 list-none cursor-pointer text-[10px] font-bold border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 rounded px-2 py-1 bg-zinc-950/40">
                   DEV TOOLS
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 w-40 rounded border border-zinc-700 bg-zinc-950 p-2 shadow-xl space-y-2">
@@ -1136,13 +1136,13 @@ export default function DayTradingTerminal() {
                         <React.Fragment key={sig.id}>
                           <tr
                             onClick={() => { setSelectedSignalId(sig.id); }}
-                            className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-all duration-300 ${
+                            className={`motion-row border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-all duration-300 ${
                               isSelected ? 'bg-emerald-950/30 border-l-2 border-l-emerald-400 shadow-[inset_4px_0_12px_-4px_rgba(16,185,129,0.25)]' : ''
                             }`}
                           >
                             {/* Expand toggle */}
                             <td className="px-1 py-1.5" onClick={e => { e.stopPropagation(); setExpandedRowId(isExpanded ? null : sig.id); }}>
-                              <button className="text-emerald-500/50 hover:text-emerald-300 transition-colors">
+                              <button className="motion-press text-emerald-500/50 hover:text-emerald-300 transition-colors">
                                 <ChevronRight className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                               </button>
                             </td>
@@ -1176,11 +1176,11 @@ export default function DayTradingTerminal() {
                                 <div className="flex justify-end gap-1">
                                   <button onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
                                     disabled={remainingTrades <= 0 || (isLiveBroker && (!settings.snaptrade_trading_account_id || settings.live_trading_acknowledged !== 'true'))}
-                                    className="h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Execute">
+                                    className="motion-press h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Execute">
                                     <Play className="h-2.5 w-2.5" />
                                   </button>
                                   <button onClick={() => handleQuickStatus(sig.id, 'CANCELLED')}
-                                    className="h-5 w-5 flex items-center justify-center rounded bg-red-950/80 hover:bg-red-900/80 border border-red-500/30 text-red-400 transition-colors" title="Cancel">
+                                    className="motion-press h-5 w-5 flex items-center justify-center rounded bg-red-950/80 hover:bg-red-900/80 border border-red-500/30 text-red-400 transition-colors" title="Cancel">
                                     <X className="h-2.5 w-2.5" />
                                   </button>
                                 </div>
@@ -1277,12 +1277,12 @@ export default function DayTradingTerminal() {
                         <React.Fragment key={log.id}>
                           <tr
                             onClick={() => { setSelectedLogId(log.id); }}
-                            className={`border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-all duration-300 ${
+                            className={`motion-row border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-all duration-300 ${
                               isSelected ? 'bg-emerald-950/30 border-l-2 border-l-emerald-400 shadow-[inset_4px_0_12px_-4px_rgba(16,185,129,0.25)]' : ''
                             }`}
                           >
                             <td className="px-1 py-1.5" onClick={e => { e.stopPropagation(); setExpandedLogId(isExpanded ? null : log.id); }}>
-                              <button className="text-emerald-500/50 hover:text-emerald-300 transition-colors">
+                              <button className="motion-press text-emerald-500/50 hover:text-emerald-300 transition-colors">
                                 <ChevronRight className={`h-3 w-3 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                               </button>
                             </td>
@@ -1339,7 +1339,7 @@ export default function DayTradingTerminal() {
         </div>
  
          {/* Detailed Inspector Panel */}
-         <div className="border border-emerald-500/20 rounded bg-zinc-900/20 flex flex-col h-[440px] 2xl:h-auto overflow-hidden min-w-0">
+         <div className="motion-panel border border-emerald-500/20 rounded bg-zinc-900/20 flex flex-col h-[440px] 2xl:h-auto overflow-hidden min-w-0">
            <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
              <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
                <Info className="h-3.5 w-3.5 text-emerald-400" />
@@ -1359,7 +1359,7 @@ export default function DayTradingTerminal() {
                  Select an alert from the left log table to inspect its technical details.
                </div>
              ) : (
-               <div className="space-y-4 animate-in fade-in duration-300">
+               <div className="space-y-4 motion-enter">
                  {/* Meta details */}
                  <div className="grid grid-cols-3 gap-2 border-b border-emerald-500/10 pb-3">
                    <div>
@@ -1656,7 +1656,7 @@ export default function DayTradingTerminal() {
        </div>
 
       <Dialog open={!!executeDialogSignal} onOpenChange={(isOpen) => !isOpen && setExecuteDialogSignal(null)}>
-        <DialogContent className="max-w-md border-emerald-500/20 bg-zinc-950 text-zinc-100">
+        <DialogContent className="max-w-md border-emerald-500/20 bg-zinc-950 text-zinc-100 data-[state=open]:duration-200 data-[state=closed]:duration-150">
           <DialogHeader>
             <DialogTitle className="text-emerald-300">Confirm Trade Execution</DialogTitle>
             <DialogDescription className="text-zinc-400">
