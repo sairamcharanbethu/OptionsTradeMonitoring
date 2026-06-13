@@ -460,26 +460,44 @@ export default function DayTradingTerminal() {
     <div className="terminal-scanline motion-enter flex flex-col gap-4 lg:gap-5 font-mono bg-zinc-950 text-emerald-400 p-3 sm:p-4 rounded-lg border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] max-w-full overflow-hidden">
       
       {/* Top Banner & Timer Bar */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-emerald-500/20 pb-4 gap-4">
-        <div className="flex items-center gap-3">
-          <TerminalIcon className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-400 animate-pulse shrink-0" />
-          <div className="flex flex-col min-w-0">
+      <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center border-b border-emerald-500/20 pb-4 gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="h-9 w-9 rounded border border-emerald-500/25 bg-emerald-950/35 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
+            <TerminalIcon className="h-[18px] w-[18px] text-emerald-300" />
+          </div>
+          <div className="flex flex-col min-w-0 gap-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-base sm:text-xl font-bold uppercase tracking-widest text-emerald-300 break-words">DAY_TRADING_DASHBOARD</h2>
-              <span className="text-[9px] bg-emerald-950/60 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-500/30 font-mono">
-                v{import.meta.env.VITE_APP_VERSION || '1.4.0'}
+              <h2 className="text-lg sm:text-2xl font-extrabold text-emerald-100 leading-none break-words">0DTE command center</h2>
+              <Badge variant="outline" className="text-[9px] bg-zinc-950/70 border-emerald-500/25 text-emerald-300 font-mono">
+                {selectedSymbol === 'BOTH' ? 'QQQ + SPY' : selectedSymbol}
+              </Badge>
+              <span className="text-[9px] text-zinc-600 font-mono">
+                v{import.meta.env.VITE_APP_VERSION || '1.4.1'}
               </span>
             </div>
-            <span className="text-[10px] text-emerald-500/80 leading-snug">Active channels: QQQ, SPY | Live database scanning engine</span>
+            <div className="flex flex-wrap gap-2 text-[10px]">
+              <span className={`px-2 py-1 rounded border font-bold ${isDayTradingEnabled ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300' : 'border-amber-500/30 bg-amber-950/20 text-amber-300'}`}>
+                {isDayTradingEnabled ? 'Scanner active' : 'Scanner paused'}
+              </span>
+              <span className="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/55 text-zinc-300">
+                Next scan {isDayTradingEnabled ? formatMinSec(countdown) : '--'}
+              </span>
+              <span className="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/55 text-zinc-300">
+                Broker {brokerLabel}
+              </span>
+              <span className="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/55 text-zinc-400">
+                Max {maxTradesPerDay}/day
+              </span>
+            </div>
           </div>
         </div>
 
         {/* Ticker switcher Tabs & Sync Timer */}
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
-          <div className="motion-panel flex bg-zinc-900 p-1 rounded border border-emerald-500/20 animate-in fade-in duration-200">
+        <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 w-full xl:w-auto justify-between xl:justify-end">
+          <div className="motion-panel grid grid-cols-3 bg-zinc-900 p-1 rounded border border-emerald-500/20 animate-in fade-in duration-200 min-w-[230px]">
             <button
               onClick={() => setSelectedSymbol('QQQ')}
-              className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${
+              className={`px-4 py-2 text-xs font-bold rounded transition-all ${
                 selectedSymbol === 'QQQ' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -487,7 +505,7 @@ export default function DayTradingTerminal() {
             </button>
             <button
               onClick={() => setSelectedSymbol('SPY')}
-              className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${
+              className={`px-4 py-2 text-xs font-bold rounded transition-all ${
                 selectedSymbol === 'SPY' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -495,7 +513,7 @@ export default function DayTradingTerminal() {
             </button>
             <button
               onClick={() => setSelectedSymbol('BOTH')}
-              className={`px-4 py-1.5 text-xs font-bold rounded transition-all ${
+              className={`px-4 py-2 text-xs font-bold rounded transition-all ${
                 selectedSymbol === 'BOTH' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -504,21 +522,21 @@ export default function DayTradingTerminal() {
           </div>
 
           {isDayTradingEnabled ? (
-            <div className="flex items-center gap-2 text-xs bg-emerald-950/40 border border-emerald-500/30 px-3 py-1.5 rounded">
-              <Clock className="h-4 w-4 text-emerald-400 animate-spin" style={{ animationDuration: '6s' }} />
-              <span>SCAN CYCLE: {formatMinSec(countdown)}</span>
+            <div className="flex items-center justify-between sm:justify-start gap-2 text-xs bg-emerald-950/40 border border-emerald-500/30 px-3 py-2 rounded min-w-[178px]">
+              <Clock className="h-4 w-4 text-emerald-400" />
+              <span className="font-bold">Rescan in {formatMinSec(countdown)}</span>
               <button
                 onClick={handleManualSync}
-                className="ml-1 text-emerald-500 hover:text-emerald-300"
+                className="motion-press ml-1 text-emerald-500 hover:text-emerald-300"
                 title="Force Sync Now"
               >
                 <RefreshCw className={`h-3 w-3 ${isFetching ? 'animate-spin' : ''}`} />
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-xs bg-zinc-900/60 border border-zinc-700 px-3 py-1.5 rounded text-zinc-500">
+            <div className="flex items-center gap-2 text-xs bg-zinc-900/60 border border-zinc-700 px-3 py-2 rounded text-zinc-500 min-w-[178px]">
               <ShieldAlert className="h-4 w-4 text-amber-500/70 animate-pulse" />
-              <span className="font-bold tracking-wider">SCANNER INACTIVE</span>
+              <span className="font-bold tracking-wider">Scanner paused</span>
             </div>
           )}
         </div>
@@ -679,12 +697,12 @@ export default function DayTradingTerminal() {
 
       </div>
 
-      {/* Execution Readiness */}
+      {/* Execution Setup */}
       <div className="motion-panel border border-emerald-500/15 rounded bg-zinc-900/30 overflow-hidden">
         <div className="p-2.5 px-3 bg-zinc-900/80 border-b border-emerald-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <ShieldAlert className={`h-4 w-4 ${isLiveBroker ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`} />
-            <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider">Execution Readiness</span>
+            <span className="text-xs font-bold text-emerald-300">Execution setup</span>
             {remainingTrades <= 0 && (
               <Badge variant="outline" className="text-[8px] border-red-500/40 text-red-300 bg-red-950/20">
                 Daily limit reached
@@ -697,7 +715,7 @@ export default function DayTradingTerminal() {
             ))}
           </div>
           <span className="text-[10px] text-zinc-500">
-            Configure Wealthsimple in Settings, then save and refresh accounts.
+            {isExecutionBlocked ? 'Resolve blockers before sending an order.' : 'Ready for pending signals.'}
           </span>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-px bg-emerald-500/10">
@@ -710,7 +728,7 @@ export default function DayTradingTerminal() {
         </div>
       </div>
 
-      {/* Row 2: Separated Prominent LATEST setup notification */}
+      {/* Row 2: Separated Prominent latest setup notification */}
       <div 
         onClick={() => latestActionableSignal && setSelectedSignalId(latestActionableSignal.id)}
         className={`motion-panel border rounded-lg backdrop-blur-md overflow-hidden transition-all duration-500 ${
@@ -721,9 +739,9 @@ export default function DayTradingTerminal() {
       >
         <div className="bg-emerald-950/20 border-b border-emerald-500/15 p-2.5 px-3 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <Sparkles className={`h-4 w-4 text-emerald-400 ${latestActionableSignal ? 'animate-bounce' : ''}`} />
-            <h3 className="text-xs font-extrabold tracking-widest text-emerald-300 uppercase">
-              LATEST ACTIONABLE SETUP ALERT
+            <Sparkles className="h-4 w-4 text-emerald-400" />
+            <h3 className="text-xs font-extrabold text-emerald-300">
+              Latest trade setup
             </h3>
           </div>
           {!isDayTradingEnabled ? (
@@ -731,11 +749,11 @@ export default function DayTradingTerminal() {
               OFFLINE
             </Badge>
           ) : latestActionableSignal ? (
-            <Badge variant="outline" className="animate-pulse bg-emerald-950 text-emerald-300 border-emerald-500/40 text-[8px] px-1.5 py-0.5 font-bold">
-              🚨 SIGNAL ACTIVE
+            <Badge variant="outline" className="bg-emerald-950 text-emerald-300 border-emerald-500/40 text-[8px] px-1.5 py-0.5 font-bold">
+              Ready to review
             </Badge>
           ) : (
-            <span className="text-[9px] text-emerald-500/40 uppercase font-bold">No active signals</span>
+            <span className="text-[9px] text-emerald-500/40 font-bold">No active setup</span>
           )}
         </div>
         
@@ -743,16 +761,16 @@ export default function DayTradingTerminal() {
           {!isDayTradingEnabled ? (
             <div className="py-6 flex flex-col items-center justify-center text-center text-zinc-500 text-xs">
               <ShieldAlert className="h-8 w-8 text-amber-500/80 mb-2 animate-pulse" />
-              <span className="font-bold text-zinc-300 uppercase">Day Trading Scanner is Inactive</span>
+              <span className="font-bold text-zinc-300">Day trading scanner is paused</span>
               <span className="text-[10px] text-zinc-500 mt-1 max-w-md">
-                The options scanning engine is currently disabled for this user. You can enable it in the Settings Dialog under the "Day Trading" tab to trigger background scanner runs.
+                Enable it in Settings to resume background scans.
               </span>
             </div>
           ) : !latestActionableSignal ? (
             <div className="py-5 flex flex-col items-center justify-center text-center text-emerald-500/40 text-xs">
               <AlertCircle className="h-8 w-8 opacity-30 mb-2" />
-              <span>No trade setups generated within the current trading session.</span>
-              <span className="text-[10px] text-zinc-500 mt-1">Waiting for next 5-minute background scanning block...</span>
+              <span>No setup meets your filters right now.</span>
+              <span className="text-[10px] text-zinc-500 mt-1">Next scan in {formatMinSec(countdown)}.</span>
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-xs">
@@ -830,7 +848,7 @@ export default function DayTradingTerminal() {
                 {/* Option premium suggestion */}
                 {latestActionableSignal.gex && (
                   <div className="bg-zinc-950/60 border border-emerald-500/10 p-2 rounded font-mono text-[10px] text-sky-400">
-                    💡 Suggested 0DTE Options Plan: Buy Premium Mark at ~${latestActionableSignal.indicators?.vwap ? (Number(latestActionableSignal.indicators.vwap) * 0.003).toFixed(2) : '1.50'} | Stop loss premium at -20% | Sell profit target at +40%
+                    Options plan: buy premium near ${latestActionableSignal.indicators?.vwap ? (Number(latestActionableSignal.indicators.vwap) * 0.003).toFixed(2) : '1.50'} | stop -20% | target +40%
                   </div>
                 )}
 
@@ -862,7 +880,7 @@ export default function DayTradingTerminal() {
               <div className="p-3 rounded border border-emerald-500/10 bg-zinc-950/30 flex flex-col justify-between gap-2.5">
                 <div>
                   <span className="text-[9px] text-emerald-500/60 block uppercase font-bold flex items-center gap-1 mb-1.5">
-                    <Zap className="h-3 w-3 text-amber-400 animate-pulse" /> AI_OPTIONS_COACH · NEWS-AWARE
+                    <Zap className="h-3 w-3 text-amber-400 animate-pulse" /> AI coach · news-aware
                   </span>
 
                   {latestActionableSignal.ai_coach_commentary ? (
@@ -939,19 +957,24 @@ export default function DayTradingTerminal() {
       {/* TradingView Chart Embed - Horizontal Full Width */}
       <div className="motion-panel border border-emerald-500/20 rounded bg-zinc-900/30 overflow-hidden flex flex-col">
         <div className="p-2.5 px-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
-          <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider flex items-center gap-1.5 font-mono">
-            <Activity className="h-4 w-4 text-emerald-400 animate-pulse" />
-            LIVE {selectedSymbol === 'BOTH' ? 'QQQ & SPY' : selectedSymbol} OPTIONS-INTEGRATED CHART{selectedSymbol === 'BOTH' ? 'S' : ''} (5M EMA9/EMA21/VWAP)
-          </span>
+          <div className="flex items-center gap-2 min-w-0">
+            <Activity className="h-4 w-4 text-emerald-400 animate-pulse shrink-0" />
+            <div className="min-w-0">
+              <span className="block text-xs font-bold text-emerald-300">
+                Live chart · {selectedSymbol === 'BOTH' ? 'QQQ and SPY' : selectedSymbol}
+              </span>
+              <span className="block text-[9px] text-zinc-500 truncate">5m candles with EMA9, EMA21, and VWAP</span>
+            </div>
+          </div>
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowChart(!showChart)}
-              className="motion-press text-[9px] font-bold border border-emerald-500/35 text-emerald-400 hover:bg-emerald-950/20 px-2 py-0.5 rounded bg-zinc-950/40 transition-colors uppercase font-mono"
+              className="motion-press text-[9px] font-bold border border-emerald-500/35 text-emerald-400 hover:bg-emerald-950/20 px-2 py-0.5 rounded bg-zinc-950/40 transition-colors font-mono"
             >
-              {showChart ? '[ COLLAPSE CHART ]' : '[ EXPAND CHART ]'}
+              {showChart ? 'Collapse' : 'Expand'}
             </button>
             <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400 font-semibold font-mono">
-              Real-Time Feed
+              Real-time
             </Badge>
           </div>
         </div>
@@ -989,19 +1012,19 @@ export default function DayTradingTerminal() {
           <div className="flex bg-zinc-950/80 border-b border-emerald-500/20 p-1">
             <button
               onClick={() => setActiveTab('signals')}
-              className={`flex-1 py-2 text-xs font-bold font-mono uppercase tracking-wider transition-all rounded ${
+              className={`flex-1 py-2 text-xs font-bold font-mono transition-all rounded ${
                 activeTab === 'signals' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/50 hover:text-emerald-400'
               }`}
             >
-              [ ACTIVE SIGNALS ]
+              Signals
             </button>
             <button
               onClick={() => setActiveTab('logs')}
-              className={`flex-1 py-2 text-xs font-bold font-mono uppercase tracking-wider transition-all rounded ${
+              className={`flex-1 py-2 text-xs font-bold font-mono transition-all rounded ${
                 activeTab === 'logs' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/50 hover:text-emerald-400'
               }`}
             >
-              [ SCANNER LOG MONITOR ({filteredLogs.length}) ]
+              Scan logs ({filteredLogs.length})
             </button>
           </div>
 
