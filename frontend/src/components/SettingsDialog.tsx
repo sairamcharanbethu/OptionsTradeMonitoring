@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock } from 'lucide-react';
+import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { api } from '@/lib/api';
 
@@ -17,6 +17,22 @@ import { useQueryClient } from '@tanstack/react-query';
 interface SettingsDialogProps {
     user: User;
     onUpdate: (user: User) => void;
+}
+
+function formatAccountBalance(account: any) {
+    const rawBalance = account?.cash_balance;
+    const numericBalance = rawBalance === null || rawBalance === undefined ? null : Number(rawBalance);
+    const currency = account?.raw_data?.currency?.code || account?.raw_data?.balance?.currency || 'CAD';
+
+    if (numericBalance === null || Number.isNaN(numericBalance)) {
+        return 'Balance unavailable';
+    }
+
+    return new Intl.NumberFormat('en-CA', {
+        style: 'currency',
+        currency,
+        maximumFractionDigits: 2
+    }).format(numericBalance);
 }
 
 export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) {
@@ -78,6 +94,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [snaptradeAutoTrade, setSnaptradeAutoTrade] = useState(false);
     const [snaptradeTradingAccountId, setSnaptradeTradingAccountId] = useState('');
     const [snaptradeAccounts, setSnaptradeAccounts] = useState<any[]>([]);
+    const [snaptradeConnecting, setSnaptradeConnecting] = useState(false);
+    const [snaptradeSyncing, setSnaptradeSyncing] = useState(false);
+    const selectedSnaptradeAccount = snaptradeAccounts.find((account: any) => account.id === snaptradeTradingAccountId);
 
     // Alpaca State
     const [alpacaKeyId, setAlpacaKeyId] = useState('');
@@ -259,6 +278,77 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             console.error(err);
         } finally {
             setLoading(false);
+        }
+    }
+
+    useEffect(() => {
+        if (!snaptradeTradingAccountId && snaptradeAccounts.length === 1) {
+            setSnaptradeTradingAccountId(snaptradeAccounts[0].id);
+        }
+    }, [snaptradeAccounts, snaptradeTradingAccountId]);
+
+    function handleExecutionBrokerChange(value: string) {
+        setExecutionBroker(value);
+        if (value === 'wealthsimple_snaptrade') {
+            setSnaptradeAutoTrade(true);
+            setAlpacaAutoTrade(false);
+        } else if (value === 'alpaca_paper') {
+            setAlpacaAutoTrade(true);
+            setSnaptradeAutoTrade(false);
+        }
+    }
+
+    async function saveSnaptradeCredentials() {
+        await api.updateSettings({
+            snaptrade_client_id: snaptradeClientId,
+            snaptrade_consumer_key: snaptradeConsumerKey
+        });
+        queryClient.invalidateQueries({ queryKey: ['settings'] });
+    }
+
+    async function handleConnectSnaptrade() {
+        if (!snaptradeClientId || !snaptradeConsumerKey) {
+            alert('Enter the SnapTrade Client ID and Consumer Key first.');
+            return;
+        }
+
+        setSnaptradeConnecting(true);
+        try {
+            await saveSnaptradeCredentials();
+            const data = await api.connectSnaptrade();
+            if (data.redirectURI) {
+                window.location.href = data.redirectURI;
+            } else {
+                alert('Failed to get Wealthsimple connection URL.');
+            }
+        } catch (err: any) {
+            alert(`Failed to connect Wealthsimple: ${err.message || 'Unknown error'}`);
+        } finally {
+            setSnaptradeConnecting(false);
+        }
+    }
+
+    async function handleSyncSnaptradeAccounts() {
+        if (!snaptradeClientId || !snaptradeConsumerKey) {
+            alert('Enter the SnapTrade Client ID and Consumer Key first.');
+            return;
+        }
+
+        setSnaptradeSyncing(true);
+        try {
+            await saveSnaptradeCredentials();
+            await api.syncSnaptradePortfolio();
+            const portfolio = await api.getSnaptradePortfolio();
+            const accounts = portfolio.accounts || [];
+            setSnaptradeAccounts(accounts);
+            if (!snaptradeTradingAccountId && accounts.length === 1) {
+                setSnaptradeTradingAccountId(accounts[0].id);
+            }
+            queryClient.invalidateQueries({ queryKey: ['snaptradePortfolio'] });
+        } catch (err: any) {
+            alert(`Failed to sync Wealthsimple accounts: ${err.message || 'Unknown error'}`);
+        } finally {
+            setSnaptradeSyncing(false);
         }
     }
 
@@ -591,7 +681,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
                                     <div className="grid gap-2">
                                         <Label htmlFor="executionBroker">Execution Broker</Label>
-                                        <Select value={executionBroker} onValueChange={setExecutionBroker}>
+                                        <Select value={executionBroker} onValueChange={handleExecutionBrokerChange}>
                                             <SelectTrigger id="executionBroker">
                                                 <SelectValue placeholder="Select Broker" />
                                             </SelectTrigger>
@@ -601,6 +691,25 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <SelectItem value="wealthsimple_snaptrade">Wealthsimple via SnapTrade (Live)</SelectItem>
                                             </SelectContent>
                                         </Select>
+                                        {executionBroker === 'wealthsimple_snaptrade' && (
+                                            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-200">
+                                                <div className="flex items-center gap-2 font-semibold">
+                                                    <AlertTriangle className="h-4 w-4" />
+                                                    Wealthsimple Live requires three checks below
+                                                </div>
+                                                <div className="mt-2 grid gap-1 text-[11px]">
+                                                    <span className={snaptradeAutoTrade ? 'text-green-600 dark:text-green-300' : ''}>
+                                                        {snaptradeAutoTrade ? 'OK' : 'Missing'}: Enable Wealthsimple Live Execution
+                                                    </span>
+                                                    <span className={snaptradeTradingAccountId ? 'text-green-600 dark:text-green-300' : ''}>
+                                                        {snaptradeTradingAccountId ? 'OK' : 'Missing'}: Select a synced Wealthsimple trading account
+                                                    </span>
+                                                    <span className={liveTradingAcknowledged ? 'text-green-600 dark:text-green-300' : ''}>
+                                                        {liveTradingAcknowledged ? 'OK' : 'Missing'}: Turn on Live Trading Acknowledgement
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="grid grid-cols-2 gap-4">
@@ -916,6 +1025,28 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <p className="text-[10px] text-muted-foreground">
                                                 Once saved, go to the Wealthsimple dashboard to securely connect your broker.
                                             </p>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    onClick={handleConnectSnaptrade}
+                                                    disabled={!snaptradeClientId || !snaptradeConsumerKey || snaptradeConnecting}
+                                                    className="gap-2"
+                                                >
+                                                    {snaptradeConnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link className="h-4 w-4" />}
+                                                    Connect Wealthsimple
+                                                </Button>
+                                                <Button
+                                                    type="button"
+                                                    variant="outline"
+                                                    onClick={handleSyncSnaptradeAccounts}
+                                                    disabled={!snaptradeClientId || !snaptradeConsumerKey || snaptradeSyncing}
+                                                    className="gap-2"
+                                                >
+                                                    <RefreshCw className={`h-4 w-4 ${snaptradeSyncing ? 'animate-spin' : ''}`} />
+                                                    {snaptradeSyncing ? 'Syncing...' : 'Sync Accounts'}
+                                                </Button>
+                                            </div>
                                             <div className="grid gap-3 pt-3 border-t border-border/40">
                                                 <div className="flex items-center justify-between">
                                                     <Label htmlFor="snaptrade-auto-trade" className="flex flex-col gap-1 cursor-pointer">
@@ -943,11 +1074,36 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                         <SelectContent>
                                                             {snaptradeAccounts.map((account: any) => (
                                                                 <SelectItem key={account.id} value={account.id}>
-                                                                    {account.name || 'Wealthsimple Account'} {account.number ? `(${account.number})` : ''}
+                                                                    {account.name || 'Wealthsimple Account'} {account.number ? `(${account.number})` : ''} · {formatAccountBalance(account)}
                                                                 </SelectItem>
                                                             ))}
                                                         </SelectContent>
                                                     </Select>
+                                                    {selectedSnaptradeAccount && (
+                                                        <div className="rounded-md border border-border/60 bg-background/70 p-3 text-xs">
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <p className="font-semibold truncate">
+                                                                        {selectedSnaptradeAccount.name || 'Wealthsimple Account'}
+                                                                    </p>
+                                                                    <p className="text-[10px] text-muted-foreground truncate">
+                                                                        {selectedSnaptradeAccount.number ? `Account ${selectedSnaptradeAccount.number}` : selectedSnaptradeAccount.id}
+                                                                    </p>
+                                                                </div>
+                                                                <div className="text-right shrink-0">
+                                                                    <p className="text-[10px] text-muted-foreground">Cash Balance</p>
+                                                                    <p className="font-bold text-green-600 dark:text-green-400">
+                                                                        {formatAccountBalance(selectedSnaptradeAccount)}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {executionBroker === 'wealthsimple_snaptrade' && snaptradeAccounts.length === 0 && (
+                                                        <p className="text-[10px] text-amber-600 dark:text-amber-300">
+                                                            No account is available yet. Connect Wealthsimple, then click Sync Accounts.
+                                                        </p>
+                                                    )}
                                                 </div>
 
                                                 <div className="flex items-center justify-between">

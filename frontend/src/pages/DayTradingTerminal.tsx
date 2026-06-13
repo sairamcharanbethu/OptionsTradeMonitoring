@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSignals, useSettings, useScannerLogs, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { api, Signal, ScannerLog } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -92,6 +92,22 @@ const getSignalExecutionTone = (signal?: Signal | null) => {
   return 'border-zinc-700 text-zinc-400 bg-zinc-950/40';
 };
 
+const formatAccountBalance = (account: any) => {
+  const rawBalance = account?.cash_balance;
+  const numericBalance = rawBalance === null || rawBalance === undefined ? null : Number(rawBalance);
+  const currency = account?.raw_data?.currency?.code || account?.raw_data?.balance?.currency || 'CAD';
+
+  if (numericBalance === null || Number.isNaN(numericBalance)) {
+    return 'Balance N/A';
+  }
+
+  return new Intl.NumberFormat('en-CA', {
+    style: 'currency',
+    currency,
+    maximumFractionDigits: 2
+  }).format(numericBalance);
+};
+
 export default function DayTradingTerminal() {
   const queryClient = useQueryClient();
   // Smart poll: 3s for 3 mins after a signal with no AI commentary; otherwise 10s
@@ -100,6 +116,7 @@ export default function DayTradingTerminal() {
   const { data: signals = [], isLoading, isFetching, refetch } = useSignals(pollInterval);
   const { data: logs = [], isLoading: logsLoading, isFetching: logsFetching, refetch: refetchLogs } = useScannerLogs(pollInterval);
   const { data: settings = {} } = useSettings();
+  const { data: snaptradePortfolio } = useSnaptradePortfolio();
   const isDayTradingEnabled = settings.day_trading_enabled !== 'false';
 
   // Live real-time WebSocket signals updates integration
@@ -417,15 +434,26 @@ export default function DayTradingTerminal() {
     return signalDateEt === todayEt && (signal.status === 'EXECUTED' || signal.execution_status === 'EXECUTED');
   }).length;
   const remainingTrades = Math.max(0, maxTradesPerDay - tradesToday);
+  const selectedSnaptradeAccount = (snaptradePortfolio?.accounts || []).find(
+    (account: any) => account.id === settings.snaptrade_trading_account_id
+  );
   const selectedAccountLabel = settings.snaptrade_trading_account_id
-    ? `Acct ${String(settings.snaptrade_trading_account_id).slice(-6)}`
+    ? selectedSnaptradeAccount?.name || `Acct ${String(settings.snaptrade_trading_account_id).slice(-6)}`
     : 'No account';
+  const selectedAccountBalance = selectedSnaptradeAccount ? formatAccountBalance(selectedSnaptradeAccount) : 'Balance N/A';
+  const missingLiveExecutionItems = isLiveBroker ? [
+    settings.snaptrade_auto_trade === 'true' ? null : 'SnapTrade execution off',
+    settings.snaptrade_trading_account_id ? null : 'No account',
+    settings.live_trading_acknowledged === 'true' ? null : 'Live ack missing'
+  ].filter(Boolean) as string[] : [];
+  const isExecutionBlocked = remainingTrades <= 0 || missingLiveExecutionItems.length > 0;
   const readinessItems = [
     { label: 'Broker', value: brokerLabel, tone: isLiveBroker ? 'text-amber-300' : configuredBroker === 'alpaca_paper' ? 'text-sky-300' : 'text-zinc-400' },
     { label: 'Size', value: `${contractsPerTrade} contract${contractsPerTrade === 1 ? '' : 's'}`, tone: 'text-emerald-300' },
     { label: 'Daily', value: `${tradesToday}/${maxTradesPerDay} used`, tone: remainingTrades > 0 ? 'text-emerald-300' : 'text-red-300' },
     { label: 'Order', value: `${settings.order_type || 'LIMIT'} ${settings.entry_slippage_pct || 3}%`, tone: 'text-zinc-300' },
-    { label: 'Account', value: isLiveBroker ? selectedAccountLabel : 'Paper/sim', tone: isLiveBroker && !settings.snaptrade_trading_account_id ? 'text-red-300' : 'text-zinc-300' }
+    { label: 'Account', value: isLiveBroker ? selectedAccountLabel : 'Paper/sim', tone: isLiveBroker && !settings.snaptrade_trading_account_id ? 'text-red-300' : 'text-zinc-300' },
+    ...(isLiveBroker ? [{ label: 'Balance', value: selectedAccountBalance, tone: selectedSnaptradeAccount ? 'text-emerald-300' : 'text-amber-300' }] : [])
   ];
 
   return (
@@ -662,17 +690,17 @@ export default function DayTradingTerminal() {
                 Daily limit reached
               </Badge>
             )}
-            {isLiveBroker && settings.live_trading_acknowledged !== 'true' && (
-              <Badge variant="outline" className="text-[8px] border-amber-500/40 text-amber-300 bg-amber-950/20">
-                Live ack missing
+            {missingLiveExecutionItems.map(item => (
+              <Badge key={item} variant="outline" className="text-[8px] border-amber-500/40 text-amber-300 bg-amber-950/20">
+                {item}
               </Badge>
-            )}
+            ))}
           </div>
           <span className="text-[10px] text-zinc-500">
-            Applies to Execute buttons on pending signals.
+            Configure Wealthsimple in Settings, then save and refresh accounts.
           </span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-px bg-emerald-500/10">
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-px bg-emerald-500/10">
           {readinessItems.map(item => (
             <div key={item.label} className="motion-panel bg-zinc-950/70 px-3 py-2 min-h-[54px] flex flex-col justify-center">
               <span className="text-[9px] uppercase text-zinc-500 font-bold">{item.label}</span>
@@ -888,7 +916,7 @@ export default function DayTradingTerminal() {
                   <Button
                     size="sm"
                     className="h-6 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-[10px] shadow-[0_0_0_rgba(16,185,129,0)] hover:shadow-[0_0_18px_rgba(16,185,129,0.25)]"
-                    disabled={remainingTrades <= 0 || (isLiveBroker && (!settings.snaptrade_trading_account_id || settings.live_trading_acknowledged !== 'true'))}
+                    disabled={isExecutionBlocked}
                     onClick={() => handleQuickStatus(latestActionableSignal.id, 'EXECUTED')}
                   >
                     Execute Trade
@@ -1175,7 +1203,7 @@ export default function DayTradingTerminal() {
                               {sig.status === 'PENDING' ? (
                                 <div className="flex justify-end gap-1">
                                   <button onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
-                                    disabled={remainingTrades <= 0 || (isLiveBroker && (!settings.snaptrade_trading_account_id || settings.live_trading_acknowledged !== 'true'))}
+                                    disabled={isExecutionBlocked}
                                     className="motion-press h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Execute">
                                     <Play className="h-2.5 w-2.5" />
                                   </button>
