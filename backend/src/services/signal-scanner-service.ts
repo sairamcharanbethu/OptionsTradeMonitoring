@@ -300,8 +300,22 @@ export class SignalScannerService {
     const cachedFp = await redis.get(fpRedisKey);
 
     if (cachedFp === newFingerprint) {
-      this.fastify.log.info(`[NewsPreWarm] ${symbol} headlines unchanged — fingerprint match, skipping Llama.`);
-      return; // Nothing to do, cache is still fresh
+      const verdictKey = `NEWS_VERDICT:${symbol}:${nyDateStr}`;
+      const cachedVerdict = await redis.get(verdictKey);
+      if (cachedVerdict) {
+        try {
+          const parsed = JSON.parse(cachedVerdict);
+          await redis.set(
+            verdictKey,
+            JSON.stringify({ ...parsed, generatedAt: new Date().toISOString() }),
+            1800
+          );
+          this.fastify.log.info(`[NewsPreWarm] ${symbol} headlines unchanged — refreshed cached guardrail timestamp.`);
+          return;
+        } catch {
+          this.fastify.log.warn(`[NewsPreWarm] ${symbol} cached verdict could not be parsed. Reclassifying.`);
+        }
+      }
     }
 
     // Headlines changed — update fingerprint and re-run Llama
@@ -310,7 +324,7 @@ export class SignalScannerService {
     if (headlines.length === 0) {
       await redis.set(
         `NEWS_VERDICT:${symbol}:${nyDateStr}`,
-        JSON.stringify({ verdict: 'NEUTRAL', rationale: 'No material news.' }),
+        JSON.stringify({ verdict: 'NEUTRAL', rationale: 'No material news.', generatedAt: new Date().toISOString() }),
         1800
       );
       this.fastify.log.info(`[NewsPreWarm] ${symbol} — no headlines, cached NEUTRAL verdict.`);
@@ -340,7 +354,8 @@ Rules:
           JSON.stringify({
             verdict: res.verdict,
             rationale: res.rationale || res.analysis || '',
-            usage: res.usage || null
+            usage: res.usage || null,
+            generatedAt: new Date().toISOString()
           }),
           1800
         );
@@ -1410,12 +1425,29 @@ Rules:
       // ── STEP 2: Discord – signal alert fires immediately, no AI wait ──
       if (settings.discord_alerts_enabled === 'true' && settings.discord_webhook_url) {
         try {
-          const mlProbStr = mlProbability !== null ? ` | ML Prob **${Math.round(mlProbability * 100)}%**` : '';
           const premEntryStr = mark !== null ? `$${mark.toFixed(2)}` : 'N/A';
           const premSlStr = optionStopLoss !== null ? `$${optionStopLoss.toFixed(2)}` : 'N/A';
           const premTpStr = optionTakeProfit !== null ? `$${optionTakeProfit.toFixed(2)}` : 'N/A';
+          const guardrail = await this.getCachedNewsGuardrail(symbol, nyParts.dateStr, winningSide as 'CALL' | 'PUT');
           const embedMessage = {
-            content: `🚨 **${symbol} $${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}\n📍 Entry >$${entryTrigger.toFixed(2)} | SL $${stopUnderlying} | TP $${targetUnderlying}\n💰 Premium: Entry: ${premEntryStr} | SL: ${premSlStr} | TP: ${premTpStr}\n🎯 Score **${finalConfidence}** (${setupGrade})${mlProbStr}`
+            content: [
+              `🚨 **${symbol} ${chosenStrike}${winningSide === 'CALL' ? 'C' : 'P'}** | ${tradeBias}`,
+              '',
+              `**Entry:** ${symbol} above $${entryTrigger.toFixed(2)}`,
+              `**Stop:** $${stopUnderlying}`,
+              `**Target:** $${targetUnderlying}`,
+              '',
+              '**Option plan:**',
+              `Entry premium: ${premEntryStr}`,
+              `Stop premium: ${premSlStr}`,
+              `Target premium: ${premTpStr}`,
+              '',
+              `**Score:** ${finalConfidence} / ${setupGrade}${mlProbability !== null ? ` | ML probability: ${Math.round(mlProbability * 100)}%` : ''}`,
+              '',
+              `**News risk:** ${guardrail.status} (${guardrail.verdict}, ${guardrail.freshness})`,
+              `**Why:** ${guardrail.rationale}`,
+              `**Suggestion:** ${guardrail.suggestion}`
+            ].join('\n')
           };
           await axios.post(settings.discord_webhook_url, embedMessage, { timeout: 8000 });
         } catch (discErr: any) {
@@ -1668,7 +1700,7 @@ Rules:
     // Cache the macro verdict for 30 min
     await redis.set(
       `NEWS_VERDICT:${symbol}:${nyDateStr}`,
-      JSON.stringify({ verdict: macroVerdict, rationale: macroRationale }),
+      JSON.stringify({ verdict: macroVerdict, rationale: macroRationale, generatedAt: new Date().toISOString() }),
       1800
     );
 
@@ -2218,6 +2250,63 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       trSum += tr;
     }
     return trSum / length;
+  }
+
+  private async getCachedNewsGuardrail(symbol: string, nyDateStr: string, winningSide: 'CALL' | 'PUT') {
+    const cachedVerdict = await redis.get(`NEWS_VERDICT:${symbol}:${nyDateStr}`);
+    if (!cachedVerdict) {
+      return {
+        status: 'UNAVAILABLE',
+        verdict: 'UNKNOWN',
+        rationale: 'No cached AI news guardrail is available yet.',
+        freshness: 'unavailable',
+        suggestion: 'MANUAL REVIEW'
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(cachedVerdict);
+      const verdict = parsed.verdict || 'NEUTRAL';
+      const rationale = parsed.rationale || 'No rationale provided.';
+      const generatedAt = parsed.generatedAt ? new Date(parsed.generatedAt) : null;
+      const ageSeconds = generatedAt ? Math.floor((Date.now() - generatedAt.getTime()) / 1000) : null;
+      const isStale = ageSeconds === null || ageSeconds > 5 * 60;
+
+      if (isStale) {
+        return {
+          status: 'STALE',
+          verdict,
+          rationale,
+          freshness: ageSeconds === null ? 'unknown age' : `${Math.floor(ageSeconds / 60)}m old`,
+          suggestion: 'MANUAL REVIEW'
+        };
+      }
+
+      const opposingRisk = (winningSide === 'CALL' && verdict === 'RISK_OFF') || (winningSide === 'PUT' && verdict === 'RISK_ON');
+      const supportingContext = (winningSide === 'CALL' && verdict === 'RISK_ON') || (winningSide === 'PUT' && verdict === 'RISK_OFF');
+      const status = opposingRisk ? 'HIGH RISK' : supportingContext || verdict === 'NEUTRAL' ? 'CLEAR' : 'CAUTION';
+      const suggestion = status === 'HIGH RISK'
+        ? 'REVIEW / REDUCE SIZE'
+        : status === 'CLEAR'
+          ? 'HOLD PLAN'
+          : 'WAIT FOR CONFIRMATION';
+
+      return {
+        status,
+        verdict,
+        rationale,
+        freshness: `${ageSeconds}s old`,
+        suggestion
+      };
+    } catch (err: any) {
+      return {
+        status: 'UNAVAILABLE',
+        verdict: 'UNKNOWN',
+        rationale: `Could not parse cached AI news guardrail: ${err.message}`,
+        freshness: 'unavailable',
+        suggestion: 'MANUAL REVIEW'
+      };
+    }
   }
 
   private isAutoExecutionEnabled(settings: any): boolean {
