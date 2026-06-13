@@ -93,9 +93,12 @@ const getSignalExecutionTone = (signal?: Signal | null) => {
 };
 
 const formatAccountBalance = (account: any) => {
-  const rawBalance = account?.cash_balance;
+  const fallbackBalance = Array.isArray(account?.balances)
+    ? account.balances.find((balance: any) => balance?.cash !== null && balance?.cash !== undefined)
+    : null;
+  const rawBalance = account?.cash_balance ?? fallbackBalance?.cash;
   const numericBalance = rawBalance === null || rawBalance === undefined ? null : Number(rawBalance);
-  const currency = account?.raw_data?.currency?.code || account?.raw_data?.balance?.currency || 'CAD';
+  const currency = account?.cash_balance_currency || fallbackBalance?.currency?.code || account?.raw_data?.currency?.code || account?.raw_data?.balance?.currency || 'CAD';
 
   if (numericBalance === null || Number.isNaN(numericBalance)) {
     return 'Balance N/A';

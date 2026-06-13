@@ -20,9 +20,12 @@ interface SettingsDialogProps {
 }
 
 function formatAccountBalance(account: any) {
-    const rawBalance = account?.cash_balance;
+    const fallbackBalance = Array.isArray(account?.balances)
+        ? account.balances.find((balance: any) => balance?.cash !== null && balance?.cash !== undefined)
+        : null;
+    const rawBalance = account?.cash_balance ?? fallbackBalance?.cash;
     const numericBalance = rawBalance === null || rawBalance === undefined ? null : Number(rawBalance);
-    const currency = account?.raw_data?.currency?.code || account?.raw_data?.balance?.currency || 'CAD';
+    const currency = account?.cash_balance_currency || fallbackBalance?.currency?.code || account?.raw_data?.currency?.code || account?.raw_data?.balance?.currency || 'CAD';
 
     if (numericBalance === null || Number.isNaN(numericBalance)) {
         return 'Balance unavailable';
@@ -40,6 +43,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [open, setOpen] = useState(false);
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [activeSettingsTab, setActiveSettingsTab] = useState('daytrading');
 
     // Config State
     const [provider, setProvider] = useState('ollama');
@@ -454,31 +458,31 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                     <Settings className="h-5 w-5 text-muted-foreground" />
                 </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-4xl max-h-[90vh] h-[600px] flex flex-col p-0 gap-0 overflow-hidden">
-                <DialogHeader className="p-6 pb-4 border-b shrink-0">
-                    <DialogTitle>Settings</DialogTitle>
+            <DialogContent className="sm:max-w-5xl max-h-[92vh] h-[min(760px,92vh)] flex flex-col p-0 gap-0 overflow-hidden">
+                <DialogHeader className="p-5 pb-4 border-b shrink-0">
+                    <DialogTitle>Trading settings</DialogTitle>
                     <DialogDescription>
-                        Manage your application preferences and account security.
+                        Configure scanner behavior, execution routing, broker connections, and account security.
                     </DialogDescription>
                 </DialogHeader>
 
-                <Tabs defaultValue="preferences" className="flex-1 flex flex-col md:flex-row overflow-hidden">
-                    <TabsList className="flex flex-row md:flex-col w-full md:w-64 overflow-x-auto md:overflow-x-visible justify-start rounded-none border-b md:border-b-0 md:border-r h-auto md:h-full bg-muted/30 p-2 space-x-1 md:space-x-0 md:space-y-1 shrink-0 scrollbar-none">
-                        <TabsTrigger value="preferences" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
-                            <Sliders className="h-4 w-4 text-muted-foreground" />
-                            Preferences
-                        </TabsTrigger>
+                <Tabs value={activeSettingsTab} onValueChange={setActiveSettingsTab} className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                    <TabsList className="flex flex-row md:flex-col w-full md:w-56 overflow-x-auto md:overflow-x-visible justify-start rounded-none border-b md:border-b-0 md:border-r h-auto md:h-full bg-muted/30 p-2 space-x-1 md:space-x-0 md:space-y-1 shrink-0 scrollbar-none">
                         <TabsTrigger value="daytrading" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Zap className="h-4 w-4 text-muted-foreground" />
-                            Day Trading Settings
+                            Day trading
                         </TabsTrigger>
                         <TabsTrigger value="credentials" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Key className="h-4 w-4 text-muted-foreground" />
-                            API & Credentials
+                            Connections
+                        </TabsTrigger>
+                        <TabsTrigger value="preferences" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
+                            <Sliders className="h-4 w-4 text-muted-foreground" />
+                            App preferences
                         </TabsTrigger>
                         <TabsTrigger value="account" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Lock className="h-4 w-4 text-muted-foreground" />
-                            Account & Security
+                            Account
                         </TabsTrigger>
                     </TabsList>
 
@@ -612,13 +616,19 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                         </TabsContent>
 
                         {/* Tab 2: Day Trading Scanner */}
-                        <TabsContent value="daytrading" className="m-0 space-y-6">
+                        <TabsContent value="daytrading" className="m-0 space-y-5">
                             <div>
-                                <h3 className="text-lg font-medium">Day Trading Scanner</h3>
-                                <p className="text-sm text-muted-foreground">Configure the real-time options scanner and alerting parameters.</p>
+                                <h3 className="text-lg font-semibold">Day trading</h3>
+                                <p className="text-sm text-muted-foreground">Scanner rules, order sizing, and execution routing.</p>
                             </div>
-                            <div className="grid gap-6">
-                                <div className="grid gap-2 pt-2">
+                            <div className="grid gap-5">
+                                <section className="rounded-lg border bg-card p-4 space-y-4">
+                                    <div>
+                                        <h4 className="text-sm font-semibold">Scanner</h4>
+                                        <p className="text-[10px] text-muted-foreground">Symbols, strike selection, confidence threshold, and trading window.</p>
+                                    </div>
+
+                                <div className="grid gap-2">
                                     <div className="flex items-center justify-between">
                                         <Label htmlFor="dtEnabledToggle" className="flex items-center gap-2">
                                             Day Trading Scanner
@@ -636,47 +646,71 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </div>
                                 </div>
 
-                                <div className="grid gap-2">
-                                    <Label htmlFor="dtSymbols">Tracked Symbols (Comma-separated)</Label>
-                                    <Input
-                                        id="dtSymbols"
-                                        value={dayTradingSymbols}
-                                        onChange={(e) => setDayTradingSymbols(e.target.value)}
-                                        placeholder="QQQ, SPY"
-                                    />
-                                </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="dtSymbols">Tracked Symbols</Label>
+                                            <Input
+                                                id="dtSymbols"
+                                                value={dayTradingSymbols}
+                                                onChange={(e) => setDayTradingSymbols(e.target.value)}
+                                                placeholder="QQQ, SPY"
+                                            />
+                                        </div>
 
-                                <div className="grid gap-2">
-                                    <Label htmlFor="dtStrikeOffset">Options Strike Offset</Label>
-                                    <Select value={strikeOffset} onValueChange={setStrikeOffset}>
-                                        <SelectTrigger>
-                                            <SelectValue placeholder="Select Offset" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="-2">In-The-Money (ITM) 2 Strikes (-2)</SelectItem>
-                                            <SelectItem value="-1">In-The-Money (ITM) 1 Strike (-1)</SelectItem>
-                                            <SelectItem value="0">At-The-Money (ATM) (0)</SelectItem>
-                                            <SelectItem value="1">Out-Of-The-Money (OTM) 1 Strike (+1)</SelectItem>
-                                            <SelectItem value="2">Out-Of-The-Money (OTM) 2 Strikes (+2)</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="dtMinScore">Minimum Signal Confidence</Label>
+                                            <Input
+                                                id="dtMinScore"
+                                                type="number"
+                                                value={minSignalScore}
+                                                onChange={(e) => setMinSignalScore(e.target.value)}
+                                                placeholder="70"
+                                            />
+                                        </div>
 
-                                <div className="grid gap-2">
-                                    <Label htmlFor="dtMinScore">Minimum Signal Confidence Score</Label>
-                                    <Input
-                                        id="dtMinScore"
-                                        type="number"
-                                        value={minSignalScore}
-                                        onChange={(e) => setMinSignalScore(e.target.value)}
-                                        placeholder="70"
-                                    />
-                                </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="dtStrikeOffset">Options Strike Offset</Label>
+                                            <Select value={strikeOffset} onValueChange={setStrikeOffset}>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Select Offset" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="-2">ITM 2 Strikes (-2)</SelectItem>
+                                                    <SelectItem value="-1">ITM 1 Strike (-1)</SelectItem>
+                                                    <SelectItem value="0">At the Money (0)</SelectItem>
+                                                    <SelectItem value="1">OTM 1 Strike (+1)</SelectItem>
+                                                    <SelectItem value="2">OTM 2 Strikes (+2)</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
 
-                                <div className="grid gap-4 pt-4 border-t">
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="dtStartTime">Start ET</Label>
+                                                <Input
+                                                    id="dtStartTime"
+                                                    type="time"
+                                                    value={tradingStartTime}
+                                                    onChange={(e) => setTradingStartTime(e.target.value)}
+                                                />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="dtCutoffTime">Cutoff ET</Label>
+                                                <Input
+                                                    id="dtCutoffTime"
+                                                    type="time"
+                                                    value={tradingCutoffTime}
+                                                    onChange={(e) => setTradingCutoffTime(e.target.value)}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section className="rounded-lg border bg-card p-4 space-y-4">
                                     <div>
-                                        <h4 className="text-sm font-semibold">Execution & Risk Limits</h4>
-                                        <p className="text-[10px] text-muted-foreground">Choose how scanner signals are executed and cap daily exposure.</p>
+                                        <h4 className="text-sm font-semibold">Execution and risk</h4>
+                                        <p className="text-[10px] text-muted-foreground">Route orders and cap exposure before a signal can be executed.</p>
                                     </div>
 
                                     <div className="grid gap-2">
@@ -693,26 +727,33 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </Select>
                                         {executionBroker === 'wealthsimple_snaptrade' && (
                                             <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-200">
-                                                <div className="flex items-center gap-2 font-semibold">
-                                                    <AlertTriangle className="h-4 w-4" />
-                                                    Wealthsimple Live requires three checks below
-                                                </div>
-                                                <div className="mt-2 grid gap-1 text-[11px]">
-                                                    <span className={snaptradeAutoTrade ? 'text-green-600 dark:text-green-300' : ''}>
-                                                        {snaptradeAutoTrade ? 'OK' : 'Missing'}: Enable Wealthsimple Live Execution
-                                                    </span>
-                                                    <span className={snaptradeTradingAccountId ? 'text-green-600 dark:text-green-300' : ''}>
-                                                        {snaptradeTradingAccountId ? 'OK' : 'Missing'}: Select a synced Wealthsimple trading account
-                                                    </span>
-                                                    <span className={liveTradingAcknowledged ? 'text-green-600 dark:text-green-300' : ''}>
-                                                        {liveTradingAcknowledged ? 'OK' : 'Missing'}: Turn on Live Trading Acknowledgement
-                                                    </span>
+                                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                                    <div>
+                                                        <div className="flex items-center gap-2 font-semibold">
+                                                            <AlertTriangle className="h-4 w-4" />
+                                                            Wealthsimple Live needs connection setup
+                                                        </div>
+                                                        <div className="mt-2 grid gap-1 text-[11px]">
+                                                            <span className={snaptradeAutoTrade ? 'text-green-600 dark:text-green-300' : ''}>
+                                                                {snaptradeAutoTrade ? 'OK' : 'Missing'}: Enable live execution
+                                                            </span>
+                                                            <span className={snaptradeTradingAccountId ? 'text-green-600 dark:text-green-300' : ''}>
+                                                                {snaptradeTradingAccountId ? 'OK' : 'Missing'}: Select synced account
+                                                            </span>
+                                                            <span className={liveTradingAcknowledged ? 'text-green-600 dark:text-green-300' : ''}>
+                                                                {liveTradingAcknowledged ? 'OK' : 'Missing'}: Acknowledge live trading
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <Button type="button" variant="outline" size="sm" onClick={() => setActiveSettingsTab('credentials')}>
+                                                        Open Connections
+                                                    </Button>
                                                 </div>
                                             </div>
                                         )}
                                     </div>
 
-                                    <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="grid gap-2">
                                             <Label htmlFor="maxTradesPerDay">Max Trades Per Day</Label>
                                             <Input
@@ -735,7 +776,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </div>
                                     </div>
 
-                                    <div className="grid grid-cols-2 gap-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="grid gap-2">
                                             <Label htmlFor="orderType">Entry Order Type</Label>
                                             <Select value={orderType} onValueChange={setOrderType}>
@@ -761,30 +802,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             />
                                         </div>
                                     </div>
-                                </div>
+                                </section>
 
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="dtStartTime">Trading Start Time (ET)</Label>
-                                        <Input
-                                            id="dtStartTime"
-                                            type="time"
-                                            value={tradingStartTime}
-                                            onChange={(e) => setTradingStartTime(e.target.value)}
-                                        />
-                                    </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="dtCutoffTime">Trading Cutoff Time (ET)</Label>
-                                        <Input
-                                            id="dtCutoffTime"
-                                            type="time"
-                                            value={tradingCutoffTime}
-                                            onChange={(e) => setTradingCutoffTime(e.target.value)}
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="grid gap-4 pt-4 border-t">
+                                <section className="rounded-lg border bg-card p-4 space-y-4">
                                     <div className="flex items-center justify-between">
                                         <Label htmlFor="dtAiEnabled" className="flex items-center gap-2">
                                             Enable AI Coach Commentary
@@ -795,43 +815,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             onCheckedChange={setDayTradingAiEnabled}
                                         />
                                     </div>
-                                </div>
-
-                                <div className="grid gap-4 pt-4 border-t">
-                                    <div className="flex items-center justify-between">
-                                        <Label htmlFor="dtAlpacaAutoTrade" className="flex flex-col gap-1 cursor-pointer">
-                                            <span className="font-semibold flex items-center gap-1.5"><Zap className="h-4 w-4 text-amber-500 animate-pulse" /> Auto-Execute Paper Trades (Alpaca)</span>
-                                            <span className="text-[10px] font-normal text-muted-foreground">Automatically place and manage 1-contract paper positions on Alpaca when signals trigger</span>
-                                        </Label>
-                                        <Switch
-                                            id="dtAlpacaAutoTrade"
-                                            checked={alpacaAutoTrade}
-                                            onCheckedChange={setAlpacaAutoTrade}
-                                        />
-                                    </div>
-                                    {alpacaAutoTrade && (
-                                        <div className="grid gap-2 animate-in fade-in slide-in-from-top-2 pt-2 pl-4 border-l-2 border-amber-500/20">
-                                            <Label htmlFor="dtAlpacaAutoTradeMode">Execution Timing</Label>
-                                            <Select value={alpacaAutoTradeMode} onValueChange={setAlpacaAutoTradeMode}>
-                                                <SelectTrigger id="dtAlpacaAutoTradeMode">
-                                                    <SelectValue placeholder="Select Execution Timing" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="instant">Instant Entry (Pre-AI) — Minimal Latency</SelectItem>
-                                                    <SelectItem value="ai_confirmed">AI-Confirmed Entry (Post-AI) — Requires AI GO Verdict</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                            <p className="text-[10px] text-muted-foreground leading-normal mt-0.5">
-                                                {alpacaAutoTradeMode === 'instant' 
-                                                    ? "⚡ Orders are placed instantly when technical scanner identifies a trade signal, ignoring AI wait." 
-                                                    : "🧠 Orders wait for news classifier and Claude Sonnet coaching verdict. Requires a GO verdict to execute."}
-                                            </p>
-                                        </div>
-                                    )}
-                                </div>
 
                                 {dayTradingAiEnabled && (
-                                    <div className="grid gap-4 animate-in fade-in slide-in-from-top-2">
+                                    <div className="grid gap-4 animate-in fade-in slide-in-from-top-2 border-t pt-4">
                                         <div className="grid gap-2">
                                             <Label htmlFor="dtAiProvider">AI Provider</Label>
                                             <Select value={dayTradingAiProvider} onValueChange={setDayTradingAiProvider}>
@@ -864,20 +850,21 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </div>
                                     </div>
                                 )}
+                                </section>
                             </div>
                         </TabsContent>
 
                         {/* Tab 3: API Keys & Credentials */}
                         <TabsContent value="credentials" className="m-0 space-y-6">
                             <div>
-                                <h3 className="text-lg font-medium">API Keys & Credentials</h3>
-                                <p className="text-sm text-muted-foreground">Manage your secret API keys, passwords, and brokerage credentials.</p>
+                                <h3 className="text-lg font-semibold">Connections</h3>
+                                <p className="text-sm text-muted-foreground">Market data, alerts, and broker account access.</p>
                             </div>
 
                             <div className="space-y-6">
                                 {/* API Keys & Services */}
                                 <div className="border rounded-lg p-6 bg-card space-y-4">
-                                    <h4 className="font-semibold text-sm border-b pb-2">API Keys & Cloud Services</h4>
+                                    <h4 className="font-semibold text-sm border-b pb-2">Market data and AI keys</h4>
                                     
                                     <div className="grid gap-2">
                                         <Label htmlFor="key">OpenRouter API Key</Label>
@@ -915,7 +902,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
                                 {/* Discord Webhook */}
                                 <div className="border rounded-lg p-6 bg-card space-y-4">
-                                    <h4 className="font-semibold text-sm border-b pb-2">Discord Notifications</h4>
+                                    <h4 className="font-semibold text-sm border-b pb-2">Alerts</h4>
                                     
                                     <div className="flex items-center justify-between">
                                         <Label htmlFor="dtDiscordAlerts" className="flex items-center gap-2">
@@ -957,7 +944,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
                                 {/* Brokerage Integrations */}
                                 <div className="border rounded-lg p-6 bg-card space-y-6">
-                                    <h4 className="font-semibold text-sm border-b pb-2">Brokerage Connections</h4>
+                                    <h4 className="font-semibold text-sm border-b pb-2">Brokerages</h4>
                                     
                                     {/* Questrade */}
                                     <div className="space-y-3">

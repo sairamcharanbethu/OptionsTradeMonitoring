@@ -241,10 +241,13 @@ export class SnaptradeService {
 
         // Enrich accounts with live cash balance
         const enrichedAccounts = await Promise.all(accounts.map(async (acc) => {
-            const cash = await this.getAccountBalance(userId, acc.id);
+            const balance = await this.getAccountBalance(userId, acc.id);
             return {
                 ...acc,
-                cash_balance: cash
+                cash_balance: balance.cash,
+                cash_balance_currency: balance.currency,
+                buying_power: balance.buyingPower,
+                balances: balance.balances
             };
         }));
 
@@ -257,7 +260,17 @@ export class SnaptradeService {
         return result;
     }
 
-    async getAccountBalance(userId: number, accountId: string): Promise<number | null> {
+    private pickPrimaryBalance(balances: any[]): any | null {
+        if (!Array.isArray(balances) || balances.length === 0) return null;
+        return (
+            balances.find((balance: any) => balance?.currency?.code === 'CAD' && balance.cash !== null && balance.cash !== undefined)
+            || balances.find((balance: any) => balance?.currency?.code === 'USD' && balance.cash !== null && balance.cash !== undefined)
+            || balances.find((balance: any) => balance.cash !== null && balance.cash !== undefined)
+            || balances[0]
+        );
+    }
+
+    async getAccountBalance(userId: number, accountId: string): Promise<{ cash: number | null; currency: string | null; buyingPower: number | null; balances: any[] }> {
         try {
             const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
             const balanceRes = await snaptrade.accountInformation.getUserAccountBalance({
@@ -265,17 +278,22 @@ export class SnaptradeService {
                 userSecret: userSecret,
                 accountId: accountId
             });
-            // The API returns an array of balances (often one per currency)
-            if (balanceRes.data && balanceRes.data.length > 0) {
-                // Return total cash of the first balance (usually base currency)
-                const bal = balanceRes.data[0];
-                const cash = bal.total?.cash ?? bal.balance?.total?.cash ?? null;
-                return cash;
+
+            const balances = Array.isArray(balanceRes.data) ? balanceRes.data : [];
+            const primaryBalance = this.pickPrimaryBalance(balances);
+            if (primaryBalance) {
+                return {
+                    cash: primaryBalance.cash ?? null,
+                    currency: primaryBalance.currency?.code || null,
+                    buyingPower: primaryBalance.buying_power ?? null,
+                    balances
+                };
             }
-            return null;
+
+            return { cash: null, currency: null, buyingPower: null, balances };
         } catch (err: any) {
             this.fastify.log.error(`[SnaptradeService] Failed to fetch account balance: ${err.message}`);
-            return null;
+            return { cash: null, currency: null, buyingPower: null, balances: [] };
         }
     }
 
