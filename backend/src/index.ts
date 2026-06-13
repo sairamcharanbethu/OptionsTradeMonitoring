@@ -424,6 +424,7 @@ const start = async () => {
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
       const questradeHealth = streamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
+      const scannerHealth = await scanner.getRuntimeStatus();
 
       return {
         liveExitMonitor: liveExitHealth,
@@ -435,9 +436,7 @@ const start = async () => {
           status: poller.isRunning() ? 'UP' : 'DOWN',
           running: poller.isRunning()
         },
-        scanner: {
-          status: 'UP'
-        },
+        scanner: scannerHealth,
         generatedAt: new Date().toISOString()
       };
     });

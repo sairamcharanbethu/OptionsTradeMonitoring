@@ -111,6 +111,8 @@ export class SignalScannerService {
   private timerId: NodeJS.Timeout | null = null;
   private newsWarmTimerId: NodeJS.Timeout | null = null;
   private scanIntervalMs: number = 5 * 60 * 1000; // 5 minutes
+  private lastScanSkippedReason: string | null = null;
+  private lastScanAt: string | null = null;
 
   constructor(fastify: FastifyInstance) {
     this.fastify = fastify;
@@ -252,6 +254,13 @@ export class SignalScannerService {
   private async preWarmNewsForUser(userId: number): Promise<void> {
     const settings = await this.getSettingsForUser(userId);
     if (settings.day_trading_ai_enabled !== 'true') return;
+    if (settings.day_trading_enabled !== 'true') return;
+
+    const windowState = this.getTradingWindowState(settings);
+    if (!windowState.isOpen) {
+      this.fastify.log.info(`[NewsPreWarm] Market-hours gate is closed (${windowState.nowLabel} ET). Skipping news pre-warm for user ${userId}.`);
+      return;
+    }
 
     const key = await this.getAiApiKey(settings.day_trading_ai_provider);
     if (!key) return;
@@ -406,14 +415,92 @@ Rules:
     return 1; // Default fallback ID if no users exist
   }
 
-  public async scanAllActiveUsers() {
+  private parseTimeToMinutes(value: string | undefined, fallback: string): number {
+    const [hourRaw, minuteRaw] = (value || fallback).split(':');
+    const hour = Number(hourRaw);
+    const minute = Number(minuteRaw);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+      return this.parseTimeToMinutes(fallback, '09:30');
+    }
+    return hour * 60 + minute;
+  }
+
+  private getTradingWindowState(settings: any, now: Date = new Date()) {
+    const nyParts = this.getNyDateParts(now);
+    const startTime = settings.trading_start_time || '09:30';
+    const cutoffTime = settings.trading_cutoff_time || '16:00';
+    const startMinutes = this.parseTimeToMinutes(startTime, '09:30');
+    const cutoffMinutes = this.parseTimeToMinutes(cutoffTime, '16:00');
+    const weekday = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      weekday: 'short'
+    }).format(now);
+    const isWeekday = weekday !== 'Sat' && weekday !== 'Sun';
+
+    return {
+      isOpen: isWeekday && nyParts.minutes >= startMinutes && nyParts.minutes < cutoffMinutes,
+      isWeekday,
+      nowLabel: `${String(nyParts.hour).padStart(2, '0')}:${String(nyParts.minute).padStart(2, '0')}`,
+      startTime,
+      cutoffTime
+    };
+  }
+
+  public async getRuntimeStatus() {
+    try {
+      const primaryUserId = await this.getPrimaryUserId();
+      const settings = await this.getSettingsForUser(primaryUserId);
+      const windowState = this.getTradingWindowState(settings);
+      const enabled = settings.day_trading_enabled === 'true';
+
+      return {
+        status: !enabled ? 'DISABLED' : this.isRunning ? 'RUNNING' : windowState.isOpen ? 'SCANNING' : 'MARKET_CLOSED',
+        enabled,
+        marketOpen: windowState.isOpen,
+        window: {
+          start: windowState.startTime,
+          cutoff: windowState.cutoffTime,
+          now: windowState.nowLabel,
+          timezone: 'America/New_York'
+        },
+        lastScanAt: this.lastScanAt,
+        lastSkippedReason: this.lastScanSkippedReason,
+        intervalSeconds: Math.round(this.scanIntervalMs / 1000)
+      };
+    } catch (err: any) {
+      return {
+        status: 'DEGRADED',
+        enabled: false,
+        marketOpen: false,
+        error: err.message || String(err)
+      };
+    }
+  }
+
+  public async scanAllActiveUsers(force: boolean = false) {
     if (this.isRunning) return;
     this.isRunning = true;
 
     try {
       const primaryUserId = await this.getPrimaryUserId();
+      const settings = await this.getSettingsForUser(primaryUserId);
+      if (settings.day_trading_enabled !== 'true') {
+        this.lastScanSkippedReason = 'DISABLED';
+        this.fastify.log.info(`[SignalScannerService] Scanner disabled for user ${primaryUserId}. Skipping background scan.`);
+        return;
+      }
+
+      const windowState = this.getTradingWindowState(settings);
+      if (!force && !windowState.isOpen) {
+        this.lastScanSkippedReason = 'MARKET_CLOSED';
+        this.fastify.log.info(`[SignalScannerService] Market-hours gate is closed (${windowState.nowLabel} ET, ${windowState.startTime}-${windowState.cutoffTime}). Skipping background scan.`);
+        return;
+      }
+
       try {
         await this.scanForUser(primaryUserId);
+        this.lastScanAt = new Date().toISOString();
+        this.lastScanSkippedReason = null;
       } catch (userErr: any) {
         this.fastify.log.error(`[SignalScannerService] Universal scan failed for user ${primaryUserId}: ${userErr.message}`);
       }
@@ -468,33 +555,6 @@ Rules:
   private async scanForUser(userId: number) {
     const settings = await this.getSettingsForUser(userId);
     if (settings.day_trading_enabled !== 'true') return;
-
-    // Auto turn off scanning after 4:30 PM ET (990 minutes)
-    const now = new Date();
-    const nyParts = this.getNyDateParts(now);
-    const cutoffMinutes = 16 * 60 + 30; // 16:30 = 990 minutes
-
-    if (nyParts.minutes >= cutoffMinutes) {
-      this.fastify.log.info(`[SignalScannerService] Current Eastern Time is past 4:30 PM ET (${nyParts.hour}:${nyParts.minute}). Auto-disabling day trading scanner for user ${userId}.`);
-      
-      await this.fastify.pg.query(
-        `INSERT INTO settings (user_id, key, value, updated_at) 
-         VALUES ($1, 'day_trading_enabled', 'false', CURRENT_TIMESTAMP) 
-         ON CONFLICT (user_id, key) DO UPDATE 
-         SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-        [userId]
-      );
-      await redis.set(`USER_SETTINGS:${userId}`, '', 1);
-
-      if (this.fastify.websocketServer) {
-        this.fastify.websocketServer.clients.forEach((client: any) => {
-          if (client.readyState === 1) {
-            client.send(JSON.stringify({ type: 'SETTINGS_UPDATED', data: { userId } }));
-          }
-        });
-      }
-      return;
-    }
 
     const symbols = settings.day_trading_symbols
       .split(',')

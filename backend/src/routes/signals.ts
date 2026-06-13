@@ -410,7 +410,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
         return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
       }
       setImmediate(() => {
-        scanner.scanAllActiveUsers().catch((err: any) => {
+        scanner.scanAllActiveUsers(true).catch((err: any) => {
           fastify.log.error(`[ManualTrigger] Scan failed: ${err.message}`);
         });
       });

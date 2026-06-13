@@ -74,7 +74,20 @@ interface ServiceHealthState {
     };
   };
   poller: { status: string; running: boolean };
-  scanner: { status: string };
+  scanner: {
+    status: string;
+    enabled?: boolean;
+    marketOpen?: boolean;
+    window?: {
+      start: string;
+      cutoff: string;
+      now: string;
+      timezone: string;
+    };
+    lastScanAt?: string | null;
+    lastSkippedReason?: string | null;
+    intervalSeconds?: number;
+  };
   generatedAt: string;
 }
 
@@ -107,7 +120,7 @@ const defaultServiceHealth: ServiceHealthState = {
     }
   },
   poller: { status: 'N/A', running: false },
-  scanner: { status: 'N/A' },
+  scanner: { status: 'N/A', enabled: false, marketOpen: false },
   generatedAt: ''
 };
 
@@ -238,6 +251,23 @@ export default function DayTradingTerminal() {
   const [healthLoading, setHealthLoading] = useState(false);
   const [executeDialogSignal, setExecuteDialogSignal] = useState<Signal | null>(null);
   const [executingSignalId, setExecutingSignalId] = useState<number | null>(null);
+  const scannerRuntimeStatus = serviceHealth.scanner.status;
+  const isScannerMarketClosed = scannerRuntimeStatus === 'MARKET_CLOSED';
+  const scannerStatusLabel = !isDayTradingEnabled
+    ? 'Scanner paused'
+    : isScannerMarketClosed
+      ? 'Market closed'
+      : scannerRuntimeStatus === 'RUNNING'
+        ? 'Scanner running'
+        : 'Scanner active';
+  const scannerStatusTone = !isDayTradingEnabled
+    ? 'border-amber-500/30 bg-amber-950/20 text-amber-300'
+    : isScannerMarketClosed
+      ? 'border-sky-500/30 bg-sky-950/20 text-sky-300'
+      : 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300';
+  const scannerWindowLabel = serviceHealth.scanner.window
+    ? `${serviceHealth.scanner.window.start}-${serviceHealth.scanner.window.cutoff} ET`
+    : '09:30-16:00 ET';
 
   // Fetch Health on mount and on refresh
   const fetchHealth = async () => {
@@ -262,7 +292,7 @@ export default function DayTradingTerminal() {
 
   // 5-minute countdown timer
   useEffect(() => {
-    if (!isDayTradingEnabled) return;
+    if (!isDayTradingEnabled || isScannerMarketClosed) return;
     const timer = setInterval(() => {
       setCountdown(prev => {
         if (prev <= 1) {
@@ -276,7 +306,7 @@ export default function DayTradingTerminal() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [refetch, refetchLogs, isDayTradingEnabled]);
+  }, [refetch, refetchLogs, isDayTradingEnabled, isScannerMarketClosed]);
 
   // Sync manually
   const handleManualSync = () => {
@@ -557,11 +587,11 @@ export default function DayTradingTerminal() {
               </span>
             </div>
             <div className="flex flex-wrap gap-2 text-[10px]">
-              <span className={`px-2 py-1 rounded border font-bold ${isDayTradingEnabled ? 'border-emerald-500/30 bg-emerald-950/30 text-emerald-300' : 'border-amber-500/30 bg-amber-950/20 text-amber-300'}`}>
-                {isDayTradingEnabled ? 'Scanner active' : 'Scanner paused'}
+              <span className={`px-2 py-1 rounded border font-bold ${scannerStatusTone}`}>
+                {scannerStatusLabel}
               </span>
               <span className="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/55 text-zinc-300">
-                Next scan {isDayTradingEnabled ? formatMinSec(countdown) : '--'}
+                Next scan {isDayTradingEnabled && !isScannerMarketClosed ? formatMinSec(countdown) : scannerWindowLabel}
               </span>
               <span className="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/55 text-zinc-300">
                 Broker {brokerLabel}
@@ -602,7 +632,7 @@ export default function DayTradingTerminal() {
             </button>
           </div>
 
-          {isDayTradingEnabled ? (
+          {isDayTradingEnabled && !isScannerMarketClosed ? (
             <div className="flex items-center justify-between sm:justify-start gap-2 text-xs bg-emerald-950/40 border border-emerald-500/30 px-3 py-2 rounded min-w-[178px]">
               <Clock className="h-4 w-4 text-emerald-400" />
               <span className="font-bold">Rescan in {formatMinSec(countdown)}</span>
@@ -616,8 +646,8 @@ export default function DayTradingTerminal() {
             </div>
           ) : (
             <div className="flex items-center gap-2 text-xs bg-zinc-900/60 border border-zinc-700 px-3 py-2 rounded text-zinc-500 min-w-[178px]">
-              <ShieldAlert className="h-4 w-4 text-amber-500/70 animate-pulse" />
-              <span className="font-bold tracking-wider">Scanner paused</span>
+              <ShieldAlert className={`h-4 w-4 ${isScannerMarketClosed ? 'text-sky-400/80' : 'text-amber-500/70 animate-pulse'}`} />
+              <span className="font-bold tracking-wider">{isScannerMarketClosed ? 'Auto resumes at open' : 'Scanner paused'}</span>
             </div>
           )}
         </div>
@@ -886,12 +916,16 @@ export default function DayTradingTerminal() {
         </div>
         
         <div className="p-3">
-          {!isDayTradingEnabled ? (
+          {!isDayTradingEnabled || isScannerMarketClosed ? (
             <div className="py-6 flex flex-col items-center justify-center text-center text-zinc-500 text-xs">
-              <ShieldAlert className="h-8 w-8 text-amber-500/80 mb-2 animate-pulse" />
-              <span className="font-bold text-zinc-300">Day trading scanner is paused</span>
+              <ShieldAlert className={`h-8 w-8 mb-2 ${isScannerMarketClosed ? 'text-sky-400/80' : 'text-amber-500/80 animate-pulse'}`} />
+              <span className="font-bold text-zinc-300">
+                {isScannerMarketClosed ? 'Scanner is waiting for market hours' : 'Day trading scanner is paused'}
+              </span>
               <span className="text-[10px] text-zinc-500 mt-1 max-w-md">
-                Enable it in Settings to resume background scans.
+                {isScannerMarketClosed
+                  ? `Background scans auto-resume during ${scannerWindowLabel}. Manual trigger remains available for testing.`
+                  : 'Enable it in Settings to resume background scans.'}
               </span>
             </div>
           ) : !latestActionableSignal ? (

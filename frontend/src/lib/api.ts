@@ -593,7 +593,20 @@ export const api = {
       };
     };
     poller: { status: string; running: boolean };
-    scanner: { status: string };
+    scanner: {
+      status: string;
+      enabled?: boolean;
+      marketOpen?: boolean;
+      window?: {
+        start: string;
+        cutoff: string;
+        now: string;
+        timezone: string;
+      };
+      lastScanAt?: string | null;
+      lastSkippedReason?: string | null;
+      intervalSeconds?: number;
+    };
     generatedAt: string;
   }> {
     const res = await authFetch(`${API_BASE}/services/health`);
