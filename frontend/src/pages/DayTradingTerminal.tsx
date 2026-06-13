@@ -27,7 +27,14 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 
 interface ApiHealthState {
   yahooFinance: { status: string; latencyMs: number };
@@ -62,6 +69,27 @@ const renderTokenUsageBadge = (usage: any) => {
       )}
     </div>
   );
+};
+
+const getExecutionBrokerLabel = (broker?: string | null) => {
+  switch (broker) {
+    case 'alpaca_paper':
+      return 'Alpaca Paper';
+    case 'wealthsimple_snaptrade':
+      return 'Wealthsimple Live';
+    case 'simulated':
+      return 'Simulated';
+    default:
+      return 'No Broker';
+  }
+};
+
+const getSignalExecutionTone = (signal?: Signal | null) => {
+  if (!signal) return 'border-zinc-700 text-zinc-400 bg-zinc-950/40';
+  if (signal.execution_status === 'FAILED' || signal.execution_error) return 'border-red-500/40 text-red-300 bg-red-950/20';
+  if (signal.execution_status === 'SKIPPED') return 'border-amber-500/40 text-amber-300 bg-amber-950/20';
+  if (signal.status === 'EXECUTED') return 'border-emerald-500/40 text-emerald-300 bg-emerald-950/20';
+  return 'border-zinc-700 text-zinc-400 bg-zinc-950/40';
 };
 
 export default function DayTradingTerminal() {
@@ -114,6 +142,8 @@ export default function DayTradingTerminal() {
     alpaca: { status: 'N/A', latencyMs: 0 }
   });
   const [healthLoading, setHealthLoading] = useState(false);
+  const [executeDialogSignal, setExecuteDialogSignal] = useState<Signal | null>(null);
+  const [executingSignalId, setExecutingSignalId] = useState<number | null>(null);
 
   // Fetch Health on mount and on refresh
   const fetchHealth = async () => {
@@ -246,11 +276,34 @@ export default function DayTradingTerminal() {
 
   // Click handler wrapper
   const handleQuickStatus = async (id: number, status: 'EXECUTED' | 'CANCELLED') => {
+    if (status === 'EXECUTED') {
+      const signal = signals.find(s => s.id === id) || null;
+      if (signal) {
+        setExecuteDialogSignal(signal);
+        return;
+      }
+    }
+
     try {
       await api.updateSignalStatus(id, status);
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
     } catch (err: any) {
       alert(`Failed to update status: ${err.message}`);
+    }
+  };
+
+  const confirmExecuteSignal = async () => {
+    if (!executeDialogSignal) return;
+    setExecutingSignalId(executeDialogSignal.id);
+    try {
+      await api.updateSignalStatus(executeDialogSignal.id, 'EXECUTED');
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions });
+      setExecuteDialogSignal(null);
+    } catch (err: any) {
+      alert(`Failed to execute trade: ${err.message}`);
+    } finally {
+      setExecutingSignalId(null);
     }
   };
 
@@ -342,21 +395,54 @@ export default function DayTradingTerminal() {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
+  const configuredBroker = settings.execution_broker
+    || (settings.alpaca_auto_trade === 'true' ? 'alpaca_paper' : settings.snaptrade_auto_trade === 'true' ? 'wealthsimple_snaptrade' : 'none');
+  const brokerLabel = getExecutionBrokerLabel(configuredBroker);
+  const isLiveBroker = configuredBroker === 'wealthsimple_snaptrade';
+  const maxTradesPerDay = Number(settings.max_trades_per_day || 2);
+  const contractsPerTrade = Number(settings.contracts_per_trade || 1);
+  const todayEt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+  const tradesToday = signals.filter(signal => {
+    const signalDateEt = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date(signal.created_at));
+    return signalDateEt === todayEt && (signal.status === 'EXECUTED' || signal.execution_status === 'EXECUTED');
+  }).length;
+  const remainingTrades = Math.max(0, maxTradesPerDay - tradesToday);
+  const selectedAccountLabel = settings.snaptrade_trading_account_id
+    ? `Acct ${String(settings.snaptrade_trading_account_id).slice(-6)}`
+    : 'No account';
+  const readinessItems = [
+    { label: 'Broker', value: brokerLabel, tone: isLiveBroker ? 'text-amber-300' : configuredBroker === 'alpaca_paper' ? 'text-sky-300' : 'text-zinc-400' },
+    { label: 'Size', value: `${contractsPerTrade} contract${contractsPerTrade === 1 ? '' : 's'}`, tone: 'text-emerald-300' },
+    { label: 'Daily', value: `${tradesToday}/${maxTradesPerDay} used`, tone: remainingTrades > 0 ? 'text-emerald-300' : 'text-red-300' },
+    { label: 'Order', value: `${settings.order_type || 'LIMIT'} ${settings.entry_slippage_pct || 3}%`, tone: 'text-zinc-300' },
+    { label: 'Account', value: isLiveBroker ? selectedAccountLabel : 'Paper/sim', tone: isLiveBroker && !settings.snaptrade_trading_account_id ? 'text-red-300' : 'text-zinc-300' }
+  ];
+
   return (
-    <div className="flex flex-col gap-6 font-mono bg-zinc-950 text-emerald-400 p-4 rounded-xl border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)]">
+    <div className="flex flex-col gap-4 lg:gap-5 font-mono bg-zinc-950 text-emerald-400 p-3 sm:p-4 rounded-lg border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] max-w-full overflow-hidden">
       
       {/* Top Banner & Timer Bar */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-emerald-500/20 pb-4 gap-4">
         <div className="flex items-center gap-3">
-          <TerminalIcon className="h-6 w-6 text-emerald-400 animate-pulse" />
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold uppercase tracking-widest text-emerald-300">DAY_TRADING_DASHBOARD</h2>
+          <TerminalIcon className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-400 animate-pulse shrink-0" />
+          <div className="flex flex-col min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-base sm:text-xl font-bold uppercase tracking-widest text-emerald-300 break-words">DAY_TRADING_DASHBOARD</h2>
               <span className="text-[9px] bg-emerald-950/60 px-1.5 py-0.5 rounded text-emerald-400 border border-emerald-500/30 font-mono">
                 v{import.meta.env.VITE_APP_VERSION || '1.4.0'}
               </span>
             </div>
-            <span className="text-[10px] text-emerald-500/80">Active channels: QQQ, SPY | Live database scanning engine</span>
+            <span className="text-[10px] text-emerald-500/80 leading-snug">Active channels: QQQ, SPY | Live database scanning engine</span>
           </div>
         </div>
 
@@ -565,6 +651,37 @@ export default function DayTradingTerminal() {
 
       </div>
 
+      {/* Execution Readiness */}
+      <div className="border border-emerald-500/15 rounded bg-zinc-900/30 overflow-hidden">
+        <div className="p-2.5 px-3 bg-zinc-900/80 border-b border-emerald-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className={`h-4 w-4 ${isLiveBroker ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`} />
+            <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider">Execution Readiness</span>
+            {remainingTrades <= 0 && (
+              <Badge variant="outline" className="text-[8px] border-red-500/40 text-red-300 bg-red-950/20">
+                Daily limit reached
+              </Badge>
+            )}
+            {isLiveBroker && settings.live_trading_acknowledged !== 'true' && (
+              <Badge variant="outline" className="text-[8px] border-amber-500/40 text-amber-300 bg-amber-950/20">
+                Live ack missing
+              </Badge>
+            )}
+          </div>
+          <span className="text-[10px] text-zinc-500">
+            Applies to Execute buttons on pending signals.
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-px bg-emerald-500/10">
+          {readinessItems.map(item => (
+            <div key={item.label} className="bg-zinc-950/70 px-3 py-2 min-h-[54px] flex flex-col justify-center">
+              <span className="text-[9px] uppercase text-zinc-500 font-bold">{item.label}</span>
+              <span className={`text-xs font-bold truncate ${item.tone}`} title={item.value}>{item.value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Row 2: Separated Prominent LATEST setup notification */}
       <div 
         onClick={() => latestActionableSignal && setSelectedSignalId(latestActionableSignal.id)}
@@ -688,6 +805,29 @@ export default function DayTradingTerminal() {
                     💡 Suggested 0DTE Options Plan: Buy Premium Mark at ~${latestActionableSignal.indicators?.vwap ? (Number(latestActionableSignal.indicators.vwap) * 0.003).toFixed(2) : '1.50'} | Stop loss premium at -20% | Sell profit target at +40%
                   </div>
                 )}
+
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 border-t border-emerald-500/10 pt-2 text-[10px]">
+                  <div className="bg-zinc-950/50 border border-emerald-500/10 rounded p-2">
+                    <span className="block text-zinc-500 uppercase font-bold">Execution</span>
+                    <span className={isLiveBroker ? 'text-amber-300 font-bold' : 'text-sky-300 font-bold'}>{brokerLabel}</span>
+                  </div>
+                  <div className="bg-zinc-950/50 border border-emerald-500/10 rounded p-2">
+                    <span className="block text-zinc-500 uppercase font-bold">Quantity</span>
+                    <span className="text-emerald-300 font-bold">{contractsPerTrade} contract{contractsPerTrade === 1 ? '' : 's'}</span>
+                  </div>
+                  <div className="bg-zinc-950/50 border border-emerald-500/10 rounded p-2">
+                    <span className="block text-zinc-500 uppercase font-bold">Est. Max Debit</span>
+                    <span className="text-zinc-200 font-bold">
+                      {latestActionableSignal.option_details?.mark
+                        ? `$${(Number(latestActionableSignal.option_details.mark) * contractsPerTrade * 100).toFixed(2)}`
+                        : 'N/A'}
+                    </span>
+                  </div>
+                  <div className={`bg-zinc-950/50 border rounded p-2 ${getSignalExecutionTone(latestActionableSignal)}`}>
+                    <span className="block uppercase font-bold opacity-80">Status</span>
+                    <span className="font-bold">{latestActionableSignal.execution_status || latestActionableSignal.status}</span>
+                  </div>
+                </div>
               </div>
 
               {/* News-Aware AI Coach Panel */}
@@ -748,6 +888,7 @@ export default function DayTradingTerminal() {
                   <Button
                     size="sm"
                     className="h-6 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-[10px]"
+                    disabled={remainingTrades <= 0 || (isLiveBroker && (!settings.snaptrade_trading_account_id || settings.live_trading_acknowledged !== 'true'))}
                     onClick={() => handleQuickStatus(latestActionableSignal.id, 'EXECUTED')}
                   >
                     Execute Trade
@@ -787,7 +928,7 @@ export default function DayTradingTerminal() {
           </div>
         </div>
         {showChart && (
-          <div className={`w-full ${selectedSymbol === 'BOTH' ? 'h-[380px] md:h-[420px] grid grid-cols-1 md:grid-cols-2 gap-2 p-2 bg-zinc-950' : 'h-[380px] bg-zinc-950'} animate-in fade-in slide-in-from-top-1 duration-200`}>
+          <div className={`w-full ${selectedSymbol === 'BOTH' ? 'h-[300px] sm:h-[360px] lg:h-[420px] grid grid-cols-1 md:grid-cols-2 gap-2 p-2 bg-zinc-950' : 'h-[300px] sm:h-[360px] lg:h-[420px] bg-zinc-950'} animate-in fade-in slide-in-from-top-1 duration-200`}>
             {(selectedSymbol === 'BOTH' || selectedSymbol === 'QQQ') && (
               <iframe
                 title="TradingView Real-Time Chart QQQ"
@@ -811,10 +952,10 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* Row 3: Signals Process Table + Detailed Inspector */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 2xl:grid-cols-3 gap-4 lg:gap-6 min-w-0">
         
         {/* Table List (Process Monitor) */}
-        <div className="xl:col-span-2 overflow-hidden flex flex-col border border-emerald-500/20 rounded bg-zinc-900/30">
+        <div className="2xl:col-span-2 overflow-hidden flex flex-col border border-emerald-500/20 rounded bg-zinc-900/30 min-w-0">
           
           {/* Tab Selector */}
           <div className="flex bg-zinc-950/80 border-b border-emerald-500/20 p-1">
@@ -885,44 +1026,51 @@ export default function DayTradingTerminal() {
                 {triggerLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
                 {triggerLoading ? 'SCANNING...' : 'TRIGGER SCAN'}
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-[10px] font-bold border-emerald-500/30 text-emerald-400 hover:text-emerald-300 hover:border-emerald-400 hover:bg-emerald-950/30 hover:shadow-[0_0_12px_rgba(16,185,129,0.2)] transition-all duration-300 gap-1 bg-zinc-950/40"
-                onClick={async () => {
-                  if (confirm("Are you sure you want to seed mock data?")) {
-                    try {
-                      const res = await api.seedSignals();
-                      if (res.success) {
-                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
-                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
+              <details className="relative">
+                <summary className="h-7 list-none cursor-pointer text-[10px] font-bold border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 rounded px-2 py-1 bg-zinc-950/40">
+                  DEV TOOLS
+                </summary>
+                <div className="absolute right-0 z-20 mt-2 w-40 rounded border border-zinc-700 bg-zinc-950 p-2 shadow-xl space-y-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-full text-[10px] font-bold border-emerald-500/30 text-emerald-400 hover:text-emerald-300 hover:border-emerald-400 hover:bg-emerald-950/30 gap-1 bg-zinc-950/40"
+                    onClick={async () => {
+                      if (confirm("Are you sure you want to seed mock data?")) {
+                        try {
+                          const res = await api.seedSignals();
+                          if (res.success) {
+                            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+                            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
+                          }
+                        } catch (err: any) { alert(`Failed to seed data: ${err.message}`); }
                       }
-                    } catch (err: any) { alert(`Failed to seed data: ${err.message}`); }
-                  }
-                }}
-              >
-                <Sparkles className="h-3.5 w-3.5 text-emerald-400 animate-pulse" /> SEED
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-[10px] font-bold border-red-500/30 text-red-400 hover:text-red-300 hover:border-red-400 hover:bg-red-950/30 hover:shadow-[0_0_12px_rgba(239,68,68,0.2)] transition-all duration-300 gap-1 bg-zinc-950/40"
-                onClick={async () => {
-                  if (confirm("Wipe all day trading signals and logs from database?")) {
-                    try {
-                      const res = await api.clearSignals();
-                      if (res.success) {
-                        setSelectedSignalId(null);
-                        setSelectedLogId(null);
-                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
-                        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
+                    }}
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-400" /> SEED
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 w-full text-[10px] font-bold border-red-500/30 text-red-400 hover:text-red-300 hover:border-red-400 hover:bg-red-950/30 gap-1 bg-zinc-950/40"
+                    onClick={async () => {
+                      if (confirm("Wipe all day trading signals and logs from database?")) {
+                        try {
+                          const res = await api.clearSignals();
+                          if (res.success) {
+                            setSelectedSignalId(null);
+                            setSelectedLogId(null);
+                            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+                            queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
+                          }
+                        } catch (err: any) { alert(`Failed to clear signals: ${err.message}`); }
                       }
-                    } catch (err: any) { alert(`Failed to clear signals: ${err.message}`); }
-                  }
-                }}
-              >
-                <XCircle className="h-3.5 w-3.5" /> WIPE
-              </Button>
+                    }}
+                  >
+                    <XCircle className="h-3.5 w-3.5" /> WIPE
+                  </Button>
+                </div>
+              </details>
             </div>
           </div>
 
@@ -1011,13 +1159,24 @@ export default function DayTradingTerminal() {
                               <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-300 font-semibold">{sig.setup_grade || 'B'}</span>
                             </td>
                             <td className="px-2 py-1.5">
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${statusBadgeClass}`}>{sig.status}</span>
+                              <div className="flex flex-col gap-1">
+                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold w-fit ${statusBadgeClass}`}>{sig.status}</span>
+                                {(sig.execution_status || sig.execution_error) && (
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded border text-[8px] font-bold w-fit max-w-[120px] truncate ${getSignalExecutionTone(sig)}`}
+                                    title={sig.execution_error || sig.execution_status || ''}
+                                  >
+                                    {sig.execution_error ? 'EXEC ERROR' : sig.execution_status}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-2 py-1.5 text-right" onClick={e => e.stopPropagation()}>
                               {sig.status === 'PENDING' ? (
                                 <div className="flex justify-end gap-1">
                                   <button onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
-                                    className="h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors" title="Execute">
+                                    disabled={remainingTrades <= 0 || (isLiveBroker && (!settings.snaptrade_trading_account_id || settings.live_trading_acknowledged !== 'true'))}
+                                    className="h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Execute">
                                     <Play className="h-2.5 w-2.5" />
                                   </button>
                                   <button onClick={() => handleQuickStatus(sig.id, 'CANCELLED')}
@@ -1180,7 +1339,7 @@ export default function DayTradingTerminal() {
         </div>
  
          {/* Detailed Inspector Panel */}
-         <div className="border border-emerald-500/20 rounded bg-zinc-900/20 flex flex-col h-[400px] xl:h-auto overflow-hidden">
+         <div className="border border-emerald-500/20 rounded bg-zinc-900/20 flex flex-col h-[440px] 2xl:h-auto overflow-hidden min-w-0">
            <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
              <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
                <Info className="h-3.5 w-3.5 text-emerald-400" />
@@ -1228,6 +1387,36 @@ export default function DayTradingTerminal() {
                         <span className="font-bold text-zinc-500">N/A</span>
                       )}
                     </div>
+                 </div>
+
+                 <div className={`rounded border p-2.5 text-[10px] ${getSignalExecutionTone(selectedSignal)}`}>
+                   <div className="flex items-center justify-between gap-2 mb-2">
+                     <span className="font-bold uppercase">EXECUTION_STATUS</span>
+                     <span className="font-bold">{selectedSignal.execution_status || selectedSignal.status}</span>
+                   </div>
+                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono">
+                     <div className="flex justify-between gap-2">
+                       <span className="opacity-70">Broker</span>
+                       <span className="font-semibold truncate">{getExecutionBrokerLabel(selectedSignal.execution_broker)}</span>
+                     </div>
+                     <div className="flex justify-between gap-2">
+                       <span className="opacity-70">Contracts</span>
+                       <span className="font-semibold">{selectedSignal.contracts_requested ?? '-'}</span>
+                     </div>
+                     <div className="flex justify-between gap-2 col-span-2">
+                       <span className="opacity-70">Order ID</span>
+                       <span className="font-semibold truncate">{selectedSignal.broker_order_id || '-'}</span>
+                     </div>
+                     <div className="flex justify-between gap-2 col-span-2">
+                       <span className="opacity-70">Trade ID</span>
+                       <span className="font-semibold truncate">{selectedSignal.broker_trade_id || '-'}</span>
+                     </div>
+                   </div>
+                   {selectedSignal.execution_error && (
+                     <div className="mt-2 border-t border-current/20 pt-2 text-red-200 leading-relaxed">
+                       {selectedSignal.execution_error}
+                     </div>
+                   )}
                  </div>
  
                  {/* Option Contract Details Block */}
@@ -1465,6 +1654,87 @@ export default function DayTradingTerminal() {
            </div>
          </div>
        </div>
+
+      <Dialog open={!!executeDialogSignal} onOpenChange={(isOpen) => !isOpen && setExecuteDialogSignal(null)}>
+        <DialogContent className="max-w-md border-emerald-500/20 bg-zinc-950 text-zinc-100">
+          <DialogHeader>
+            <DialogTitle className="text-emerald-300">Confirm Trade Execution</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Review the exact order path before sending this signal to the configured execution broker.
+            </DialogDescription>
+          </DialogHeader>
+
+          {executeDialogSignal && (
+            <div className="space-y-3 text-xs font-mono">
+              {isLiveBroker && (
+                <div className="rounded border border-amber-500/30 bg-amber-950/20 p-3 text-amber-200">
+                  Wealthsimple/SnapTrade is live trading. This can place a real order in the selected account.
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded border border-zinc-800 bg-zinc-900/70 p-2">
+                  <span className="block text-[9px] text-zinc-500 uppercase">Broker</span>
+                  <span className={isLiveBroker ? 'text-amber-300 font-bold' : 'text-sky-300 font-bold'}>{brokerLabel}</span>
+                </div>
+                <div className="rounded border border-zinc-800 bg-zinc-900/70 p-2">
+                  <span className="block text-[9px] text-zinc-500 uppercase">Quantity</span>
+                  <span className="text-emerald-300 font-bold">{contractsPerTrade} contract{contractsPerTrade === 1 ? '' : 's'}</span>
+                </div>
+                <div className="rounded border border-zinc-800 bg-zinc-900/70 p-2 col-span-2">
+                  <span className="block text-[9px] text-zinc-500 uppercase">Contract</span>
+                  <span className="text-zinc-100 font-bold break-all">
+                    {executeDialogSignal.option_details?.ticker || `${executeDialogSignal.symbol} ${executeDialogSignal.signal_type}`}
+                  </span>
+                </div>
+                <div className="rounded border border-zinc-800 bg-zinc-900/70 p-2">
+                  <span className="block text-[9px] text-zinc-500 uppercase">Premium</span>
+                  <span className="text-zinc-100 font-bold">
+                    {executeDialogSignal.option_details?.mark !== undefined ? `$${Number(executeDialogSignal.option_details.mark).toFixed(2)}` : 'N/A'}
+                  </span>
+                </div>
+                <div className="rounded border border-zinc-800 bg-zinc-900/70 p-2">
+                  <span className="block text-[9px] text-zinc-500 uppercase">Est. Debit</span>
+                  <span className="text-zinc-100 font-bold">
+                    {executeDialogSignal.option_details?.mark !== undefined
+                      ? `$${(Number(executeDialogSignal.option_details.mark) * contractsPerTrade * 100).toFixed(2)}`
+                      : 'N/A'}
+                  </span>
+                </div>
+                <div className="rounded border border-zinc-800 bg-zinc-900/70 p-2">
+                  <span className="block text-[9px] text-zinc-500 uppercase">Stop / Target</span>
+                  <span className="text-zinc-100 font-bold">
+                    ${executeDialogSignal.stop_loss?.toFixed(2) || 'N/A'} / ${executeDialogSignal.target_price?.toFixed(2) || 'N/A'}
+                  </span>
+                </div>
+                <div className="rounded border border-zinc-800 bg-zinc-900/70 p-2">
+                  <span className="block text-[9px] text-zinc-500 uppercase">Order</span>
+                  <span className="text-zinc-100 font-bold">{settings.order_type || 'LIMIT'} {settings.entry_slippage_pct || 3}%</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="ghost"
+              className="text-zinc-300 hover:bg-zinc-900"
+              onClick={() => setExecuteDialogSignal(null)}
+              disabled={executingSignalId !== null}
+            >
+              Cancel
+            </Button>
+            <Button
+              className={isLiveBroker ? 'bg-amber-600 hover:bg-amber-500 text-black font-bold' : 'bg-emerald-700 hover:bg-emerald-600 text-white font-bold'}
+              onClick={confirmExecuteSignal}
+              disabled={executingSignalId !== null}
+            >
+              {executingSignalId !== null ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
+              {isLiveBroker ? 'Send Live Order' : 'Execute'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
      </div>
    );
  }
