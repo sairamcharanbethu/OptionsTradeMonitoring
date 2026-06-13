@@ -35,6 +35,15 @@ export interface Position {
   suggested_take_profit_1?: number;
   suggested_take_profit_2?: number;
   analysis_data?: any;
+  is_simulated?: boolean;
+  account_id?: string;
+  execution_broker?: string;
+  broker_order_id?: string;
+  broker_trade_id?: string;
+  execution_account_id?: string;
+  execution_status?: string;
+  execution_error?: string;
+  contracts_requested?: number;
 }
 
 const API_BASE = '/api';
@@ -206,6 +215,7 @@ export const api = {
       suggested_stop_loss: pos.suggested_stop_loss != null ? Number(pos.suggested_stop_loss) : undefined,
       suggested_take_profit_1: pos.suggested_take_profit_1 != null ? Number(pos.suggested_take_profit_1) : undefined,
       suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
+      contracts_requested: pos.contracts_requested != null ? Number(pos.contracts_requested) : undefined,
       analysis_data: pos.analysis_data || undefined,
     }));
   },
@@ -238,6 +248,7 @@ export const api = {
         suggested_stop_loss: pos.suggested_stop_loss != null ? Number(pos.suggested_stop_loss) : undefined,
         suggested_take_profit_1: pos.suggested_take_profit_1 != null ? Number(pos.suggested_take_profit_1) : undefined,
         suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
+        contracts_requested: pos.contracts_requested != null ? Number(pos.contracts_requested) : undefined,
         analysis_data: pos.analysis_data || undefined,
       }))
     };
@@ -567,6 +578,7 @@ export const api = {
       stop_loss: sig.stop_loss != null ? Number(sig.stop_loss) : undefined,
       target_price: sig.target_price != null ? Number(sig.target_price) : undefined,
       confidence_score: Number(sig.confidence_score),
+      contracts_requested: sig.contracts_requested != null ? Number(sig.contracts_requested) : null,
     }));
   },
 
@@ -671,6 +683,12 @@ export interface Signal {
   option_expiration_date?: string;
   market_date?: string;
   created_at: string;
+  execution_broker?: string | null;
+  broker_order_id?: string | null;
+  broker_trade_id?: string | null;
+  execution_status?: string | null;
+  execution_error?: string | null;
+  contracts_requested?: number | null;
   news_context?: string | null;
   ai_coach_commentary?: string | null;
   ml_probability?: number | null;
@@ -742,4 +760,3 @@ export interface GoalInsights {
   avgLoss: number;
   profitFactor: number | null;
 }
-

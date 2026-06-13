@@ -43,6 +43,12 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
               token_usage: { type: 'object', nullable: true, additionalProperties: true },
               ml_probability: { type: 'number', nullable: true },
               option_details: { type: 'object', nullable: true, additionalProperties: true },
+              execution_broker: { type: 'string', nullable: true },
+              broker_order_id: { type: 'string', nullable: true },
+              broker_trade_id: { type: 'string', nullable: true },
+              execution_status: { type: 'string', nullable: true },
+              execution_error: { type: 'string', nullable: true },
+              contracts_requested: { type: 'integer', nullable: true },
               created_at: { type: 'string', format: 'date-time' }
             }
           }
@@ -75,6 +81,12 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           token_usage,
           ml_probability::double precision AS ml_probability,
           option_details,
+          execution_broker,
+          broker_order_id,
+          broker_trade_id,
+          execution_status,
+          execution_error,
+          contracts_requested,
           created_at 
         FROM signals 
         WHERE signal_type != 'NONE'
@@ -186,39 +198,9 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
         }
 
-        // 1. Fetch signal
-        const { rows: sigRows } = await fastify.pg.query('SELECT * FROM signals WHERE id = $1', [id]);
-        if (sigRows.length === 0) {
-          return (reply as any).code(404).send({ error: 'Signal not found' });
-        }
-        const signal = sigRows[0];
-
-        // 2. Load settings
-        const settings = await scanner.getSettingsForUser(userId);
-        const hasAlpacaKeys = settings.alpaca_key_id && settings.alpaca_secret_key;
-
-        // 3. Execute
-        if (hasAlpacaKeys) {
-          // If Alpaca keys are present, place the paper order
-          const optionDetails = signal.option_details || {};
-          const chosenStrike = optionDetails.strike || Math.round(signal.current_price);
-          const chosenExpiry = optionDetails.expiry || signal.option_expiration_date || new Date().toISOString().split('T')[0];
-          const mark = optionDetails.mark || null;
-
-          await scanner.executeAlpacaPaperTrade(
-            userId,
-            signal.symbol,
-            signal.signal_type,
-            chosenStrike,
-            chosenExpiry,
-            signal.stop_loss,
-            signal.target_price,
-            mark,
-            signal.id
-          );
-        } else {
-          // Fallback: create simulated position
-          await scanner.createSimulatedPositionFromSignal(userId, id);
+        const executionResult = await scanner.executeSignalForUser(userId, id);
+        if (executionResult && executionResult.success === false) {
+          return (reply as any).code(400).send({ error: executionResult.message || 'Signal execution was not placed' });
         }
 
         return { id, status: 'EXECUTED' };
@@ -439,4 +421,3 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     }
   });
 }
-

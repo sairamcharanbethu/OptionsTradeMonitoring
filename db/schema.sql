@@ -36,6 +36,16 @@ CREATE TABLE IF NOT EXISTS positions (
     suggested_take_profit_1 DECIMAL(10, 2),
     suggested_take_profit_2 DECIMAL(10, 2),
     analysis_data JSONB,
+    is_simulated BOOLEAN DEFAULT FALSE,
+    account_id VARCHAR(255),
+    notes TEXT,
+    execution_broker VARCHAR(50),
+    broker_order_id VARCHAR(255),
+    broker_trade_id VARCHAR(255),
+    execution_account_id VARCHAR(255),
+    execution_status VARCHAR(50),
+    execution_error TEXT,
+    contracts_requested INTEGER,
     status VARCHAR(20) DEFAULT 'OPEN', -- OPEN, CLOSED
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -111,6 +121,11 @@ CREATE TABLE IF NOT EXISTS scanner_logs (
     indicators JSONB,
     outcome VARCHAR(30) NOT NULL, -- 'SIGNAL_GENERATED' or 'BLOCKED'
     no_trade_reasons TEXT[],
+    execution_broker VARCHAR(50),
+    broker_order_id VARCHAR(255),
+    broker_trade_id VARCHAR(255),
+    execution_status VARCHAR(50),
+    execution_error TEXT,
+    contracts_requested INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
-

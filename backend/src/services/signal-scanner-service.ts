@@ -8,6 +8,7 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import { TradeExecutionService } from './trade-execution-service';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -449,8 +450,16 @@ Rules:
       day_trading_ai_provider: 'openrouter',
       day_trading_ai_model: 'meta-llama/llama-3.1-70b-instruct',  // news classifier
       day_trading_coach_model: 'anthropic/claude-sonnet-4-5',       // signal coach
+      execution_broker: 'none',
       alpaca_auto_trade: 'false',
-      alpaca_auto_trade_mode: 'instant'
+      alpaca_auto_trade_mode: 'instant',
+      snaptrade_auto_trade: 'false',
+      snaptrade_trading_account_id: '',
+      max_trades_per_day: '2',
+      contracts_per_trade: '1',
+      order_type: 'LIMIT',
+      entry_slippage_pct: '3',
+      live_trading_acknowledged: 'false'
     };
 
     return { ...defaults, ...dbSettings };
@@ -1317,22 +1326,23 @@ Rules:
         });
       }
 
-      // ── Alpaca Auto-Trade Execution (Instant Entry, pre-AI) ──
+      // ── Broker Auto-Trade Execution (Instant Entry, pre-AI) ──
       const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
-      if (settings.alpaca_auto_trade === 'true' && autoTradeMode === 'instant') {
+      if (this.isAutoExecutionEnabled(settings) && autoTradeMode === 'instant') {
         setImmediate(() => {
-          this.executeAlpacaPaperTrade(
+          this.executeSignalWithConfiguredBroker({
             userId,
+            signalId,
             symbol,
-            winningSide as 'CALL' | 'PUT',
-            chosenStrike as number,
-            chosenExpiry || '',
+            winningSide: winningSide as 'CALL' | 'PUT',
+            chosenStrike: chosenStrike as number,
+            chosenExpiry: chosenExpiry || '',
             stopUnderlying,
             targetUnderlying,
             mark,
-            signalId
-          ).catch((err: any) => {
-            this.fastify.log.error(`[SignalScannerService] Alpaca instant auto-execution failed for signal #${signalId}: ${err.message}`);
+            settings
+          }).catch((err: any) => {
+            this.fastify.log.error(`[SignalScannerService] Instant auto-execution failed for signal #${signalId}: ${err.message}`);
           });
         });
       }
@@ -1686,20 +1696,21 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       );
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} enriched with AI commentary. Token usage tracked.`);
 
-      // ── Alpaca Auto-Trade Execution (AI-Confirmed Entry, post-AI) ──
+      // ── Broker Auto-Trade Execution (AI-Confirmed Entry, post-AI) ──
       const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
-      if (finalVerdict === 'GO' && settings.alpaca_auto_trade === 'true' && autoTradeMode === 'ai_confirmed') {
-        await this.executeAlpacaPaperTrade(
+      if (finalVerdict === 'GO' && this.isAutoExecutionEnabled(settings) && autoTradeMode === 'ai_confirmed') {
+        await this.executeSignalWithConfiguredBroker({
           userId,
+          signalId,
           symbol,
-          winningSide as 'CALL' | 'PUT',
+          winningSide: winningSide as 'CALL' | 'PUT',
           chosenStrike,
           chosenExpiry,
           stopUnderlying,
           targetUnderlying,
           mark,
-          signalId
-        );
+          settings
+        });
       }
 
       // Broadcast signal update via WebSocket
@@ -2149,6 +2160,65 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     return trSum / length;
   }
 
+  private isAutoExecutionEnabled(settings: any): boolean {
+    const broker = settings.execution_broker || 'none';
+    if (broker === 'alpaca_paper') return settings.alpaca_auto_trade === 'true';
+    if (broker === 'wealthsimple_snaptrade') return settings.snaptrade_auto_trade === 'true';
+    return settings.alpaca_auto_trade === 'true' || settings.snaptrade_auto_trade === 'true';
+  }
+
+  private async executeSignalWithConfiguredBroker(input: {
+    userId: number;
+    signalId: number;
+    symbol: string;
+    winningSide: 'CALL' | 'PUT';
+    chosenStrike: number;
+    chosenExpiry: string;
+    stopUnderlying: number;
+    targetUnderlying: number;
+    mark: number | null;
+    settings?: any;
+  }) {
+    const service = new TradeExecutionService(this.fastify);
+    return service.executeSignal({
+      userId: input.userId,
+      signalId: input.signalId,
+      symbol: input.symbol,
+      winningSide: input.winningSide,
+      chosenStrike: input.chosenStrike,
+      chosenExpiry: input.chosenExpiry,
+      stopUnderlying: input.stopUnderlying,
+      targetUnderlying: input.targetUnderlying,
+      mark: input.mark
+    }, input.settings);
+  }
+
+  public async executeSignalForUser(userId: number, signalId: number) {
+    const { rows } = await this.fastify.pg.query(
+      'SELECT * FROM signals WHERE id = $1',
+      [signalId]
+    );
+    if (rows.length === 0) {
+      throw new Error(`Signal #${signalId} not found`);
+    }
+
+    const signal = rows[0];
+    const optionDetails = signal.option_details || {};
+    const currentPrice = Number(signal.current_price);
+    const winningSide = signal.signal_type === 'PUT' ? 'PUT' : 'CALL';
+    return this.executeSignalWithConfiguredBroker({
+      userId,
+      signalId,
+      symbol: signal.symbol,
+      winningSide,
+      chosenStrike: Number(optionDetails.strike || Math.round(currentPrice)),
+      chosenExpiry: optionDetails.expiry || signal.option_expiration_date || new Date().toISOString().split('T')[0],
+      stopUnderlying: Number(signal.stop_loss || currentPrice * 0.99),
+      targetUnderlying: Number(signal.target_price || currentPrice * 1.01),
+      mark: optionDetails.mark != null ? Number(optionDetails.mark) : null
+    });
+  }
+
   public async createSimulatedPositionFromSignal(
     userId: number,
     signalId: number
@@ -2388,4 +2458,3 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeFormatted}`;
   }
 }
-

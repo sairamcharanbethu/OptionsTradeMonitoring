@@ -49,6 +49,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [dayTradingAiProvider, setDayTradingAiProvider] = useState('openrouter');
     const [dayTradingAiModel, setDayTradingAiModel] = useState('meta-llama/llama-3.1-70b-instruct');
     const [dayTradingCoachModel, setDayTradingCoachModel] = useState('anthropic/claude-sonnet-4-5');
+    const [executionBroker, setExecutionBroker] = useState('none');
+    const [maxTradesPerDay, setMaxTradesPerDay] = useState('2');
+    const [contractsPerTrade, setContractsPerTrade] = useState('1');
+    const [orderType, setOrderType] = useState('LIMIT');
+    const [entrySlippagePct, setEntrySlippagePct] = useState('3');
+    const [liveTradingAcknowledged, setLiveTradingAcknowledged] = useState(false);
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -69,6 +75,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     // SnapTrade State
     const [snaptradeClientId, setSnaptradeClientId] = useState('');
     const [snaptradeConsumerKey, setSnaptradeConsumerKey] = useState('');
+    const [snaptradeAutoTrade, setSnaptradeAutoTrade] = useState(false);
+    const [snaptradeTradingAccountId, setSnaptradeTradingAccountId] = useState('');
+    const [snaptradeAccounts, setSnaptradeAccounts] = useState<any[]>([]);
 
     // Alpaca State
     const [alpacaKeyId, setAlpacaKeyId] = useState('');
@@ -215,6 +224,14 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setAlpacaSecretKey(data.alpaca_secret_key || '');
             setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
             setAlpacaAutoTradeMode(data.alpaca_auto_trade_mode || 'instant');
+            setExecutionBroker(data.execution_broker || 'none');
+            setSnaptradeAutoTrade(data.snaptrade_auto_trade === 'true');
+            setSnaptradeTradingAccountId(data.snaptrade_trading_account_id || '');
+            setMaxTradesPerDay(data.max_trades_per_day || '2');
+            setContractsPerTrade(data.contracts_per_trade || '1');
+            setOrderType(data.order_type || 'LIMIT');
+            setEntrySlippagePct(data.entry_slippage_pct || '3');
+            setLiveTradingAcknowledged(data.live_trading_acknowledged === 'true');
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
@@ -231,6 +248,13 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setDayTradingAiProvider(data.day_trading_ai_provider || 'openrouter');
             setDayTradingAiModel(data.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct');
             setDayTradingCoachModel(data.day_trading_coach_model || 'anthropic/claude-sonnet-4-5');
+
+            try {
+                const portfolio = await api.getSnaptradePortfolio();
+                setSnaptradeAccounts(portfolio.accounts || []);
+            } catch {
+                setSnaptradeAccounts([]);
+            }
         } catch (err) {
             console.error(err);
         } finally {
@@ -296,10 +320,18 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 position_poll_interval: positionPollInterval,
                 snaptrade_client_id: snaptradeClientId,
                 snaptrade_consumer_key: snaptradeConsumerKey,
+                snaptrade_auto_trade: snaptradeAutoTrade ? 'true' : 'false',
+                snaptrade_trading_account_id: snaptradeTradingAccountId,
                 alpaca_key_id: alpacaKeyId,
                 alpaca_secret_key: alpacaSecretKey,
                 alpaca_auto_trade: alpacaAutoTrade ? 'true' : 'false',
                 alpaca_auto_trade_mode: alpacaAutoTradeMode,
+                execution_broker: executionBroker,
+                max_trades_per_day: maxTradesPerDay,
+                contracts_per_trade: contractsPerTrade,
+                order_type: orderType,
+                entry_slippage_pct: entrySlippagePct,
+                live_trading_acknowledged: liveTradingAcknowledged ? 'true' : 'false',
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 day_trading_symbols: dayTradingSymbols,
                 strike_offset: strikeOffset,
@@ -549,6 +581,77 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         onChange={(e) => setMinSignalScore(e.target.value)}
                                         placeholder="70"
                                     />
+                                </div>
+
+                                <div className="grid gap-4 pt-4 border-t">
+                                    <div>
+                                        <h4 className="text-sm font-semibold">Execution & Risk Limits</h4>
+                                        <p className="text-[10px] text-muted-foreground">Choose how scanner signals are executed and cap daily exposure.</p>
+                                    </div>
+
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="executionBroker">Execution Broker</Label>
+                                        <Select value={executionBroker} onValueChange={setExecutionBroker}>
+                                            <SelectTrigger id="executionBroker">
+                                                <SelectValue placeholder="Select Broker" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="none">No broker execution (Simulated)</SelectItem>
+                                                <SelectItem value="alpaca_paper">Alpaca Paper Trading</SelectItem>
+                                                <SelectItem value="wealthsimple_snaptrade">Wealthsimple via SnapTrade (Live)</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="maxTradesPerDay">Max Trades Per Day</Label>
+                                            <Input
+                                                id="maxTradesPerDay"
+                                                type="number"
+                                                min="1"
+                                                value={maxTradesPerDay}
+                                                onChange={(e) => setMaxTradesPerDay(e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="contractsPerTrade">Contracts Per Trade</Label>
+                                            <Input
+                                                id="contractsPerTrade"
+                                                type="number"
+                                                min="1"
+                                                value={contractsPerTrade}
+                                                onChange={(e) => setContractsPerTrade(e.target.value)}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="orderType">Entry Order Type</Label>
+                                            <Select value={orderType} onValueChange={setOrderType}>
+                                                <SelectTrigger id="orderType">
+                                                    <SelectValue placeholder="Select Order Type" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="LIMIT">Limit</SelectItem>
+                                                    <SelectItem value="MARKET">Market</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="entrySlippagePct">Entry Slippage Cap (%)</Label>
+                                            <Input
+                                                id="entrySlippagePct"
+                                                type="number"
+                                                min="0"
+                                                step="0.5"
+                                                value={entrySlippagePct}
+                                                onChange={(e) => setEntrySlippagePct(e.target.value)}
+                                                disabled={orderType !== 'LIMIT'}
+                                            />
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-4">
@@ -813,6 +916,52 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <p className="text-[10px] text-muted-foreground">
                                                 Once saved, go to the Wealthsimple dashboard to securely connect your broker.
                                             </p>
+                                            <div className="grid gap-3 pt-3 border-t border-border/40">
+                                                <div className="flex items-center justify-between">
+                                                    <Label htmlFor="snaptrade-auto-trade" className="flex flex-col gap-1 cursor-pointer">
+                                                        <span>Enable Wealthsimple Live Execution</span>
+                                                        <span className="text-[10px] font-normal text-muted-foreground">Places live single-leg option orders through SnapTrade when selected as the execution broker.</span>
+                                                    </Label>
+                                                    <Switch
+                                                        id="snaptrade-auto-trade"
+                                                        checked={snaptradeAutoTrade}
+                                                        onCheckedChange={setSnaptradeAutoTrade}
+                                                        disabled={!snaptradeClientId || !snaptradeConsumerKey}
+                                                    />
+                                                </div>
+
+                                                <div className="grid gap-1.5">
+                                                    <Label htmlFor="snaptrade-account">Trading Account</Label>
+                                                    <Select
+                                                        value={snaptradeTradingAccountId}
+                                                        onValueChange={setSnaptradeTradingAccountId}
+                                                        disabled={snaptradeAccounts.length === 0}
+                                                    >
+                                                        <SelectTrigger id="snaptrade-account">
+                                                            <SelectValue placeholder={snaptradeAccounts.length ? "Select Wealthsimple account" : "Sync portfolio to load accounts"} />
+                                                        </SelectTrigger>
+                                                        <SelectContent>
+                                                            {snaptradeAccounts.map((account: any) => (
+                                                                <SelectItem key={account.id} value={account.id}>
+                                                                    {account.name || 'Wealthsimple Account'} {account.number ? `(${account.number})` : ''}
+                                                                </SelectItem>
+                                                            ))}
+                                                        </SelectContent>
+                                                    </Select>
+                                                </div>
+
+                                                <div className="flex items-center justify-between">
+                                                    <Label htmlFor="live-trading-ack" className="flex flex-col gap-1 cursor-pointer">
+                                                        <span>Live Trading Acknowledgement</span>
+                                                        <span className="text-[10px] font-normal text-muted-foreground">I understand Wealthsimple orders are real live trades and require account/options approval.</span>
+                                                    </Label>
+                                                    <Switch
+                                                        id="live-trading-ack"
+                                                        checked={liveTradingAcknowledged}
+                                                        onCheckedChange={setLiveTradingAcknowledged}
+                                                    />
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
 

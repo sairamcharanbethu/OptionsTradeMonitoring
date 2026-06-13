@@ -150,7 +150,15 @@ const ensureSchema = async (instance: any) => {
       { name: 'suggested_take_profit_2', type: 'DECIMAL(10, 2)' },
       { name: 'analysis_data', type: 'JSONB' },
       { name: 'is_simulated', type: 'BOOLEAN DEFAULT FALSE' },
-      { name: 'account_id', type: 'VARCHAR(255)' }
+      { name: 'account_id', type: 'VARCHAR(255)' },
+      { name: 'notes', type: 'TEXT' },
+      { name: 'execution_broker', type: 'VARCHAR(50)' },
+      { name: 'broker_order_id', type: 'VARCHAR(255)' },
+      { name: 'broker_trade_id', type: 'VARCHAR(255)' },
+      { name: 'execution_account_id', type: 'VARCHAR(255)' },
+      { name: 'execution_status', type: 'VARCHAR(50)' },
+      { name: 'execution_error', type: 'TEXT' },
+      { name: 'contracts_requested', type: 'INTEGER' }
     ];
 
     for (const col of columns) {
@@ -167,6 +175,12 @@ const ensureSchema = async (instance: any) => {
     await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS token_usage JSONB;`);
     await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS ml_probability NUMERIC(5, 4);`);
     await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS option_details JSONB;`);
+    await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS execution_broker VARCHAR(50);`);
+    await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS broker_order_id VARCHAR(255);`);
+    await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS broker_trade_id VARCHAR(255);`);
+    await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS execution_status VARCHAR(50);`);
+    await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS execution_error TEXT;`);
+    await instance.pg.query(`ALTER TABLE signals ADD COLUMN IF NOT EXISTS contracts_requested INTEGER;`);
 
     // 4. Create snaptrade tables
     await instance.pg.query(`
