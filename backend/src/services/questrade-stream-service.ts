@@ -11,6 +11,8 @@ export class QuestradeStreamService extends EventEmitter {
     private qt: QuestradeService;
     private activeSymbolIds: Set<number> = new Set();
     private isConnected = false;
+    private lastMessageAt: string | null = null;
+    private lastError: string | null = null;
 
     public get isSocketConnected(): boolean {
         return this.isConnected;
@@ -160,6 +162,7 @@ export class QuestradeStreamService extends EventEmitter {
 
             // Handle Quotes
             if (msg.quotes instanceof Array) {
+                this.lastMessageAt = new Date().toISOString();
                 msg.quotes.forEach((q: any) => {
                     this.emit('quote', q);
                 });
@@ -175,6 +178,7 @@ export class QuestradeStreamService extends EventEmitter {
                     this.scheduleReconnect(1000);
                     return;
                 }
+                this.lastError = JSON.stringify(msg);
                 console.warn('[Stream] API Message:', msg);
             }
 
@@ -184,10 +188,12 @@ export class QuestradeStreamService extends EventEmitter {
     }
 
     private onError(err: Error) {
+        this.lastError = err.message;
         console.error('[Stream] WebSocket Error:', err.message);
     }
 
     private onClose(code: number, reason: string) {
+        this.lastError = `Closed ${code}: ${reason}`;
         console.log(`[Stream] Disconnected (${code}): ${reason}`);
         this.cleanup();
         this.scheduleReconnect();
@@ -234,6 +240,18 @@ export class QuestradeStreamService extends EventEmitter {
         }
     }
 
+    public getHealth() {
+        return {
+            status: this.isConnected ? 'UP' : 'DEGRADED',
+            connected: this.isConnected,
+            provider: 'questrade',
+            activeSubscriptions: this.activeSymbolIds.size,
+            lastMessageAt: this.lastMessageAt,
+            lastError: this.lastError,
+            reconnectAttempts: this.reconnectAttempts
+        };
+    }
+
     // --- Helper for OSI Ticker ---
     private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
         try {
@@ -271,6 +289,7 @@ export class QuestradeStreamService extends EventEmitter {
             const id = await this.qt.getSymbolId(ticker);
             if (id) {
                 await redis.set(CACHE_KEY, id.toString(), 86400); // 24h
+                await redis.set(`SYMBOL_NAME:${id}`, ticker, 86400);
             }
             return id;
         } catch (e) {
@@ -349,4 +368,3 @@ export class QuestradeStreamService extends EventEmitter {
         await redis.expire(this.LOCK_KEY, 15);
     }
 }
-

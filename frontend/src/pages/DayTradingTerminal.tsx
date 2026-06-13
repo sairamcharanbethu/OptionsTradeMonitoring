@@ -45,6 +45,79 @@ interface ApiHealthState {
   alpaca?: { status: string; latencyMs: number };
 }
 
+interface ServiceHealthState {
+  liveExitMonitor: {
+    status: string;
+    active: boolean;
+    provider: string;
+    quotesProcessed: number;
+    matchedUpdates: number;
+    lastQuoteAt: string | null;
+    lastMatchedAt: string | null;
+    lastError: string | null;
+  };
+  streams: {
+    alpaca: {
+      status: string;
+      connected: boolean;
+      feed?: string;
+      activeSubscriptions: number;
+      lastMessageAt: string | null;
+      reconnectAttempts: number;
+    };
+    questrade: {
+      status: string;
+      connected: boolean;
+      activeSubscriptions: number;
+      lastMessageAt: string | null;
+      reconnectAttempts: number;
+    };
+  };
+  poller: { status: string; running: boolean };
+  scanner: { status: string };
+  generatedAt: string;
+}
+
+const defaultServiceHealth: ServiceHealthState = {
+  liveExitMonitor: {
+    status: 'N/A',
+    active: false,
+    provider: 'none',
+    quotesProcessed: 0,
+    matchedUpdates: 0,
+    lastQuoteAt: null,
+    lastMatchedAt: null,
+    lastError: null
+  },
+  streams: {
+    alpaca: {
+      status: 'N/A',
+      connected: false,
+      feed: undefined,
+      activeSubscriptions: 0,
+      lastMessageAt: null,
+      reconnectAttempts: 0
+    },
+    questrade: {
+      status: 'N/A',
+      connected: false,
+      activeSubscriptions: 0,
+      lastMessageAt: null,
+      reconnectAttempts: 0
+    }
+  },
+  poller: { status: 'N/A', running: false },
+  scanner: { status: 'N/A' },
+  generatedAt: ''
+};
+
+const formatRelativeTime = (timestamp?: string | null) => {
+  if (!timestamp) return 'no ticks';
+  const diffSeconds = Math.max(0, Math.round((Date.now() - new Date(timestamp).getTime()) / 1000));
+  if (diffSeconds < 60) return `${diffSeconds}s ago`;
+  return `${Math.round(diffSeconds / 60)}m ago`;
+};
+
 const renderTokenUsageBadge = (usage: any) => {
   if (!usage || (!usage.classifier && !usage.coach)) return null;
   const totalTokens = (usage.classifier?.total_tokens || 0) + (usage.coach?.total_tokens || 0);
@@ -161,6 +234,7 @@ export default function DayTradingTerminal() {
     discord: { status: 'UP', latencyMs: 120 },
     alpaca: { status: 'N/A', latencyMs: 0 }
   });
+  const [serviceHealth, setServiceHealth] = useState<ServiceHealthState>(defaultServiceHealth);
   const [healthLoading, setHealthLoading] = useState(false);
   const [executeDialogSignal, setExecuteDialogSignal] = useState<Signal | null>(null);
   const [executingSignalId, setExecutingSignalId] = useState<number | null>(null);
@@ -169,10 +243,14 @@ export default function DayTradingTerminal() {
   const fetchHealth = async () => {
     setHealthLoading(true);
     try {
-      const health = await api.getSignalsHealth();
+      const [health, services] = await Promise.all([
+        api.getSignalsHealth(),
+        api.getServicesHealth()
+      ]);
       setHealthData(health);
+      setServiceHealth(services);
     } catch (err: any) {
-      console.warn('Failed to load API health stats:', err);
+      console.warn('Failed to load health stats:', err);
     } finally {
       setHealthLoading(false);
     }
@@ -694,6 +772,53 @@ export default function DayTradingTerminal() {
               <span className={isConnected ? 'text-green-400 animate-pulse' : 'text-red-400 animate-pulse'}>●</span>
               <span className="text-zinc-500 font-bold">STREAM</span>
               <span className="text-zinc-300">{isConnected ? 'LIVE' : 'CONN...'}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Widget 4: Runtime service health */}
+        <div className="motion-panel p-3 border border-cyan-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
+          <div className="flex justify-between items-center mb-1.5">
+            <span className="text-[9px] text-cyan-300/80 block uppercase tracking-wider font-semibold">LIVE EXIT SERVICES</span>
+            <Badge
+              variant="outline"
+              className={`text-[8px] px-1 py-0.5 font-mono ${
+                serviceHealth.liveExitMonitor.status === 'UP'
+                  ? 'border-cyan-500/30 text-cyan-300'
+                  : serviceHealth.liveExitMonitor.status === 'DEGRADED'
+                    ? 'border-amber-500/40 text-amber-300'
+                    : 'border-red-500/40 text-red-300'
+              }`}
+            >
+              {serviceHealth.liveExitMonitor.provider.toUpperCase()}
+            </Badge>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[9px] font-mono">
+            <div className="px-1.5 py-1 border border-cyan-500/10 bg-zinc-950/40 rounded" title={serviceHealth.liveExitMonitor.lastError || 'Live exit monitor'}>
+              <div className="flex items-center gap-1">
+                <span className={serviceHealth.liveExitMonitor.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
+                <span className="text-zinc-500 font-bold">EXIT</span>
+              </div>
+              <div className="text-zinc-300">{serviceHealth.liveExitMonitor.matchedUpdates} matches</div>
+            </div>
+            <div className="px-1.5 py-1 border border-cyan-500/10 bg-zinc-950/40 rounded" title="Latest stream tick processed by live exit monitor">
+              <div className="text-zinc-500 font-bold">LAST TICK</div>
+              <div className="text-zinc-300">{formatRelativeTime(serviceHealth.liveExitMonitor.lastQuoteAt)}</div>
+            </div>
+            <div className="px-1.5 py-1 border border-cyan-500/10 bg-zinc-950/40 rounded" title="Active option stream subscriptions">
+              <div className="text-zinc-500 font-bold">SUBS</div>
+              <div className="text-zinc-300">
+                {serviceHealth.liveExitMonitor.provider === 'alpaca'
+                  ? serviceHealth.streams.alpaca.activeSubscriptions
+                  : serviceHealth.streams.questrade.activeSubscriptions}
+              </div>
+            </div>
+            <div className="px-1.5 py-1 border border-cyan-500/10 bg-zinc-950/40 rounded" title="Polling fallback remains available if stream misses ticks">
+              <div className="flex items-center gap-1">
+                <span className={serviceHealth.poller.running ? 'text-green-400' : 'text-red-400'}>●</span>
+                <span className="text-zinc-500 font-bold">FALLBACK</span>
+              </div>
+              <div className="text-zinc-300">{serviceHealth.poller.running ? 'poller on' : 'poller off'}</div>
             </div>
           </div>
         </div>

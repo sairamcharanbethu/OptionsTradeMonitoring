@@ -260,6 +260,10 @@ export class TradeExecutionService {
     executionStatus: string;
     notes: string;
   }) {
+    const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
+    const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
+    const premiumTakeProfit = Number((entryPrice * 1.4).toFixed(2));
+
     await this.fastify.pg.query(
       `INSERT INTO positions (
         user_id, symbol, option_type, strike_price, expiration_date,
@@ -267,10 +271,12 @@ export class TradeExecutionService {
         trailing_high_price, trailing_stop_loss_pct, current_price,
         status, is_simulated, account_id, notes, execution_broker,
         broker_order_id, broker_trade_id, execution_account_id, execution_status, contracts_requested,
+        suggested_stop_loss, suggested_take_profit_1,
         created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         'OPEN', $13, $14, $15, $16, $17, $18, $19, $20, $21,
+        $22, $23,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )`,
       [
@@ -279,24 +285,38 @@ export class TradeExecutionService {
         input.winningSide,
         input.chosenStrike,
         input.chosenExpiry,
-        execution.entryPrice,
+        entryPrice,
         execution.quantity,
-        input.stopUnderlying,
-        input.targetUnderlying,
-        execution.entryPrice,
+        premiumStopLoss,
+        premiumTakeProfit,
+        entryPrice,
         null,
-        execution.entryPrice,
+        entryPrice,
         execution.isSimulated,
         execution.accountId,
-        execution.notes,
+        `${execution.notes} [Auto exits: premium SL $${premiumStopLoss}, premium TP $${premiumTakeProfit}, underlying SL ${input.stopUnderlying}, underlying TP ${input.targetUnderlying}]`,
         execution.executionBroker,
         execution.brokerOrderId,
         execution.brokerTradeId,
         execution.accountId,
         execution.executionStatus,
-        execution.quantity
+        execution.quantity,
+        input.stopUnderlying,
+        input.targetUnderlying
       ]
     );
+
+    const streamers = [
+      (this.fastify as any).alpacaMarketDataStreamer,
+      (this.fastify as any).streamer
+    ];
+    for (const streamer of streamers) {
+      if (streamer?.syncSubscriptions) {
+        streamer.syncSubscriptions().catch((err: any) => {
+          this.fastify.log.warn(`[TradeExecutionService] Failed to refresh stream subscriptions: ${err.message}`);
+        });
+      }
+    }
   }
 
   private async resolveEntryPriceFromAlpaca(osiTicker: string, mark: number | null, keyId: string, secretKey: string): Promise<number> {

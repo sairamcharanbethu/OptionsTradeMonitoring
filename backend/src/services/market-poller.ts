@@ -11,7 +11,6 @@ export class MarketPoller {
   private currentIntervalSeconds: number = 30; // Default 30s
   private timerId: NodeJS.Timeout | null = null;
   private pollingEnabled: boolean = true;
-
   private redisClient: any;
 
   // Alpaca WebSocket stream
@@ -109,24 +108,6 @@ export class MarketPoller {
    */
   public isRunning(): boolean {
     return this.pollingEnabled;
-  }
-
-  // Called by QuestradeStreamService via Index.ts
-  public async handlePriceUpdate(quote: any) {
-    if (!quote || !quote.symbolId) return;
-
-    // Map SymbolID -> Position(s)
-    // Since we don't store symbolId in DB, we have to look it up or do a reverse check.
-    // Optimization: We can store a local cache of SymbolID -> Symbol string
-    // For now, let's try to match by resolving if needed, but that's slow.
-    // Better approach: If quote has 'symbol', use it. If not, we might skip or broadcast only.
-    // Questrade stream quotes usually imply we know the ID. 
-    // Let's rely on the Poller's cache if possible, or just skip if we can't map.
-    // Actually, for immediate STOP LOSS, we really want to process this.
-    // Let's assume for this iteration we mainly broadcast for UI.
-    // Stop Loss checks are still run by the Poller periodically (1 min).
-    // If we want real-time stop loss, we'd need a robust ID map.
-    // Future TODO: Add symbol_id to positions table.
   }
 
   private startBriefingJob() {
@@ -702,6 +683,10 @@ export class MarketPoller {
         await new Promise<void>(resolve => setTimeout(() => resolve(), 5000));
       }
     }
+  }
+
+  public async processPositionExitUpdate(position: any, price: number, greeks?: any, iv?: number, underlyingPrice?: number) {
+    return this.processUpdate(position, price, greeks, iv, underlyingPrice);
   }
 
   private async processUpdate(position: any, price: number, greeks?: any, iv?: number, underlyingPrice?: number) {

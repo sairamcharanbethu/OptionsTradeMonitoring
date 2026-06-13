@@ -389,8 +389,16 @@ const start = async () => {
     const streamer = new QuestradeStreamService(fastify);
     fastify.decorate('streamer', streamer);
 
+    const { AlpacaMarketDataStreamService } = await import('./services/alpaca-market-data-stream-service');
+    const alpacaMarketDataStreamer = new AlpacaMarketDataStreamService(fastify);
+    fastify.decorate('alpacaMarketDataStreamer', alpacaMarketDataStreamer);
+
+    const { LiveExitMonitorService } = await import('./services/live-exit-monitor-service');
+    const liveExitMonitor = new LiveExitMonitorService(fastify);
+    fastify.decorate('liveExitMonitor', liveExitMonitor);
+
     // Broadcast real-time quotes to all connected frontend clients
-    streamer.on('quote', async (quote) => {
+    const handleStreamQuote = async (quote: any) => {
       // Enrich with Symbol if missing
       if (!quote.symbol && quote.symbolId) {
         const ticker = await redis.get(`SYMBOL_NAME:${quote.symbolId}`);
@@ -405,8 +413,84 @@ const start = async () => {
         });
       }
 
-      // Feed data into Poller for Stop Loss checks (Optimization: Don't wait for poll cycle)
-      // poller.onExternalPriceUpdate(quote); // TODO: Implement in MarketPoller
+      // Feed data into the dedicated live exit monitor without waiting for the next poll cycle.
+      await liveExitMonitor.handleQuote(quote);
+    };
+
+    streamer.on('quote', handleStreamQuote);
+    alpacaMarketDataStreamer.on('quote', handleStreamQuote);
+
+    fastify.get('/api/services/health', { preHandler: fastify.authenticate }, async () => {
+      const alpacaHealth = alpacaMarketDataStreamer.getHealth();
+      const questradeHealth = streamer.getHealth();
+      const liveExitHealth = liveExitMonitor.getHealth();
+
+      return {
+        liveExitMonitor: liveExitHealth,
+        streams: {
+          alpaca: alpacaHealth,
+          questrade: questradeHealth
+        },
+        poller: {
+          status: poller.isRunning() ? 'UP' : 'DOWN',
+          running: poller.isRunning()
+        },
+        scanner: {
+          status: 'UP'
+        },
+        generatedAt: new Date().toISOString()
+      };
+    });
+
+    fastify.post('/api/services/dev/quote', { preHandler: fastify.authenticate }, async (request, reply) => {
+      const devTestsEnabled = process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEV_TRADING_TESTS === 'true';
+      if (!devTestsEnabled) {
+        return reply.code(404).send({ error: 'Dev trade testing is disabled' });
+      }
+
+      const body = request.body as {
+        provider?: string;
+        symbol?: string;
+        optionType?: 'CALL' | 'PUT';
+        strike?: number | string;
+        expiration?: string;
+        bid?: number | string;
+        ask?: number | string;
+        last?: number | string;
+        underlyingPrice?: number | string;
+      };
+
+      const symbol = String(body.symbol || '').trim().toUpperCase();
+      const optionType = body.optionType;
+      const strike = Number(body.strike);
+      const expiration = String(body.expiration || '').trim();
+
+      if (!symbol || !optionType || !Number.isFinite(strike) || !expiration) {
+        return reply.code(400).send({ error: 'symbol, optionType, strike, and expiration are required' });
+      }
+
+      const dateParts = expiration.split('-');
+      if (dateParts.length !== 3) {
+        return reply.code(400).send({ error: 'expiration must use YYYY-MM-DD' });
+      }
+
+      const osiSymbol = `${symbol}${dateParts[0].slice(-2)}${dateParts[1].padStart(2, '0')}${dateParts[2].padStart(2, '0')}${optionType === 'CALL' ? 'C' : 'P'}${Math.round(strike * 1000).toString().padStart(8, '0')}`;
+      const quote = {
+        provider: body.provider || 'dev',
+        symbol: osiSymbol,
+        bidPrice: Number(body.bid || 0) || undefined,
+        askPrice: Number(body.ask || 0) || undefined,
+        lastTradePrice: Number(body.last || 0) || undefined,
+        underlyingPrice: Number(body.underlyingPrice || 0) || undefined,
+        injected: true
+      };
+
+      await liveExitMonitor.handleQuote(quote);
+      return {
+        status: 'ok',
+        quote,
+        health: liveExitMonitor.getHealth()
+      };
     });
 
     // Public WebSocket endpoint
@@ -447,7 +531,15 @@ const start = async () => {
     // Start background services
     poller.start();
     scanner.start();
-    // streamer.start(); // Disabled: Subscriptions are on-demand via position sync
+    const alpacaStreamStarted = await alpacaMarketDataStreamer.start();
+    if (alpacaStreamStarted) {
+      liveExitMonitor.start('alpaca');
+      fastify.log.info('[Stream] Alpaca option market data stream enabled for live exit monitoring.');
+    } else {
+      streamer.start();
+      liveExitMonitor.start('questrade');
+      fastify.log.info('[Stream] Questrade stream enabled as market data fallback.');
+    }
 
     fastify.log.info(`Server listening on http://localhost:${port}`);
   } catch (err) {

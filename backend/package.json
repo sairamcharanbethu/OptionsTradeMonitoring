@@ -19,6 +19,7 @@
     "@fastify/swagger": "^9.6.1",
     "@fastify/swagger-ui": "^5.2.4",
     "@fastify/websocket": "^11.2.0",
+    "@msgpack/msgpack": "^3.1.3",
     "@types/ws": "^8.18.1",
     "alphavantage": "^2.5.0",
     "axios": "^1.13.2",

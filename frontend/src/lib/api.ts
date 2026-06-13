@@ -560,6 +560,69 @@ export const api = {
     return res.json();
   },
 
+  async getServicesHealth(): Promise<{
+    liveExitMonitor: {
+      status: string;
+      active: boolean;
+      provider: string;
+      quotesProcessed: number;
+      matchedUpdates: number;
+      lastQuoteAt: string | null;
+      lastMatchedAt: string | null;
+      lastError: string | null;
+    };
+    streams: {
+      alpaca: {
+        status: string;
+        connected: boolean;
+        provider: string;
+        feed?: string;
+        activeSubscriptions: number;
+        lastMessageAt: string | null;
+        lastError: string | null;
+        reconnectAttempts: number;
+      };
+      questrade: {
+        status: string;
+        connected: boolean;
+        provider: string;
+        activeSubscriptions: number;
+        lastMessageAt: string | null;
+        lastError: string | null;
+        reconnectAttempts: number;
+      };
+    };
+    poller: { status: string; running: boolean };
+    scanner: { status: string };
+    generatedAt: string;
+  }> {
+    const res = await authFetch(`${API_BASE}/services/health`);
+    if (!res.ok) throw new Error('Failed to fetch runtime service health');
+    return res.json();
+  },
+
+  async injectDevQuote(payload: {
+    provider: string;
+    symbol: string;
+    optionType: 'CALL' | 'PUT';
+    strike: string;
+    expiration: string;
+    bid: string;
+    ask: string;
+    last: string;
+    underlyingPrice: string;
+  }): Promise<any> {
+    const res = await authFetch(`${API_BASE}/services/dev/quote`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to inject dev quote');
+    }
+    return res.json();
+  },
+
   async triggerScan(): Promise<{ success: boolean; message: string }> {
     const res = await authFetch(`${API_BASE}/signals/trigger`, { method: 'POST' });
     if (!res.ok) throw new Error('Failed to trigger scan');
