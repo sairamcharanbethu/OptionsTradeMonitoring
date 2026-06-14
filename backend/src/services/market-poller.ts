@@ -690,6 +690,16 @@ export class MarketPoller {
   }
 
   private async processUpdate(position: any, price: number, greeks?: any, iv?: number, underlyingPrice?: number) {
+    let analysis: any = {};
+    let analysisDirty = false;
+    try {
+      if (position.analysis_data) {
+        analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data;
+      }
+    } catch (e) {
+      this.fastify.log.warn(`[MarketPoller] Failed to parse analysis_data for position ${position.id}`);
+    }
+
     const engineResult = StopLossEngine.evaluate(price, {
       entry_price: Number(position.entry_price),
       stop_loss_trigger: Number(position.stop_loss_trigger),
@@ -698,39 +708,100 @@ export class MarketPoller {
       trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
     });
 
-    let triggered = engineResult.triggered;
-    let triggerType: 'STOP_LOSS' | 'TAKE_PROFIT' | undefined = engineResult.triggerType;
+    let triggered = engineResult.triggered && engineResult.triggerType === 'TAKE_PROFIT';
+    let triggerType: 'STOP_LOSS' | 'TAKE_PROFIT' | undefined = triggered ? 'TAKE_PROFIT' : undefined;
     let lossAvoided = engineResult.lossAvoided;
 
-    // Strategy 1: Underlying-Triggered Stops (Structural Exit Strategy)
+    const entryPrice = Number(position.entry_price);
+    const softPremiumStop = Number(position.stop_loss_trigger);
+    const hardPremiumStop = Number((entryPrice * 0.65).toFixed(2));
+    const premiumSoftStopHit = engineResult.triggered && engineResult.triggerType === 'STOP_LOSS';
+    const premiumHardStopHit = price <= hardPremiumStop;
+    const smartStopConfirmationMs = Number(process.env.SMART_STOP_CONFIRMATION_MS || 45000);
+
+    // Strategy 1: Underlying structure informs stop-loss confirmation.
     const underlyingStop = position.suggested_stop_loss ? Number(position.suggested_stop_loss) : null;
     const underlyingTarget = position.suggested_take_profit_1 ? Number(position.suggested_take_profit_1) : null;
+    const underlyingStopBroken = Boolean(
+      underlyingPrice && underlyingStop &&
+      (
+        (position.option_type === 'CALL' && underlyingPrice <= underlyingStop) ||
+        (position.option_type === 'PUT' && underlyingPrice >= underlyingStop)
+      )
+    );
 
-    if (underlyingPrice && underlyingStop) {
-      if (position.option_type === 'CALL' && underlyingPrice <= underlyingStop) {
+    if (!triggered) {
+      if (premiumHardStopHit) {
         triggered = true;
         triggerType = 'STOP_LOSS';
-        lossAvoided = Number(position.entry_price) - price;
-        this.fastify.log.info(`[MarketPoller] Strategy 1 STOP_LOSS triggered via underlying index price: ${underlyingPrice} <= ${underlyingStop}`);
-      } else if (position.option_type === 'PUT' && underlyingPrice >= underlyingStop) {
-        triggered = true;
-        triggerType = 'STOP_LOSS';
-        lossAvoided = Number(position.entry_price) - price;
-        this.fastify.log.info(`[MarketPoller] Strategy 1 STOP_LOSS triggered via underlying index price: ${underlyingPrice} >= ${underlyingStop}`);
+        lossAvoided = entryPrice - price;
+        analysis.smartStopWarning = {
+          status: 'HARD_STOP',
+          price,
+          hardPremiumStop,
+          triggeredAt: new Date().toISOString()
+        };
+        analysisDirty = true;
+        this.fastify.log.info(`[MarketPoller] HARD STOP triggered for position ${position.id}: premium ${price} <= ${hardPremiumStop}`);
+      } else if (premiumSoftStopHit) {
+        if (underlyingStopBroken) {
+          triggered = true;
+          triggerType = 'STOP_LOSS';
+          lossAvoided = entryPrice - price;
+          analysis.smartStopWarning = {
+            status: 'CONFIRMED_STRUCTURE_BREAK',
+            price,
+            softPremiumStop,
+            underlyingPrice,
+            underlyingStop,
+            triggeredAt: new Date().toISOString()
+          };
+          analysisDirty = true;
+          this.fastify.log.info(`[MarketPoller] Smart STOP confirmed for position ${position.id}: premium ${price} <= ${softPremiumStop} and structure broken.`);
+        } else {
+          const existingWarning = analysis.smartStopWarning;
+          const firstWarningAt = existingWarning?.triggeredAt ? new Date(existingWarning.triggeredAt).getTime() : Date.now();
+          const warningAgeMs = Date.now() - firstWarningAt;
+
+          if (existingWarning?.status === 'SOFT_STOP_WARNING' && warningAgeMs >= smartStopConfirmationMs) {
+            triggered = true;
+            triggerType = 'STOP_LOSS';
+            lossAvoided = entryPrice - price;
+            analysis.smartStopWarning = {
+              ...existingWarning,
+              status: 'CONFIRMED_TIMEOUT',
+              confirmedAt: new Date().toISOString(),
+              confirmedPrice: price,
+              underlyingPrice: underlyingPrice ?? existingWarning.underlyingPrice
+            };
+            analysisDirty = true;
+            this.fastify.log.info(`[MarketPoller] Smart STOP timeout confirmed for position ${position.id}: premium stayed below ${softPremiumStop} for ${Math.round(warningAgeMs / 1000)}s.`);
+          } else {
+            triggered = false;
+            triggerType = undefined;
+            lossAvoided = undefined;
+            analysis.smartStopWarning = {
+              status: 'SOFT_STOP_WARNING',
+              triggeredAt: existingWarning?.triggeredAt || new Date().toISOString(),
+              price,
+              softPremiumStop,
+              hardPremiumStop,
+              underlyingPrice: underlyingPrice ?? null,
+              underlyingStop,
+              message: 'Premium soft stop hit, but underlying structure has not confirmed the exit.'
+            };
+            analysisDirty = true;
+            this.fastify.log.info(`[MarketPoller] Soft stop warning for position ${position.id}: premium ${price} <= ${softPremiumStop}, structure still valid.`);
+          }
+        }
+      } else if (analysis.smartStopWarning) {
+        delete analysis.smartStopWarning;
+        analysisDirty = true;
+        this.fastify.log.info(`[MarketPoller] Smart stop warning cleared for position ${position.id}: premium recovered above ${softPremiumStop}.`);
       }
     }
 
     if (underlyingPrice && underlyingTarget && !triggered) {
-      // Parse analysis_data to check for Negative GEX Regime dynamic trailing stop
-      let analysis: any = {};
-      try {
-        if (position.analysis_data) {
-          analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data;
-        }
-      } catch (e) {
-        this.fastify.log.warn(`[MarketPoller] Failed to parse analysis_data for position ${position.id}`);
-      }
-
       const gexRegime = analysis.gexRegime || 'POSITIVE';
 
       if (gexRegime === 'NEGATIVE') {
@@ -758,6 +829,7 @@ export class MarketPoller {
               "UPDATE positions SET analysis_data = $1 WHERE id = $2",
               [JSON.stringify(analysis), position.id]
             );
+            analysisDirty = false;
           }
         } else if (position.option_type === 'PUT') {
           const hasReachedTarget = analysis.underlyingTrailingLow !== undefined || underlyingPrice <= underlyingTarget;
@@ -781,6 +853,7 @@ export class MarketPoller {
               "UPDATE positions SET analysis_data = $1 WHERE id = $2",
               [JSON.stringify(analysis), position.id]
             );
+            analysisDirty = false;
           }
         }
       } else {
@@ -820,6 +893,13 @@ export class MarketPoller {
         position.id
       ]
     );
+
+    if (analysisDirty) {
+      await (this.fastify as any).pg.query(
+        "UPDATE positions SET analysis_data = $1 WHERE id = $2",
+        [JSON.stringify(analysis), position.id]
+      );
+    }
 
     await (this.fastify as any).pg.query(
       'INSERT INTO price_history (position_id, price) VALUES ($1, $2)',
