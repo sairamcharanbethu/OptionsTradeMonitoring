@@ -11,7 +11,7 @@ ENV VITE_APP_BUILD_SHA=$VITE_APP_BUILD_SHA
 ENV VITE_ENABLE_DEV_TRADING_TESTS=$VITE_ENABLE_DEV_TRADING_TESTS
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 COPY . .
 RUN npm run build
