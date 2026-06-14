@@ -1010,7 +1010,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 />
                                             </div>
                                             <p className="text-[10px] text-muted-foreground">
-                                                Once saved, go to the Wealthsimple dashboard to securely connect your broker.
+                                                Connect requests SnapTrade trading access. Reconnect if Wealthsimple was linked as read-only.
                                             </p>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                 <Button
@@ -1021,7 +1021,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     className="gap-2"
                                                 >
                                                     {snaptradeConnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link className="h-4 w-4" />}
-                                                    Connect Wealthsimple
+                                                    Connect Wealthsimple Trading
                                                 </Button>
                                                 <Button
                                                     type="button"

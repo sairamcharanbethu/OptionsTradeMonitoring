@@ -119,9 +119,11 @@ export class SnaptradeService {
         try {
             const response = await snaptrade.authentication.loginSnapTradeUser({
                 userId: userIdStr,
-                userSecret: userSecret
+                userSecret: userSecret,
+                connectionType: 'trade',
+                connectionPortalVersion: 'v4'
             });
-            return { redirectURI: response.data?.redirectURI };
+            return { redirectURI: response.data?.redirectURI, connectionType: 'trade' };
         } catch (err: any) {
             this.fastify.log.error(`[SnaptradeService] Failed to generate connection URL: ${err.message}`);
             if (err.responseBody) {
