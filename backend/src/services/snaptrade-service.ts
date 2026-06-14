@@ -639,15 +639,17 @@ export class SnaptradeService {
     async placeOptionOrder(
         userId: number,
         accountId: string,
-        optionSymbol: string, // OCC format: e.g. "AAPL 250718C00150000"
+        optionSymbol: string,
         action: 'BUY_TO_OPEN' | 'SELL_TO_CLOSE' | 'BUY_TO_CLOSE' | 'SELL_TO_OPEN',
         units: number,
         orderType: 'LIMIT' | 'MARKET' = 'MARKET',
         limitPrice?: string
     ) {
         const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        const snaptradeOptionSymbol = this.toSnaptradeOccSymbol(optionSymbol);
+        const priceEffect = action.startsWith('BUY') ? 'DEBIT' : 'CREDIT';
 
-        this.fastify.log.info(`[SnaptradeService] Placing option order: ${action} ${units} contracts of ${optionSymbol} on account ${accountId} (Mode: ${orderType})`);
+        this.fastify.log.info(`[SnaptradeService] Placing option order: ${action} ${units} contracts of ${snaptradeOptionSymbol} on account ${accountId} (Mode: ${orderType})`);
 
         try {
             const orderPayload: any = {
@@ -656,10 +658,13 @@ export class SnaptradeService {
                 accountId: accountId,
                 order_type: orderType,
                 time_in_force: 'Day',
+                limit_price: orderType === 'LIMIT' ? limitPrice : '',
+                stop_price: '',
+                price_effect: priceEffect,
                 legs: [
                     {
                         instrument: {
-                            symbol: optionSymbol,
+                            symbol: snaptradeOptionSymbol,
                             instrument_type: 'OPTION'
                         },
                         action: action,
@@ -672,33 +677,27 @@ export class SnaptradeService {
                 if (!limitPrice) {
                     throw new Error('Limit price is required for LIMIT orders.');
                 }
-                orderPayload.limit_price = limitPrice;
-                orderPayload.price_effect = action.startsWith('BUY') ? 'DEBIT' : 'CREDIT';
             }
 
-            // 1. Get Order Impact
-            this.fastify.log.info(`[SnaptradeService] Getting order impact for ${optionSymbol}...`);
-            const impactRes = await snaptrade.trading.getOrderImpact(orderPayload);
-            
-            const tradeId = impactRes.data?.id || (impactRes.data as any)?.tradeId;
-            if (!tradeId) {
-                throw new Error(`Failed to obtain tradeId from order impact: ${JSON.stringify(impactRes.data)}`);
-            }
+            this.fastify.log.info(`[SnaptradeService] Getting option impact for ${snaptradeOptionSymbol}...`);
+            const impactRes = await snaptrade.trading.getOptionImpact(orderPayload);
 
-            // 2. Place Order
-            this.fastify.log.info(`[SnaptradeService] Executing order for tradeId: ${tradeId}...`);
-            const placeRes = await snaptrade.trading.placeOrder({
-                userId: userIdStr,
-                userSecret: userSecret,
-                tradeId: tradeId
-            });
+            this.fastify.log.info(`[SnaptradeService] Placing multi-leg option order for ${snaptradeOptionSymbol}...`);
+            const placeRes = await snaptrade.trading.placeMlegOrder(orderPayload);
+            const brokerageOrderId = placeRes.data?.brokerage_order_id
+                || placeRes.data?.orders?.[0]?.brokerage_order_id
+                || (placeRes.data as any)?.id
+                || null;
 
             this.fastify.log.info(`[SnaptradeService] Order executed successfully: ${JSON.stringify(placeRes.data)}`);
             return {
                 success: true,
-                tradeId,
-                orderId: placeRes.data?.id || (placeRes.data as any)?.orderId || tradeId,
-                rawResponse: placeRes.data
+                tradeId: null,
+                orderId: brokerageOrderId,
+                rawResponse: {
+                    impact: impactRes.data,
+                    order: placeRes.data
+                }
             };
         } catch (err: any) {
             this.fastify.log.error(`[SnaptradeService] Option order execution failed: ${err.message}`);
@@ -708,6 +707,14 @@ export class SnaptradeService {
             const detail = err.responseBody?.detail || err.message;
             throw new Error(`Failed to place options trade via SnapTrade: ${detail}`);
         }
+    }
+
+    private toSnaptradeOccSymbol(optionSymbol: string): string {
+        const compact = String(optionSymbol || '').replace(/\s+/g, '').toUpperCase();
+        const match = compact.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+        if (!match) return optionSymbol;
+        const [, root, expiry, side, strike] = match;
+        return `${root.padEnd(6, ' ')}${expiry}${side}${strike}`;
     }
 
     private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
