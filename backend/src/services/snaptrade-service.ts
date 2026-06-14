@@ -778,8 +778,21 @@ export class SnaptradeService {
                 }
             }
 
-            this.fastify.log.info(`[SnaptradeService] Getting option impact for ${snaptradeOptionSymbol}...`);
-            const impactRes = await snaptrade.trading.getOptionImpact(orderPayload);
+            let impactData: any = null;
+            let impactWarning: string | null = null;
+            try {
+                this.fastify.log.info(`[SnaptradeService] Getting option impact for ${snaptradeOptionSymbol}...`);
+                const impactRes = await snaptrade.trading.getOptionImpact(orderPayload);
+                impactData = impactRes.data;
+            } catch (impactErr: any) {
+                const detail = impactErr.responseBody?.detail || impactErr.message || '';
+                const unsupportedImpact = /impact is not supported|not supported for this brokerage/i.test(detail);
+                if (!unsupportedImpact) {
+                    throw impactErr;
+                }
+                impactWarning = detail;
+                this.fastify.log.warn(`[SnaptradeService] Option impact preview skipped for ${snaptradeOptionSymbol}: ${detail}`);
+            }
 
             this.fastify.log.info(`[SnaptradeService] Placing multi-leg option order for ${snaptradeOptionSymbol}...`);
             const placeRes = await snaptrade.trading.placeMlegOrder(orderPayload);
@@ -794,7 +807,8 @@ export class SnaptradeService {
                 tradeId: null,
                 orderId: brokerageOrderId,
                 rawResponse: {
-                    impact: impactRes.data,
+                    impact: impactData,
+                    impactWarning,
                     order: placeRes.data
                 }
             };
