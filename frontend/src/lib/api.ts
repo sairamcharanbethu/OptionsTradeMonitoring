@@ -528,6 +528,21 @@ export const api = {
     return res.json();
   },
 
+  async getSnaptradeConnections(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/snaptrade/connections`);
+    if (!res.ok) throw new Error('Failed to fetch Wealthsimple connection status');
+    return res.json();
+  },
+
+  async resetSnaptradeReadOnlyConnections(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/snaptrade/reset-readonly-connections`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to reset read-only Wealthsimple connection');
+    }
+    return res.json();
+  },
+
   async syncSnaptradePortfolio(): Promise<{ success: boolean; syncedAccounts: number }> {
     const res = await authFetch(`${API_BASE}/snaptrade/sync`, { method: 'POST' });
     if (!res.ok) throw new Error('Failed to sync Wealthsimple portfolio');

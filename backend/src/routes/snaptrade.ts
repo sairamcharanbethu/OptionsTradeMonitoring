@@ -21,6 +21,32 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
     return result; // { redirectURI: "https://..." }
   });
 
+  // GET /connections
+  fastify.get('/connections', {
+    schema: {
+      tags: ['SnapTrade'],
+      summary: 'Get Wealthsimple Connection Status',
+      description: 'Returns SnapTrade brokerage authorization types so read-only vs trade-enabled connections are visible.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    return snaptradeService.getConnectionStatus(userId);
+  });
+
+  // POST /reset-readonly-connections
+  fastify.post('/reset-readonly-connections', {
+    schema: {
+      tags: ['SnapTrade'],
+      summary: 'Remove Read-Only Wealthsimple Connections',
+      description: 'Removes read-only Wealthsimple SnapTrade authorizations so the user can reconnect with trading access.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    return snaptradeService.resetReadOnlyWealthsimpleConnections(userId);
+  });
+
   // POST /sync
   fastify.post('/sync', {
     schema: {

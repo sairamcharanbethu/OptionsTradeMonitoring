@@ -100,6 +100,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [snaptradeAccounts, setSnaptradeAccounts] = useState<any[]>([]);
     const [snaptradeConnecting, setSnaptradeConnecting] = useState(false);
     const [snaptradeSyncing, setSnaptradeSyncing] = useState(false);
+    const [snaptradeConnectionStatus, setSnaptradeConnectionStatus] = useState<any>(null);
+    const [snaptradeCheckingAccess, setSnaptradeCheckingAccess] = useState(false);
+    const [snaptradeResettingAccess, setSnaptradeResettingAccess] = useState(false);
     const selectedSnaptradeAccount = snaptradeAccounts.find((account: any) => account.id === snaptradeTradingAccountId);
 
     // Alpaca State
@@ -278,6 +281,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             } catch {
                 setSnaptradeAccounts([]);
             }
+            try {
+                setSnaptradeConnectionStatus(await api.getSnaptradeConnections());
+            } catch {
+                setSnaptradeConnectionStatus(null);
+            }
         } catch (err) {
             console.error(err);
         } finally {
@@ -353,6 +361,38 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             alert(`Failed to sync Wealthsimple accounts: ${err.message || 'Unknown error'}`);
         } finally {
             setSnaptradeSyncing(false);
+        }
+    }
+
+    async function handleCheckSnaptradeAccess() {
+        setSnaptradeCheckingAccess(true);
+        try {
+            setSnaptradeConnectionStatus(await api.getSnaptradeConnections());
+        } catch (err: any) {
+            alert(`Failed to check Wealthsimple access: ${err.message || 'Unknown error'}`);
+        } finally {
+            setSnaptradeCheckingAccess(false);
+        }
+    }
+
+    async function handleResetSnaptradeReadOnlyAccess() {
+        const confirmed = window.confirm(
+            'This removes read-only Wealthsimple connections from SnapTrade and clears the selected Wealthsimple account. Reconnect afterward to grant trading access. Continue?'
+        );
+        if (!confirmed) return;
+
+        setSnaptradeResettingAccess(true);
+        try {
+            const result = await api.resetSnaptradeReadOnlyConnections();
+            setSnaptradeTradingAccountId('');
+            setSnaptradeAccounts([]);
+            setSnaptradeConnectionStatus(await api.getSnaptradeConnections().catch(() => null));
+            queryClient.invalidateQueries({ queryKey: ['snaptradePortfolio'] });
+            alert(result.message || 'Read-only connection reset complete. Reconnect Wealthsimple trading, then sync accounts.');
+        } catch (err: any) {
+            alert(`Failed to reset Wealthsimple access: ${err.message || 'Unknown error'}`);
+        } finally {
+            setSnaptradeResettingAccess(false);
         }
     }
 
@@ -1033,6 +1073,59 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     <RefreshCw className={`h-4 w-4 ${snaptradeSyncing ? 'animate-spin' : ''}`} />
                                                     {snaptradeSyncing ? 'Syncing...' : 'Sync Accounts'}
                                                 </Button>
+                                            </div>
+                                            <div className="rounded-md border border-border/60 bg-background/70 p-3 space-y-3 text-xs">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <p className="font-semibold">SnapTrade access</p>
+                                                        <p className="text-[10px] text-muted-foreground">
+                                                            {snaptradeConnectionStatus?.selectedAuthorization
+                                                                ? `Selected connection: ${snaptradeConnectionStatus.selectedAuthorization.name}`
+                                                                : 'Check after connecting Wealthsimple.'}
+                                                        </p>
+                                                    </div>
+                                                    <Badge variant={snaptradeConnectionStatus?.hasTradeConnection ? 'default' : 'secondary'}>
+                                                        {snaptradeConnectionStatus?.hasTradeConnection
+                                                            ? 'Trade enabled'
+                                                            : snaptradeConnectionStatus?.hasReadOnlyConnection
+                                                                ? 'Read-only'
+                                                                : 'Unknown'}
+                                                    </Badge>
+                                                </div>
+                                                {snaptradeConnectionStatus?.wealthsimpleConnections?.length > 0 && (
+                                                    <div className="space-y-1">
+                                                        {snaptradeConnectionStatus.wealthsimpleConnections.map((connection: any) => (
+                                                            <div key={connection.id} className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                                                                <span className="truncate">{connection.name || connection.brokerageName || connection.id}</span>
+                                                                <span className={connection.type === 'trade' ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-300'}>
+                                                                    {connection.type || 'unknown'}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        onClick={handleCheckSnaptradeAccess}
+                                                        disabled={!snaptradeClientId || !snaptradeConsumerKey || snaptradeCheckingAccess}
+                                                        className="gap-2"
+                                                    >
+                                                        {snaptradeCheckingAccess ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                                        Check Access
+                                                    </Button>
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        onClick={handleResetSnaptradeReadOnlyAccess}
+                                                        disabled={!snaptradeClientId || !snaptradeConsumerKey || snaptradeResettingAccess || !snaptradeConnectionStatus?.hasReadOnlyConnection}
+                                                        className="gap-2"
+                                                    >
+                                                        {snaptradeResettingAccess ? <Loader2 className="h-4 w-4 animate-spin" /> : <AlertTriangle className="h-4 w-4" />}
+                                                        Reset Read-only
+                                                    </Button>
+                                                </div>
                                             </div>
                                             <div className="grid gap-3 pt-3 border-t border-border/40">
                                                 <div className="flex items-center justify-between">

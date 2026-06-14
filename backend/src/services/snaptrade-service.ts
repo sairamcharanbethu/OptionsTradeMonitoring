@@ -134,6 +134,103 @@ export class SnaptradeService {
         }
     }
 
+    private normalizeAuthorization(auth: any) {
+        const brokerage = auth?.brokerage || {};
+        return {
+            id: auth?.id || '',
+            name: auth?.name || brokerage?.display_name || brokerage?.name || 'Brokerage connection',
+            type: auth?.type || 'unknown',
+            disabled: Boolean(auth?.disabled),
+            brokerageSlug: brokerage?.slug || brokerage?.slug_id || brokerage?.id || '',
+            brokerageName: brokerage?.display_name || brokerage?.name || '',
+            allowsTrading: brokerage?.allows_trading ?? null
+        };
+    }
+
+    private isWealthsimpleAuthorization(auth: any) {
+        const normalized = this.normalizeAuthorization(auth);
+        const haystack = `${normalized.brokerageSlug} ${normalized.brokerageName} ${normalized.name}`.toLowerCase();
+        return haystack.includes('wealthsimple');
+    }
+
+    async getConnectionStatus(userId: number) {
+        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        const authRes = await snaptrade.connections.listBrokerageAuthorizations({
+            userId: userIdStr,
+            userSecret
+        });
+
+        const authorizations = Array.isArray(authRes.data) ? authRes.data.map((auth: any) => this.normalizeAuthorization(auth)) : [];
+        const selectedAccountRes = await this.fastify.pg.query(
+            `SELECT s.value AS selected_account_id, a.raw_data
+             FROM settings s
+             LEFT JOIN snaptrade_accounts a ON a.id = s.value AND a.user_id = s.user_id
+             WHERE s.user_id = $1 AND s.key = 'snaptrade_trading_account_id'
+             LIMIT 1`,
+            [userId]
+        );
+        const selectedAccountId = selectedAccountRes.rows[0]?.selected_account_id || '';
+        const selectedAuthorizationId = selectedAccountRes.rows[0]?.raw_data?.brokerage_authorization || '';
+        const selectedAuthorization = authorizations.find((auth: any) => auth.id === selectedAuthorizationId) || null;
+        const wealthsimpleConnections = authorizations.filter((auth: any) => {
+            const haystack = `${auth.brokerageSlug} ${auth.brokerageName} ${auth.name}`.toLowerCase();
+            return haystack.includes('wealthsimple') || (selectedAuthorizationId && auth.id === selectedAuthorizationId);
+        });
+
+        return {
+            success: true,
+            selectedAccountId,
+            selectedAuthorizationId,
+            selectedAuthorization,
+            connections: authorizations,
+            wealthsimpleConnections,
+            hasTradeConnection: wealthsimpleConnections.some((auth: any) => auth.type === 'trade' && !auth.disabled),
+            hasReadOnlyConnection: wealthsimpleConnections.some((auth: any) => auth.type !== 'trade')
+        };
+    }
+
+    async resetReadOnlyWealthsimpleConnections(userId: number) {
+        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        const status = await this.getConnectionStatus(userId);
+        const removeCandidates = status.connections.filter((auth: any) => {
+            const isSelected = status.selectedAuthorizationId && auth.id === status.selectedAuthorizationId;
+            const haystack = `${auth.brokerageSlug} ${auth.brokerageName} ${auth.name}`.toLowerCase();
+            const isWealthsimple = haystack.includes('wealthsimple');
+            return auth.id && auth.type !== 'trade' && (isSelected || isWealthsimple);
+        });
+
+        for (const auth of removeCandidates) {
+            await snaptrade.connections.removeBrokerageAuthorization({
+                authorizationId: auth.id,
+                userId: userIdStr,
+                userSecret
+            });
+        }
+
+        if (removeCandidates.length > 0) {
+            await this.fastify.pg.query(
+                `UPDATE settings
+                 SET value = '', updated_at = CURRENT_TIMESTAMP
+                 WHERE user_id = $1 AND key = 'snaptrade_trading_account_id'`,
+                [userId]
+            );
+            await this.fastify.pg.query('DELETE FROM snaptrade_positions WHERE user_id = $1', [userId]);
+            await this.fastify.pg.query('DELETE FROM snaptrade_accounts WHERE user_id = $1', [userId]);
+            await redis.del(`SNAPTRADE_PORTFOLIO:${userId}`);
+            await redis.del(`USER_POSITIONS:${userId}`);
+            await redis.del(`USER_STATS:${userId}`);
+        }
+
+        return {
+            success: true,
+            removedCount: removeCandidates.length,
+            removedConnections: removeCandidates,
+            message: removeCandidates.length
+                ? 'Removed read-only Wealthsimple connection. Reconnect Wealthsimple trading, then sync accounts.'
+                : 'No read-only Wealthsimple connection found to remove.'
+        };
+    }
+
     async syncPortfolio(userId: number) {
         this.fastify.log.info(`Syncing Snaptrade portfolio for user ${userId}...`);
         
