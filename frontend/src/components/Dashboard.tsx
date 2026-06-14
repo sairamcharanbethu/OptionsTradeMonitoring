@@ -189,11 +189,12 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     let result = positions.filter(pos => {
       if (debouncedTicker && !pos.symbol.toLowerCase().includes(debouncedTicker.toLowerCase())) return false;
       if (statusFilter !== 'ALL') {
+        if (statusFilter === 'PENDING_ORDER' && pos.status !== 'PENDING_ORDER') return false;
         if (statusFilter === 'OPEN_ONLY' && pos.status !== 'OPEN') return false;
         if (statusFilter === 'STOPPED' && pos.status !== 'STOP_TRIGGERED') return false;
         if (statusFilter === 'PROFIT' && pos.status !== 'PROFIT_TRIGGERED') return false;
         if (statusFilter === 'CLOSED' && pos.status !== 'CLOSED') return false;
-        if (['OPEN', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED', 'CLOSED'].includes(statusFilter) && pos.status !== statusFilter) return false;
+        if (['PENDING_ORDER', 'OPEN', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED', 'CLOSED'].includes(statusFilter) && pos.status !== statusFilter) return false;
       } else if (pos.status === 'CLOSED') {
         return false;
       }
@@ -544,6 +545,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="ALL">All Status</SelectItem>
+                        <SelectItem value="PENDING_ORDER">Pending Orders</SelectItem>
                         <SelectItem value="OPEN">Open</SelectItem>
                         <SelectItem value="STOP_TRIGGERED">Stopped</SelectItem>
                         <SelectItem value="PROFIT_TRIGGERED">Profit Hit</SelectItem>

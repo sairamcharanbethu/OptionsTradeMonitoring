@@ -186,7 +186,9 @@ export function PositionsTable({
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        {pos.status === 'STOP_TRIGGERED' ? (
+                                        {pos.status === 'PENDING_ORDER' ? (
+                                            <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-500/50 text-amber-600 dark:text-amber-300 animate-pulse">PENDING</Badge>
+                                        ) : pos.status === 'STOP_TRIGGERED' ? (
                                             <Badge variant="destructive" className="text-[10px] px-1 py-0 animate-pulse">STOP</Badge>
                                         ) : pos.status === 'PROFIT_TRIGGERED' ? (
                                             <Badge className="bg-green-500 text-[10px] px-1 py-0 animate-pulse">PROFIT</Badge>
@@ -285,7 +287,9 @@ export function PositionsTable({
                                 </div>
 
                                 <div className="flex items-center justify-between pt-1">
-                                    {pos.status === 'OPEN' ? (
+                                    {pos.status === 'PENDING_ORDER' ? (
+                                        <Badge variant="outline" className="text-[9px] border-amber-500/50 text-amber-600 dark:text-amber-300 animate-pulse">PENDING</Badge>
+                                    ) : pos.status === 'OPEN' ? (
                                         <Badge variant="outline" className="text-[9px]">OPEN</Badge>
                                     ) : (
                                         <Badge variant="destructive" className="text-[9px] animate-pulse">{pos.status === 'STOP_TRIGGERED' ? 'STOPPED' : 'PROFIT'}</Badge>

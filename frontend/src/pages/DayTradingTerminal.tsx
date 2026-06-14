@@ -174,6 +174,7 @@ const getSignalExecutionTone = (signal?: Signal | null) => {
   if (!signal) return 'border-zinc-700 text-zinc-400 bg-zinc-950/40';
   if (signal.execution_status === 'FAILED' || signal.execution_error) return 'border-red-500/40 text-red-300 bg-red-950/20';
   if (signal.execution_status === 'SKIPPED') return 'border-amber-500/40 text-amber-300 bg-amber-950/20';
+  if (signal.execution_status === 'PENDING') return 'border-amber-500/40 text-amber-300 bg-amber-950/20';
   if (signal.status === 'EXECUTED') return 'border-emerald-500/40 text-emerald-300 bg-emerald-950/20';
   return 'border-zinc-700 text-zinc-400 bg-zinc-950/40';
 };

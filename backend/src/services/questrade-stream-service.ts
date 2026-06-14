@@ -59,7 +59,7 @@ export class QuestradeStreamService extends EventEmitter {
 
             // Gather IDs first
             const result = await (this.fastify as any).pg.query(
-                "SELECT symbol, option_type, strike_price, expiration_date FROM positions WHERE status != 'CLOSED'"
+                "SELECT symbol, option_type, strike_price, expiration_date FROM positions WHERE status = 'OPEN'"
             );
 
             // Given we might have multiple positions for the same option (scaling in),
@@ -303,7 +303,7 @@ export class QuestradeStreamService extends EventEmitter {
         try {
             console.log('[Stream] Syncing active subscriptions...');
             const result = await (this.fastify as any).pg.query(
-                "SELECT symbol, option_type, strike_price, expiration_date FROM positions WHERE status != 'CLOSED'"
+                "SELECT symbol, option_type, strike_price, expiration_date FROM positions WHERE status = 'OPEN'"
             );
 
             const newIds = new Set<number>();

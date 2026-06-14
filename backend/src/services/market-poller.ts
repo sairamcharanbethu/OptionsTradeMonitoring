@@ -148,7 +148,7 @@ export class MarketPoller {
 
         // 3. Fetch open positions
         const { rows: positions } = await (this.fastify as any).pg.query(
-          "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.user_id = $1 AND p.status != 'CLOSED'",
+          "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.user_id = $1 AND p.status = 'OPEN'",
           [userId]
         );
 
@@ -395,7 +395,7 @@ export class MarketPoller {
   public async syncPrice(symbol: string, skipCache: boolean = false) {
     this.fastify.log.info(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
     const { rows: positions } = await (this.fastify as any).pg.query(
-      "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'",
+      "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status = 'OPEN'",
       [symbol]
     );
 
@@ -465,7 +465,7 @@ export class MarketPoller {
     this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
 
     const { rows: positions } = await (this.fastify as any).pg.query(
-      "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'"
+      "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN'"
     );
 
     if (positions.length === 0) {
@@ -1233,12 +1233,24 @@ export class MarketPoller {
         if (orderSide === 'buy') {
           // Entry fill — update the position's entry price with actual fill price
           try {
-            await (this.fastify as any).pg.query(
-              `UPDATE positions SET entry_price = $1, current_price = $1, trailing_high_price = $1, updated_at = CURRENT_TIMESTAMP
-               WHERE account_id = 'alpaca_paper' AND status = 'OPEN'
-               AND notes LIKE $2`,
-              [filledAvgPrice, `%${orderId}%`]
+            const { rows } = await (this.fastify as any).pg.query(
+              `UPDATE positions
+               SET status = 'OPEN',
+                   execution_status = 'EXECUTED',
+                   entry_price = $1,
+                   current_price = $1,
+                   trailing_high_price = $1,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE account_id = 'alpaca_paper'
+                 AND status IN ('PENDING_ORDER', 'OPEN')
+                 AND broker_order_id = $2
+               RETURNING user_id`,
+              [filledAvgPrice, orderId]
             );
+            for (const row of rows) {
+              await this.redisClient.del(`USER_POSITIONS:${row.user_id}`);
+              await this.redisClient.del(`USER_STATS:${row.user_id}`);
+            }
             this.fastify.log.info(`[AlpacaStream] Entry fill recorded: ${orderSymbol} @ $${filledAvgPrice}`);
           } catch (err: any) {
             this.fastify.log.error(`[AlpacaStream] Failed to update entry fill: ${err.message}`);
@@ -1287,6 +1299,27 @@ export class MarketPoller {
       case 'canceled':
       case 'rejected': {
         this.fastify.log.warn(`[AlpacaStream] Order ${event}: ${orderSymbol} | ID: ${orderId} | Reason: ${order.reject_reason || 'N/A'}`);
+        try {
+          const { rows } = await (this.fastify as any).pg.query(
+            `UPDATE positions
+             SET status = 'CLOSED',
+                 execution_status = $1,
+                 execution_error = $2,
+                 notes = COALESCE(notes, '') || $3,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE account_id = 'alpaca_paper'
+               AND status = 'PENDING_ORDER'
+               AND broker_order_id = $4
+             RETURNING user_id`,
+            [event.toUpperCase(), order.reject_reason || null, ` [Order ${event}]`, orderId]
+          );
+          for (const row of rows) {
+            await this.redisClient.del(`USER_POSITIONS:${row.user_id}`);
+            await this.redisClient.del(`USER_STATS:${row.user_id}`);
+          }
+        } catch (err: any) {
+          this.fastify.log.error(`[AlpacaStream] Failed to update ${event} order state: ${err.message}`);
+        }
         this.broadcastToFrontend({ type: 'ALPACA_ORDER_EVENT', data: { event, symbol: orderSymbol, orderId, reason: order.reject_reason } });
         break;
       }

@@ -19,7 +19,7 @@ export interface Position {
   realized_pnl?: number;
   loss_avoided?: number;
   current_price?: number;
-  status: 'OPEN' | 'CLOSED' | 'STOP_TRIGGERED' | 'PROFIT_TRIGGERED';
+  status: 'PENDING_ORDER' | 'OPEN' | 'CLOSED' | 'STOP_TRIGGERED' | 'PROFIT_TRIGGERED';
   created_at: string;
   updated_at: string;
   delta?: number;

@@ -48,7 +48,7 @@ const positionResponseSchema = {
     trailing_stop_loss_pct: { type: 'number', nullable: true },
     trailing_high_price: { type: 'number', nullable: true },
     current_price: { type: 'number', nullable: true },
-    status: { type: 'string', enum: ['OPEN', 'CLOSED', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED'] },
+    status: { type: 'string', enum: ['PENDING_ORDER', 'OPEN', 'CLOSED', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED'] },
     realized_pnl: { type: 'number', nullable: true },
     delta: { type: 'number', nullable: true },
     theta: { type: 'number', nullable: true },

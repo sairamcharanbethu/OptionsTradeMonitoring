@@ -158,6 +158,8 @@ export class TradeExecutionService {
 
       const orderData: any = await res.json();
       const entryPrice = await this.resolveEntryPriceFromAlpaca(osiTicker, input.mark, keyId, secretKey);
+      const orderFilled = ['filled', 'partially_filled'].includes(String(orderData.status || '').toLowerCase());
+      const executionStatus = orderFilled ? 'EXECUTED' : 'PENDING';
       await this.insertExecutedPosition(input, {
         quantity,
         entryPrice,
@@ -166,13 +168,14 @@ export class TradeExecutionService {
         executionBroker: 'alpaca_paper',
         brokerOrderId: orderData.id || null,
         brokerTradeId: null,
-        executionStatus: 'EXECUTED',
+        executionStatus,
+        positionStatus: orderFilled ? 'OPEN' : 'PENDING_ORDER',
         notes: `[Alpaca paper trade ${orderData.id || 'submitted'} from Signal #${input.signalId}]`
       });
 
-      await this.markSignalExecuted(input.signalId, 'alpaca_paper', orderData.id || null, null, quantity);
+      await this.markSignalExecuted(input.signalId, 'alpaca_paper', orderData.id || null, null, quantity, executionStatus);
       await this.invalidateUserCaches(input.userId);
-      return { success: true, broker: 'alpaca_paper', orderId: orderData.id, quantity };
+      return { success: true, broker: 'alpaca_paper', orderId: orderData.id, quantity, executionStatus };
     } catch (err: any) {
       await this.markSignalExecutionFailure(input.signalId, err.message);
       throw err;
@@ -219,13 +222,14 @@ export class TradeExecutionService {
         executionBroker: 'wealthsimple_snaptrade',
         brokerOrderId: result.orderId || null,
         brokerTradeId: result.tradeId || null,
-        executionStatus: 'EXECUTED',
+        executionStatus: 'PENDING',
+        positionStatus: 'PENDING_ORDER',
         notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId}]`
       });
 
-      await this.markSignalExecuted(input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity);
+      await this.markSignalExecuted(input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity, 'PENDING');
       await this.invalidateUserCaches(input.userId);
-      return { success: true, broker: 'wealthsimple_snaptrade', orderId: result.orderId, tradeId: result.tradeId, quantity };
+      return { success: true, broker: 'wealthsimple_snaptrade', orderId: result.orderId, tradeId: result.tradeId, quantity, executionStatus: 'PENDING' };
     } catch (err: any) {
       await this.markSignalExecutionFailure(input.signalId, err.message);
       throw err;
@@ -258,6 +262,7 @@ export class TradeExecutionService {
     brokerOrderId: string | null;
     brokerTradeId: string | null;
     executionStatus: string;
+    positionStatus?: string;
     notes: string;
   }) {
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
@@ -275,8 +280,8 @@ export class TradeExecutionService {
         created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-        'OPEN', $13, $14, $15, $16, $17, $18, $19, $20, $21,
-        $22, $23,
+        $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+        $23, $24,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )`,
       [
@@ -292,6 +297,7 @@ export class TradeExecutionService {
         entryPrice,
         null,
         entryPrice,
+        execution.positionStatus || 'OPEN',
         execution.isSimulated,
         execution.accountId,
         `${execution.notes} [Auto exits: premium SL $${premiumStopLoss}, premium TP $${premiumTakeProfit}, underlying SL ${input.stopUnderlying}, underlying TP ${input.targetUnderlying}]`,
@@ -344,18 +350,18 @@ export class TradeExecutionService {
     return 1;
   }
 
-  private async markSignalExecuted(signalId: number, broker: string, orderId: string | null, tradeId: string | null, quantity: number) {
+  private async markSignalExecuted(signalId: number, broker: string, orderId: string | null, tradeId: string | null, quantity: number, executionStatus: string = 'EXECUTED') {
     await this.fastify.pg.query(
       `UPDATE signals
        SET status = 'EXECUTED',
            execution_broker = $1,
            broker_order_id = $2,
            broker_trade_id = $3,
-           execution_status = 'EXECUTED',
+           execution_status = $4,
            execution_error = NULL,
-           contracts_requested = $4
-       WHERE id = $5`,
-      [broker, orderId, tradeId, quantity, signalId]
+           contracts_requested = $5
+       WHERE id = $6`,
+      [broker, orderId, tradeId, executionStatus, quantity, signalId]
     );
   }
 
