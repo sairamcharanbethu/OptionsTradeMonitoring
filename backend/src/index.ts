@@ -152,13 +152,17 @@ const ensureSchema = async (instance: any) => {
       { name: 'is_simulated', type: 'BOOLEAN DEFAULT FALSE' },
       { name: 'account_id', type: 'VARCHAR(255)' },
       { name: 'notes', type: 'TEXT' },
+      { name: 'exit_price', type: 'DECIMAL(10, 2)' },
       { name: 'execution_broker', type: 'VARCHAR(50)' },
       { name: 'broker_order_id', type: 'VARCHAR(255)' },
       { name: 'broker_trade_id', type: 'VARCHAR(255)' },
+      { name: 'broker_exit_order_id', type: 'VARCHAR(255)' },
+      { name: 'broker_exit_trade_id', type: 'VARCHAR(255)' },
       { name: 'execution_account_id', type: 'VARCHAR(255)' },
       { name: 'execution_status', type: 'VARCHAR(50)' },
       { name: 'execution_error', type: 'TEXT' },
-      { name: 'contracts_requested', type: 'INTEGER' }
+      { name: 'contracts_requested', type: 'INTEGER' },
+      { name: 'exit_requested_at', type: 'TIMESTAMPTZ' }
     ];
 
     for (const col of columns) {

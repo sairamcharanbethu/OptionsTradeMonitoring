@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS positions (
     iv DECIMAL(10, 4),
     realized_pnl DECIMAL(10, 2),
     loss_avoided DECIMAL(10, 2),
+    exit_price DECIMAL(10, 2),
     current_price DECIMAL(10, 2),
     underlying_price DECIMAL(10, 2),
     analyzed_support DECIMAL(10, 2),
@@ -42,10 +43,13 @@ CREATE TABLE IF NOT EXISTS positions (
     execution_broker VARCHAR(50),
     broker_order_id VARCHAR(255),
     broker_trade_id VARCHAR(255),
+    broker_exit_order_id VARCHAR(255),
+    broker_exit_trade_id VARCHAR(255),
     execution_account_id VARCHAR(255),
     execution_status VARCHAR(50),
     execution_error TEXT,
     contracts_requested INTEGER,
+    exit_requested_at TIMESTAMP WITH TIME ZONE,
     status VARCHAR(20) DEFAULT 'OPEN', -- OPEN, CLOSED
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

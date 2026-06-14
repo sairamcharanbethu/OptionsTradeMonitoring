@@ -419,11 +419,16 @@ export class SnaptradeService {
             .map((value) => String(value));
     }
 
-    private findMatchingOrder(orders: any[], position: any) {
-        const expectedIds = [
-            position.broker_order_id,
-            position.broker_trade_id
-        ].filter(Boolean).map((value) => String(value));
+    private findMatchingOrder(orders: any[], position: any, phase: 'ENTRY' | 'EXIT' = 'ENTRY') {
+        const expectedIds = phase === 'EXIT'
+            ? [
+                position.broker_exit_order_id,
+                position.broker_exit_trade_id
+            ].filter(Boolean).map((value) => String(value))
+            : [
+                position.broker_order_id,
+                position.broker_trade_id
+            ].filter(Boolean).map((value) => String(value));
 
         if (expectedIds.length === 0) return null;
 
@@ -453,13 +458,31 @@ export class SnaptradeService {
         return fallback;
     }
 
+    private getFilledQuantity(order: any): number {
+        const candidates = [
+            order?.filled_quantity,
+            order?.filledQuantity,
+            order?.total_quantity,
+            order?.totalQuantity,
+            order?.units
+        ];
+        for (const candidate of candidates) {
+            const value = Number(candidate);
+            if (Number.isFinite(value) && value > 0) return value;
+        }
+        return 0;
+    }
+
     async syncPendingBrokerOrders(userId: number) {
         const pendingRes = await this.fastify.pg.query(
             `SELECT *
              FROM positions
              WHERE user_id = $1
                AND execution_broker = 'wealthsimple_snaptrade'
-               AND status = 'PENDING_ORDER'
+               AND (
+                 status = 'PENDING_ORDER'
+                 OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
+               )
              ORDER BY created_at DESC`,
             [userId]
         );
@@ -494,7 +517,7 @@ export class SnaptradeService {
             return orders;
         };
 
-        const openStatuses = new Set(['EXECUTED', 'PARTIAL', 'PARTIALLY_EXECUTED']);
+        const openStatuses = new Set(['EXECUTED', 'FILLED', 'FILLED_FULLY', 'COMPLETE', 'COMPLETED', 'PARTIAL', 'PARTIALLY_EXECUTED', 'PARTIALLY_FILLED']);
         const closedStatuses = new Set(['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED']);
         const pendingStatuses = new Set([
             'PENDING',
@@ -514,6 +537,7 @@ export class SnaptradeService {
         ]);
 
         for (const position of pendingPositions) {
+            const phase: 'ENTRY' | 'EXIT' = position.execution_status === 'PENDING_EXIT' ? 'EXIT' : 'ENTRY';
             const accountId = String(position.execution_account_id || position.account_id || '').trim();
             if (!accountId) {
                 summary.unmatched += 1;
@@ -522,15 +546,15 @@ export class SnaptradeService {
                     positionId: position.id,
                     status: 'UNKNOWN',
                     action: 'unmatched',
-                    brokerOrderId: position.broker_order_id,
-                    brokerTradeId: position.broker_trade_id
+                    brokerOrderId: phase === 'EXIT' ? position.broker_exit_order_id : position.broker_order_id,
+                    brokerTradeId: phase === 'EXIT' ? position.broker_exit_trade_id : position.broker_trade_id
                 });
                 continue;
             }
 
             try {
                 const orders = await getOrdersForAccount(accountId);
-                const order = this.findMatchingOrder(orders, position);
+                const order = this.findMatchingOrder(orders, position, phase);
 
                 if (!order) {
                     summary.unmatched += 1;
@@ -538,8 +562,8 @@ export class SnaptradeService {
                         positionId: position.id,
                         status: 'UNKNOWN',
                         action: 'unmatched',
-                        brokerOrderId: position.broker_order_id,
-                        brokerTradeId: position.broker_trade_id
+                        brokerOrderId: phase === 'EXIT' ? position.broker_exit_order_id : position.broker_order_id,
+                        brokerTradeId: phase === 'EXIT' ? position.broker_exit_trade_id : position.broker_trade_id
                     });
                     continue;
                 }
@@ -547,45 +571,82 @@ export class SnaptradeService {
                 const status = this.normalizeOrderStatus(order.status);
                 if (openStatuses.has(status)) {
                     const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
-                    await this.fastify.pg.query(
-                        `UPDATE positions
-                         SET status = 'OPEN',
-                             execution_status = $1,
-                             entry_price = $2,
-                             current_price = $2,
-                             trailing_high_price = GREATEST(COALESCE(trailing_high_price, 0), $2),
-                             notes = COALESCE(notes, '') || ' [SnapTrade fill confirmed: ' || $1 || ']',
-                             updated_at = CURRENT_TIMESTAMP
-                         WHERE id = $3`,
-                        [status, fillPrice, position.id]
-                    );
-                    summary.opened += 1;
+                    if (phase === 'EXIT') {
+                        const filledQty = this.getFilledQuantity(order) || Number(position.quantity || 1);
+                        const realizedPnl = (fillPrice - Number(position.entry_price || 0)) * filledQty * 100;
+                        await this.fastify.pg.query(
+                            `UPDATE positions
+                             SET status = 'CLOSED',
+                                 execution_status = $1,
+                                 current_price = $2,
+                                 exit_price = $2,
+                                 realized_pnl = $3,
+                                 execution_error = NULL,
+                                 notes = COALESCE(notes, '') || ' [SnapTrade exit fill confirmed: ' || $1 || ']',
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = $4`,
+                            [status, fillPrice, realizedPnl, position.id]
+                        );
+                        summary.closed += 1;
+                    } else {
+                        const stopLoss = Number((fillPrice * 0.8).toFixed(2));
+                        const takeProfit = Number((fillPrice * 1.4).toFixed(2));
+                        await this.fastify.pg.query(
+                            `UPDATE positions
+                             SET status = 'OPEN',
+                                 execution_status = $1,
+                                 entry_price = $2,
+                                 current_price = $2,
+                                 stop_loss_trigger = $3,
+                                 take_profit_trigger = $4,
+                                 trailing_high_price = GREATEST(COALESCE(trailing_high_price, 0), $2),
+                                 execution_error = NULL,
+                                 notes = COALESCE(notes, '') || ' [SnapTrade fill confirmed: ' || $1 || '; auto exits recalculated from fill]',
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = $5`,
+                            [status, fillPrice, stopLoss, takeProfit, position.id]
+                        );
+                        summary.opened += 1;
+                    }
                     summary.orders.push({
                         positionId: position.id,
                         status,
-                        action: 'opened',
-                        brokerOrderId: position.broker_order_id,
-                        brokerTradeId: position.broker_trade_id,
+                        action: phase === 'EXIT' ? 'closed' : 'opened',
+                        brokerOrderId: phase === 'EXIT' ? position.broker_exit_order_id : position.broker_order_id,
+                        brokerTradeId: phase === 'EXIT' ? position.broker_exit_trade_id : position.broker_trade_id,
                         fillPrice
                     });
                 } else if (closedStatuses.has(status)) {
-                    await this.fastify.pg.query(
-                        `UPDATE positions
-                         SET status = 'CLOSED',
-                             execution_status = $1,
-                             execution_error = COALESCE($2, execution_error),
-                             notes = COALESCE(notes, '') || ' [SnapTrade order ' || $1 || ']',
-                             updated_at = CURRENT_TIMESTAMP
-                         WHERE id = $3`,
-                        [status, order?.rejection_reason || order?.reason || null, position.id]
-                    );
-                    summary.closed += 1;
+                    if (phase === 'EXIT') {
+                        await this.fastify.pg.query(
+                            `UPDATE positions
+                             SET execution_status = $1,
+                                 execution_error = COALESCE($2, execution_error),
+                                 notes = COALESCE(notes, '') || ' [SnapTrade exit order ' || $1 || ']',
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = $3`,
+                            [`EXIT_${status}`, order?.rejection_reason || order?.reason || null, position.id]
+                        );
+                        summary.stillPending += 1;
+                    } else {
+                        await this.fastify.pg.query(
+                            `UPDATE positions
+                             SET status = 'CLOSED',
+                                 execution_status = $1,
+                                 execution_error = COALESCE($2, execution_error),
+                                 notes = COALESCE(notes, '') || ' [SnapTrade order ' || $1 || ']',
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = $3`,
+                            [status, order?.rejection_reason || order?.reason || null, position.id]
+                        );
+                        summary.closed += 1;
+                    }
                     summary.orders.push({
                         positionId: position.id,
                         status,
-                        action: 'closed',
-                        brokerOrderId: position.broker_order_id,
-                        brokerTradeId: position.broker_trade_id
+                        action: phase === 'EXIT' ? 'exit_failed' : 'closed',
+                        brokerOrderId: phase === 'EXIT' ? position.broker_exit_order_id : position.broker_order_id,
+                        brokerTradeId: phase === 'EXIT' ? position.broker_exit_trade_id : position.broker_trade_id
                     });
                 } else {
                     await this.fastify.pg.query(
@@ -600,8 +661,8 @@ export class SnaptradeService {
                         positionId: position.id,
                         status,
                         action: 'pending',
-                        brokerOrderId: position.broker_order_id,
-                        brokerTradeId: position.broker_trade_id
+                        brokerOrderId: phase === 'EXIT' ? position.broker_exit_order_id : position.broker_order_id,
+                        brokerTradeId: phase === 'EXIT' ? position.broker_exit_trade_id : position.broker_trade_id
                     });
                 }
             } catch (err: any) {

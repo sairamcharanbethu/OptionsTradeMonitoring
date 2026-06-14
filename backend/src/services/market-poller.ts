@@ -3,6 +3,7 @@ import { FastifyInstance } from 'fastify';
 import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
+import { SnaptradeService } from './snaptrade-service';
 import WebSocket from 'ws';
 
 export class MarketPoller {
@@ -189,6 +190,81 @@ export class MarketPoller {
     }
   }
 
+  private getNewYorkDateString(date: Date = new Date()): string {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(date);
+    const getPart = (type: string) => parts.find(part => part.type === type)?.value || '';
+    return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+  }
+
+  private async markExitSubmissionFailure(position: any, message: string) {
+    await (this.fastify as any).pg.query(
+      `UPDATE positions
+       SET execution_status = 'EXIT_FAILED',
+           execution_error = $1,
+           notes = COALESCE(notes, '') || $2,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 AND status = 'OPEN'`,
+      [message, ` [Exit submission failed: ${message}]`, position.id]
+    );
+  }
+
+  private async submitSnapTradeExit(position: any, orderType: 'LIMIT' | 'MARKET', limitPrice?: string): Promise<boolean> {
+    const accountId = position.account_id;
+    if (!accountId) {
+      await this.markExitSubmissionFailure(position, 'No SnapTrade account id found for live exit');
+      return false;
+    }
+
+    try {
+      const snaptradeService = new SnaptradeService(this.fastify);
+      const osiTicker = this.constructOSITicker(
+        position.symbol,
+        Number(position.strike_price),
+        position.option_type,
+        position.expiration_date
+      );
+
+      const result = await snaptradeService.placeOptionOrder(
+        position.user_id,
+        accountId,
+        osiTicker,
+        'SELL_TO_CLOSE',
+        position.quantity,
+        orderType,
+        limitPrice
+      );
+
+      await (this.fastify as any).pg.query(
+        `UPDATE positions
+         SET execution_status = 'PENDING_EXIT',
+             execution_error = NULL,
+             broker_exit_order_id = $1,
+             broker_exit_trade_id = $2,
+             exit_requested_at = CURRENT_TIMESTAMP,
+             notes = COALESCE(notes, '') || $3,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $4 AND status = 'OPEN'`,
+        [
+          result.orderId || null,
+          result.tradeId || null,
+          ` [SnapTrade ${orderType} exit submitted${result.orderId ? `: ${result.orderId}` : ''}]`,
+          position.id
+        ]
+      );
+      return true;
+    } catch (err: any) {
+      const message = err.message || String(err);
+      this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${message}`);
+      await this.markExitSubmissionFailure(position, message);
+      return false;
+    }
+  }
+
   private async notifyN8nBriefing(userId: string, username: string, briefing: string, discordMessage: string) {
     const N8N_WEBHOOK_URL = process.env.N8N_ALERT_WEBHOOK_URL;
     if (!N8N_WEBHOOK_URL) return;
@@ -242,6 +318,18 @@ export class MarketPoller {
     const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
 
     return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
+  }
+
+  private parseCompactOsiTicker(ticker: string): { root: string; expiration: string; optionType: 'CALL' | 'PUT'; strike: number } | null {
+    const match = String(ticker || '').replace(/\s+/g, '').toUpperCase().match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+    if (!match) return null;
+    const [, root, expiry, side, strikeRaw] = match;
+    return {
+      root,
+      expiration: `20${expiry.slice(0, 2)}-${expiry.slice(2, 4)}-${expiry.slice(4, 6)}`,
+      optionType: side === 'C' ? 'CALL' : 'PUT',
+      strike: Number(strikeRaw) / 1000
+    };
   }
 
   private async getOptionPremium(userId: number, symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string, skipCache: boolean = false): Promise<any | null> {
@@ -486,7 +574,7 @@ export class MarketPoller {
     const etMinute = parseInt(etMinuteStr, 10);
     const etTimeMinutes = etHour * 60 + etMinute;
 
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = this.getNewYorkDateString(now);
 
     const isEodCutoff = etTimeMinutes >= 15 * 60 + 50; // 3:50 PM ET or later
     const isMorningCutoff = etTimeMinutes >= 13 * 60; // 1:00 PM ET or later
@@ -495,9 +583,13 @@ export class MarketPoller {
         let shouldForceClose = false;
         let reason = '';
 
-        const expDateStr = pos.expiration_date instanceof Date 
-            ? pos.expiration_date.toISOString().split('T')[0] 
-            : new Date(pos.expiration_date).toISOString().split('T')[0];
+        if (pos.execution_status === 'PENDING_EXIT') {
+            continue;
+        }
+
+        const expDateStr = pos.expiration_date instanceof Date
+            ? this.getNewYorkDateString(pos.expiration_date)
+            : String(pos.expiration_date).split('T')[0];
         const is0Dte = expDateStr === todayStr;
 
         if (isEodCutoff) {
@@ -513,36 +605,19 @@ export class MarketPoller {
             let currentPrice = Number(pos.current_price || pos.entry_price);
             
             if (!pos.is_simulated) {
-                try {
-                    const accountId = pos.account_id;
-                    if (!accountId) {
-                        this.fastify.log.error(`[MarketPoller] No account_id found for Live position ${pos.id}. Cannot force close.`);
-                    } else {
-                        const snaptradeService = new (await import('./snaptrade-service')).SnaptradeService(this.fastify);
-                        const osiTicker = this.constructOSITicker(
-                            pos.symbol, 
-                            Number(pos.strike_price), 
-                            pos.option_type, 
-                            pos.expiration_date
-                        );
-
-                        // Hard cutoffs always use MARKET orders to guarantee exit before bell
-                        let limitPrice: string | undefined = undefined;
-                        let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
-
-                        await snaptradeService.placeOptionOrder(
-                            pos.user_id,
-                            accountId,
-                            osiTicker,
-                            'SELL_TO_CLOSE',
-                            pos.quantity,
-                            orderType,
-                            limitPrice
-                        );
-                    }
-                } catch (err: any) {
-                    this.fastify.log.error(`[MarketPoller] Failed to execute Live force-close for position ${pos.id}: ${err.message}`);
-                }
+                const submitted = await this.submitSnapTradeExit(pos, 'MARKET');
+                if (!submitted) continue;
+                await this.notifyN8n(
+                    pos,
+                    currentPrice,
+                    0,
+                    0,
+                    'FORCE_CLOSE',
+                    `Exit order submitted due to ${reason}`,
+                    `**[FORCE CLOSE SUBMITTED]** ${reason}. Market SELL_TO_CLOSE was submitted; waiting for broker fill confirmation. Last app price: $${currentPrice}.`
+                );
+                pos.execution_status = 'PENDING_EXIT';
+                continue;
             } else if (pos.account_id === 'alpaca_paper') {
                 try {
                     const { rows: settingsRows } = await (this.fastify as any).pg.query(
@@ -589,9 +664,24 @@ export class MarketPoller {
                             const errText = await res.text();
                             throw new Error(`Alpaca paper force close failed: ${res.status} - ${errText}`);
                         }
+                        const orderData: any = await res.json();
+                        await (this.fastify as any).pg.query(
+                            `UPDATE positions
+                             SET execution_status = 'PENDING_EXIT',
+                                 execution_error = NULL,
+                                 broker_exit_order_id = $1,
+                                 exit_requested_at = CURRENT_TIMESTAMP,
+                                 notes = COALESCE(notes, '') || $2,
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = $3 AND status = 'OPEN'`,
+                            [orderData.id || null, ` [Alpaca paper force-close submitted${orderData.id ? `: ${orderData.id}` : ''}]`, pos.id]
+                        );
+                        pos.execution_status = 'PENDING_EXIT';
+                        continue;
                     }
                 } catch (err: any) {
                     this.fastify.log.error(`[MarketPoller] Failed to execute Alpaca force-close for position ${pos.id}: ${err.message}`);
+                    await this.markExitSubmissionFailure(pos, err.message || String(err));
                     continue;
                 }
             }
@@ -906,6 +996,10 @@ export class MarketPoller {
       [position.id, price]
     );
 
+    if (position.execution_status === 'PENDING_EXIT') {
+      return;
+    }
+
     if (triggered) {
       if (position.status === 'OPEN') {
         const exitTriggerType = triggerType || 'STOP_LOSS';
@@ -915,42 +1009,32 @@ export class MarketPoller {
         // Execute Live SnapTrade order if not simulated
         if (!position.is_simulated) {
             this.fastify.log.info(`[MarketPoller] LIVE position exit triggered for position ${position.id} (${position.symbol}). Executing SELL_TO_CLOSE via SnapTrade...`);
-            try {
-                const accountId = position.account_id;
-                if (!accountId) {
-                    this.fastify.log.error(`[MarketPoller] No account_id found for Live position ${position.id}. Cannot close.`);
-                } else {
-                    const snaptradeService = new (await import('./snaptrade-service')).SnaptradeService(this.fastify);
-                    const osiTicker = this.constructOSITicker(
-                        position.symbol, 
-                        Number(position.strike_price), 
-                        position.option_type, 
-                        position.expiration_date
-                    );
-                    
-                    let limitPrice: string | undefined = undefined;
-                    let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
+            let limitPrice: string | undefined = undefined;
+            let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
 
-                    // Only use LIMIT order if taking profit. Stop Loss MUST be MARKET to guarantee exit.
-                    if (exitTriggerType === 'TAKE_PROFIT' && price > 0) {
-                        limitPrice = price.toFixed(2);
-                        orderType = 'LIMIT';
-                    }
-
-                    await snaptradeService.placeOptionOrder(
-                        position.user_id,
-                        accountId,
-                        osiTicker,
-                        'SELL_TO_CLOSE',
-                        position.quantity,
-                        orderType,
-                        limitPrice
-                    );
-                    this.fastify.log.info(`[MarketPoller] Live exit execution successful for position ${position.id} using ${orderType} order at limit price: ${limitPrice}.`);
-                }
-            } catch (err: any) {
-                this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${err.message}`);
+            // Only use LIMIT order if taking profit. Stop Loss MUST be MARKET to prioritize exit.
+            if (exitTriggerType === 'TAKE_PROFIT' && price > 0) {
+                limitPrice = price.toFixed(2);
+                orderType = 'LIMIT';
             }
+
+            const submitted = await this.submitSnapTradeExit(position, orderType, limitPrice);
+            if (submitted) {
+              await (this.fastify as any).pg.query(
+                'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',
+                [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT' ? (position.suggested_take_profit_1 || position.take_profit_trigger) : (position.suggested_stop_loss || position.stop_loss_trigger), price]
+              );
+              this.notifyN8n(
+                position,
+                price,
+                realizedPnl,
+                lossAvoided,
+                exitTriggerType,
+                `${exitTriggerType} exit order submitted; waiting for broker fill confirmation.`,
+                `**[${exitTriggerType} EXIT SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} SELL_TO_CLOSE submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
+              );
+            }
+            return;
         } else if (position.account_id === 'alpaca_paper') {
             try {
                 const { rows: settingsRows } = await (this.fastify as any).pg.query(
@@ -1008,10 +1092,24 @@ export class MarketPoller {
                         const errText = await res.text();
                         throw new Error(`Alpaca paper exit failed: ${res.status} - ${errText}`);
                     }
+                    const orderData: any = await res.json();
+                    await (this.fastify as any).pg.query(
+                        `UPDATE positions
+                         SET execution_status = 'PENDING_EXIT',
+                             execution_error = NULL,
+                             broker_exit_order_id = $1,
+                             exit_requested_at = CURRENT_TIMESTAMP,
+                             notes = COALESCE(notes, '') || $2,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = $3 AND status = 'OPEN'`,
+                        [orderData.id || null, ` [Alpaca paper exit submitted${orderData.id ? `: ${orderData.id}` : ''}]`, position.id]
+                    );
                     this.fastify.log.info(`[MarketPoller] Alpaca paper exit execution successful for position ${position.id}.`);
+                    return;
                 }
             } catch (err: any) {
                 this.fastify.log.error(`[MarketPoller] Alpaca paper exit execution failed for position ${position.id}: ${err.message}`);
+                await this.markExitSubmissionFailure(position, err.message || String(err));
                 return;
             }
         }
@@ -1258,12 +1356,32 @@ export class MarketPoller {
         } else if (orderSide === 'sell') {
           // Exit fill — close the position with actual exit price
           try {
+            const parsedOsi = this.parseCompactOsiTicker(orderSymbol);
             const { rows } = await (this.fastify as any).pg.query(
               `SELECT id, entry_price, quantity, user_id FROM positions
-               WHERE account_id = 'alpaca_paper' AND status = 'OPEN'
-               AND symbol = $1
-               ORDER BY created_at DESC LIMIT 1`,
-              [orderSymbol.substring(0, 3)] // Extract root symbol (e.g., SPY, QQQ)
+               WHERE account_id = 'alpaca_paper'
+                 AND status = 'OPEN'
+                 AND (
+                   broker_exit_order_id = $1
+                   OR (
+                     $2::text IS NOT NULL
+                     AND symbol = $2
+                     AND option_type = $3
+                     AND strike_price = $4
+                     AND expiration_date = $5
+                   )
+                 )
+               ORDER BY
+                 CASE WHEN broker_exit_order_id = $1 THEN 0 ELSE 1 END,
+                 created_at DESC
+               LIMIT 1`,
+              [
+                orderId,
+                parsedOsi?.root || null,
+                parsedOsi?.optionType || null,
+                parsedOsi?.strike || null,
+                parsedOsi?.expiration || null
+              ]
             );
 
             if (rows.length > 0) {

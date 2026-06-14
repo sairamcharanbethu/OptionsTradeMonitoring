@@ -2,6 +2,16 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 import { redis } from '../lib/redis';
 import { AnalysisService } from '../services/analysis-service';
+import { SnaptradeService } from '../services/snaptrade-service';
+
+function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
+  const dateStr = expiration instanceof Date ? expiration.toISOString().split('T')[0] : String(expiration).split('T')[0];
+  const [year, month, day] = dateStr.split('-');
+  const yy = year.slice(-2);
+  const side = type === 'CALL' ? 'C' : 'P';
+  const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
+  return `${symbol.toUpperCase()}${yy}${month}${day}${side}${strikeValue}`;
+}
 
 const PositionSchema = z.object({
   symbol: z.string(),
@@ -558,6 +568,145 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       if (closeQty <= 0 || closeQty > currentQty) {
         await client.query('ROLLBACK');
         return reply.code(400).send({ error: 'Invalid quantity' });
+      }
+
+      if (position.status !== 'OPEN') {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: 'Only open positions can be closed' });
+      }
+
+      if (position.execution_status === 'PENDING_EXIT') {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: 'An exit order is already pending for this position' });
+      }
+
+      const executionBroker = String(position.execution_broker || '');
+      const isLiveSnapTrade = !position.is_simulated && executionBroker === 'wealthsimple_snaptrade';
+      const isAlpacaPaper = position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper';
+
+      if (isLiveSnapTrade) {
+        const accountId = String(position.execution_account_id || position.account_id || '').trim();
+        if (!accountId) {
+          await client.query('ROLLBACK');
+          return reply.code(400).send({ error: 'No SnapTrade account id is attached to this position' });
+        }
+
+        try {
+          const snaptradeService = new SnaptradeService(fastify);
+          const osiTicker = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+          const order = await snaptradeService.placeOptionOrder(
+            userId,
+            accountId,
+            osiTicker,
+            'SELL_TO_CLOSE',
+            closeQty,
+            'MARKET'
+          );
+
+          const { rows: updatedRows } = await client.query(
+            `UPDATE positions
+             SET execution_status = 'PENDING_EXIT',
+                 execution_error = NULL,
+                 broker_exit_order_id = $1,
+                 broker_exit_trade_id = $2,
+                 exit_requested_at = CURRENT_TIMESTAMP,
+                 notes = COALESCE(notes, '') || $3,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $4
+             RETURNING *`,
+            [
+              order.orderId || null,
+              order.tradeId || null,
+              ` [Manual SnapTrade MARKET exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`,
+              id
+            ]
+          );
+          await client.query('COMMIT');
+          await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+          return updatedRows[0];
+        } catch (err: any) {
+          await client.query(
+            `UPDATE positions
+             SET execution_status = 'EXIT_FAILED',
+                 execution_error = $1,
+                 notes = COALESCE(notes, '') || $2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $3`,
+            [err.message || String(err), ` [Manual SnapTrade exit failed: ${err.message || String(err)}]`, id]
+          );
+          await client.query('COMMIT');
+          await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+          return reply.code(400).send({ error: err.message || 'Failed to submit SnapTrade close order' });
+        }
+      }
+
+      if (isAlpacaPaper) {
+        const { rows: settingsRows } = await client.query(
+          "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')",
+          [userId]
+        );
+        const settings = settingsRows.reduce((acc: any, row: any) => {
+          acc[row.key] = row.value;
+          return acc;
+        }, {});
+        const keyId = settings.alpaca_key_id?.trim();
+        const secretKey = settings.alpaca_secret_key?.trim();
+        if (!keyId || !secretKey) {
+          await client.query('ROLLBACK');
+          return reply.code(400).send({ error: 'Alpaca credentials are not configured' });
+        }
+
+        try {
+          const osiTicker = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+          const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+            method: 'POST',
+            headers: {
+              'APCA-API-KEY-ID': keyId,
+              'APCA-API-SECRET-KEY': secretKey,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              symbol: osiTicker,
+              qty: closeQty,
+              side: 'sell',
+              type: 'market',
+              time_in_force: 'day'
+            })
+          });
+          if (!res.ok) {
+            const errorText = await res.text();
+            throw new Error(`Alpaca paper close failed: ${res.status} - ${errorText}`);
+          }
+          const orderData: any = await res.json();
+          const { rows: updatedRows } = await client.query(
+            `UPDATE positions
+             SET execution_status = 'PENDING_EXIT',
+                 execution_error = NULL,
+                 broker_exit_order_id = $1,
+                 exit_requested_at = CURRENT_TIMESTAMP,
+                 notes = COALESCE(notes, '') || $2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $3
+             RETURNING *`,
+            [orderData.id || null, ` [Manual Alpaca paper MARKET exit submitted for ${closeQty} contract(s)${orderData.id ? `: ${orderData.id}` : ''}]`, id]
+          );
+          await client.query('COMMIT');
+          await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+          return updatedRows[0];
+        } catch (err: any) {
+          await client.query(
+            `UPDATE positions
+             SET execution_status = 'EXIT_FAILED',
+                 execution_error = $1,
+                 notes = COALESCE(notes, '') || $2,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $3`,
+            [err.message || String(err), ` [Manual Alpaca paper exit failed: ${err.message || String(err)}]`, id]
+          );
+          await client.query('COMMIT');
+          await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+          return reply.code(400).send({ error: err.message || 'Failed to submit Alpaca paper close order' });
+        }
       }
 
       // 3. Calculate Analytics for the closed portion
