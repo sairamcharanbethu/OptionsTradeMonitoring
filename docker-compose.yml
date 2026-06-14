@@ -13,13 +13,22 @@ services:
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     networks:
       - ssmedia_ssmedia_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   backend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     restart: always
     ports:
       - "${PORT_BACKEND:-3001}:3001"
     environment:
+      NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${DATABASE_URL}
       BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL}
       REDIS_URL: redis://redis:6379
@@ -29,12 +38,29 @@ services:
       MARKET_DATA_POLL_INTERVAL: ${MARKET_DATA_POLL_INTERVAL}
       ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
       POLYGON_API_KEY: ${POLYGON_API_KEY}
+      ALPACA_OPTIONS_FEED: ${ALPACA_OPTIONS_FEED:-indicative}
+      SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS: ${SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS:-60}
+      SMART_STOP_CONFIRMATION_MS: ${SMART_STOP_CONFIRMATION_MS:-45000}
+      ENABLE_DEV_TRADING_TESTS: ${ENABLE_DEV_TRADING_TESTS:-false}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      AI_MODEL: ${AI_MODEL:-mistral:7b-instruct-q4_K_M}
+      MORNING_BRIEFING_SCHEDULE: ${MORNING_BRIEFING_SCHEDULE:-30 8 * * *}
+      QUESTRADE_TOKEN_KEY: ${QUESTRADE_TOKEN_KEY:-questrade_refresh_token}
+      QUESTRADE_CLIENT_ID: ${QUESTRADE_CLIENT_ID}
+      QUESTRADE_REFRESH_TOKEN: ${QUESTRADE_REFRESH_TOKEN}
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - ssmedia_ssmedia_net
       - default
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:alpine
@@ -43,17 +69,35 @@ services:
       - "${PORT_REDIS:-6379}:6379"
     networks:
       - default
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_APP_VERSION: ${VITE_APP_VERSION:-1.4.1}
+        VITE_APP_BUILD_SHA: ${VITE_APP_BUILD_SHA:-}
+        VITE_ENABLE_DEV_TRADING_TESTS: ${VITE_ENABLE_DEV_TRADING_TESTS:-false}
     restart: always
     ports:
       - "${PORT_FRONTEND:-3000}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - ssmedia_ssmedia_net
       - default
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
 networks:
   ssmedia_ssmedia_net:

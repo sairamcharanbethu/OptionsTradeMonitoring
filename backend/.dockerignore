@@ -1,5 +1,10 @@
 node_modules
-# dist removed to allow native build assets
+dist
+.env
+npm-debug.log*
+*.log
+snaptrade_accounts.json
+snaptrade_positions.json
 .git
 .gitignore
 README.md

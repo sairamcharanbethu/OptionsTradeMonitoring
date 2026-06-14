@@ -1,5 +1,8 @@
 node_modules
-# dist removed to allow native build assets
+dist
+.env
+npm-debug.log*
+*.log
 .git
 .gitignore
 README.md
