@@ -89,7 +89,7 @@ function App() {
             <Routes>
               <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
               <Route path="/positions/:id" element={<PositionDetailsPage />} />
-              {devTradeTestsEnabled && <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />}
+              <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />
             </Routes>
           </BrowserRouter>
         </main>
