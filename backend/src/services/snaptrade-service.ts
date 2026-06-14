@@ -297,6 +297,242 @@ export class SnaptradeService {
         }
     }
 
+    private extractRecentOrders(payload: any): any[] {
+        if (Array.isArray(payload)) return payload;
+        if (Array.isArray(payload?.orders)) return payload.orders;
+        return [];
+    }
+
+    private collectOrderIds(order: any): string[] {
+        return [
+            order?.id,
+            order?.order_id,
+            order?.orderId,
+            order?.brokerage_order_id,
+            order?.brokerageOrderId,
+            order?.brokerage_order_id?.id,
+            order?.brokerage_group_order_id,
+            order?.brokerageGroupOrderId,
+            order?.trade_id,
+            order?.tradeId
+        ]
+            .filter((value) => value !== null && value !== undefined)
+            .map((value) => String(value));
+    }
+
+    private findMatchingOrder(orders: any[], position: any) {
+        const expectedIds = [
+            position.broker_order_id,
+            position.broker_trade_id
+        ].filter(Boolean).map((value) => String(value));
+
+        if (expectedIds.length === 0) return null;
+
+        return orders.find((order) => {
+            const orderIds = this.collectOrderIds(order);
+            return expectedIds.some((id) => orderIds.includes(id));
+        }) || null;
+    }
+
+    private normalizeOrderStatus(status: any): string {
+        return String(status || 'UNKNOWN').trim().toUpperCase();
+    }
+
+    private getOrderFillPrice(order: any, fallback: number): number {
+        const candidates = [
+            order?.execution_price,
+            order?.average_fill_price,
+            order?.filled_avg_price,
+            order?.avg_fill_price,
+            order?.price,
+            order?.limit_price
+        ];
+        for (const candidate of candidates) {
+            const value = Number(candidate);
+            if (Number.isFinite(value) && value > 0) return value;
+        }
+        return fallback;
+    }
+
+    async syncPendingBrokerOrders(userId: number) {
+        const pendingRes = await this.fastify.pg.query(
+            `SELECT *
+             FROM positions
+             WHERE user_id = $1
+               AND execution_broker = 'wealthsimple_snaptrade'
+               AND status = 'PENDING_ORDER'
+             ORDER BY created_at DESC`,
+            [userId]
+        );
+
+        const pendingPositions = pendingRes.rows || [];
+        const summary = {
+            success: true,
+            checked: pendingPositions.length,
+            opened: 0,
+            closed: 0,
+            stillPending: 0,
+            unmatched: 0,
+            errors: [] as string[],
+            orders: [] as Array<{ positionId: number; status: string; action: string; brokerOrderId: string | null; brokerTradeId: string | null; fillPrice?: number }>
+        };
+
+        if (pendingPositions.length === 0) return summary;
+
+        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        const ordersByAccount = new Map<string, any[]>();
+
+        const getOrdersForAccount = async (accountId: string) => {
+            if (ordersByAccount.has(accountId)) return ordersByAccount.get(accountId) || [];
+            const response = await snaptrade.accountInformation.getUserAccountRecentOrders({
+                userId: userIdStr,
+                userSecret,
+                accountId,
+                onlyExecuted: false
+            });
+            const orders = this.extractRecentOrders(response.data);
+            ordersByAccount.set(accountId, orders);
+            return orders;
+        };
+
+        const openStatuses = new Set(['EXECUTED', 'PARTIAL', 'PARTIALLY_EXECUTED']);
+        const closedStatuses = new Set(['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED']);
+        const pendingStatuses = new Set([
+            'PENDING',
+            'ACCEPTED',
+            'QUEUED',
+            'TRIGGERED',
+            'ACTIVATED',
+            'PENDING_RISK_REVIEW',
+            'CONTINGENT_ORDER',
+            'CANCEL_PENDING',
+            'REPLACE_PENDING',
+            'REPLACED',
+            'STOPPED',
+            'SUSPENDED',
+            'NONE',
+            'UNKNOWN'
+        ]);
+
+        for (const position of pendingPositions) {
+            const accountId = String(position.execution_account_id || position.account_id || '').trim();
+            if (!accountId) {
+                summary.unmatched += 1;
+                summary.errors.push(`Position ${position.id} has no SnapTrade account id.`);
+                summary.orders.push({
+                    positionId: position.id,
+                    status: 'UNKNOWN',
+                    action: 'unmatched',
+                    brokerOrderId: position.broker_order_id,
+                    brokerTradeId: position.broker_trade_id
+                });
+                continue;
+            }
+
+            try {
+                const orders = await getOrdersForAccount(accountId);
+                const order = this.findMatchingOrder(orders, position);
+
+                if (!order) {
+                    summary.unmatched += 1;
+                    summary.orders.push({
+                        positionId: position.id,
+                        status: 'UNKNOWN',
+                        action: 'unmatched',
+                        brokerOrderId: position.broker_order_id,
+                        brokerTradeId: position.broker_trade_id
+                    });
+                    continue;
+                }
+
+                const status = this.normalizeOrderStatus(order.status);
+                if (openStatuses.has(status)) {
+                    const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
+                    await this.fastify.pg.query(
+                        `UPDATE positions
+                         SET status = 'OPEN',
+                             execution_status = $1,
+                             entry_price = $2,
+                             current_price = $2,
+                             trailing_high_price = GREATEST(COALESCE(trailing_high_price, 0), $2),
+                             notes = COALESCE(notes, '') || ' [SnapTrade fill confirmed: ' || $1 || ']',
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = $3`,
+                        [status, fillPrice, position.id]
+                    );
+                    summary.opened += 1;
+                    summary.orders.push({
+                        positionId: position.id,
+                        status,
+                        action: 'opened',
+                        brokerOrderId: position.broker_order_id,
+                        brokerTradeId: position.broker_trade_id,
+                        fillPrice
+                    });
+                } else if (closedStatuses.has(status)) {
+                    await this.fastify.pg.query(
+                        `UPDATE positions
+                         SET status = 'CLOSED',
+                             execution_status = $1,
+                             execution_error = COALESCE($2, execution_error),
+                             notes = COALESCE(notes, '') || ' [SnapTrade order ' || $1 || ']',
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = $3`,
+                        [status, order?.rejection_reason || order?.reason || null, position.id]
+                    );
+                    summary.closed += 1;
+                    summary.orders.push({
+                        positionId: position.id,
+                        status,
+                        action: 'closed',
+                        brokerOrderId: position.broker_order_id,
+                        brokerTradeId: position.broker_trade_id
+                    });
+                } else {
+                    await this.fastify.pg.query(
+                        `UPDATE positions
+                         SET execution_status = $1,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = $2`,
+                        [pendingStatuses.has(status) ? status : 'PENDING', position.id]
+                    );
+                    summary.stillPending += 1;
+                    summary.orders.push({
+                        positionId: position.id,
+                        status,
+                        action: 'pending',
+                        brokerOrderId: position.broker_order_id,
+                        brokerTradeId: position.broker_trade_id
+                    });
+                }
+            } catch (err: any) {
+                summary.unmatched += 1;
+                summary.errors.push(`Position ${position.id}: ${err.message}`);
+                this.fastify.log.warn(`[SnaptradeService] Failed to sync pending order ${position.id}: ${err.message}`);
+            }
+        }
+
+        if (summary.opened > 0 || summary.closed > 0 || summary.stillPending > 0) {
+            await redis.del(`USER_POSITIONS:${userId}`);
+            await redis.del(`USER_STATS:${userId}`);
+            await redis.del(`SNAPTRADE_PORTFOLIO:${userId}`);
+
+            const streamers = [
+                (this.fastify as any).alpacaMarketDataStreamer,
+                (this.fastify as any).streamer
+            ];
+            for (const streamer of streamers) {
+                if (streamer?.syncSubscriptions) {
+                    streamer.syncSubscriptions().catch((err: any) => {
+                        this.fastify.log.warn(`[SnaptradeService] Failed to refresh stream subscriptions after pending sync: ${err.message}`);
+                    });
+                }
+            }
+        }
+
+        return summary;
+    }
+
     async placeOptionOrder(
         userId: number,
         accountId: string,

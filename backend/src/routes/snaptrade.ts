@@ -35,6 +35,20 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
     return result;
   });
 
+  // POST /sync-pending-orders
+  fastify.post('/sync-pending-orders', {
+    schema: {
+      tags: ['SnapTrade'],
+      summary: 'Sync Pending Wealthsimple Orders',
+      description: 'Checks recent SnapTrade orders and promotes pending Wealthsimple executions to open or closed positions.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    const result = await snaptradeService.syncPendingBrokerOrders(userId);
+    return result;
+  });
+
   // GET /portfolio
   fastify.get('/portfolio', {
     schema: {

@@ -40,6 +40,7 @@ export default function DevLiveExitTestPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [syncingOrders, setSyncingOrders] = useState(false);
 
   const osi = useMemo(() => buildOsi(symbol, optionType, strike, expiration), [symbol, optionType, strike, expiration]);
 
@@ -80,6 +81,21 @@ export default function DevLiveExitTestPage() {
       setError(err.message || 'Failed to inject quote');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const syncPendingOrders = async () => {
+    setSyncingOrders(true);
+    setError('');
+    setResult(null);
+    try {
+      const response = await api.syncSnaptradePendingOrders();
+      setResult(response);
+      await loadHealth();
+    } catch (err: any) {
+      setError(err.message || 'Failed to sync pending orders');
+    } finally {
+      setSyncingOrders(false);
     }
   };
 
@@ -205,6 +221,17 @@ export default function DevLiveExitTestPage() {
               <div className="text-xs text-muted-foreground">Subscriptions</div>
               <div className="font-bold">{activeStream?.activeSubscriptions ?? 0}</div>
             </div>
+          </div>
+
+          <div className="rounded border border-border bg-muted/30 p-3 space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold">Wealthsimple order sync</h3>
+              <p className="text-xs text-muted-foreground mt-1">Checks recent SnapTrade orders and moves filled pending app orders to open positions.</p>
+            </div>
+            <Button variant="outline" className="w-full gap-2" onClick={syncPendingOrders} disabled={syncingOrders}>
+              {syncingOrders ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Sync pending orders
+            </Button>
           </div>
 
           {result && (

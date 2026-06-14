@@ -534,6 +534,15 @@ export const api = {
     return res.json();
   },
 
+  async syncSnaptradePendingOrders(): Promise<any> {
+    const res = await authFetch(`${API_BASE}/snaptrade/sync-pending-orders`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to sync Wealthsimple pending orders');
+    }
+    return res.json();
+  },
+
   async getSnaptradePortfolio(): Promise<{ accounts: any[]; positions: any[] }> {
     const res = await authFetch(`${API_BASE}/snaptrade/portfolio`);
     if (!res.ok) throw new Error('Failed to fetch Wealthsimple portfolio');

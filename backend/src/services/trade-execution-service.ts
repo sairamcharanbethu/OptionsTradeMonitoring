@@ -229,6 +229,7 @@ export class TradeExecutionService {
 
       await this.markSignalExecuted(input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity, 'PENDING');
       await this.invalidateUserCaches(input.userId);
+      this.scheduleSnapTradePendingSync(input.userId);
       return { success: true, broker: 'wealthsimple_snaptrade', orderId: result.orderId, tradeId: result.tradeId, quantity, executionStatus: 'PENDING' };
     } catch (err: any) {
       await this.markSignalExecutionFailure(input.signalId, err.message);
@@ -379,6 +380,18 @@ export class TradeExecutionService {
   private async invalidateUserCaches(userId: number) {
     await redis.del(`USER_POSITIONS:${userId}`);
     await redis.del(`USER_STATS:${userId}`);
+  }
+
+  private scheduleSnapTradePendingSync(userId: number) {
+    const delays = [5000, 30000, 120000];
+    for (const delayMs of delays) {
+      setTimeout(() => {
+        const snaptradeService = new SnaptradeService(this.fastify);
+        snaptradeService.syncPendingBrokerOrders(userId).catch((err: any) => {
+          this.fastify.log.warn(`[TradeExecutionService] SnapTrade pending sync failed after ${delayMs}ms: ${err.message}`);
+        });
+      }, delayMs);
+    }
   }
 
   private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
