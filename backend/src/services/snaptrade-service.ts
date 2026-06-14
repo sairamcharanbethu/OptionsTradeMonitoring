@@ -632,6 +632,44 @@ export class SnaptradeService {
         return summary;
     }
 
+    async syncAllPendingBrokerOrders() {
+        const { rows } = await this.fastify.pg.query(
+            `SELECT DISTINCT user_id
+             FROM positions
+             WHERE execution_broker = 'wealthsimple_snaptrade'
+               AND status = 'PENDING_ORDER'`
+        );
+
+        const summary = {
+            success: true,
+            usersChecked: rows.length,
+            checked: 0,
+            opened: 0,
+            closed: 0,
+            stillPending: 0,
+            unmatched: 0,
+            errors: [] as string[]
+        };
+
+        for (const row of rows) {
+            try {
+                const result = await this.syncPendingBrokerOrders(Number(row.user_id));
+                summary.checked += result.checked;
+                summary.opened += result.opened;
+                summary.closed += result.closed;
+                summary.stillPending += result.stillPending;
+                summary.unmatched += result.unmatched;
+                summary.errors.push(...result.errors);
+            } catch (err: any) {
+                const message = `User ${row.user_id}: ${err.message}`;
+                summary.errors.push(message);
+                this.fastify.log.warn(`[SnaptradeService] Pending order background sync failed: ${message}`);
+            }
+        }
+
+        return summary;
+    }
+
     async placeTrackedTestOptionOrder(userId: number, input: {
         symbol: string;
         optionType: 'CALL' | 'PUT';

@@ -397,6 +397,39 @@ const start = async () => {
     const liveExitMonitor = new LiveExitMonitorService(fastify);
     fastify.decorate('liveExitMonitor', liveExitMonitor);
 
+    const { SnaptradeService } = await import('./services/snaptrade-service');
+    const snaptradeOrderSync = new SnaptradeService(fastify);
+    const snaptradePendingOrderSyncHealth = {
+      status: 'IDLE',
+      running: false,
+      lastRunAt: null as string | null,
+      lastResult: null as any,
+      lastError: null as string | null,
+      intervalSeconds: Number(process.env.SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS || 60)
+    };
+
+    const runSnaptradePendingOrderSync = async () => {
+      if (snaptradePendingOrderSyncHealth.running) return;
+      snaptradePendingOrderSyncHealth.running = true;
+      snaptradePendingOrderSyncHealth.status = 'RUNNING';
+      snaptradePendingOrderSyncHealth.lastRunAt = new Date().toISOString();
+      try {
+        const result = await snaptradeOrderSync.syncAllPendingBrokerOrders();
+        snaptradePendingOrderSyncHealth.lastResult = result;
+        snaptradePendingOrderSyncHealth.lastError = null;
+        snaptradePendingOrderSyncHealth.status = 'UP';
+        if (result.checked > 0) {
+          fastify.log.info(`[SnapTradePendingSync] checked=${result.checked} opened=${result.opened} closed=${result.closed} pending=${result.stillPending} unmatched=${result.unmatched}`);
+        }
+      } catch (err: any) {
+        snaptradePendingOrderSyncHealth.lastError = err.message;
+        snaptradePendingOrderSyncHealth.status = 'ERROR';
+        fastify.log.warn(`[SnapTradePendingSync] Failed: ${err.message}`);
+      } finally {
+        snaptradePendingOrderSyncHealth.running = false;
+      }
+    };
+
     // Broadcast real-time quotes to all connected frontend clients
     const handleStreamQuote = async (quote: any) => {
       // Enrich with Symbol if missing
@@ -437,6 +470,7 @@ const start = async () => {
           running: poller.isRunning()
         },
         scanner: scannerHealth,
+        snaptradePendingOrders: snaptradePendingOrderSyncHealth,
         generatedAt: new Date().toISOString()
       };
     });
@@ -530,6 +564,10 @@ const start = async () => {
     // Start background services
     poller.start();
     scanner.start();
+    setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000);
+    runSnaptradePendingOrderSync().catch((err: any) => {
+      fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);
+    });
     const alpacaStreamStarted = await alpacaMarketDataStreamer.start();
     if (alpacaStreamStarted) {
       liveExitMonitor.start('alpaca');
