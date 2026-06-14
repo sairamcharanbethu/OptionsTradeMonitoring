@@ -41,8 +41,11 @@ export default function DevLiveExitTestPage() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [syncingOrders, setSyncingOrders] = useState(false);
+  const [runningFullTest, setRunningFullTest] = useState(false);
 
   const osi = useMemo(() => buildOsi(symbol, optionType, strike, expiration), [symbol, optionType, strike, expiration]);
+  const quotePayload = { provider, symbol, optionType, strike, expiration, bid, ask, last, underlyingPrice };
+  const canSendQuote = Boolean(osi && (bid || ask || last));
 
   const loadHealth = async () => {
     setRefreshing(true);
@@ -64,17 +67,7 @@ export default function DevLiveExitTestPage() {
     setError('');
     setResult(null);
     try {
-      const response = await api.injectDevQuote({
-        provider,
-        symbol,
-        optionType,
-        strike,
-        expiration,
-        bid,
-        ask,
-        last,
-        underlyingPrice
-      });
+      const response = await api.injectDevQuote(quotePayload);
       setResult(response);
       await loadHealth();
     } catch (err: any) {
@@ -96,6 +89,27 @@ export default function DevLiveExitTestPage() {
       setError(err.message || 'Failed to sync pending orders');
     } finally {
       setSyncingOrders(false);
+    }
+  };
+
+  const runFullLiveExitTest = async () => {
+    setRunningFullTest(true);
+    setError('');
+    setResult(null);
+    try {
+      const pendingSync = await api.syncSnaptradePendingOrders();
+      const quoteInjection = await api.injectDevQuote(quotePayload);
+      setResult({
+        status: 'ok',
+        test: 'sync-pending-orders-and-inject-quote',
+        pendingSync,
+        quoteInjection
+      });
+      await loadHealth();
+    } catch (err: any) {
+      setError(err.message || 'Failed to run full live-exit test');
+    } finally {
+      setRunningFullTest(false);
     }
   };
 
@@ -183,7 +197,7 @@ export default function DevLiveExitTestPage() {
             </div>
           </div>
 
-          <Button className="w-full gap-2" onClick={submitQuote} disabled={loading || !osi || (!bid && !ask && !last)}>
+          <Button className="w-full gap-2" onClick={submitQuote} disabled={loading || !canSendQuote}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             Send test quote
           </Button>
@@ -231,6 +245,10 @@ export default function DevLiveExitTestPage() {
             <Button variant="outline" className="w-full gap-2" onClick={syncPendingOrders} disabled={syncingOrders}>
               {syncingOrders ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Sync pending orders
+            </Button>
+            <Button className="w-full gap-2" onClick={runFullLiveExitTest} disabled={runningFullTest || !canSendQuote}>
+              {runningFullTest ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Sync orders + send quote
             </Button>
           </div>
 
