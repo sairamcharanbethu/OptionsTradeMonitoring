@@ -533,6 +533,109 @@ export class SnaptradeService {
         return summary;
     }
 
+    async placeTrackedTestOptionOrder(userId: number, input: {
+        symbol: string;
+        optionType: 'CALL' | 'PUT';
+        strike: number;
+        expiration: string;
+        quantity: number;
+        orderType: 'LIMIT' | 'MARKET';
+        limitPrice?: number;
+        mark?: number;
+    }) {
+        const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
+        const settings = rows.reduce((acc: any, row: any) => {
+            acc[row.key] = row.value;
+            return acc;
+        }, {});
+
+        if (settings.live_trading_acknowledged !== 'true') {
+            throw new Error('Wealthsimple live trading acknowledgement is required before placing a test order.');
+        }
+
+        const accountId = String(settings.snaptrade_trading_account_id || '').trim();
+        if (!accountId) {
+            throw new Error('No Wealthsimple/SnapTrade trading account selected in settings.');
+        }
+
+        const quantity = Math.max(1, Math.min(Number(input.quantity || 1), 10));
+        const orderType = input.orderType === 'MARKET' ? 'MARKET' : 'LIMIT';
+        const limitPrice = input.limitPrice !== undefined ? Number(input.limitPrice) : undefined;
+        if (orderType === 'LIMIT' && (!Number.isFinite(limitPrice) || Number(limitPrice) <= 0)) {
+            throw new Error('A positive limit price is required for LIMIT test orders.');
+        }
+
+        const optionSymbol = this.constructOSITicker(input.symbol, input.strike, input.optionType, input.expiration);
+        const entryPrice = Math.max(Number(input.mark || limitPrice || 1), 0.01);
+        const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
+        const premiumTakeProfit = Number((entryPrice * 1.4).toFixed(2));
+
+        const order = await this.placeOptionOrder(
+            userId,
+            accountId,
+            optionSymbol,
+            'BUY_TO_OPEN',
+            quantity,
+            orderType,
+            limitPrice !== undefined ? limitPrice.toFixed(2) : undefined
+        );
+
+        const insertRes = await this.fastify.pg.query(
+            `INSERT INTO positions (
+                user_id, symbol, option_type, strike_price, expiration_date,
+                entry_price, quantity, stop_loss_trigger, take_profit_trigger,
+                trailing_high_price, trailing_stop_loss_pct, current_price,
+                status, is_simulated, account_id, notes, execution_broker,
+                broker_order_id, broker_trade_id, execution_account_id, execution_status, contracts_requested,
+                suggested_stop_loss, suggested_take_profit_1,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                'PENDING_ORDER', FALSE, $13, $14, 'wealthsimple_snaptrade',
+                $15, $16, $13, 'PENDING', $7,
+                $17, $18,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            RETURNING id, status, execution_status, broker_order_id, broker_trade_id`,
+            [
+                userId,
+                input.symbol.toUpperCase(),
+                input.optionType,
+                input.strike,
+                input.expiration,
+                entryPrice,
+                quantity,
+                premiumStopLoss,
+                premiumTakeProfit,
+                entryPrice,
+                null,
+                entryPrice,
+                accountId,
+                `[Dev SnapTrade live option test ${order.orderId || order.tradeId || 'submitted'}] [Auto exits: premium SL $${premiumStopLoss}, premium TP $${premiumTakeProfit}]`,
+                order.orderId || null,
+                order.tradeId || null,
+                premiumStopLoss,
+                premiumTakeProfit
+            ]
+        );
+
+        await redis.del(`USER_POSITIONS:${userId}`);
+        await redis.del(`USER_STATS:${userId}`);
+
+        return {
+            success: true,
+            optionSymbol,
+            accountId,
+            orderType,
+            limitPrice: limitPrice ?? null,
+            quantity,
+            orderId: order.orderId,
+            tradeId: order.tradeId,
+            position: insertRes.rows[0],
+            rawResponse: order.rawResponse
+        };
+    }
+
     async placeOptionOrder(
         userId: number,
         accountId: string,
@@ -605,5 +708,14 @@ export class SnaptradeService {
             const detail = err.responseBody?.detail || err.message;
             throw new Error(`Failed to place options trade via SnapTrade: ${detail}`);
         }
+    }
+
+    private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
+        const dateStr = expiration instanceof Date ? expiration.toISOString().split('T')[0] : expiration.split('T')[0];
+        const [year, month, day] = dateStr.split('-');
+        const yy = year.slice(-2);
+        const side = type === 'CALL' ? 'C' : 'P';
+        const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
+        return `${symbol.toUpperCase()}${yy}${month}${day}${side}${strikeValue}`;
     }
 }

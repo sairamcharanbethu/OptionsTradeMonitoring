@@ -49,6 +49,70 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
     return result;
   });
 
+  // POST /dev/place-option-order
+  fastify.post('/dev/place-option-order', {
+    schema: {
+      tags: ['SnapTrade'],
+      summary: 'Place Dev Wealthsimple Option Order',
+      description: 'Dev-only endpoint that places a live SnapTrade option order and records it as a pending app position.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const devTestsEnabled = process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEV_TRADING_TESTS === 'true';
+    if (!devTestsEnabled) {
+      return reply.code(404).send({ error: 'Dev trade testing is disabled' });
+    }
+
+    const { id: userId } = (request as any).user;
+    const body = request.body as {
+      symbol?: string;
+      optionType?: 'CALL' | 'PUT';
+      strike?: number | string;
+      expiration?: string;
+      quantity?: number | string;
+      orderType?: 'LIMIT' | 'MARKET';
+      limitPrice?: number | string;
+      mark?: number | string;
+      confirmation?: string;
+    };
+
+    const symbol = String(body.symbol || '').trim().toUpperCase();
+    const optionType = body.optionType;
+    const strike = Number(body.strike);
+    const expiration = String(body.expiration || '').trim();
+    const quantity = Number(body.quantity || 1);
+    const orderType = body.orderType === 'MARKET' ? 'MARKET' : 'LIMIT';
+    const limitPrice = body.limitPrice !== undefined && body.limitPrice !== '' ? Number(body.limitPrice) : undefined;
+    const mark = body.mark !== undefined && body.mark !== '' ? Number(body.mark) : undefined;
+
+    if (body.confirmation !== 'PLACE LIVE ORDER') {
+      return reply.code(400).send({ error: 'Type PLACE LIVE ORDER to confirm this live SnapTrade test order' });
+    }
+    if (!symbol || !optionType || !Number.isFinite(strike) || !expiration || !Number.isFinite(quantity) || quantity <= 0) {
+      return reply.code(400).send({ error: 'symbol, optionType, strike, expiration, and positive quantity are required' });
+    }
+    if (orderType === 'LIMIT' && (!Number.isFinite(limitPrice) || Number(limitPrice) <= 0)) {
+      return reply.code(400).send({ error: 'limitPrice is required for LIMIT orders' });
+    }
+
+    try {
+      const result = await snaptradeService.placeTrackedTestOptionOrder(userId, {
+        symbol,
+        optionType,
+        strike,
+        expiration,
+        quantity,
+        orderType,
+        limitPrice,
+        mark
+      });
+      return result;
+    } catch (err: any) {
+      fastify.log.error(`[SnapTradeDevOrder] Failed to place dev option order: ${err.message}`);
+      return reply.code(400).send({ error: err.message || 'Failed to place SnapTrade dev option order' });
+    }
+  });
+
   // GET /portfolio
   fastify.get('/portfolio', {
     schema: {

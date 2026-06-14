@@ -543,6 +543,28 @@ export const api = {
     return res.json();
   },
 
+  async placeSnaptradeDevOptionOrder(payload: {
+    symbol: string;
+    optionType: 'CALL' | 'PUT';
+    strike: string;
+    expiration: string;
+    quantity: string;
+    orderType: 'LIMIT' | 'MARKET';
+    limitPrice: string;
+    mark: string;
+    confirmation: string;
+  }): Promise<any> {
+    const res = await authFetch(`${API_BASE}/snaptrade/dev/place-option-order`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to place Wealthsimple test option order');
+    }
+    return res.json();
+  },
+
   async getSnaptradePortfolio(): Promise<{ accounts: any[]; positions: any[] }> {
     const res = await authFetch(`${API_BASE}/snaptrade/portfolio`);
     if (!res.ok) throw new Error('Failed to fetch Wealthsimple portfolio');

@@ -35,6 +35,10 @@ export default function DevLiveExitTestPage() {
   const [ask, setAsk] = useState('');
   const [last, setLast] = useState('');
   const [underlyingPrice, setUnderlyingPrice] = useState('');
+  const [quantity, setQuantity] = useState('1');
+  const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET'>('LIMIT');
+  const [limitPrice, setLimitPrice] = useState('');
+  const [liveOrderConfirmation, setLiveOrderConfirmation] = useState('');
   const [health, setHealth] = useState<any>(null);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState('');
@@ -42,10 +46,28 @@ export default function DevLiveExitTestPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [syncingOrders, setSyncingOrders] = useState(false);
   const [runningFullTest, setRunningFullTest] = useState(false);
+  const [placingOrder, setPlacingOrder] = useState(false);
 
   const osi = useMemo(() => buildOsi(symbol, optionType, strike, expiration), [symbol, optionType, strike, expiration]);
   const quotePayload = { provider, symbol, optionType, strike, expiration, bid, ask, last, underlyingPrice };
   const canSendQuote = Boolean(osi && (bid || ask || last));
+  const testOrderPayload = {
+    symbol,
+    optionType,
+    strike,
+    expiration,
+    quantity,
+    orderType,
+    limitPrice,
+    mark: last || (bid && ask ? ((Number(bid) + Number(ask)) / 2).toFixed(2) : ''),
+    confirmation: liveOrderConfirmation
+  };
+  const canPlaceLiveOrder = Boolean(
+    osi
+    && Number(quantity) > 0
+    && liveOrderConfirmation === 'PLACE LIVE ORDER'
+    && (orderType === 'MARKET' || Number(limitPrice) > 0)
+  );
 
   const loadHealth = async () => {
     setRefreshing(true);
@@ -108,6 +130,44 @@ export default function DevLiveExitTestPage() {
       await loadHealth();
     } catch (err: any) {
       setError(err.message || 'Failed to run full live-exit test');
+    } finally {
+      setRunningFullTest(false);
+    }
+  };
+
+  const placeSnaptradeTestOrder = async () => {
+    setPlacingOrder(true);
+    setError('');
+    setResult(null);
+    try {
+      const response = await api.placeSnaptradeDevOptionOrder(testOrderPayload);
+      setResult(response);
+      await loadHealth();
+    } catch (err: any) {
+      setError(err.message || 'Failed to place Wealthsimple test order');
+    } finally {
+      setPlacingOrder(false);
+    }
+  };
+
+  const runCompleteSnaptradeTest = async () => {
+    setRunningFullTest(true);
+    setError('');
+    setResult(null);
+    try {
+      const placedOrder = await api.placeSnaptradeDevOptionOrder(testOrderPayload);
+      const pendingSync = await api.syncSnaptradePendingOrders();
+      const quoteInjection = canSendQuote ? await api.injectDevQuote(quotePayload) : null;
+      setResult({
+        status: 'ok',
+        test: 'place-snaptrade-order-sync-and-inject-quote',
+        placedOrder,
+        pendingSync,
+        quoteInjection
+      });
+      await loadHealth();
+    } catch (err: any) {
+      setError(err.message || 'Failed to run complete SnapTrade test');
     } finally {
       setRunningFullTest(false);
     }
@@ -235,6 +295,45 @@ export default function DevLiveExitTestPage() {
               <div className="text-xs text-muted-foreground">Subscriptions</div>
               <div className="font-bold">{activeStream?.activeSubscriptions ?? 0}</div>
             </div>
+          </div>
+
+          <div className="rounded border border-red-500/30 bg-red-950/10 p-3 space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold text-red-100">Place Wealthsimple test order</h3>
+              <p className="text-xs text-muted-foreground mt-1">Submits a real SnapTrade BUY_TO_OPEN order using the selected Wealthsimple account in settings.</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="space-y-1.5">
+                <Label>Contracts</Label>
+                <Input value={quantity} onChange={(e) => setQuantity(e.target.value)} inputMode="numeric" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Order</Label>
+                <Select value={orderType} onValueChange={(value) => setOrderType(value as 'LIMIT' | 'MARKET')}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="LIMIT">LIMIT</SelectItem>
+                    <SelectItem value="MARKET">MARKET</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Limit</Label>
+                <Input value={limitPrice} onChange={(e) => setLimitPrice(e.target.value)} placeholder="Required for limit" inputMode="decimal" disabled={orderType === 'MARKET'} />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Confirmation</Label>
+              <Input value={liveOrderConfirmation} onChange={(e) => setLiveOrderConfirmation(e.target.value)} placeholder="Type PLACE LIVE ORDER" />
+            </div>
+            <Button variant="destructive" className="w-full gap-2" onClick={placeSnaptradeTestOrder} disabled={placingOrder || !canPlaceLiveOrder}>
+              {placingOrder ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Place Wealthsimple order
+            </Button>
+            <Button className="w-full gap-2" onClick={runCompleteSnaptradeTest} disabled={runningFullTest || !canPlaceLiveOrder || !canSendQuote}>
+              {runningFullTest ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Place order + sync + send quote
+            </Button>
           </div>
 
           <div className="rounded border border-border bg-muted/30 p-3 space-y-3">
