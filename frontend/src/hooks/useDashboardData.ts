@@ -10,6 +10,7 @@ export const QUERY_KEYS = {
     briefing: ['briefing'],
     signals: ['signals'],
     scannerLogs: ['scannerLogs'],
+    tradeUsage: ['tradeUsage'],
     history: (page: number, limit: number) => ['positionHistory', page, limit],
 };
 
@@ -89,6 +90,15 @@ export function useSnaptradePortfolio() {
         queryFn: () => api.getSnaptradePortfolio(),
         refetchInterval: 300000, // Refresh every 5 minutes
         staleTime: 60000,
+    });
+}
+
+export function useTradeUsage(refreshInterval = 30000) {
+    return useQuery({
+        queryKey: QUERY_KEYS.tradeUsage,
+        queryFn: () => api.getTradeUsage(),
+        refetchInterval: refreshInterval,
+        staleTime: 5000,
     });
 }
 

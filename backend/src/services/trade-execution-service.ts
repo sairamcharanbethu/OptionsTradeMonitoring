@@ -81,6 +81,18 @@ export class TradeExecutionService {
     return this.createSimulatedPosition(input, quantity, 'Unknown execution broker');
   }
 
+  public async getDailyTradeUsage(userId: number, settingsOverride?: ExecutionSettings) {
+    const settings = settingsOverride || await this.getSettingsForUser(userId);
+    const maxTradesPerDay = this.parsePositiveInt(settings.max_trades_per_day, 2, 100);
+    const used = await this.countTradesToday(userId);
+
+    return {
+      used,
+      max: maxTradesPerDay,
+      remaining: Math.max(0, maxTradesPerDay - used)
+    };
+  }
+
   private resolveBroker(settings: ExecutionSettings): ExecutionBroker {
     const configured = settings.execution_broker as ExecutionBroker | undefined;
     if (configured === 'alpaca_paper' && settings.alpaca_auto_trade === 'true') return 'alpaca_paper';

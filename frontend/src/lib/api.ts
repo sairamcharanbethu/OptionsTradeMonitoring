@@ -68,6 +68,12 @@ export interface ClosedTradesResponse {
   totalPages: number;
 }
 
+export interface TradeUsageResponse {
+  used: number;
+  max: number;
+  remaining: number;
+}
+
 const API_BASE = '/api';
 
 const getToken = () => localStorage.getItem('token');
@@ -251,6 +257,12 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch open Wealthsimple trades');
     const data = await res.json();
     return data.map(normalizePosition);
+  },
+
+  async getTradeUsage(): Promise<TradeUsageResponse> {
+    const res = await authFetch(`${API_BASE}/trades/usage?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch daily trade usage');
+    return res.json();
   },
 
   async getClosedTrades(filters: {

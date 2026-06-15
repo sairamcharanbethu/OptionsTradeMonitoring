@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, useTradeUsage, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { api, Signal, ScannerLog } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -207,6 +207,7 @@ export default function DayTradingTerminal() {
   const { data: logs = [], isLoading: logsLoading, isFetching: logsFetching, refetch: refetchLogs } = useScannerLogs(pollInterval);
   const { data: settings = {} } = useSettings();
   const { data: snaptradePortfolio } = useSnaptradePortfolio();
+  const { data: tradeUsage, refetch: refetchTradeUsage } = useTradeUsage();
   const isDayTradingEnabled = settings.day_trading_enabled !== 'false';
 
   // Live real-time WebSocket signals updates integration
@@ -313,6 +314,7 @@ export default function DayTradingTerminal() {
   const handleManualSync = () => {
     refetch();
     refetchLogs();
+    refetchTradeUsage();
     fetchHealth();
     setCountdown(300);
   };
@@ -428,6 +430,7 @@ export default function DayTradingTerminal() {
       await api.updateSignalStatus(executeDialogSignal.id, 'EXECUTED');
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.tradeUsage });
       setExecuteDialogSignal(null);
     } catch (err: any) {
       alert(`Failed to execute trade: ${err.message}`);
@@ -530,22 +533,9 @@ export default function DayTradingTerminal() {
   const isLiveBroker = configuredBroker === 'wealthsimple_snaptrade';
   const maxTradesPerDay = Number(settings.max_trades_per_day || 2);
   const contractsPerTrade = Number(settings.contracts_per_trade || 1);
-  const todayEt = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).format(new Date());
-  const tradesToday = signals.filter(signal => {
-    const signalDateEt = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/New_York',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    }).format(new Date(signal.created_at));
-    return signalDateEt === todayEt && (signal.status === 'EXECUTED' || signal.execution_status === 'EXECUTED');
-  }).length;
-  const remainingTrades = Math.max(0, maxTradesPerDay - tradesToday);
+  const tradesToday = Number(tradeUsage?.used ?? 0);
+  const dailyLimit = Number(tradeUsage?.max ?? maxTradesPerDay);
+  const remainingTrades = Math.max(0, Number(tradeUsage?.remaining ?? dailyLimit - tradesToday));
   const selectedSnaptradeAccount = (snaptradePortfolio?.accounts || []).find(
     (account: any) => account.id === settings.snaptrade_trading_account_id
   );
@@ -562,7 +552,7 @@ export default function DayTradingTerminal() {
   const readinessItems = [
     { label: 'Broker', value: brokerLabel, tone: isLiveBroker ? 'text-amber-300' : configuredBroker === 'alpaca_paper' ? 'text-sky-300' : 'text-zinc-400' },
     { label: 'Size', value: `${contractsPerTrade} contract${contractsPerTrade === 1 ? '' : 's'}`, tone: 'text-emerald-300' },
-    { label: 'Daily', value: `${tradesToday}/${maxTradesPerDay} used`, tone: remainingTrades > 0 ? 'text-emerald-300' : 'text-red-300' },
+    { label: 'Daily', value: `${tradesToday}/${dailyLimit} used`, tone: remainingTrades > 0 ? 'text-emerald-300' : 'text-red-300' },
     { label: 'Order', value: `${settings.order_type || 'LIMIT'} ${settings.entry_slippage_pct || 3}%`, tone: 'text-zinc-300' },
     { label: 'Account', value: isLiveBroker ? selectedAccountLabel : 'Paper/sim', tone: isLiveBroker && !settings.snaptrade_trading_account_id ? 'text-red-300' : 'text-zinc-300' },
     ...(isLiveBroker ? [{ label: 'Balance', value: selectedAccountBalance, tone: selectedSnaptradeAccount ? 'text-emerald-300' : 'text-amber-300' }] : [])

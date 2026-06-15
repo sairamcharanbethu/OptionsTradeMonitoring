@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { redis } from '../lib/redis';
 import { SnaptradeService } from '../services/snaptrade-service';
+import { TradeExecutionService } from '../services/trade-execution-service';
 
 const tradeResponseSchema = {
   type: 'object',
@@ -40,6 +41,29 @@ function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT'
 
 export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
+
+  fastify.get('/usage', {
+    schema: {
+      tags: ['Trades'],
+      summary: 'Get current day trade usage for the authenticated user',
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: 'object',
+          properties: {
+            used: { type: 'integer' },
+            max: { type: 'integer' },
+            remaining: { type: 'integer' }
+          },
+          required: ['used', 'max', 'remaining']
+        }
+      }
+    }
+  }, async (request) => {
+    const { id: userId } = (request as any).user;
+    const executionService = new TradeExecutionService(fastify);
+    return executionService.getDailyTradeUsage(userId);
+  });
 
   fastify.get('/open', {
     schema: {
