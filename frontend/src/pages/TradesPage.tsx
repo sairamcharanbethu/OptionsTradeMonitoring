@@ -22,6 +22,13 @@ const currency = (value?: number | null) => {
   return `$${Number(value).toFixed(2)}`;
 };
 
+const takeProfitLabel = (trade: Position) => {
+  if (trade.take_profit_trigger !== undefined && trade.take_profit_trigger !== null) {
+    return currency(trade.take_profit_trigger);
+  }
+  return 'Suggested';
+};
+
 const compactDate = (value?: string) => {
   if (!value) return '-';
   return new Date(value).toLocaleString([], {
@@ -208,7 +215,7 @@ export default function TradesPage() {
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.current_price)}</td>
                         <td className={`px-3 py-3 text-right font-mono font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</td>
                         <td className="px-3 py-3 text-right font-mono text-red-500">{currency(trade.stop_loss_trigger)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-emerald-500">{currency(trade.take_profit_trigger)}</td>
+                        <td className="px-3 py-3 text-right font-mono text-emerald-500">{takeProfitLabel(trade)}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.underlying_price)}</td>
                         <td className="px-3 py-3">
                           <Badge variant={trade.execution_status === 'EXIT_FAILED' ? 'destructive' : 'outline'}>

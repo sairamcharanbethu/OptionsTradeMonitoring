@@ -25,6 +25,7 @@ interface ExecutionSettings {
   contracts_per_trade?: string;
   order_type?: string;
   entry_slippage_pct?: string;
+  take_profit_pct?: string;
   live_trading_acknowledged?: string;
   alpaca_key_id?: string;
   alpaca_secret_key?: string;
@@ -52,6 +53,7 @@ export class TradeExecutionService {
       contracts_per_trade: '1',
       order_type: 'LIMIT',
       entry_slippage_pct: '3',
+      take_profit_pct: '',
       live_trading_acknowledged: 'false',
       ...dbSettings
     };
@@ -99,6 +101,14 @@ export class TradeExecutionService {
   private parsePositiveInt(value: string | undefined, fallback: number, max: number): number {
     const parsed = parseInt(value || '', 10);
     if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(parsed, max);
+  }
+
+  private parseOptionalPct(value: string | undefined, max: number): number | null {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
     return Math.min(parsed, max);
   }
 
@@ -170,6 +180,7 @@ export class TradeExecutionService {
         brokerTradeId: null,
         executionStatus,
         positionStatus: orderFilled ? 'OPEN' : 'PENDING_ORDER',
+        takeProfitPct: settings.take_profit_pct,
         notes: `[Alpaca paper trade ${orderData.id || 'submitted'} from Signal #${input.signalId}]`
       });
 
@@ -224,6 +235,7 @@ export class TradeExecutionService {
         brokerTradeId: result.tradeId || null,
         executionStatus: 'PENDING',
         positionStatus: 'PENDING_ORDER',
+        takeProfitPct: settings.take_profit_pct,
         notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId}]`
       });
 
@@ -264,11 +276,15 @@ export class TradeExecutionService {
     brokerTradeId: string | null;
     executionStatus: string;
     positionStatus?: string;
+    takeProfitPct?: string;
     notes: string;
   }) {
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
     const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
-    const premiumTakeProfit = Number((entryPrice * 1.4).toFixed(2));
+    const configuredTakeProfitPct = this.parseOptionalPct(execution.takeProfitPct, 500);
+    const premiumTakeProfit = configuredTakeProfitPct !== null
+      ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
+      : null;
 
     await this.fastify.pg.query(
       `INSERT INTO positions (
@@ -301,7 +317,7 @@ export class TradeExecutionService {
         execution.positionStatus || 'OPEN',
         execution.isSimulated,
         execution.accountId,
-        `${execution.notes} [Auto exits: premium SL $${premiumStopLoss}, premium TP $${premiumTakeProfit}, underlying SL ${input.stopUnderlying}, underlying TP ${input.targetUnderlying}]`,
+        `${execution.notes} [Auto exits: premium SL $${premiumStopLoss}, premium TP ${premiumTakeProfit === null ? 'suggested TP only' : `$${premiumTakeProfit}`}, underlying SL ${input.stopUnderlying}, underlying TP ${input.targetUnderlying}]`,
         execution.executionBroker,
         execution.brokerOrderId,
         execution.brokerTradeId,

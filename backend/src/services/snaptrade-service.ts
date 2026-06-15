@@ -473,6 +473,18 @@ export class SnaptradeService {
         return 0;
     }
 
+    private async getTakeProfitPct(userId: number): Promise<number | null> {
+        const { rows } = await this.fastify.pg.query(
+            "SELECT value FROM settings WHERE user_id = $1 AND key = 'take_profit_pct' LIMIT 1",
+            [userId]
+        );
+        const raw = String(rows[0]?.value || '').trim();
+        if (!raw) return null;
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed) || parsed <= 0) return null;
+        return Math.min(parsed, 500);
+    }
+
     async syncPendingBrokerOrders(userId: number) {
         const pendingRes = await this.fastify.pg.query(
             `SELECT *
@@ -502,6 +514,7 @@ export class SnaptradeService {
         if (pendingPositions.length === 0) return summary;
 
         const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        const takeProfitPct = await this.getTakeProfitPct(userId);
         const ordersByAccount = new Map<string, any[]>();
 
         const getOrdersForAccount = async (accountId: string) => {
@@ -591,7 +604,9 @@ export class SnaptradeService {
                         summary.closed += 1;
                     } else {
                         const stopLoss = Number((fillPrice * 0.8).toFixed(2));
-                        const takeProfit = Number((fillPrice * 1.4).toFixed(2));
+                        const takeProfit = takeProfitPct !== null
+                            ? Number((fillPrice * (1 + takeProfitPct / 100)).toFixed(2))
+                            : null;
                         await this.fastify.pg.query(
                             `UPDATE positions
                              SET status = 'OPEN',
@@ -767,7 +782,10 @@ export class SnaptradeService {
         const optionSymbol = this.constructOSITicker(input.symbol, input.strike, input.optionType, input.expiration);
         const entryPrice = Math.max(Number(input.mark || limitPrice || 1), 0.01);
         const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
-        const premiumTakeProfit = Number((entryPrice * 1.4).toFixed(2));
+        const takeProfitPct = await this.getTakeProfitPct(userId);
+        const premiumTakeProfit = takeProfitPct !== null
+            ? Number((entryPrice * (1 + takeProfitPct / 100)).toFixed(2))
+            : null;
 
         const order = await this.placeOptionOrder(
             userId,
@@ -810,7 +828,7 @@ export class SnaptradeService {
                 null,
                 entryPrice,
                 accountId,
-                `[Dev SnapTrade live option test ${order.orderId || order.tradeId || 'submitted'}] [Auto exits: premium SL $${premiumStopLoss}, premium TP $${premiumTakeProfit}]`,
+                `[Dev SnapTrade live option test ${order.orderId || order.tradeId || 'submitted'}] [Auto exits: premium SL $${premiumStopLoss}, premium TP ${premiumTakeProfit === null ? 'suggested TP only' : `$${premiumTakeProfit}`}]`,
                 order.orderId || null,
                 order.tradeId || null,
                 premiumStopLoss,

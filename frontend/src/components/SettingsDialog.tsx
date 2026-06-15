@@ -74,6 +74,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [contractsPerTrade, setContractsPerTrade] = useState('1');
     const [orderType, setOrderType] = useState('LIMIT');
     const [entrySlippagePct, setEntrySlippagePct] = useState('3');
+    const [takeProfitPct, setTakeProfitPct] = useState('');
     const [liveTradingAcknowledged, setLiveTradingAcknowledged] = useState(false);
 
     // Security & Profile State
@@ -257,6 +258,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setContractsPerTrade(data.contracts_per_trade || '1');
             setOrderType(data.order_type || 'LIMIT');
             setEntrySlippagePct(data.entry_slippage_pct || '3');
+            setTakeProfitPct(data.take_profit_pct || '');
             setLiveTradingAcknowledged(data.live_trading_acknowledged === 'true');
 
             // Load Day Trading settings
@@ -465,6 +467,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 contracts_per_trade: contractsPerTrade,
                 order_type: orderType,
                 entry_slippage_pct: entrySlippagePct,
+                take_profit_pct: takeProfitPct,
                 live_trading_acknowledged: liveTradingAcknowledged ? 'true' : 'false',
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 day_trading_symbols: dayTradingSymbols,
@@ -841,6 +844,22 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 disabled={orderType !== 'LIMIT'}
                                             />
                                         </div>
+                                    </div>
+
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="takeProfitPct">Premium Take Profit Override (%)</Label>
+                                        <Input
+                                            id="takeProfitPct"
+                                            type="number"
+                                            min="0"
+                                            step="1"
+                                            value={takeProfitPct}
+                                            onChange={(e) => setTakeProfitPct(e.target.value)}
+                                            placeholder="Blank = use suggested TP"
+                                        />
+                                        <p className="text-[10px] text-muted-foreground">
+                                            Optional. Example: 20 exits at entry premium +20%. Leave blank to rely on the scanner suggested TP.
+                                        </p>
                                     </div>
                                 </section>
 
