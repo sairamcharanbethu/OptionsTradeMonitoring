@@ -17,8 +17,13 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
     }
   }, async (request, reply) => {
     const { id: userId } = (request as any).user;
-    const result = await snaptradeService.generateConnectionUrl(userId);
-    return result; // { redirectURI: "https://..." }
+    try {
+      const result = await snaptradeService.generateConnectionUrl(userId);
+      return result; // { redirectURI: "https://..." }
+    } catch (err: any) {
+      fastify.log.warn(`[SnapTradeConnect] Failed for user ${userId}: ${err.message}`);
+      return reply.code(400).send({ error: err.message || 'Failed to generate Wealthsimple connection URL' });
+    }
   });
 
   // GET /connections

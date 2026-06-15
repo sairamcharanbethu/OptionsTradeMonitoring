@@ -55,51 +55,7 @@ export class SnaptradeService {
                                           (err.responseBody?.detail && err.responseBody.detail.includes('Personal keys can only register one user'));
 
                 if (isPersonalKeyLimit) {
-                    this.fastify.log.warn(`[SnaptradeService] Personal API key user limit reached (1012). Initiating automatic cleanup of orphaned users...`);
-                    try {
-                        // 1. List existing users
-                        const usersRes = await snaptrade.authentication.listSnapTradeUsers();
-                        this.fastify.log.info(`[SnaptradeService] Found ${usersRes.data?.length || 0} registered user(s) to clean up.`);
-                        
-                        // 2. Delete existing users to free up slot
-                        if (usersRes.data && Array.isArray(usersRes.data)) {
-                            for (const existingUser of usersRes.data) {
-                                const idToDelete = typeof existingUser === 'string' ? existingUser : (existingUser.userId || existingUser.id || existingUser.user_id);
-                                if (idToDelete) {
-                                    this.fastify.log.info(`[SnaptradeService] Deleting orphaned user: ${idToDelete}`);
-                                    await snaptrade.authentication.deleteSnapTradeUser({
-                                        userId: idToDelete
-                                    });
-                                }
-                            }
-                        }
-
-                        // 3. Retry registration
-                        this.fastify.log.info(`[SnaptradeService] Retrying registration for new user: ${snaptradeUserId}`);
-                        const retryRes = await snaptrade.authentication.registerSnapTradeUser({
-                            userId: snaptradeUserId
-                        });
-                        userSecret = retryRes.data.userSecret;
-
-                        await this.fastify.pg.query(
-                            `INSERT INTO settings (user_id, key, value, updated_at) 
-                             VALUES ($1, 'snaptrade_user_secret', $2, CURRENT_TIMESTAMP),
-                                    ($1, 'snaptrade_user_id', $3, CURRENT_TIMESTAMP)
-                             ON CONFLICT (user_id, key) DO UPDATE 
-                             SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                            [userId, userSecret, snaptradeUserId]
-                        );
-                        this.fastify.log.info(`[SnaptradeService] Registration successful after automatic cleanup!`);
-                        
-                        // Successfully recovered and registered! Return early.
-                        return { snaptrade, userIdStr: snaptradeUserId, userSecret };
-                    } catch (cleanupErr: any) {
-                        this.fastify.log.error(`[SnaptradeService] Failed during automatic user cleanup/retry: ${cleanupErr.message}`);
-                        if (cleanupErr.responseBody) {
-                            this.fastify.log.error(`[SnaptradeService] Cleanup API Response: ${JSON.stringify(cleanupErr.responseBody)}`);
-                        }
-                        throw new Error(`Failed to automatically resolve SnapTrade user limit: ${cleanupErr.responseBody?.detail || cleanupErr.message}`);
-                    }
+                    throw new Error('This SnapTrade personal key already has a registered user. Use unique SnapTrade credentials for this app user, or reset that SnapTrade user in the SnapTrade dashboard before reconnecting.');
                 }
 
                 this.fastify.log.error(`[SnaptradeService] Failed to register user: ${err.message}`);
