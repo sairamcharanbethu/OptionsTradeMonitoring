@@ -9,7 +9,7 @@ import { execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { TradeExecutionService } from './trade-execution-service';
-import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -2163,10 +2163,9 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
   }
 
   private async getAiApiKey(provider: string): Promise<string | null> {
-    const { rows } = await this.fastify.pg.query(
-      "SELECT value FROM settings WHERE key = 'openrouter_key' ORDER BY updated_at DESC LIMIT 1"
-    );
-    return rows[0]?.value || null;
+    if (provider !== 'openrouter') return null;
+    const settings = await getGlobalSettings(this.fastify.pg);
+    return settings.openrouter_key || null;
   }
 
   // --- Utility functions ---
