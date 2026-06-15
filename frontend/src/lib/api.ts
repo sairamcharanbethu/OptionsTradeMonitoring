@@ -40,10 +40,32 @@ export interface Position {
   execution_broker?: string;
   broker_order_id?: string;
   broker_trade_id?: string;
+  broker_exit_order_id?: string;
+  broker_exit_trade_id?: string;
   execution_account_id?: string;
   execution_status?: string;
   execution_error?: string;
   contracts_requested?: number;
+  exit_price?: number;
+  exit_requested_at?: string;
+  exit_reason?: string;
+  exit_order_type?: string;
+  notes?: string;
+}
+
+export interface ClosedTradesResponse {
+  trades: Position[];
+  summary: {
+    total: number;
+    totalPnl: number;
+    wins: number;
+    losses: number;
+    averagePnl: number;
+    winRate: number;
+  };
+  page: number;
+  limit: number;
+  totalPages: number;
 }
 
 const API_BASE = '/api';
@@ -69,6 +91,33 @@ const authFetch = async (url: string, options: any = {}) => {
   }
   return res;
 };
+
+const normalizePosition = (pos: any): Position => ({
+  ...pos,
+  strike_price: Number(pos.strike_price),
+  entry_price: Number(pos.entry_price),
+  quantity: Number(pos.quantity),
+  stop_loss_trigger: pos.stop_loss_trigger != null ? Number(pos.stop_loss_trigger) : undefined,
+  take_profit_trigger: pos.take_profit_trigger != null ? Number(pos.take_profit_trigger) : undefined,
+  trailing_high_price: pos.trailing_high_price != null ? Number(pos.trailing_high_price) : undefined,
+  current_price: pos.current_price != null ? Number(pos.current_price) : undefined,
+  realized_pnl: pos.realized_pnl != null ? Number(pos.realized_pnl) : undefined,
+  loss_avoided: pos.loss_avoided != null ? Number(pos.loss_avoided) : undefined,
+  delta: pos.delta != null ? Number(pos.delta) : undefined,
+  theta: pos.theta != null ? Number(pos.theta) : undefined,
+  gamma: pos.gamma != null ? Number(pos.gamma) : undefined,
+  vega: pos.vega != null ? Number(pos.vega) : undefined,
+  iv: pos.iv != null ? Number(pos.iv) : undefined,
+  underlying_price: pos.underlying_price != null ? Number(pos.underlying_price) : undefined,
+  analyzed_support: pos.analyzed_support != null ? Number(pos.analyzed_support) : undefined,
+  analyzed_resistance: pos.analyzed_resistance != null ? Number(pos.analyzed_resistance) : undefined,
+  suggested_stop_loss: pos.suggested_stop_loss != null ? Number(pos.suggested_stop_loss) : undefined,
+  suggested_take_profit_1: pos.suggested_take_profit_1 != null ? Number(pos.suggested_take_profit_1) : undefined,
+  suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
+  contracts_requested: pos.contracts_requested != null ? Number(pos.contracts_requested) : undefined,
+  exit_price: pos.exit_price != null ? Number(pos.exit_price) : undefined,
+  analysis_data: pos.analysis_data || undefined,
+});
 
 export const api = {
   // Auth
@@ -194,30 +243,48 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch positions');
     const data = await res.json();
 
-    return data.map((pos: any) => ({
-      ...pos,
-      strike_price: Number(pos.strike_price),
-      entry_price: Number(pos.entry_price),
-      stop_loss_trigger: pos.stop_loss_trigger != null ? Number(pos.stop_loss_trigger) : undefined,
-      take_profit_trigger: pos.take_profit_trigger != null ? Number(pos.take_profit_trigger) : undefined,
-      trailing_high_price: pos.trailing_high_price != null ? Number(pos.trailing_high_price) : undefined,
-      current_price: pos.current_price != null ? Number(pos.current_price) : undefined,
-      realized_pnl: pos.realized_pnl != null ? Number(pos.realized_pnl) : undefined,
-      loss_avoided: pos.loss_avoided != null ? Number(pos.loss_avoided) : undefined,
-      delta: pos.delta != null ? Number(pos.delta) : undefined,
-      theta: pos.theta != null ? Number(pos.theta) : undefined,
-      gamma: pos.gamma != null ? Number(pos.gamma) : undefined,
-      vega: pos.vega != null ? Number(pos.vega) : undefined,
-      iv: pos.iv != null ? Number(pos.iv) : undefined,
-      underlying_price: pos.underlying_price != null ? Number(pos.underlying_price) : undefined,
-      analyzed_support: pos.analyzed_support != null ? Number(pos.analyzed_support) : undefined,
-      analyzed_resistance: pos.analyzed_resistance != null ? Number(pos.analyzed_resistance) : undefined,
-      suggested_stop_loss: pos.suggested_stop_loss != null ? Number(pos.suggested_stop_loss) : undefined,
-      suggested_take_profit_1: pos.suggested_take_profit_1 != null ? Number(pos.suggested_take_profit_1) : undefined,
-      suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
-      contracts_requested: pos.contracts_requested != null ? Number(pos.contracts_requested) : undefined,
-      analysis_data: pos.analysis_data || undefined,
-    }));
+    return data.map(normalizePosition);
+  },
+
+  async getOpenTrades(): Promise<Position[]> {
+    const res = await authFetch(`${API_BASE}/trades/open?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch open Wealthsimple trades');
+    const data = await res.json();
+    return data.map(normalizePosition);
+  },
+
+  async getClosedTrades(filters: {
+    from?: string;
+    to?: string;
+    symbol?: string;
+    result?: 'all' | 'win' | 'loss';
+    page?: number;
+    limit?: number;
+  } = {}): Promise<ClosedTradesResponse> {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== '') params.set(key, String(value));
+    });
+    params.set('t', String(Date.now()));
+    const res = await authFetch(`${API_BASE}/trades/closed?${params.toString()}`);
+    if (!res.ok) throw new Error('Failed to fetch closed Wealthsimple trades');
+    const data = await res.json();
+    return {
+      ...data,
+      trades: data.trades.map(normalizePosition)
+    };
+  },
+
+  async closeWealthsimpleTrade(id: number, quantity?: number): Promise<Position> {
+    const res = await authFetch(`${API_BASE}/trades/${id}/close`, {
+      method: 'POST',
+      body: JSON.stringify({ quantity }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to submit Wealthsimple close order');
+    }
+    return normalizePosition(await res.json());
   },
 
   async getClosedPositions(page: number = 1, limit: number = 10): Promise<{ positions: Position[]; total: number; page: number; limit: number; totalPages: number }> {

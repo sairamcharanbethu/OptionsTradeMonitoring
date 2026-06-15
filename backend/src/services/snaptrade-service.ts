@@ -582,6 +582,7 @@ export class SnaptradeService {
                                  exit_price = $2,
                                  realized_pnl = $3,
                                  execution_error = NULL,
+                                 exit_reason = COALESCE(exit_reason, 'BROKER_CONFIRMED'),
                                  notes = COALESCE(notes, '') || ' [SnapTrade exit fill confirmed: ' || $1 || ']',
                                  updated_at = CURRENT_TIMESTAMP
                              WHERE id = $4`,

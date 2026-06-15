@@ -6,9 +6,10 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Button } from './components/ui/button';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { FlaskConical, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
+import { FlaskConical, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 import PositionDetailsPage from './pages/PositionDetailsPage';
 import DevLiveExitTestPage from './pages/DevLiveExitTestPage';
+import TradesPage from './pages/TradesPage';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -72,6 +73,15 @@ function App() {
                     <FlaskConical className="h-3.5 w-3.5" />
                   </Button>
                 )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
+                  onClick={() => { window.location.href = '/trades'; }}
+                  title="Wealthsimple Trades"
+                >
+                  <ListChecks className="h-3.5 w-3.5" />
+                </Button>
                 <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-black/5 dark:bg-white/5 border border-black/[0.02] dark:border-white/[0.04] rounded-full text-[10px] font-bold uppercase tracking-wider">
                   <UserIcon className="h-2.5 w-2.5 text-muted-foreground" />
                   <span className="text-foreground/90">{user.username}</span>
@@ -88,6 +98,7 @@ function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
+              <Route path="/trades" element={<TradesPage />} />
               <Route path="/positions/:id" element={<PositionDetailsPage />} />
               <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />
             </Routes>

@@ -609,6 +609,8 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
                  execution_error = NULL,
                  broker_exit_order_id = $1,
                  broker_exit_trade_id = $2,
+                 exit_reason = 'MANUAL',
+                 exit_order_type = 'MARKET',
                  exit_requested_at = CURRENT_TIMESTAMP,
                  notes = COALESCE(notes, '') || $3,
                  updated_at = CURRENT_TIMESTAMP
@@ -683,6 +685,8 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
              SET execution_status = 'PENDING_EXIT',
                  execution_error = NULL,
                  broker_exit_order_id = $1,
+                 exit_reason = 'MANUAL',
+                 exit_order_type = 'MARKET',
                  exit_requested_at = CURRENT_TIMESTAMP,
                  notes = COALESCE(notes, '') || $2,
                  updated_at = CURRENT_TIMESTAMP

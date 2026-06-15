@@ -11,6 +11,7 @@ import { aiRoutes } from './routes/ai';
 import { settingsRoutes } from './routes/settings';
 import { goalRoutes } from './routes/goals';
 import { signalRoutes } from './routes/signals';
+import { tradeRoutes } from './routes/trades';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -162,7 +163,9 @@ const ensureSchema = async (instance: any) => {
       { name: 'execution_status', type: 'VARCHAR(50)' },
       { name: 'execution_error', type: 'TEXT' },
       { name: 'contracts_requested', type: 'INTEGER' },
-      { name: 'exit_requested_at', type: 'TIMESTAMPTZ' }
+      { name: 'exit_requested_at', type: 'TIMESTAMPTZ' },
+      { name: 'exit_reason', type: 'VARCHAR(50)' },
+      { name: 'exit_order_type', type: 'VARCHAR(20)' }
     ];
 
     for (const col of columns) {
@@ -361,6 +364,7 @@ const start = async () => {
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
     fastify.register(goalRoutes, { prefix: '/api/goals' });
     fastify.register(snaptradeRoutes, { prefix: '/api/snaptrade' });
+    fastify.register(tradeRoutes, { prefix: '/api/trades' });
     fastify.register(signalRoutes, { prefix: '/api/signals' });
 
     fastify.get('/health', async () => {

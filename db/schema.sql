@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS positions (
     execution_error TEXT,
     contracts_requested INTEGER,
     exit_requested_at TIMESTAMP WITH TIME ZONE,
+    exit_reason VARCHAR(50),
+    exit_order_type VARCHAR(20),
     status VARCHAR(20) DEFAULT 'OPEN', -- OPEN, CLOSED
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

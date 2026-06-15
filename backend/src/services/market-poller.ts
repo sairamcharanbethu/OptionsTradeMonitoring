@@ -245,13 +245,16 @@ export class MarketPoller {
              execution_error = NULL,
              broker_exit_order_id = $1,
              broker_exit_trade_id = $2,
+             exit_reason = COALESCE(exit_reason, 'AUTO_EXIT'),
+             exit_order_type = $3,
              exit_requested_at = CURRENT_TIMESTAMP,
-             notes = COALESCE(notes, '') || $3,
+             notes = COALESCE(notes, '') || $4,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $4 AND status = 'OPEN'`,
+         WHERE id = $5 AND status = 'OPEN'`,
         [
           result.orderId || null,
           result.tradeId || null,
+          orderType,
           ` [SnapTrade ${orderType} exit submitted${result.orderId ? `: ${result.orderId}` : ''}]`,
           position.id
         ]
