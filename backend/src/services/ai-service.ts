@@ -1,6 +1,7 @@
 
 import { FastifyInstance } from 'fastify';
 import YahooFinance from 'yahoo-finance2';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -264,17 +265,19 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
         let currentModel = this.model;
 
         try {
-            let query = 'SELECT key, value FROM settings';
-            const params: any[] = [];
-            if (userId !== undefined) {
-                query += ' WHERE user_id = $1';
-                params.push(userId);
-            }
-            const { rows } = await (this.fastify as any).pg.query(query, params);
-            const settings = rows.reduce((acc: any, row: any) => {
-                acc[row.key] = row.value;
-                return acc;
-            }, {});
+            const settings = userId !== undefined
+                ? await getSettingsWithGlobalFallback((this.fastify as any).pg, userId)
+                : (await (this.fastify as any).pg.query(
+                    `SELECT DISTINCT ON (key) key, value
+                     FROM settings
+                     WHERE key IN ('ai_provider', 'openrouter_key', 'ai_model')
+                       AND value IS NOT NULL
+                       AND value != ''
+                     ORDER BY key, updated_at DESC`
+                )).rows.reduce((acc: any, row: any) => {
+                    acc[row.key] = row.value;
+                    return acc;
+                }, {});
 
             if (settings.ai_provider) currentProvider = settings.ai_provider;
             if (settings.openrouter_key) openRouterKey = settings.openrouter_key;

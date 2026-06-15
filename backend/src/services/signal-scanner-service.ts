@@ -9,6 +9,7 @@ import { execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { TradeExecutionService } from './trade-execution-service';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -527,15 +528,7 @@ Rules:
   }
 
   public async getSettingsForUser(userId: number) {
-    const { rows } = await this.fastify.pg.query(
-      'SELECT key, value FROM settings WHERE user_id = $1',
-      [userId]
-    );
-
-    const dbSettings = rows.reduce((acc: any, r: any) => {
-      acc[r.key] = r.value;
-      return acc;
-    }, {});
+    const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
     const defaults = {
       day_trading_enabled: 'true',
@@ -553,6 +546,8 @@ Rules:
       day_trading_ai_model: 'meta-llama/llama-3.1-70b-instruct',  // news classifier
       day_trading_coach_model: 'anthropic/claude-sonnet-4-5',       // signal coach
       execution_broker: 'none',
+      alpaca_key_id: '',
+      alpaca_secret_key: '',
       alpaca_auto_trade: 'false',
       alpaca_auto_trade_mode: 'instant',
       snaptrade_auto_trade: 'false',
@@ -561,6 +556,7 @@ Rules:
       contracts_per_trade: '1',
       order_type: 'LIMIT',
       entry_slippage_pct: '3',
+      take_profit_pct: '',
       live_trading_acknowledged: 'false'
     };
 

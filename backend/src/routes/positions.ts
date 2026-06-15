@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { redis } from '../lib/redis';
 import { AnalysisService } from '../services/analysis-service';
 import { SnaptradeService } from '../services/snaptrade-service';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
   const dateStr = expiration instanceof Date ? expiration.toISOString().split('T')[0] : String(expiration).split('T')[0];
@@ -643,14 +644,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       }
 
       if (isAlpacaPaper) {
-        const { rows: settingsRows } = await client.query(
-          "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')",
-          [userId]
-        );
-        const settings = settingsRows.reduce((acc: any, row: any) => {
-          acc[row.key] = row.value;
-          return acc;
-        }, {});
+        const settings = await getSettingsWithGlobalFallback(fastify.pg, userId);
         const keyId = settings.alpaca_key_id?.trim();
         const secretKey = settings.alpaca_secret_key?.trim();
         if (!keyId || !secretKey) {

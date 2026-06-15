@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 export async function settingsRoutes(fastify: FastifyInstance) {
     fastify.addHook('onRequest', fastify.authenticate);
@@ -7,23 +8,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
     // GET all settings
     fastify.get('/', async (request, reply) => {
         const { id: userId } = (request as any).user;
-        const CACHE_KEY = `USER_SETTINGS:${userId}`;
-
-        // Try cache
-        const cached = await redis.get(CACHE_KEY);
-        if (cached) return JSON.parse(cached);
 
         try {
-            const { rows } = await (fastify as any).pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
-            const settings = rows.reduce((acc: any, row: any) => {
-                acc[row.key] = row.value;
-                return acc;
-            }, {});
-
-            // Cache for 5 minutes
-            await redis.set(CACHE_KEY, JSON.stringify(settings), 300);
-
-            return settings;
+            return getSettingsWithGlobalFallback((fastify as any).pg, userId);
         } catch (err) {
             fastify.log.error(err);
             return reply.code(500).send({ error: 'Failed to fetch settings' });

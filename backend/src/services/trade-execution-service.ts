@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
 import { SnaptradeService } from './snaptrade-service';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 type ExecutionBroker = 'none' | 'alpaca_paper' | 'wealthsimple_snaptrade' | 'simulated';
 
@@ -35,14 +36,7 @@ export class TradeExecutionService {
   constructor(private fastify: FastifyInstance) {}
 
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
-    const { rows } = await this.fastify.pg.query(
-      'SELECT key, value FROM settings WHERE user_id = $1',
-      [userId]
-    );
-    const dbSettings = rows.reduce((acc: any, row: any) => {
-      acc[row.key] = row.value;
-      return acc;
-    }, {});
+    const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
     return {
       execution_broker: 'none',

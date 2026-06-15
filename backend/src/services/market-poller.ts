@@ -4,6 +4,7 @@ import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
 import { SnaptradeService } from './snaptrade-service';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import WebSocket from 'ws';
 
 export class MarketPoller {
@@ -339,16 +340,7 @@ export class MarketPoller {
     const ticker = this.constructOSITicker(symbol, strike, type, expiration);
 
     try {
-      // 0. Check for user-specific Alpaca configuration
-      const { rows: settingsRows } = await (this.fastify as any).pg.query(
-        "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')",
-        [userId]
-      );
-      const settings = settingsRows.reduce((acc: any, row: any) => {
-        acc[row.key] = row.value;
-        return acc;
-      }, {});
-
+      const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
       const alpacaKeyId = settings.alpaca_key_id?.trim();
       const alpacaSecretKey = settings.alpaca_secret_key?.trim();
 
@@ -623,14 +615,7 @@ export class MarketPoller {
                 continue;
             } else if (pos.account_id === 'alpaca_paper') {
                 try {
-                    const { rows: settingsRows } = await (this.fastify as any).pg.query(
-                        "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key', 'alpaca_auto_trade')",
-                        [pos.user_id]
-                    );
-                    const userSettings = settingsRows.reduce((acc: any, r: any) => {
-                        acc[r.key] = r.value;
-                        return acc;
-                    }, {});
+                    const userSettings = await getSettingsWithGlobalFallback((this.fastify as any).pg, pos.user_id);
                     const alpacaKeyId = userSettings.alpaca_key_id?.trim() || '';
                     const alpacaSecretKey = userSettings.alpaca_secret_key?.trim() || '';
                     const alpacaAutoTrade = userSettings.alpaca_auto_trade?.trim() || 'false';
@@ -1040,14 +1025,7 @@ export class MarketPoller {
             return;
         } else if (position.account_id === 'alpaca_paper') {
             try {
-                const { rows: settingsRows } = await (this.fastify as any).pg.query(
-                    "SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key', 'alpaca_auto_trade')",
-                    [position.user_id]
-                );
-                const userSettings = settingsRows.reduce((acc: any, r: any) => {
-                    acc[r.key] = r.value;
-                    return acc;
-                }, {});
+                const userSettings = await getSettingsWithGlobalFallback((this.fastify as any).pg, position.user_id);
                 const alpacaKeyId = userSettings.alpaca_key_id?.trim() || '';
                 const alpacaSecretKey = userSettings.alpaca_secret_key?.trim() || '';
                 const alpacaAutoTrade = userSettings.alpaca_auto_trade?.trim() || 'false';
