@@ -81,6 +81,24 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           AND s.status = 'CANCELLED'
           AND sue.status = 'PENDING'
       `);
+      await fastify.pg.query(`
+        UPDATE signal_user_executions sue
+        SET status = CASE
+              WHEN p.execution_status IN ('FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED') THEN 'CANCELLED'
+              ELSE 'EXECUTED'
+            END,
+            execution_status = p.execution_status,
+            execution_error = p.execution_error,
+            broker_trade_id = COALESCE(sue.broker_trade_id, p.broker_trade_id),
+            updated_at = CURRENT_TIMESTAMP
+        FROM positions p
+        WHERE p.user_id = sue.user_id
+          AND p.broker_order_id = sue.broker_order_id
+          AND p.broker_order_id IS NOT NULL
+          AND sue.execution_broker = 'wealthsimple_snaptrade'
+          AND p.execution_broker = 'wealthsimple_snaptrade'
+          AND COALESCE(sue.execution_status, '') <> COALESCE(p.execution_status, '')
+      `);
       const query = `
         SELECT 
           s.id, 

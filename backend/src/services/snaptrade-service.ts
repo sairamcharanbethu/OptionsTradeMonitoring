@@ -665,6 +665,7 @@ export class SnaptradeService {
                             [status, fillPrice, stopLoss, takeProfit, position.id]
                         );
                         summary.opened += 1;
+                        await this.syncSignalExecutionFromOrder(position, 'EXECUTED', status);
                     }
                     summary.orders.push({
                         positionId: position.id,
@@ -698,6 +699,7 @@ export class SnaptradeService {
                             [status, order?.rejection_reason || order?.reason || null, position.id]
                         );
                         summary.closed += 1;
+                        await this.syncSignalExecutionFromOrder(position, 'CANCELLED', status, order?.rejection_reason || order?.reason || null);
                     }
                     summary.orders.push({
                         positionId: position.id,
@@ -711,9 +713,12 @@ export class SnaptradeService {
                         `UPDATE positions
                          SET execution_status = $1,
                              updated_at = CURRENT_TIMESTAMP
-                         WHERE id = $2`,
+                        WHERE id = $2`,
                         [pendingStatuses.has(status) ? status : 'PENDING', position.id]
                     );
+                    if (phase === 'ENTRY') {
+                        await this.syncSignalExecutionFromOrder(position, 'EXECUTED', pendingStatuses.has(status) ? status : 'PENDING');
+                    }
                     summary.stillPending += 1;
                     summary.orders.push({
                         positionId: position.id,
@@ -749,6 +754,35 @@ export class SnaptradeService {
         }
 
         return summary;
+    }
+
+    private async syncSignalExecutionFromOrder(
+        position: any,
+        signalStatus: 'EXECUTED' | 'CANCELLED',
+        executionStatus: string,
+        executionError: string | null = null
+    ) {
+        const orderId = String(position.broker_order_id || '').trim();
+        if (!orderId) return;
+
+        await this.fastify.pg.query(
+            `UPDATE signal_user_executions
+             SET status = $1,
+                 execution_status = $2,
+                 execution_error = $3,
+                 broker_trade_id = COALESCE(broker_trade_id, $4),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE user_id = $5
+               AND broker_order_id = $6`,
+            [
+                signalStatus,
+                executionStatus,
+                executionError,
+                position.broker_trade_id || null,
+                position.user_id,
+                orderId
+            ]
+        );
     }
 
     async syncAllPendingBrokerOrders() {
