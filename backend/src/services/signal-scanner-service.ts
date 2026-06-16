@@ -2416,10 +2416,17 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     await this.fastify.pg.query(insertQuery, values);
     this.fastify.log.info(`[SignalScannerService] Simulated position recorded in DB for signal #${signalId}.`);
 
-    // 4. Update signal status to EXECUTED
+    // 4. Record this user's signal execution without changing the shared scanner signal.
     await this.fastify.pg.query(
-      'UPDATE signals SET status = $1 WHERE id = $2',
-      ['EXECUTED', signalId]
+      `INSERT INTO signal_user_executions (signal_id, user_id, status, execution_broker, execution_status, contracts_requested, updated_at)
+       VALUES ($1, $2, 'EXECUTED', 'simulated', 'SIMULATED', 1, CURRENT_TIMESTAMP)
+       ON CONFLICT (signal_id, user_id) DO UPDATE
+       SET status = 'EXECUTED',
+           execution_broker = EXCLUDED.execution_broker,
+           execution_status = EXCLUDED.execution_status,
+           contracts_requested = EXCLUDED.contracts_requested,
+           updated_at = CURRENT_TIMESTAMP`,
+      [signalId, userId]
     );
 
     // 5. Broadcast signal update
@@ -2553,10 +2560,18 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       await this.fastify.pg.query(insertQuery, values);
       this.fastify.log.info(`[SignalScannerService] Position recorded in DB for signal #${signalId}.`);
 
-      // Update signal status to EXECUTED
+      // Record this user's signal execution without changing the shared scanner signal.
       await this.fastify.pg.query(
-        'UPDATE signals SET status = $1 WHERE id = $2',
-        ['EXECUTED', signalId]
+        `INSERT INTO signal_user_executions (signal_id, user_id, status, execution_broker, broker_order_id, execution_status, contracts_requested, updated_at)
+         VALUES ($1, $2, 'EXECUTED', 'alpaca_paper', $3, 'EXECUTED', 1, CURRENT_TIMESTAMP)
+         ON CONFLICT (signal_id, user_id) DO UPDATE
+         SET status = 'EXECUTED',
+             execution_broker = EXCLUDED.execution_broker,
+             broker_order_id = EXCLUDED.broker_order_id,
+             execution_status = EXCLUDED.execution_status,
+             contracts_requested = EXCLUDED.contracts_requested,
+             updated_at = CURRENT_TIMESTAMP`,
+        [signalId, userId, alpacaOrderId]
       );
 
       // Broadcast signal update

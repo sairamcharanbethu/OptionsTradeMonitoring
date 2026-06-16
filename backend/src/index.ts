@@ -136,6 +136,23 @@ const ensureSchema = async (instance: any) => {
       );
     `);
 
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS signal_user_executions (
+        signal_id INTEGER REFERENCES signals(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+        execution_broker VARCHAR(50),
+        broker_order_id VARCHAR(255),
+        broker_trade_id VARCHAR(255),
+        execution_status VARCHAR(50),
+        execution_error TEXT,
+        contracts_requested INTEGER,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (signal_id, user_id)
+      );
+    `);
+
     // 3. Ensure all extra columns are added to positions table
     const columns = [
       { name: 'delta', type: 'DECIMAL(10, 4)' },

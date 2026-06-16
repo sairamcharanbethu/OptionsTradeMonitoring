@@ -1,16 +1,29 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
-import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { getSettingsWithGlobalFallback, isGlobalSettingKey } from '../lib/settings-utils';
+
+function redactGlobalSettingsForUser(settings: Record<string, string>, role?: string) {
+    if (role === 'ADMIN') return settings;
+
+    const redacted = { ...settings };
+    for (const key of Object.keys(redacted)) {
+        if (isGlobalSettingKey(key)) {
+            delete redacted[key];
+        }
+    }
+    return redacted;
+}
 
 export async function settingsRoutes(fastify: FastifyInstance) {
     fastify.addHook('onRequest', fastify.authenticate);
 
     // GET all settings
     fastify.get('/', async (request, reply) => {
-        const { id: userId } = (request as any).user;
+        const { id: userId, role } = (request as any).user;
 
         try {
-            return getSettingsWithGlobalFallback((fastify as any).pg, userId);
+            const settings = await getSettingsWithGlobalFallback((fastify as any).pg, userId);
+            return redactGlobalSettingsForUser(settings, role);
         } catch (err) {
             fastify.log.error(err);
             return reply.code(500).send({ error: 'Failed to fetch settings' });
@@ -19,7 +32,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // UPDATE settings (Batch)
     fastify.post('/', async (request, reply) => {
-        const { id: userId } = (request as any).user;
+        const { id: userId, role } = (request as any).user;
         const updates = request.body as Record<string, string>;
 
         try {
@@ -28,6 +41,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 await client.query('BEGIN');
 
                 for (const [key, value] of Object.entries(updates)) {
+                    if (role !== 'ADMIN' && isGlobalSettingKey(key)) {
+                        continue;
+                    }
+
                     const trimmedValue = typeof value === 'string' ? value.trim() : value;
                     await client.query(
                         `INSERT INTO settings (user_id, key, value, updated_at) 

@@ -66,7 +66,7 @@ export class TradeExecutionService {
     const currentTradeCount = await this.countTradesToday(input.userId);
     if (currentTradeCount >= maxTradesPerDay) {
       const message = `Daily trade limit reached (${currentTradeCount}/${maxTradesPerDay})`;
-      await this.markSignalExecutionFailure(input.signalId, message, true);
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
       return { success: false, skipped: true, broker, message };
     }
 
@@ -138,7 +138,7 @@ export class TradeExecutionService {
     const secretKey = settings.alpaca_secret_key?.trim();
     if (!keyId || !secretKey) {
       const message = 'Alpaca credentials are not configured';
-      await this.markSignalExecutionFailure(input.signalId, message);
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message);
       return { success: false, broker: 'alpaca_paper', message };
     }
 
@@ -190,11 +190,11 @@ export class TradeExecutionService {
         notes: `[Alpaca paper trade ${orderData.id || 'submitted'} from Signal #${input.signalId}]`
       });
 
-      await this.markSignalExecuted(input.signalId, 'alpaca_paper', orderData.id || null, null, quantity, executionStatus);
+      await this.markSignalExecuted(input.userId, input.signalId, 'alpaca_paper', orderData.id || null, null, quantity, executionStatus);
       await this.invalidateUserCaches(input.userId);
       return { success: true, broker: 'alpaca_paper', orderId: orderData.id, quantity, executionStatus };
     } catch (err: any) {
-      await this.markSignalExecutionFailure(input.signalId, err.message);
+      await this.markSignalExecutionFailure(input.userId, input.signalId, err.message);
       throw err;
     }
   }
@@ -202,14 +202,14 @@ export class TradeExecutionService {
   private async executeSnapTradeOptionTrade(input: ExecuteSignalInput, settings: ExecutionSettings, quantity: number) {
     if (settings.live_trading_acknowledged !== 'true') {
       const message = 'Wealthsimple live trading acknowledgement is required';
-      await this.markSignalExecutionFailure(input.signalId, message);
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message);
       return { success: false, broker: 'wealthsimple_snaptrade', message };
     }
 
     const accountId = settings.snaptrade_trading_account_id?.trim();
     if (!accountId) {
       const message = 'No Wealthsimple/SnapTrade trading account selected';
-      await this.markSignalExecutionFailure(input.signalId, message);
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message);
       return { success: false, broker: 'wealthsimple_snaptrade', message };
     }
 
@@ -245,12 +245,12 @@ export class TradeExecutionService {
         notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId}]`
       });
 
-      await this.markSignalExecuted(input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity, 'PENDING');
+      await this.markSignalExecuted(input.userId, input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity, 'PENDING');
       await this.invalidateUserCaches(input.userId);
       this.scheduleSnapTradePendingSync(input.userId);
       return { success: true, broker: 'wealthsimple_snaptrade', orderId: result.orderId, tradeId: result.tradeId, quantity, executionStatus: 'PENDING' };
     } catch (err: any) {
-      await this.markSignalExecutionFailure(input.signalId, err.message);
+      await this.markSignalExecutionFailure(input.userId, input.signalId, err.message);
       throw err;
     }
   }
@@ -267,7 +267,7 @@ export class TradeExecutionService {
       executionStatus: 'SIMULATED',
       notes: `[Simulated position from Signal #${input.signalId}: ${reason}]`
     });
-    await this.markSignalExecuted(input.signalId, 'simulated', null, null, quantity);
+    await this.markSignalExecuted(input.userId, input.signalId, 'simulated', null, null, quantity);
     await this.invalidateUserCaches(input.userId);
     return { success: true, broker: 'simulated', quantity };
   }
@@ -373,29 +373,41 @@ export class TradeExecutionService {
     return 1;
   }
 
-  private async markSignalExecuted(signalId: number, broker: string, orderId: string | null, tradeId: string | null, quantity: number, executionStatus: string = 'EXECUTED') {
+  private async markSignalExecuted(userId: number, signalId: number, broker: string, orderId: string | null, tradeId: string | null, quantity: number, executionStatus: string = 'EXECUTED') {
     await this.fastify.pg.query(
-      `UPDATE signals
+      `INSERT INTO signal_user_executions (
+         signal_id, user_id, status, execution_broker, broker_order_id, broker_trade_id,
+         execution_status, execution_error, contracts_requested, updated_at
+       )
+       VALUES ($1, $2, 'EXECUTED', $3, $4, $5, $6, NULL, $7, CURRENT_TIMESTAMP)
+       ON CONFLICT (signal_id, user_id) DO UPDATE
        SET status = 'EXECUTED',
-           execution_broker = $1,
-           broker_order_id = $2,
-           broker_trade_id = $3,
-           execution_status = $4,
+           execution_broker = EXCLUDED.execution_broker,
+           broker_order_id = EXCLUDED.broker_order_id,
+           broker_trade_id = EXCLUDED.broker_trade_id,
+           execution_status = EXCLUDED.execution_status,
            execution_error = NULL,
-           contracts_requested = $5
-       WHERE id = $6`,
-      [broker, orderId, tradeId, executionStatus, quantity, signalId]
+           contracts_requested = EXCLUDED.contracts_requested,
+           updated_at = CURRENT_TIMESTAMP`,
+      [signalId, userId, broker, orderId, tradeId, executionStatus, quantity]
     );
   }
 
-  private async markSignalExecutionFailure(signalId: number, error: string, skipped = false) {
+  private async markSignalExecutionFailure(userId: number, signalId: number, error: string, skipped = false) {
+    const executionStatus = skipped ? 'SKIPPED' : 'FAILED';
+    const status = skipped ? 'CANCELLED' : 'PENDING';
+
     await this.fastify.pg.query(
-      `UPDATE signals
-       SET status = CASE WHEN $1 = 'SKIPPED' THEN 'CANCELLED' ELSE status END,
-           execution_status = $1,
-           execution_error = $2
-       WHERE id = $3`,
-      [skipped ? 'SKIPPED' : 'FAILED', error, signalId]
+      `INSERT INTO signal_user_executions (
+         signal_id, user_id, status, execution_status, execution_error, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+       ON CONFLICT (signal_id, user_id) DO UPDATE
+       SET status = EXCLUDED.status,
+           execution_status = EXCLUDED.execution_status,
+           execution_error = EXCLUDED.execution_error,
+           updated_at = CURRENT_TIMESTAMP`,
+      [signalId, userId, status, executionStatus, error]
     );
   }
 

@@ -57,43 +57,49 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     }
   }, async (request, reply) => {
     try {
+      const { id: userId } = (request as any).user;
       const query = `
         SELECT 
-          id, 
-          symbol, 
-          signal_type, 
-          trade_bias, 
-          current_price::double precision, 
-          entry_trigger::double precision, 
-          stop_loss::double precision, 
-          target_price::double precision, 
-          confidence_score, 
-          setup_grade, 
-          status, 
-          indicators, 
-          gex, 
-          volatility, 
-          no_trade_reasons, 
-          option_expiration_date, 
-          market_date, 
-          news_context,
-          ai_coach_commentary,
-          token_usage,
-          ml_probability::double precision AS ml_probability,
-          option_details,
-          execution_broker,
-          broker_order_id,
-          broker_trade_id,
-          execution_status,
-          execution_error,
-          contracts_requested,
-          created_at 
-        FROM signals 
-        WHERE signal_type != 'NONE'
-        ORDER BY created_at DESC 
+          s.id, 
+          s.symbol, 
+          s.signal_type, 
+          s.trade_bias, 
+          s.current_price::double precision, 
+          s.entry_trigger::double precision, 
+          s.stop_loss::double precision, 
+          s.target_price::double precision, 
+          s.confidence_score, 
+          s.setup_grade, 
+          COALESCE(
+            sue.status,
+            CASE WHEN s.status IN ('EXECUTED', 'CANCELLED') THEN 'PENDING' ELSE s.status END
+          ) AS status, 
+          s.indicators, 
+          s.gex, 
+          s.volatility, 
+          s.no_trade_reasons, 
+          s.option_expiration_date, 
+          s.market_date, 
+          s.news_context,
+          s.ai_coach_commentary,
+          s.token_usage,
+          s.ml_probability::double precision AS ml_probability,
+          s.option_details,
+          sue.execution_broker,
+          sue.broker_order_id,
+          sue.broker_trade_id,
+          sue.execution_status,
+          sue.execution_error,
+          sue.contracts_requested,
+          s.created_at 
+        FROM signals s
+        LEFT JOIN signal_user_executions sue
+          ON sue.signal_id = s.id AND sue.user_id = $1
+        WHERE s.signal_type != 'NONE'
+        ORDER BY s.created_at DESC 
         LIMIT 100
       `;
-      const { rows } = await fastify.pg.query(query);
+      const { rows } = await fastify.pg.query(query, [userId]);
       return rows;
     } catch (err: any) {
       fastify.log.error(err);
@@ -205,12 +211,21 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
 
         return { id, status: 'EXECUTED' };
       } else {
-        const query = 'UPDATE signals SET status = $1 WHERE id = $2 RETURNING id, status';
-        const { rows } = await fastify.pg.query(query, [status, id]);
+        const { rows: signalRows } = await fastify.pg.query('SELECT id FROM signals WHERE id = $1', [id]);
 
-        if (rows.length === 0) {
+        if (signalRows.length === 0) {
           return (reply as any).code(404).send({ error: 'Signal not found' });
         }
+
+        const { rows } = await fastify.pg.query(
+          `INSERT INTO signal_user_executions (signal_id, user_id, status, updated_at)
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+           ON CONFLICT (signal_id, user_id) DO UPDATE
+           SET status = EXCLUDED.status,
+               updated_at = CURRENT_TIMESTAMP
+           RETURNING signal_id AS id, status`,
+          [id, userId, status]
+        );
 
         return rows[0];
       }
@@ -239,6 +254,12 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     }
   }, async (request, reply) => {
     try {
+      const { role } = (request as any).user;
+      if (role !== 'ADMIN') {
+        return (reply as any).code(403).send({ error: 'Admin access required' });
+      }
+
+      await fastify.pg.query('DELETE FROM signal_user_executions');
       await fastify.pg.query('DELETE FROM signals');
       await fastify.pg.query('DELETE FROM scanner_logs');
       return { success: true, message: 'All day trading signals and logs cleared successfully.' };
@@ -268,6 +289,11 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
   }, async (request, reply) => {
     const client = await fastify.pg.connect();
     try {
+      const { role } = (request as any).user;
+      if (role !== 'ADMIN') {
+        return (reply as any).code(403).send({ error: 'Admin access required' });
+      }
+
       await client.query('BEGIN');
 
       const today = new Date().toISOString().split('T')[0];
