@@ -59,7 +59,7 @@ export class LiveExitMonitorService {
       }
 
       const { rows: positions } = await (this.fastify as any).pg.query(
-        "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_status, '') <> 'PENDING_EXIT'"
+        "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')"
       );
 
       const matchedPositions = positions.filter((position: any) => {

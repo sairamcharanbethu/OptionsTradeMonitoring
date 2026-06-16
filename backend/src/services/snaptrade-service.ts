@@ -545,6 +545,7 @@ export class SnaptradeService {
                AND (
                  status = 'PENDING_ORDER'
                  OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
+                 OR (status = 'OPEN' AND execution_status = 'PENDING_TRIM')
                  OR (status = 'OPEN' AND execution_status LIKE 'EXIT_%')
                )
              ORDER BY created_at DESC`,
@@ -557,6 +558,7 @@ export class SnaptradeService {
             checked: pendingPositions.length,
             opened: 0,
             closed: 0,
+            trimmed: 0,
             stillPending: 0,
             unmatched: 0,
             errors: [] as string[],
@@ -603,7 +605,10 @@ export class SnaptradeService {
         ]);
 
         for (const position of pendingPositions) {
-            const phase: 'ENTRY' | 'EXIT' = position.execution_status === 'PENDING_EXIT' ? 'EXIT' : 'ENTRY';
+            const executionStatus = String(position.execution_status || '');
+            const phase: 'ENTRY' | 'EXIT' = ['PENDING_EXIT', 'PENDING_TRIM'].includes(executionStatus) || executionStatus.startsWith('EXIT_')
+                ? 'EXIT'
+                : 'ENTRY';
             const accountId = String(position.execution_account_id || position.account_id || '').trim();
             if (!accountId) {
                 summary.unmatched += 1;
@@ -639,23 +644,49 @@ export class SnaptradeService {
                 if (openStatuses.has(status)) {
                     const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
                     if (phase === 'EXIT') {
-                        const filledQty = this.getFilledQuantity(order) || Number(position.quantity || 1);
+                        const isTrim = executionStatus === 'PENDING_TRIM' || position.exit_reason === 'PROFIT_TRIM';
+                        const requestedQty = Number(position.profit_trim_quantity || position.quantity || 1);
+                        const currentQty = Number(position.quantity || 1);
+                        const filledQty = Math.min(this.getFilledQuantity(order) || requestedQty, currentQty);
                         const realizedPnl = (fillPrice - Number(position.entry_price || 0)) * filledQty * 100;
-                        await this.fastify.pg.query(
-                            `UPDATE positions
-                             SET status = 'CLOSED',
-                                 execution_status = $1,
-                                 current_price = $2,
-                                 exit_price = $2,
-                                 realized_pnl = $3,
-                                 execution_error = NULL,
-                                 exit_reason = COALESCE(exit_reason, 'BROKER_CONFIRMED'),
-                                 notes = COALESCE(notes, '') || $4,
-                                 updated_at = CURRENT_TIMESTAMP
-                             WHERE id = $5`,
-                            [status, fillPrice, realizedPnl, ` [SnapTrade exit fill confirmed: ${status}]`, position.id]
-                        );
-                        summary.closed += 1;
+                        if (isTrim && filledQty < currentQty) {
+                            await this.fastify.pg.query(
+                                `UPDATE positions
+                                 SET quantity = quantity - $1,
+                                     execution_status = $2,
+                                     current_price = $3,
+                                     realized_pnl = COALESCE(realized_pnl, 0) + $4,
+                                     execution_error = NULL,
+                                     broker_exit_order_id = NULL,
+                                     broker_exit_trade_id = NULL,
+                                     profit_trim_status = 'DONE',
+                                     profit_trim_quantity = $1,
+                                     profit_trim_price = $3,
+                                     profit_trimmed_at = CURRENT_TIMESTAMP,
+                                     take_profit_trigger = NULL,
+                                     notes = COALESCE(notes, '') || $5,
+                                     updated_at = CURRENT_TIMESTAMP
+                                 WHERE id = $6`,
+                                [filledQty, status, fillPrice, realizedPnl, ` [SnapTrade profit trim fill confirmed: sold ${filledQty}/${currentQty} @ $${fillPrice}]`, position.id]
+                            );
+                            summary.trimmed += 1;
+                        } else {
+                            await this.fastify.pg.query(
+                                `UPDATE positions
+                                 SET status = 'CLOSED',
+                                     execution_status = $1,
+                                     current_price = $2,
+                                     exit_price = $2,
+                                     realized_pnl = COALESCE(realized_pnl, 0) + $3,
+                                     execution_error = NULL,
+                                     exit_reason = COALESCE(exit_reason, 'BROKER_CONFIRMED'),
+                                     notes = COALESCE(notes, '') || $4,
+                                     updated_at = CURRENT_TIMESTAMP
+                                 WHERE id = $5`,
+                                [status, fillPrice, realizedPnl, ` [SnapTrade exit fill confirmed: ${status}]`, position.id]
+                            );
+                            summary.closed += 1;
+                        }
                     } else {
                         const stopLoss = Number((fillPrice * 0.8).toFixed(2));
                         const takeProfit = takeProfitPct !== null
@@ -721,12 +752,19 @@ export class SnaptradeService {
                         brokerTradeId: phase === 'EXIT' ? position.broker_exit_trade_id : position.broker_trade_id
                     });
                 } else {
+                    const nextExecutionStatus = phase === 'EXIT'
+                        ? (executionStatus === 'PENDING_TRIM'
+                            ? 'PENDING_TRIM'
+                            : executionStatus.startsWith('EXIT_')
+                                ? executionStatus
+                                : 'PENDING_EXIT')
+                        : (pendingStatuses.has(status) ? status : 'PENDING');
                     await this.fastify.pg.query(
                         `UPDATE positions
                          SET execution_status = $1,
                              updated_at = CURRENT_TIMESTAMP
                         WHERE id = $2`,
-                        [pendingStatuses.has(status) ? status : 'PENDING', position.id]
+                        [nextExecutionStatus, position.id]
                     );
                     if (phase === 'ENTRY') {
                         await this.syncSignalExecutionFromOrder(position, 'EXECUTED', pendingStatuses.has(status) ? status : 'PENDING');
@@ -747,7 +785,7 @@ export class SnaptradeService {
             }
         }
 
-        if (summary.opened > 0 || summary.closed > 0 || summary.stillPending > 0) {
+        if (summary.opened > 0 || summary.closed > 0 || summary.trimmed > 0 || summary.stillPending > 0) {
             await redis.del(`USER_POSITIONS:${userId}`);
             await redis.del(`USER_STATS:${userId}`);
             await redis.del(`SNAPTRADE_PORTFOLIO:${userId}`);
@@ -805,6 +843,7 @@ export class SnaptradeService {
                AND (
                  status = 'PENDING_ORDER'
                  OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
+                 OR (status = 'OPEN' AND execution_status = 'PENDING_TRIM')
                  OR (status = 'OPEN' AND execution_status LIKE 'EXIT_%')
                )`
         );
@@ -815,6 +854,7 @@ export class SnaptradeService {
             checked: 0,
             opened: 0,
             closed: 0,
+            trimmed: 0,
             stillPending: 0,
             unmatched: 0,
             errors: [] as string[]
@@ -826,6 +866,7 @@ export class SnaptradeService {
                 summary.checked += result.checked;
                 summary.opened += result.opened;
                 summary.closed += result.closed;
+                summary.trimmed += result.trimmed || 0;
                 summary.stillPending += result.stillPending;
                 summary.unmatched += result.unmatched;
                 summary.errors.push(...result.errors);

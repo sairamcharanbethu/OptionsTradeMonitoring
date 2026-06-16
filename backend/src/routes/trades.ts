@@ -243,9 +243,9 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
         await client.query('ROLLBACK');
         return reply.code(400).send({ error: 'Only open Wealthsimple trades can be closed manually' });
       }
-      if (trade.execution_status === 'PENDING_EXIT') {
+      if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))) {
         await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'An exit order is already pending for this trade' });
+        return reply.code(400).send({ error: 'An exit or trim order is already pending for this trade' });
       }
       if (String(trade.execution_status || '').startsWith('EXIT_') && trade.broker_exit_order_id) {
         await client.query('ROLLBACK');

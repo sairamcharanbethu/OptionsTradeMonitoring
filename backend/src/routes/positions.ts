@@ -576,9 +576,9 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
         return reply.code(400).send({ error: 'Only open positions can be closed' });
       }
 
-      if (position.execution_status === 'PENDING_EXIT') {
+      if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(position.execution_status || ''))) {
         await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'An exit order is already pending for this position' });
+        return reply.code(400).send({ error: 'An exit or trim order is already pending for this position' });
       }
 
       const executionBroker = String(position.execution_broker || '');

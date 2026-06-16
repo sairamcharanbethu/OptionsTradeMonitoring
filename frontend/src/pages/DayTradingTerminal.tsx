@@ -179,6 +179,20 @@ const getSignalExecutionTone = (signal?: Signal | null) => {
   return 'border-zinc-700 text-zinc-400 bg-zinc-950/40';
 };
 
+const getSetupGradeKey = (setupGrade?: string | null) => {
+  const normalized = String(setupGrade || '').toUpperCase();
+  if (normalized.includes('A+')) return 'A+';
+  if (/(^|[^A-Z])A([^A-Z+]|$)/.test(normalized)) return 'A';
+  if (/(^|[^A-Z])B([^A-Z+]|$)/.test(normalized)) return 'B';
+  if (/(^|[^A-Z])C([^A-Z+]|$)/.test(normalized)) return 'C';
+  return '';
+};
+
+const isExecutableSetupGrade = (signal?: Signal | null) => {
+  const grade = getSetupGradeKey(signal?.setup_grade);
+  return grade === 'A+' || grade === 'A';
+};
+
 const formatAccountBalance = (account: any) => {
   const fallbackBalance = Array.isArray(account?.balances)
     ? account.balances.find((balance: any) => balance?.cash !== null && balance?.cash !== undefined)
@@ -342,8 +356,7 @@ export default function DayTradingTerminal() {
     .filter(s => filterStatus === 'ALL' || s.status === filterStatus)
     .filter(s => {
       if (filterGrade === 'ALL') return true;
-      const grade = (s.setup_grade || '').split('/')[0].trim();
-      return grade === filterGrade;
+      return getSetupGradeKey(s.setup_grade) === filterGrade;
     });
 
   const filteredLogs = logs
@@ -410,6 +423,10 @@ export default function DayTradingTerminal() {
     if (status === 'EXECUTED') {
       const signal = signals.find(s => s.id === id) || null;
       if (signal) {
+        if (!isExecutableSetupGrade(signal)) {
+          alert(`Only A and A+ setups can be executed. This setup is ${signal.setup_grade || 'ungraded'}.`);
+          return;
+        }
         setExecuteDialogSignal(signal);
         return;
       }
@@ -1087,7 +1104,7 @@ export default function DayTradingTerminal() {
                   <Button
                     size="sm"
                     className="h-6 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-[10px] shadow-[0_0_0_rgba(16,185,129,0)] hover:shadow-[0_0_18px_rgba(16,185,129,0.25)]"
-                    disabled={isExecutionBlocked}
+                    disabled={isExecutionBlocked || !isExecutableSetupGrade(latestActionableSignal)}
                     onClick={() => handleQuickStatus(latestActionableSignal.id, 'EXECUTED')}
                   >
                     Execute Trade
@@ -1200,7 +1217,7 @@ export default function DayTradingTerminal() {
                   ))}
                   <span className="text-emerald-500/20">|</span>
                   {/* Grade filter */}
-                  {(['ALL', 'A+', 'B', 'C'] as const).map(g => (
+                  {(['ALL', 'A+', 'A', 'B', 'C'] as const).map(g => (
                     <button key={g}
                       onClick={() => setFilterGrade(g)}
                       className={`text-[9px] px-2 py-0.5 rounded border font-bold transition-colors ${
@@ -1335,6 +1352,7 @@ export default function DayTradingTerminal() {
 
                       const hasAi = !!sig.ai_coach_commentary;
                       const aiPending = sig.signal_type !== 'NONE' && !hasAi;
+                      const isSignalExecutable = isExecutableSetupGrade(sig);
 
                       return (
                         <React.Fragment key={sig.id}>
@@ -1379,8 +1397,8 @@ export default function DayTradingTerminal() {
                               {sig.status === 'PENDING' ? (
                                 <div className="flex justify-end gap-1">
                                   <button onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
-                                    disabled={isExecutionBlocked}
-                                    className="motion-press h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title="Execute">
+                                    disabled={isExecutionBlocked || !isSignalExecutable}
+                                    className="motion-press h-5 w-5 flex items-center justify-center rounded bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/30 text-emerald-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed" title={isSignalExecutable ? 'Execute' : 'Only A/A+ setups can execute'}>
                                     <Play className="h-2.5 w-2.5" />
                                   </button>
                                   <button onClick={() => handleQuickStatus(sig.id, 'CANCELLED')}

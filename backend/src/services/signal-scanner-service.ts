@@ -1061,6 +1061,10 @@ Rules:
       const polygonApiKey = settings.polygon_api_key;
       const strikeOffset = parseInt(settings.strike_offset, 10) || 0;
       const todayDateStr = nyParts.dateStr;
+      const targetExpiryDateStr = this.getTargetDayTradeExpiry(todayDateStr, nyParts.minutes);
+      if (targetExpiryDateStr !== todayDateStr) {
+        this.fastify.log.info(`[SignalScannerService] ${symbol} scan is after 1:00 PM ET. Selecting 1DTE expiry ${targetExpiryDateStr} instead of 0DTE ${todayDateStr}.`);
+      }
 
       let chosenContract: any = null;
 
@@ -1070,7 +1074,7 @@ Rules:
             params: {
               underlying_ticker: symbol,
               contract_type: winningSide === 'CALL' ? 'call' : 'put',
-              expiration_date: todayDateStr,
+              expiration_date: targetExpiryDateStr,
               limit: 250,
               sort: 'strike_price',
               order: 'asc',
@@ -1128,10 +1132,10 @@ Rules:
       let openInterest: number | null = null;
       let usingTheoreticalPricing = true;
 
-      const defaultContractName = `${symbol}${todayDateStr.replace(/-/g, '').slice(2)}${winningSide === 'CALL' ? 'C' : 'P'}${Math.round(currentPrice)}`;
+      const defaultContractName = `${symbol}${targetExpiryDateStr.replace(/-/g, '').slice(2)}${winningSide === 'CALL' ? 'C' : 'P'}${Math.round(currentPrice)}`;
       optionTicker = chosenContract?.ticker || defaultContractName;
       chosenStrike = chosenContract?.strike || Math.round(currentPrice);
-      chosenExpiry = chosenContract?.expiry || todayDateStr;
+      chosenExpiry = chosenContract?.expiry || targetExpiryDateStr;
 
       // Try fetching live option contract snapshot from Alpaca API if credentials exist
       const alpacaKeyId = settings.alpaca_key_id?.trim();
@@ -2250,6 +2254,20 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       dateStr: `${t.year}-${t.month}-${t.day}`,
       marketDate: `${t.month}/${t.day}/${t.year}`
     };
+  }
+
+  private getTargetDayTradeExpiry(nyDateStr: string, nyMinutes: number): string {
+    const onePmMinutes = 13 * 60;
+    if (nyMinutes < onePmMinutes) return nyDateStr;
+
+    const [year, month, day] = nyDateStr.split('-').map((value) => parseInt(value, 10));
+    const expiryDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+
+    do {
+      expiryDate.setUTCDate(expiryDate.getUTCDate() + 1);
+    } while (expiryDate.getUTCDay() === 0 || expiryDate.getUTCDay() === 6);
+
+    return expiryDate.toISOString().split('T')[0];
   }
 
   private computeRsi(values: number[], length: number): number | null {

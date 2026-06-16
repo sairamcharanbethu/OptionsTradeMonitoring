@@ -214,32 +214,65 @@ export class MarketPoller {
     );
   }
 
-  private async submitSnapTradeExit(position: any, orderType: 'LIMIT' | 'MARKET', limitPrice?: string): Promise<boolean> {
+  private getProfitTrimQuantity(position: any): number {
+    const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
+    if (quantity <= 1) return quantity;
+    if (String(position.profit_trim_status || '').toUpperCase() === 'DONE') return quantity;
+    return Math.max(1, Math.floor(quantity / 2));
+  }
+
+  private isPartialProfitTrim(position: any, exitTriggerType: 'STOP_LOSS' | 'TAKE_PROFIT'): boolean {
+    const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
+    return exitTriggerType === 'TAKE_PROFIT'
+      && quantity > 1
+      && String(position.profit_trim_status || '').toUpperCase() !== 'DONE';
+  }
+
+  private async submitSnapTradeExit(
+    position: any,
+    orderType: 'LIMIT' | 'MARKET',
+    limitPrice?: string,
+    exitTriggerType: 'STOP_LOSS' | 'TAKE_PROFIT' = 'STOP_LOSS',
+    requestedQuantity?: number
+  ): Promise<boolean> {
     const accountId = position.account_id;
     if (!accountId) {
       await this.markExitSubmissionFailure(position, 'No SnapTrade account id found for live exit');
       return false;
     }
 
+    const partialTrim = this.isPartialProfitTrim(position, exitTriggerType);
+    const exitQuantity = Math.max(1, Math.min(
+      Math.floor(Number(requestedQuantity || (partialTrim ? this.getProfitTrimQuantity(position) : position.quantity) || 1)),
+      Math.floor(Number(position.quantity || 1))
+    ));
+    const nextExecutionStatus = partialTrim ? 'PENDING_TRIM' : 'PENDING_EXIT';
+    const nextExitReason = partialTrim ? 'PROFIT_TRIM' : 'AUTO_EXIT';
+    const claimNote = partialTrim
+      ? ` [Profit trim claim created before SnapTrade ${orderType} SELL_TO_CLOSE for ${exitQuantity}/${position.quantity} contracts]`
+      : ` [Exit claim created before SnapTrade ${orderType} submission]`;
+
     const claimResult = await (this.fastify as any).pg.query(
       `UPDATE positions
-       SET execution_status = 'PENDING_EXIT',
+       SET execution_status = $1,
            execution_error = NULL,
-           exit_reason = COALESCE(exit_reason, 'AUTO_EXIT'),
-           exit_order_type = $1,
+           exit_reason = COALESCE(exit_reason, $2),
+           exit_order_type = $3,
            exit_requested_at = CURRENT_TIMESTAMP,
-           notes = COALESCE(notes, '') || $2,
+           profit_trim_status = CASE WHEN $1 = 'PENDING_TRIM' THEN 'PENDING' ELSE profit_trim_status END,
+           profit_trim_quantity = CASE WHEN $1 = 'PENDING_TRIM' THEN $4 ELSE profit_trim_quantity END,
+           notes = COALESCE(notes, '') || $5,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3
+       WHERE id = $6
          AND status = 'OPEN'
-         AND COALESCE(execution_status, '') <> 'PENDING_EXIT'
+         AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')
          AND broker_exit_order_id IS NULL
        RETURNING id`,
-      [orderType, ` [Exit claim created before SnapTrade ${orderType} submission]`, position.id]
+      [nextExecutionStatus, nextExitReason, orderType, exitQuantity, claimNote, position.id]
     );
 
     if (claimResult.rowCount === 0) {
-      this.fastify.log.info(`[MarketPoller] Exit already pending or unavailable for position ${position.id}. Skipping duplicate SELL_TO_CLOSE.`);
+      this.fastify.log.info(`[MarketPoller] Exit/trim already pending or unavailable for position ${position.id}. Skipping duplicate SELL_TO_CLOSE.`);
       return false;
     }
 
@@ -257,26 +290,31 @@ export class MarketPoller {
         accountId,
         osiTicker,
         'SELL_TO_CLOSE',
-        position.quantity,
+        exitQuantity,
         orderType,
         limitPrice
       );
 
       await (this.fastify as any).pg.query(
         `UPDATE positions
-         SET execution_status = 'PENDING_EXIT',
+         SET execution_status = $1,
              execution_error = NULL,
-             broker_exit_order_id = $1,
-             broker_exit_trade_id = $2,
-             notes = COALESCE(notes, '') || $3,
+             broker_exit_order_id = $2,
+             broker_exit_trade_id = $3,
+             profit_trim_order_id = CASE WHEN $1 = 'PENDING_TRIM' THEN $2 ELSE profit_trim_order_id END,
+             profit_trim_trade_id = CASE WHEN $1 = 'PENDING_TRIM' THEN $3 ELSE profit_trim_trade_id END,
+             notes = COALESCE(notes, '') || $4,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $4
+         WHERE id = $5
            AND status = 'OPEN'
-           AND execution_status = 'PENDING_EXIT'`,
+           AND execution_status = $1`,
         [
+          nextExecutionStatus,
           result.orderId || null,
           result.tradeId || null,
-          ` [SnapTrade ${orderType} exit submitted${result.orderId ? `: ${result.orderId}` : ''}]`,
+          partialTrim
+            ? ` [SnapTrade ${orderType} profit trim submitted for ${exitQuantity}/${position.quantity} contracts${result.orderId ? `: ${result.orderId}` : ''}]`
+            : ` [SnapTrade ${orderType} exit submitted${result.orderId ? `: ${result.orderId}` : ''}]`,
           position.id
         ]
       );
@@ -598,7 +636,7 @@ export class MarketPoller {
         let shouldForceClose = false;
         let reason = '';
 
-        if (pos.execution_status === 'PENDING_EXIT') {
+        if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(pos.execution_status || ''))) {
             continue;
         }
 
@@ -812,7 +850,8 @@ export class MarketPoller {
 
     const entryPrice = Number(position.entry_price);
     const softPremiumStop = Number(position.stop_loss_trigger);
-    const hardPremiumStop = Number((entryPrice * 0.65).toFixed(2));
+    const hardPremiumStop = Number(Math.max(entryPrice * 0.65, softPremiumStop * 0.85).toFixed(2));
+    const softStopConfirmationMs = 10_000;
     const premiumSoftStopHit = engineResult.triggered && engineResult.triggerType === 'STOP_LOSS';
     const premiumHardStopHit = price <= hardPremiumStop;
 
@@ -841,20 +880,41 @@ export class MarketPoller {
         analysisDirty = true;
         this.fastify.log.info(`[MarketPoller] HARD STOP triggered for position ${position.id}: premium ${price} <= ${hardPremiumStop}`);
       } else if (premiumSoftStopHit) {
-        triggered = true;
-        triggerType = 'STOP_LOSS';
-        lossAvoided = entryPrice - price;
-        analysis.smartStopWarning = {
-          status: underlyingStopBroken ? 'PREMIUM_STOP_STRUCTURE_CONFIRMED' : 'PREMIUM_STOP_TRIGGERED',
-          price,
-          softPremiumStop,
-          hardPremiumStop,
-          underlyingPrice: underlyingPrice ?? null,
-          underlyingStop,
-          triggeredAt: new Date().toISOString()
-        };
-        analysisDirty = true;
-        this.fastify.log.info(`[MarketPoller] Premium STOP triggered for position ${position.id}: premium ${price} <= displayed stop ${softPremiumStop}.`);
+        const now = Date.now();
+        const existingArmedAt = analysis.smartStopWarning?.armedAt || analysis.smartStopWarning?.triggeredAt;
+        const armedAtMs = existingArmedAt ? new Date(existingArmedAt).getTime() : NaN;
+        const confirmedByTime = Number.isFinite(armedAtMs) && now - armedAtMs >= softStopConfirmationMs;
+
+        if (underlyingStopBroken || confirmedByTime) {
+          triggered = true;
+          triggerType = 'STOP_LOSS';
+          lossAvoided = entryPrice - price;
+          analysis.smartStopWarning = {
+            status: underlyingStopBroken ? 'PREMIUM_STOP_STRUCTURE_CONFIRMED' : 'PREMIUM_STOP_TIME_CONFIRMED',
+            price,
+            softPremiumStop,
+            hardPremiumStop,
+            underlyingPrice: underlyingPrice ?? null,
+            underlyingStop,
+            armedAt: Number.isFinite(armedAtMs) ? existingArmedAt : new Date(now).toISOString(),
+            triggeredAt: new Date(now).toISOString()
+          };
+          analysisDirty = true;
+          this.fastify.log.info(`[MarketPoller] Premium STOP confirmed for position ${position.id}: premium ${price} <= displayed stop ${softPremiumStop}.`);
+        } else {
+          analysis.smartStopWarning = {
+            status: 'STOP_ARMED',
+            price,
+            softPremiumStop,
+            hardPremiumStop,
+            underlyingPrice: underlyingPrice ?? null,
+            underlyingStop,
+            armedAt: Number.isFinite(armedAtMs) ? existingArmedAt : new Date(now).toISOString(),
+            confirmationSeconds: softStopConfirmationMs / 1000
+          };
+          analysisDirty = true;
+          this.fastify.log.info(`[MarketPoller] Premium STOP armed for position ${position.id}: premium ${price} <= displayed stop ${softPremiumStop}; waiting ${softStopConfirmationMs / 1000}s or structure break.`);
+        }
       } else if (analysis.smartStopWarning) {
         delete analysis.smartStopWarning;
         analysisDirty = true;
@@ -967,19 +1027,21 @@ export class MarketPoller {
       [position.id, price]
     );
 
-    if (position.execution_status === 'PENDING_EXIT') {
+    if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(position.execution_status || ''))) {
       return;
     }
 
     if (triggered) {
       if (position.status === 'OPEN') {
         const exitTriggerType = triggerType || 'STOP_LOSS';
+        const partialTrim = this.isPartialProfitTrim(position, exitTriggerType);
+        const exitQuantity = partialTrim ? this.getProfitTrimQuantity(position) : Number(position.quantity || 1);
         const newStatus = 'CLOSED';
-        const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
+        const realizedPnl = (price - Number(position.entry_price)) * exitQuantity * 100;
 
         // Execute Live SnapTrade order if not simulated
         if (!position.is_simulated) {
-            this.fastify.log.info(`[MarketPoller] LIVE position exit triggered for position ${position.id} (${position.symbol}). Executing SELL_TO_CLOSE via SnapTrade...`);
+            this.fastify.log.info(`[MarketPoller] LIVE position ${partialTrim ? 'profit trim' : 'exit'} triggered for position ${position.id} (${position.symbol}). Executing SELL_TO_CLOSE ${exitQuantity}/${position.quantity} via SnapTrade...`);
             let limitPrice: string | undefined = undefined;
             let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
 
@@ -989,7 +1051,7 @@ export class MarketPoller {
                 orderType = 'LIMIT';
             }
 
-            const submitted = await this.submitSnapTradeExit(position, orderType, limitPrice);
+            const submitted = await this.submitSnapTradeExit(position, orderType, limitPrice, exitTriggerType, exitQuantity);
             if (submitted) {
               await (this.fastify as any).pg.query(
                 'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',
@@ -1001,8 +1063,12 @@ export class MarketPoller {
                 realizedPnl,
                 lossAvoided,
                 exitTriggerType,
-                `${exitTriggerType} exit order submitted; waiting for broker fill confirmation.`,
-                `**[${exitTriggerType} EXIT SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} SELL_TO_CLOSE submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
+                partialTrim
+                  ? `${exitTriggerType} profit trim submitted for ${exitQuantity}/${position.quantity} contracts; waiting for broker fill confirmation.`
+                  : `${exitTriggerType} exit order submitted; waiting for broker fill confirmation.`,
+                partialTrim
+                  ? `**[${exitTriggerType} TRIM SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} SELL_TO_CLOSE ${exitQuantity}/${position.quantity} submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
+                  : `**[${exitTriggerType} EXIT SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} SELL_TO_CLOSE submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
               );
             }
             return;
@@ -1033,7 +1099,7 @@ export class MarketPoller {
 
                     const exitPayload: any = {
                         symbol: osiTicker,
-                        qty: position.quantity || 1,
+                        qty: exitQuantity,
                         side: 'sell',
                         type: useLimitExit ? 'limit' : 'market',
                         time_in_force: 'day'
@@ -1059,14 +1125,27 @@ export class MarketPoller {
                     const orderData: any = await res.json();
                     await (this.fastify as any).pg.query(
                         `UPDATE positions
-                         SET execution_status = 'PENDING_EXIT',
+                         SET execution_status = $1,
                              execution_error = NULL,
-                             broker_exit_order_id = $1,
+                             broker_exit_order_id = $2,
                              exit_requested_at = CURRENT_TIMESTAMP,
-                             notes = COALESCE(notes, '') || $2,
+                             exit_reason = COALESCE(exit_reason, $3),
+                             profit_trim_status = CASE WHEN $1 = 'PENDING_TRIM' THEN 'PENDING' ELSE profit_trim_status END,
+                             profit_trim_quantity = CASE WHEN $1 = 'PENDING_TRIM' THEN $4 ELSE profit_trim_quantity END,
+                             profit_trim_order_id = CASE WHEN $1 = 'PENDING_TRIM' THEN $2 ELSE profit_trim_order_id END,
+                             notes = COALESCE(notes, '') || $5,
                              updated_at = CURRENT_TIMESTAMP
-                         WHERE id = $3 AND status = 'OPEN'`,
-                        [orderData.id || null, ` [Alpaca paper exit submitted${orderData.id ? `: ${orderData.id}` : ''}]`, position.id]
+                         WHERE id = $6 AND status = 'OPEN'`,
+                        [
+                          partialTrim ? 'PENDING_TRIM' : 'PENDING_EXIT',
+                          orderData.id || null,
+                          partialTrim ? 'PROFIT_TRIM' : 'AUTO_EXIT',
+                          exitQuantity,
+                          partialTrim
+                            ? ` [Alpaca paper profit trim submitted for ${exitQuantity}/${position.quantity}${orderData.id ? `: ${orderData.id}` : ''}]`
+                            : ` [Alpaca paper exit submitted${orderData.id ? `: ${orderData.id}` : ''}]`,
+                          position.id
+                        ]
                     );
                     this.fastify.log.info(`[MarketPoller] Alpaca paper exit execution successful for position ${position.id}.`);
                     return;
@@ -1078,16 +1157,31 @@ export class MarketPoller {
             }
         }
 
-        const updateResult = await (this.fastify as any).pg.query(
-          `UPDATE positions 
-              SET status = $1, 
-              loss_avoided = $2,
-              realized_pnl = $3,
-              notes = COALESCE(notes, '') || $4,
-              updated_at = CURRENT_TIMESTAMP 
-              WHERE id = $5 AND status = 'OPEN'`,
-          [newStatus, lossAvoided, realizedPnl, ` [Closed via Underlying-Triggered ${exitTriggerType} Strategy]`, position.id]
-        );
+        const updateResult = partialTrim
+          ? await (this.fastify as any).pg.query(
+              `UPDATE positions
+               SET quantity = quantity - $1,
+                   realized_pnl = COALESCE(realized_pnl, 0) + $2,
+                   profit_trim_status = 'DONE',
+                   profit_trim_quantity = $1,
+                   profit_trim_price = $3,
+                   profit_trimmed_at = CURRENT_TIMESTAMP,
+                   take_profit_trigger = NULL,
+                   notes = COALESCE(notes, '') || $4,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = $5 AND status = 'OPEN' AND quantity > $1`,
+              [exitQuantity, realizedPnl, price, ` [Profit trim simulated: sold ${exitQuantity}/${position.quantity} via ${exitTriggerType}]`, position.id]
+            )
+          : await (this.fastify as any).pg.query(
+              `UPDATE positions
+                  SET status = $1,
+                  loss_avoided = $2,
+                  realized_pnl = COALESCE(realized_pnl, 0) + $3,
+                  notes = COALESCE(notes, '') || $4,
+                  updated_at = CURRENT_TIMESTAMP
+                  WHERE id = $5 AND status = 'OPEN'`,
+              [newStatus, lossAvoided, realizedPnl, ` [Closed via Underlying-Triggered ${exitTriggerType} Strategy]`, position.id]
+            );
 
         if (updateResult.rowCount === 0) {
           // Already updated or state mismatch, skip AI alert

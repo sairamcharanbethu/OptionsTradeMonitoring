@@ -69,6 +69,14 @@ export class TradeExecutionService {
       };
     }
 
+    const setupGrade = await this.getSignalSetupGrade(input.signalId);
+    if (!this.isExecutableSetupGrade(setupGrade)) {
+      const message = `Signal #${input.signalId} skipped: setup grade ${setupGrade || 'N/A'} is below A/A+`;
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      this.fastify.log.info(`[TradeExecutionService] ${message}`);
+      return { success: false, skipped: true, broker, message };
+    }
+
     const supersededSummary = await this.closeSupersededPositions(input, settings, broker);
     if (supersededSummary.blocked) {
       await this.markSignalExecutionFailure(input.userId, input.signalId, supersededSummary.message);
@@ -145,6 +153,20 @@ export class TradeExecutionService {
     return rows[0] || null;
   }
 
+  private async getSignalSetupGrade(signalId: number): Promise<string | null> {
+    const { rows } = await this.fastify.pg.query(
+      'SELECT setup_grade FROM signals WHERE id = $1',
+      [signalId]
+    );
+    return rows[0]?.setup_grade || null;
+  }
+
+  private isExecutableSetupGrade(setupGrade: string | null | undefined): boolean {
+    const normalized = String(setupGrade || '').toUpperCase();
+    if (normalized.includes('A+')) return true;
+    return /(^|[^A-Z])A([^A-Z+]|$)/.test(normalized);
+  }
+
   private async countTradesToday(userId: number): Promise<number> {
     const { rows } = await this.fastify.pg.query(
       `SELECT COUNT(*)::int AS count
@@ -168,7 +190,7 @@ export class TradeExecutionService {
          AND symbol = $2
          AND option_type <> $3
          AND status IN ('OPEN', 'PENDING_ORDER')
-         AND COALESCE(execution_status, '') <> 'PENDING_EXIT'
+         AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')
        ORDER BY created_at DESC`,
       [input.userId, input.symbol, input.winningSide]
     );
@@ -278,7 +300,7 @@ export class TradeExecutionService {
   }
 
   private async submitSupersededExit(position: any, settings: ExecutionSettings, broker: ExecutionBroker, signalId: number): Promise<boolean> {
-    if (position.execution_status === 'PENDING_EXIT') return false;
+    if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(position.execution_status || ''))) return false;
 
     const executionBroker = String(position.execution_broker || broker || '');
     if (!position.is_simulated && executionBroker === 'wealthsimple_snaptrade') {
