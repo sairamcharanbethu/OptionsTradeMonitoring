@@ -387,28 +387,39 @@ export class SnaptradeService {
     }
 
     private collectOrderIds(order: any): string[] {
-        const ids = [
-            order?.id,
-            order?.order_id,
-            order?.orderId,
-            order?.brokerage_order_id,
-            order?.brokerageOrderId,
-            order?.brokerage_order_id?.id,
-            order?.brokerage_group_order_id,
-            order?.brokerageGroupOrderId,
-            order?.trade_id,
-            order?.tradeId
-        ]
-            .filter((value) => value !== null && value !== undefined)
-            .map((value) => String(value));
+        const ids = new Set<string>();
+        this.collectOrderIdsRecursive(order, ids);
+        return [...ids];
+    }
 
-        if (Array.isArray(order?.orders)) {
-            for (const childOrder of order.orders) {
-                ids.push(...this.collectOrderIds(childOrder));
-            }
+    private collectOrderIdsRecursive(value: any, ids: Set<string>, depth = 0) {
+        if (value === null || value === undefined || depth > 8) return;
+
+        if (typeof value === 'string' || typeof value === 'number') {
+            const text = String(value).trim();
+            if (text) ids.add(text);
+            return;
         }
 
-        return [...new Set(ids)];
+        if (Array.isArray(value)) {
+            for (const item of value) {
+                this.collectOrderIdsRecursive(item, ids, depth + 1);
+            }
+            return;
+        }
+
+        if (typeof value !== 'object') return;
+
+        for (const [key, child] of Object.entries(value)) {
+            const lowerKey = key.toLowerCase();
+            if (
+                child !== null
+                && child !== undefined
+                && (lowerKey.includes('id') || lowerKey.includes('order') || lowerKey.includes('trade'))
+            ) {
+                this.collectOrderIdsRecursive(child, ids, depth + 1);
+            }
+        }
     }
 
     private findMatchingOrder(orders: any[], position: any, phase: 'ENTRY' | 'EXIT' = 'ENTRY') {

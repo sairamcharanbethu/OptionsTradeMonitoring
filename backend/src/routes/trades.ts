@@ -79,6 +79,13 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     }
   }, async (request) => {
     const { id: userId } = (request as any).user;
+    try {
+      const snaptradeService = new SnaptradeService(fastify);
+      await snaptradeService.syncPendingBrokerOrders(userId);
+    } catch (err: any) {
+      fastify.log.warn(`[TradesOpen] Wealthsimple pending-order sync failed before listing trades: ${err.message}`);
+    }
+
     const { rows } = await fastify.pg.query(
       `SELECT *
        FROM positions
