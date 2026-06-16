@@ -10,6 +10,15 @@ export class SnaptradeService {
         this.fastify = fastify;
     }
 
+    private toLocalAccountId(userId: number, snaptradeAccountId: string): string {
+        return `${userId}:${snaptradeAccountId}`;
+    }
+
+    private toSnaptradeAccountId(accountId: string): string {
+        const parts = String(accountId || '').split(':');
+        return parts.length > 1 ? parts.slice(1).join(':') : accountId;
+    }
+
     private async getSnaptradeClient(userId: number): Promise<{ snaptrade: Snaptrade, userIdStr: string, userSecret: string }> {
         const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
         const settings = rows.reduce((acc: any, row: any) => {
@@ -120,7 +129,9 @@ export class SnaptradeService {
         const selectedAccountRes = await this.fastify.pg.query(
             `SELECT s.value AS selected_account_id, a.raw_data
              FROM settings s
-             LEFT JOIN snaptrade_accounts a ON a.id = s.value AND a.user_id = s.user_id
+             LEFT JOIN snaptrade_accounts a
+               ON a.user_id = s.user_id
+              AND (a.id = s.value OR a.id = CONCAT(s.user_id::text, ':', s.value))
              WHERE s.user_id = $1 AND s.key = 'snaptrade_trading_account_id'
              LIMIT 1`,
             [userId]
@@ -214,9 +225,15 @@ export class SnaptradeService {
                 // 1. Wipe previous SnapTrade sync data for this user to avoid stale/orphaned/duplicate records
                 await client.query('DELETE FROM snaptrade_positions WHERE user_id = $1', [userId]);
                 await client.query('DELETE FROM snaptrade_accounts WHERE user_id = $1', [userId]);
+                const { rows: selectedRows } = await client.query(
+                    "SELECT value FROM settings WHERE user_id = $1 AND key = 'snaptrade_trading_account_id' LIMIT 1",
+                    [userId]
+                );
+                const selectedAccountId = String(selectedRows[0]?.value || '');
 
                 // 2. Re-insert only the currently active accounts
                 for (const account of openAccounts) {
+                    const localAccountId = this.toLocalAccountId(userId, account.id);
                     const status = account.meta?.status || account.status || 'open';
                     const unifiedType = account.meta?.unifiedAccountType || '';
                     
@@ -224,13 +241,23 @@ export class SnaptradeService {
                         INSERT INTO snaptrade_accounts (id, user_id, name, number, status, unified_type, raw_data, last_synced_at)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
                         ON CONFLICT (id) DO UPDATE SET
+                            user_id = EXCLUDED.user_id,
                             name = EXCLUDED.name,
                             number = EXCLUDED.number,
                             status = EXCLUDED.status,
                             unified_type = EXCLUDED.unified_type,
                             raw_data = EXCLUDED.raw_data,
                             last_synced_at = CURRENT_TIMESTAMP
-                    `, [account.id, userId, account.name, account.number, status, unifiedType, account]);
+                    `, [localAccountId, userId, account.name, account.number, status, unifiedType, account]);
+
+                    if (selectedAccountId === account.id) {
+                        await client.query(
+                            `UPDATE settings
+                             SET value = $1, updated_at = CURRENT_TIMESTAMP
+                             WHERE user_id = $2 AND key = 'snaptrade_trading_account_id'`,
+                            [localAccountId, userId]
+                        );
+                    }
 
                     // Fetch positions for this account
                     const positionsRes = await snaptrade.accountInformation.getUserAccountPositions({
@@ -252,12 +279,12 @@ export class SnaptradeService {
                         const averagePrice = pos.average_purchase_price;
                         const openPnl = pos.open_pnl;
 
-                        const posId = pos.symbol.id + '-' + account.id; // Unique ID
+                        const posId = `${userId}:${pos.symbol.id}-${account.id}`; // Unique per app user/account
 
                         await client.query(`
                             INSERT INTO snaptrade_positions (id, account_id, user_id, symbol, description, asset_type, price, units, average_purchase_price, open_pnl, currency, raw_data, last_synced_at)
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
-                        `, [posId, account.id, userId, symbol, description, assetType, price, units, averagePrice, openPnl, currency, pos]);
+                        `, [posId, localAccountId, userId, symbol, description, assetType, price, units, averagePrice, openPnl, currency, pos]);
                     }
                 }
 
@@ -328,10 +355,11 @@ export class SnaptradeService {
     async getAccountBalance(userId: number, accountId: string): Promise<{ cash: number | null; currency: string | null; buyingPower: number | null; balances: any[] }> {
         try {
             const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+            const snaptradeAccountId = this.toSnaptradeAccountId(accountId);
             const balanceRes = await snaptrade.accountInformation.getUserAccountBalance({
                 userId: userIdStr,
                 userSecret: userSecret,
-                accountId: accountId
+                accountId: snaptradeAccountId
             });
 
             const balances = Array.isArray(balanceRes.data) ? balanceRes.data : [];
@@ -475,10 +503,11 @@ export class SnaptradeService {
 
         const getOrdersForAccount = async (accountId: string) => {
             if (ordersByAccount.has(accountId)) return ordersByAccount.get(accountId) || [];
+            const snaptradeAccountId = this.toSnaptradeAccountId(accountId);
             const response = await snaptrade.accountInformation.getUserAccountRecentOrders({
                 userId: userIdStr,
                 userSecret,
-                accountId,
+                accountId: snaptradeAccountId,
                 onlyExecuted: false
             });
             const orders = this.extractRecentOrders(response.data);
@@ -821,6 +850,7 @@ export class SnaptradeService {
         const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
         const snaptradeOptionSymbol = this.toSnaptradeOccSymbol(optionSymbol);
         const priceEffect = action.startsWith('BUY') ? 'DEBIT' : 'CREDIT';
+        const snaptradeAccountId = this.toSnaptradeAccountId(accountId);
 
         this.fastify.log.info(`[SnaptradeService] Placing option order: ${action} ${units} contracts of ${snaptradeOptionSymbol} on account ${accountId} (Mode: ${orderType})`);
 
@@ -828,7 +858,7 @@ export class SnaptradeService {
             const orderPayload: any = {
                 userId: userIdStr,
                 userSecret: userSecret,
-                accountId: accountId,
+                accountId: snaptradeAccountId,
                 order_type: orderType,
                 time_in_force: 'Day',
                 limit_price: orderType === 'LIMIT' ? limitPrice : '',

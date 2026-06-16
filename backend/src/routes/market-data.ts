@@ -11,8 +11,26 @@ const PriceUpdateSchema = z.object({
 export async function marketDataRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   const aiService = new AIService(fastify);
 
+  async function authenticateMarketDataUpdate(request: any, reply: any) {
+    const webhookSecret = process.env.MARKET_DATA_WEBHOOK_SECRET;
+    const providedSecret = request.headers['x-webhook-secret'] || request.headers['x-market-data-secret'];
+
+    if (webhookSecret && providedSecret === webhookSecret) {
+      return;
+    }
+
+    try {
+      await request.jwtVerify();
+      if (request.user?.role !== 'ADMIN') {
+        return reply.code(403).send({ error: 'Admin access required' });
+      }
+    } catch (err) {
+      return reply.code(401).send({ error: 'Unauthorized market data update' });
+    }
+  }
+
   // POST price update from n8n
-  fastify.post('/update-price', async (request, reply) => {
+  fastify.post('/update-price', { preHandler: authenticateMarketDataUpdate }, async (request, reply) => {
     const { symbol, price } = PriceUpdateSchema.parse(request.body);
 
     // 1. Find all OPEN positions for this symbol

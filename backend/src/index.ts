@@ -506,6 +506,11 @@ const start = async () => {
         return reply.code(404).send({ error: 'Dev trade testing is disabled' });
       }
 
+      const { role } = (request as any).user;
+      if (role !== 'ADMIN') {
+        return reply.code(403).send({ error: 'Admin access required' });
+      }
+
       const body = request.body as {
         provider?: string;
         symbol?: string;

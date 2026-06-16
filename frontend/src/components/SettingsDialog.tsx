@@ -44,6 +44,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [activeSettingsTab, setActiveSettingsTab] = useState('daytrading');
+    const isAdmin = user.role === 'ADMIN';
 
     // Config State
     const [provider, setProvider] = useState('ollama');
@@ -134,7 +135,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     useEffect(() => {
         if (open) {
             loadSettings();
-            loadQuestradeConfig();
+            if (isAdmin) {
+                loadQuestradeConfig();
+            }
             setPwError(null);
             setPwSuccess(null);
             setProfileError(null);
@@ -143,15 +146,15 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setNewPassword('');
             setUsername(user.username);
         }
-    }, [open, user.username]);
+    }, [open, user.username, isAdmin]);
 
     // Handle OAuth Callback on mount/refresh
     useEffect(() => {
         const hash = window.location.hash;
-        if (hash && hash.includes('access_token=')) {
+        if (isAdmin && hash && hash.includes('access_token=')) {
             handleQuestradeCallback(hash);
         }
-    }, []);
+    }, [isAdmin]);
 
     async function loadQuestradeConfig() {
         try {
@@ -1006,41 +1009,43 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <h4 className="font-semibold text-sm border-b pb-2">Brokerages</h4>
                                     
                                     {/* Questrade */}
-                                    <div className="space-y-3">
-                                        <div className="flex items-center justify-between">
-                                            <h5 className="font-medium text-sm">Questrade Brokerage</h5>
-                                            <Badge variant={qtSaved ? "default" : "secondary"}>
-                                                {qtSaved ? "Connected" : "Not Linked"}
-                                            </Badge>
+                                    {isAdmin && (
+                                        <div className="space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <h5 className="font-medium text-sm">Questrade Brokerage</h5>
+                                                <Badge variant={qtSaved ? "default" : "secondary"}>
+                                                    {qtSaved ? "Connected" : "Not Linked"}
+                                                </Badge>
+                                            </div>
+                                            <div className="grid gap-2 p-4 border rounded-md bg-muted/30">
+                                                <Label htmlFor="qt-client">Questrade API Key / Refresh Token</Label>
+                                                <Input
+                                                    id="qt-client"
+                                                    value={qtClientId}
+                                                    onChange={(e) => setQtClientId(e.target.value)}
+                                                    placeholder="Paste your manually generated Refresh Token or Consumer Key"
+                                                    type="password"
+                                                />
+                                                <p className="text-[10px] text-muted-foreground leading-normal">
+                                                    <strong>Recommended:</strong> Click <strong>"New manual authorization"</strong> in your Questrade API Centre, copy the Refresh Token, and paste it here. Or, enter your static **Consumer Key (Client ID)** to use the redirect flow.
+                                                </p>
+                                                <Button
+                                                    onClick={initiateQuestradeLogin}
+                                                    disabled={qtConnecting}
+                                                    className="w-full mt-2 bg-[#ffcc00] text-black hover:bg-[#e6b800] font-bold transition-all duration-200 shadow-md hover:shadow-lg"
+                                                >
+                                                    {qtConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                                    Connect Questrade
+                                                </Button>
+                                                <p className="text-[10px] text-center text-muted-foreground italic mt-1">
+                                                    The application will automatically detect, verify, and rotate your token directly.
+                                                </p>
+                                            </div>
                                         </div>
-                                        <div className="grid gap-2 p-4 border rounded-md bg-muted/30">
-                                            <Label htmlFor="qt-client">Questrade API Key / Refresh Token</Label>
-                                            <Input
-                                                id="qt-client"
-                                                value={qtClientId}
-                                                onChange={(e) => setQtClientId(e.target.value)}
-                                                placeholder="Paste your manually generated Refresh Token or Consumer Key"
-                                                type="password"
-                                            />
-                                            <p className="text-[10px] text-muted-foreground leading-normal">
-                                                <strong>Recommended:</strong> Click <strong>"New manual authorization"</strong> in your Questrade API Centre, copy the Refresh Token, and paste it here. Or, enter your static **Consumer Key (Client ID)** to use the redirect flow.
-                                            </p>
-                                            <Button
-                                                onClick={initiateQuestradeLogin}
-                                                disabled={qtConnecting}
-                                                className="w-full mt-2 bg-[#ffcc00] text-black hover:bg-[#e6b800] font-bold transition-all duration-200 shadow-md hover:shadow-lg"
-                                            >
-                                                {qtConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                Connect Questrade
-                                            </Button>
-                                            <p className="text-[10px] text-center text-muted-foreground italic mt-1">
-                                                The application will automatically detect, verify, and rotate your token directly.
-                                            </p>
-                                        </div>
-                                    </div>
+                                    )}
 
                                     {/* SnapTrade */}
-                                    <div className="space-y-3 pt-4 border-t">
+                                    <div className={`space-y-3 ${isAdmin ? 'pt-4 border-t' : ''}`}>
                                         <div className="flex items-center justify-between">
                                             <h5 className="font-medium text-sm">Wealthsimple (via SnapTrade)</h5>
                                             <Badge variant={snaptradeClientId && snaptradeConsumerKey ? "default" : "secondary"}>

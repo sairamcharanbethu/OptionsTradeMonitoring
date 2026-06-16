@@ -14,6 +14,13 @@ function redactGlobalSettingsForUser(settings: Record<string, string>, role?: st
     return redacted;
 }
 
+function requireAdmin(request: any, reply: any) {
+    const { role } = request.user || {};
+    if (role !== 'ADMIN') {
+        return reply.code(403).send({ error: 'Admin access required' });
+    }
+}
+
 export async function settingsRoutes(fastify: FastifyInstance) {
     fastify.addHook('onRequest', fastify.authenticate);
 
@@ -92,6 +99,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // QUESTRADE CONFIG
     fastify.get('/questrade/config', async (request, reply) => {
+        const denied = requireAdmin(request, reply);
+        if (denied) return denied;
+
         try {
             const questrade = (fastify as any).questrade;
             const clientId = await questrade.getClientId();
@@ -104,6 +114,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // QUESTRADE SAVE CLIENT ID
     fastify.post('/questrade/client', async (request, reply) => {
+        const denied = requireAdmin(request, reply);
+        if (denied) return denied;
+
         const { clientId } = request.body as { clientId: string };
         if (!clientId) return reply.code(400).send({ error: 'clientId required' });
 
@@ -118,6 +131,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // QUESTRADE SAVE MANUAL REFRESH TOKEN
     fastify.post('/questrade/manual-token', async (request, reply) => {
+        const denied = requireAdmin(request, reply);
+        if (denied) return denied;
+
         const { refreshToken } = request.body as { refreshToken: string };
         if (!refreshToken) return reply.code(400).send({ error: 'refreshToken required' });
 
@@ -146,6 +162,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
     // QUESTRADE TOKEN CALLBACK (from frontend hash)
     fastify.post('/questrade/token', async (request, reply) => {
+        const denied = requireAdmin(request, reply);
+        if (denied) return denied;
+
         const data = request.body as any;
         if (!data.access_token || !data.refresh_token) {
             return reply.code(400).send({ error: 'Invalid token data' });
