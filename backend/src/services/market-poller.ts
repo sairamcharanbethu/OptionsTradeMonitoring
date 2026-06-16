@@ -221,6 +221,28 @@ export class MarketPoller {
       return false;
     }
 
+    const claimResult = await (this.fastify as any).pg.query(
+      `UPDATE positions
+       SET execution_status = 'PENDING_EXIT',
+           execution_error = NULL,
+           exit_reason = COALESCE(exit_reason, 'AUTO_EXIT'),
+           exit_order_type = $1,
+           exit_requested_at = CURRENT_TIMESTAMP,
+           notes = COALESCE(notes, '') || $2,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3
+         AND status = 'OPEN'
+         AND COALESCE(execution_status, '') <> 'PENDING_EXIT'
+         AND broker_exit_order_id IS NULL
+       RETURNING id`,
+      [orderType, ` [Exit claim created before SnapTrade ${orderType} submission]`, position.id]
+    );
+
+    if (claimResult.rowCount === 0) {
+      this.fastify.log.info(`[MarketPoller] Exit already pending or unavailable for position ${position.id}. Skipping duplicate SELL_TO_CLOSE.`);
+      return false;
+    }
+
     try {
       const snaptradeService = new SnaptradeService(this.fastify);
       const osiTicker = this.constructOSITicker(
@@ -246,16 +268,14 @@ export class MarketPoller {
              execution_error = NULL,
              broker_exit_order_id = $1,
              broker_exit_trade_id = $2,
-             exit_reason = COALESCE(exit_reason, 'AUTO_EXIT'),
-             exit_order_type = $3,
-             exit_requested_at = CURRENT_TIMESTAMP,
-             notes = COALESCE(notes, '') || $4,
+             notes = COALESCE(notes, '') || $3,
              updated_at = CURRENT_TIMESTAMP
-         WHERE id = $5 AND status = 'OPEN'`,
+         WHERE id = $4
+           AND status = 'OPEN'
+           AND execution_status = 'PENDING_EXIT'`,
         [
           result.orderId || null,
           result.tradeId || null,
-          orderType,
           ` [SnapTrade ${orderType} exit submitted${result.orderId ? `: ${result.orderId}` : ''}]`,
           position.id
         ]
