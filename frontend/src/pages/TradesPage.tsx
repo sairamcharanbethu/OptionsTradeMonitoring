@@ -125,7 +125,7 @@ export default function TradesPage() {
 
   const openSummary = useMemo(() => {
     const totalPnl = openTrades.reduce((sum, trade) => sum + livePnl(trade), 0);
-    const pendingExits = openTrades.filter((trade) => trade.execution_status === 'PENDING_EXIT').length;
+    const pendingExits = openTrades.filter((trade) => ['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))).length;
     const openCount = openTrades.filter((trade) => trade.status === 'OPEN').length;
     return { totalPnl, pendingExits, openCount };
   }, [openTrades]);
@@ -215,7 +215,7 @@ export default function TradesPage() {
                   ) : openTrades.map((trade) => {
                     const pnl = livePnl(trade);
                     const closeDisabled = trade.status !== 'OPEN'
-                      || trade.execution_status === 'PENDING_EXIT'
+                      || ['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))
                       || String(trade.execution_status || '').startsWith('EXIT_');
                     return (
                       <tr key={trade.id} className="border-t border-border/70">

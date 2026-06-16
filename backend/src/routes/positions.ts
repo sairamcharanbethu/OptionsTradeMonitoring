@@ -580,6 +580,10 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
         await client.query('ROLLBACK');
         return reply.code(400).send({ error: 'An exit or trim order is already pending for this position' });
       }
+      if (String(position.execution_status || '').startsWith('EXIT_')) {
+        await client.query('ROLLBACK');
+        return reply.code(400).send({ error: `Previous exit order is ${position.execution_status}. Verify broker status before submitting another close.` });
+      }
 
       const executionBroker = String(position.execution_broker || '');
       const isLiveSnapTrade = !position.is_simulated && executionBroker === 'wealthsimple_snaptrade';

@@ -59,7 +59,7 @@ export class LiveExitMonitorService {
       }
 
       const { rows: positions } = await (this.fastify as any).pg.query(
-        "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')"
+        "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM') AND COALESCE(p.execution_status, '') NOT LIKE 'EXIT_%'"
       );
 
       const matchedPositions = positions.filter((position: any) => {
@@ -90,8 +90,9 @@ export class LiveExitMonitorService {
         this.streamUpdateLocks.add(positionId);
         try {
           const underlyingPrice = this.getStreamUnderlyingPrice(quote, position);
+          const quoteContext = this.getStreamQuoteContext(quote, price);
           this.fastify.log.info(`[LiveExitMonitor] ${this.provider} update for ${ticker}: $${price}`);
-          await (this.fastify as any).poller.processPositionExitUpdate(position, price, greeks, iv, underlyingPrice);
+          await (this.fastify as any).poller.processPositionExitUpdate(position, price, greeks, iv, underlyingPrice, quoteContext);
           this.matchedUpdates++;
           this.lastMatchedAt = new Date().toISOString();
         } finally {
@@ -143,6 +144,22 @@ export class LiveExitMonitorService {
     if (bid > 0) return Number(bid.toFixed(2));
     if (ask > 0) return Number(ask.toFixed(2));
     return 0;
+  }
+
+  private getStreamQuoteContext(quote: any, price: number): any {
+    const bid = Number(quote.bidPrice ?? quote.bid ?? 0);
+    const ask = Number(quote.askPrice ?? quote.ask ?? 0);
+    const last = Number(quote.lastTradePrice ?? quote.last ?? quote.price ?? 0);
+    const mid = bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : price;
+    const spreadPct = bid > 0 && ask > 0 && mid > 0 ? Number((((ask - bid) / mid) * 100).toFixed(2)) : undefined;
+    return {
+      bid: bid > 0 ? bid : undefined,
+      ask: ask > 0 ? ask : undefined,
+      last: last > 0 ? last : undefined,
+      mid: mid > 0 ? mid : undefined,
+      spreadPct,
+      source: this.provider
+    };
   }
 
   private getStreamUnderlyingPrice(quote: any, position: any): number | undefined {

@@ -663,6 +663,7 @@ export class SnaptradeService {
                                      profit_trim_quantity = $1,
                                      profit_trim_price = $3,
                                      profit_trimmed_at = CURRENT_TIMESTAMP,
+                                     stop_loss_trigger = GREATEST(COALESCE(stop_loss_trigger, 0), entry_price),
                                      take_profit_trigger = NULL,
                                      notes = COALESCE(notes, '') || $5,
                                      updated_at = CURRENT_TIMESTAMP
@@ -752,6 +753,34 @@ export class SnaptradeService {
                         brokerTradeId: phase === 'EXIT' ? position.broker_exit_trade_id : position.broker_trade_id
                     });
                 } else {
+                    const requestedAtMs = position.exit_requested_at ? new Date(position.exit_requested_at).getTime() : NaN;
+                    const limitExitStale = phase === 'EXIT'
+                        && executionStatus !== 'EXIT_STALE'
+                        && String(position.exit_order_type || '').toUpperCase() === 'LIMIT'
+                        && Number.isFinite(requestedAtMs)
+                        && Date.now() - requestedAtMs > 120_000;
+
+                    if (limitExitStale) {
+                        await this.fastify.pg.query(
+                            `UPDATE positions
+                             SET execution_status = 'EXIT_STALE',
+                                 execution_error = 'Limit exit order is still pending after 120 seconds; verify/cancel at broker before retrying.',
+                                 notes = COALESCE(notes, '') || $1,
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = $2`,
+                            [` [SnapTrade limit exit marked stale while broker status is ${status}]`, position.id]
+                        );
+                        summary.stillPending += 1;
+                        summary.orders.push({
+                            positionId: position.id,
+                            status: 'EXIT_STALE',
+                            action: 'exit_stale',
+                            brokerOrderId: position.broker_exit_order_id,
+                            brokerTradeId: position.broker_exit_trade_id
+                        });
+                        continue;
+                    }
+
                     const nextExecutionStatus = phase === 'EXIT'
                         ? (executionStatus === 'PENDING_TRIM'
                             ? 'PENDING_TRIM'
