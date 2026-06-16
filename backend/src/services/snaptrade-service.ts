@@ -649,10 +649,10 @@ export class SnaptradeService {
                                  realized_pnl = $3,
                                  execution_error = NULL,
                                  exit_reason = COALESCE(exit_reason, 'BROKER_CONFIRMED'),
-                                 notes = COALESCE(notes, '') || ' [SnapTrade exit fill confirmed: ' || $1 || ']',
+                                 notes = COALESCE(notes, '') || $4,
                                  updated_at = CURRENT_TIMESTAMP
-                             WHERE id = $4`,
-                            [status, fillPrice, realizedPnl, position.id]
+                             WHERE id = $5`,
+                            [status, fillPrice, realizedPnl, ` [SnapTrade exit fill confirmed: ${status}]`, position.id]
                         );
                         summary.closed += 1;
                     } else {
@@ -670,10 +670,10 @@ export class SnaptradeService {
                                  take_profit_trigger = $4,
                                  trailing_high_price = GREATEST(COALESCE(trailing_high_price, 0), $2),
                                  execution_error = NULL,
-                                 notes = COALESCE(notes, '') || ' [SnapTrade fill confirmed: ' || $1 || '; auto exits recalculated from fill]',
+                                 notes = COALESCE(notes, '') || $5,
                                  updated_at = CURRENT_TIMESTAMP
-                             WHERE id = $5`,
-                            [status, fillPrice, stopLoss, takeProfit, position.id]
+                             WHERE id = $6`,
+                            [status, fillPrice, stopLoss, takeProfit, ` [SnapTrade fill confirmed: ${status}; auto exits recalculated from fill]`, position.id]
                         );
                         summary.opened += 1;
                         await this.syncSignalExecutionFromOrder(position, 'EXECUTED', status);
@@ -692,10 +692,10 @@ export class SnaptradeService {
                             `UPDATE positions
                              SET execution_status = $1,
                                  execution_error = COALESCE($2, execution_error),
-                                 notes = COALESCE(notes, '') || ' [SnapTrade exit order ' || $1 || ']',
+                                 notes = COALESCE(notes, '') || $3,
                                  updated_at = CURRENT_TIMESTAMP
-                             WHERE id = $3`,
-                            [`EXIT_${status}`, order?.rejection_reason || order?.reason || null, position.id]
+                             WHERE id = $4`,
+                            [`EXIT_${status}`, order?.rejection_reason || order?.reason || null, ` [SnapTrade exit order EXIT_${status}]`, position.id]
                         );
                         summary.stillPending += 1;
                     } else {
@@ -704,10 +704,10 @@ export class SnaptradeService {
                              SET status = 'CLOSED',
                                  execution_status = $1,
                                  execution_error = COALESCE($2, execution_error),
-                                 notes = COALESCE(notes, '') || ' [SnapTrade order ' || $1 || ']',
+                                 notes = COALESCE(notes, '') || $3,
                                  updated_at = CURRENT_TIMESTAMP
-                             WHERE id = $3`,
-                            [status, order?.rejection_reason || order?.reason || null, position.id]
+                             WHERE id = $4`,
+                            [status, order?.rejection_reason || order?.reason || null, ` [SnapTrade order ${status}]`, position.id]
                         );
                         summary.closed += 1;
                         await this.syncSignalExecutionFromOrder(position, 'CANCELLED', status, order?.rejection_reason || order?.reason || null);
