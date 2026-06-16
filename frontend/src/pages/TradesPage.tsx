@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BadgeDollarSign, CalendarDays, RefreshCw, Search, ShieldCheck, XCircle } from 'lucide-react';
+import { ArrowLeft, BadgeDollarSign, Clock, RefreshCw, Search, ShieldCheck, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, ClosedTradesResponse, Position } from '../lib/api';
 import { Button } from '../components/ui/button';
@@ -50,6 +50,73 @@ const livePnl = (trade: Position) => {
   return (current - entry) * Number(trade.quantity || 1) * 100;
 };
 
+const trimPnl = (trade: Position) => {
+  if (!trade.profit_trim_quantity || !trade.profit_trim_price) return 0;
+  return (Number(trade.profit_trim_price) - Number(trade.entry_price || 0)) * Number(trade.profit_trim_quantity) * 100;
+};
+
+const dteLabel = (trade: Position) => {
+  const expiry = String(trade.expiration_date || '').split('T')[0];
+  if (!expiry) return '-';
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const [year, month, day] = expiry.split('-').map(Number);
+  const expiryUtc = Date.UTC(year, month - 1, day);
+  const days = Math.ceil((expiryUtc - todayUtc) / 86400000);
+  if (days < 0) return 'Expired';
+  return `${days}DTE`;
+};
+
+const isWorkingOrder = (trade: Position) => {
+  const status = String(trade.execution_status || '');
+  return ['PENDING_EXIT', 'PENDING_TRIM'].includes(status) || status.startsWith('EXIT_');
+};
+
+const actionLabel = (trade: Position) => {
+  const status = String(trade.execution_status || trade.status || '');
+  if (status === 'PENDING_TRIM') return 'Trim pending';
+  if (status === 'PENDING_EXIT') return 'Close pending';
+  if (status === 'EXIT_STALE') return 'Verify broker';
+  if (status === 'EXIT_REJECTED' || status === 'EXIT_FAILED') return 'Sync required';
+  if (status.startsWith('EXIT_')) return 'Broker check';
+  return 'Close';
+};
+
+const stateLabel = (trade: Position) => {
+  const raw = String(trade.exit_reason || trade.execution_status || trade.status || 'OPEN');
+  const labels: Record<string, string> = {
+    PENDING_EXIT: 'Close pending',
+    PENDING_TRIM: 'Trim pending',
+    EXIT_STALE: 'Verify broker',
+    EXIT_REJECTED: 'Exit rejected',
+    EXIT_FAILED: 'Exit failed',
+    STOP_LOSS: 'Stop loss',
+    TAKE_PROFIT: 'Take profit',
+    PROFIT_TRIM: 'Profit trim',
+    MANUAL: 'Manual',
+    BROKER_CONFIRMED: 'Broker confirmed',
+    FILLED: 'Filled',
+    CLOSED: 'Closed',
+    OPEN: 'Open'
+  };
+  return labels[raw] || raw.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const stateTone = (trade: Position): 'default' | 'destructive' | 'outline' | 'secondary' => {
+  const status = String(trade.execution_status || '');
+  if (status.includes('REJECTED') || status.includes('FAILED') || status === 'EXIT_STALE') return 'destructive';
+  if (status === 'PENDING_EXIT' || status === 'PENDING_TRIM') return 'secondary';
+  return 'outline';
+};
+
+const isBreakevenStop = (trade: Position) =>
+  trade.profit_trim_status === 'DONE'
+  && trade.stop_loss_trigger !== undefined
+  && Number(trade.stop_loss_trigger) >= Number(trade.entry_price);
+
+const activeOrderId = (trade: Position) =>
+  trade.broker_exit_order_id || trade.profit_trim_order_id || trade.broker_order_id || '-';
+
 function SummaryTile({ label, value, tone }: { label: string; value: string; tone?: 'green' | 'red' }) {
   return (
     <div className="rounded-md border border-border/70 bg-card/80 px-4 py-3">
@@ -69,6 +136,7 @@ export default function TradesPage() {
   const [closingTrade, setClosingTrade] = useState<Position | null>(null);
   const [submittingClose, setSubmittingClose] = useState(false);
   const [syncingOrders, setSyncingOrders] = useState(false);
+  const [syncingTradeId, setSyncingTradeId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     from: '',
@@ -124,11 +192,14 @@ export default function TradesPage() {
   }, [filters.result]);
 
   const openSummary = useMemo(() => {
-    const totalPnl = openTrades.reduce((sum, trade) => sum + livePnl(trade), 0);
-    const pendingExits = openTrades.filter((trade) => ['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))).length;
-    const openCount = openTrades.filter((trade) => trade.status === 'OPEN').length;
-    return { totalPnl, pendingExits, openCount };
+    const activeTrades = openTrades.filter((trade) => trade.status === 'OPEN' && !isWorkingOrder(trade));
+    const totalPnl = activeTrades.reduce((sum, trade) => sum + livePnl(trade), 0);
+    const workingOrders = openTrades.filter(isWorkingOrder).length;
+    return { totalPnl, workingOrders, openCount: activeTrades.length };
   }, [openTrades]);
+
+  const workingOrders = useMemo(() => openTrades.filter(isWorkingOrder), [openTrades]);
+  const activeOpenTrades = useMemo(() => openTrades.filter((trade) => !isWorkingOrder(trade)), [openTrades]);
 
   const submitClose = async () => {
     if (!closingTrade) return;
@@ -142,6 +213,21 @@ export default function TradesPage() {
       setError(err.message || 'Failed to close trade');
     } finally {
       setSubmittingClose(false);
+    }
+  };
+
+  const syncTradeStatus = async (tradeId?: number) => {
+    setSyncingTradeId(tradeId || null);
+    if (!tradeId) setSyncingOrders(true);
+    setError(null);
+    try {
+      await api.syncSnaptradePendingOrders();
+      await refreshOpen(false);
+    } catch (err: any) {
+      setError(err.message || 'Failed to sync Wealthsimple order status');
+    } finally {
+      setSyncingTradeId(null);
+      if (!tradeId) setSyncingOrders(false);
     }
   };
 
@@ -187,15 +273,70 @@ export default function TradesPage() {
           <div className="grid gap-3 md:grid-cols-3">
             <SummaryTile label="Open Trades" value={String(openSummary.openCount)} />
             <SummaryTile label="Live P&L" value={currency(openSummary.totalPnl)} tone={openSummary.totalPnl >= 0 ? 'green' : 'red'} />
-            <SummaryTile label="Pending Exits" value={String(openSummary.pendingExits)} />
+            <SummaryTile label="Working Orders" value={String(openSummary.workingOrders)} />
           </div>
+
+          {workingOrders.length > 0 && (
+            <div className="overflow-hidden rounded-md border border-amber-500/30 bg-amber-500/5">
+              <div className="flex items-center justify-between border-b border-amber-500/20 px-3 py-2">
+                <div className="flex items-center gap-2 text-sm font-semibold text-amber-600">
+                  <Clock className="h-4 w-4" />
+                  Working Orders
+                </div>
+                <Button variant="outline" size="sm" className="h-7 gap-2" onClick={() => syncTradeStatus()} disabled={syncingOrders || syncingTradeId !== null}>
+                  <RefreshCw className={`h-3.5 w-3.5 ${syncingOrders || syncingTradeId !== null ? 'animate-spin' : ''}`} />
+                  Sync
+                </Button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[980px] text-sm">
+                  <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Contract</th>
+                      <th className="px-3 py-2 text-right">Qty</th>
+                      <th className="px-3 py-2 text-right">Live</th>
+                      <th className="px-3 py-2 text-left">Order State</th>
+                      <th className="px-3 py-2 text-left">Exit Order</th>
+                      <th className="px-3 py-2 text-left">Requested</th>
+                      <th className="px-3 py-2 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {workingOrders.map((trade) => (
+                      <tr key={`working-${trade.id}`} className="border-t border-amber-500/10">
+                        <td className="px-3 py-2">
+                          <div className="font-medium">{contractLabel(trade)}</div>
+                          <div className="text-xs text-muted-foreground">{dteLabel(trade)}</div>
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono">{trade.quantity}</td>
+                        <td className="px-3 py-2 text-right font-mono">{currency(trade.current_price)}</td>
+                        <td className="px-3 py-2">
+                          <Badge variant={stateTone(trade)}>{stateLabel(trade)}</Badge>
+                          {trade.execution_error && <div className="mt-1 max-w-[260px] truncate text-xs text-red-500">{trade.execution_error}</div>}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{activeOrderId(trade)}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{compactDate(trade.exit_requested_at)}</td>
+                        <td className="px-3 py-2 text-right">
+                          <Button variant="outline" size="sm" className="h-7 gap-2" onClick={() => syncTradeStatus(trade.id)} disabled={syncingTradeId === trade.id}>
+                            <RefreshCw className={`h-3.5 w-3.5 ${syncingTradeId === trade.id ? 'animate-spin' : ''}`} />
+                            {actionLabel(trade)}
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="overflow-hidden rounded-md border border-border">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1050px] text-sm">
+              <table className="w-full min-w-[1220px] text-sm">
                 <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
                   <tr>
                     <th className="px-3 py-3 text-left">Contract</th>
+                    <th className="px-3 py-3 text-center">DTE</th>
                     <th className="px-3 py-3 text-right">Qty</th>
                     <th className="px-3 py-3 text-right">Entry</th>
                     <th className="px-3 py-3 text-right">Live</th>
@@ -203,17 +344,19 @@ export default function TradesPage() {
                     <th className="px-3 py-3 text-right">SL</th>
                     <th className="px-3 py-3 text-right">TP</th>
                     <th className="px-3 py-3 text-right">Underlying</th>
+                    <th className="px-3 py-3 text-left">Order</th>
                     <th className="px-3 py-3 text-left">State</th>
                     <th className="px-3 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loadingOpen ? (
-                    <tr><td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">Loading Wealthsimple trades...</td></tr>
-                  ) : openTrades.length === 0 ? (
-                    <tr><td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">No open Wealthsimple trades.</td></tr>
-                  ) : openTrades.map((trade) => {
+                    <tr><td colSpan={12} className="px-3 py-8 text-center text-muted-foreground">Loading Wealthsimple trades...</td></tr>
+                  ) : activeOpenTrades.length === 0 ? (
+                    <tr><td colSpan={12} className="px-3 py-8 text-center text-muted-foreground">No active open Wealthsimple positions.</td></tr>
+                  ) : activeOpenTrades.map((trade) => {
                     const pnl = livePnl(trade);
+                    const realizedTrimPnl = trimPnl(trade);
                     const closeDisabled = trade.status !== 'OPEN'
                       || ['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))
                       || String(trade.execution_status || '').startsWith('EXIT_');
@@ -221,24 +364,34 @@ export default function TradesPage() {
                       <tr key={trade.id} className="border-t border-border/70">
                         <td className="px-3 py-3">
                           <div className="font-medium">{contractLabel(trade)}</div>
-                          <div className="text-xs text-muted-foreground">{trade.broker_order_id || '-'}</div>
+                          <div className="text-xs text-muted-foreground">Entry {trade.broker_order_id || '-'}</div>
                         </td>
+                        <td className="px-3 py-3 text-center"><Badge variant="outline">{dteLabel(trade)}</Badge></td>
                         <td className="px-3 py-3 text-right font-mono">{trade.quantity}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.entry_price)}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.current_price)}</td>
-                        <td className={`px-3 py-3 text-right font-mono font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</td>
+                        <td className="px-3 py-3 text-right">
+                          <div className={`font-mono font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</div>
+                          {realizedTrimPnl !== 0 && (
+                            <div className="text-[11px] text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>
+                          )}
+                        </td>
                         <td className="px-3 py-3 text-right font-mono text-red-500">{currency(trade.stop_loss_trigger)}</td>
                         <td className="px-3 py-3 text-right font-mono text-emerald-500">{takeProfitLabel(trade)}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.underlying_price)}</td>
+                        <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{activeOrderId(trade)}</td>
                         <td className="px-3 py-3">
-                          <Badge variant={trade.execution_status === 'EXIT_FAILED' ? 'destructive' : 'outline'}>
-                            {trade.execution_status || trade.status}
-                          </Badge>
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant={stateTone(trade)}>{stateLabel(trade)}</Badge>
+                            {trade.profit_trim_status === 'DONE' && <Badge variant="secondary">Trim done</Badge>}
+                            {isBreakevenStop(trade) && <Badge variant="outline">Breakeven stop</Badge>}
+                            {trade.take_profit_trigger && <Badge variant="outline">TP live</Badge>}
+                          </div>
                           {trade.execution_error && <div className="mt-1 max-w-[220px] truncate text-xs text-red-500">{trade.execution_error}</div>}
                         </td>
                         <td className="px-3 py-3 text-right">
                           <Button size="sm" variant="destructive" disabled={closeDisabled} onClick={() => setClosingTrade(trade)}>
-                            Close
+                            {actionLabel(trade)}
                           </Button>
                         </td>
                       </tr>
@@ -297,6 +450,7 @@ export default function TradesPage() {
                   <tr>
                     <th className="px-3 py-3 text-left">Closed</th>
                     <th className="px-3 py-3 text-left">Contract</th>
+                    <th className="px-3 py-3 text-center">DTE</th>
                     <th className="px-3 py-3 text-right">Qty</th>
                     <th className="px-3 py-3 text-right">Entry</th>
                     <th className="px-3 py-3 text-right">Exit</th>
@@ -307,23 +461,33 @@ export default function TradesPage() {
                 </thead>
                 <tbody>
                   {loadingClosed ? (
-                    <tr><td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">Loading closed trades...</td></tr>
+                    <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">Loading closed trades...</td></tr>
                   ) : !closedData || closedData.trades.length === 0 ? (
-                    <tr><td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">No closed Wealthsimple trades match the filters.</td></tr>
-                  ) : closedData.trades.map((trade) => (
-                    <tr key={trade.id} className="border-t border-border/70">
-                      <td className="px-3 py-3 text-muted-foreground">{compactDate(trade.updated_at)}</td>
-                      <td className="px-3 py-3 font-medium">{contractLabel(trade)}</td>
-                      <td className="px-3 py-3 text-right font-mono">{trade.quantity}</td>
-                      <td className="px-3 py-3 text-right font-mono">{currency(trade.entry_price)}</td>
-                      <td className="px-3 py-3 text-right font-mono">{currency(trade.exit_price || trade.current_price)}</td>
-                      <td className={`px-3 py-3 text-right font-mono font-semibold ${(trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</td>
-                      <td className="px-3 py-3">
-                        <Badge variant="outline">{trade.exit_reason || trade.execution_status || 'CLOSED'}</Badge>
-                      </td>
-                      <td className="px-3 py-3 text-xs text-muted-foreground">{trade.broker_exit_order_id || trade.broker_order_id || '-'}</td>
-                    </tr>
-                  ))}
+                    <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No closed Wealthsimple trades match the filters.</td></tr>
+                  ) : closedData.trades.map((trade) => {
+                    const realizedTrimPnl = trimPnl(trade);
+                    return (
+                      <tr key={trade.id} className="border-t border-border/70">
+                        <td className="px-3 py-3 text-muted-foreground">{compactDate(trade.updated_at)}</td>
+                        <td className="px-3 py-3 font-medium">{contractLabel(trade)}</td>
+                        <td className="px-3 py-3 text-center"><Badge variant="outline">{dteLabel(trade)}</Badge></td>
+                        <td className="px-3 py-3 text-right font-mono">{trade.quantity}</td>
+                        <td className="px-3 py-3 text-right font-mono">{currency(trade.entry_price)}</td>
+                        <td className="px-3 py-3 text-right font-mono">{currency(trade.exit_price || trade.current_price)}</td>
+                        <td className={`px-3 py-3 text-right font-mono font-semibold ${(trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                          <div>{currency(trade.realized_pnl)}</div>
+                          {realizedTrimPnl !== 0 && <div className="text-[11px] font-normal text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>}
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant="outline">{stateLabel(trade)}</Badge>
+                            {trade.profit_trim_status === 'DONE' && <Badge variant="secondary">Profit trim</Badge>}
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{activeOrderId(trade)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -339,7 +503,7 @@ export default function TradesPage() {
               Close Wealthsimple Trade
             </DialogTitle>
             <DialogDescription>
-              This submits a live MARKET SELL_TO_CLOSE through SnapTrade. The trade stays open as PENDING_EXIT until Wealthsimple confirms the fill.
+              This submits a live MARKET SELL_TO_CLOSE through SnapTrade. The trade stays open while Wealthsimple confirms the exit.
             </DialogDescription>
           </DialogHeader>
           {closingTrade && (
@@ -355,6 +519,10 @@ export default function TradesPage() {
               <div className="mt-2 flex items-center justify-between">
                 <span className="text-muted-foreground">Last app price</span>
                 <span className="font-mono">{currency(closingTrade.current_price)}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Order</span>
+                <span className="truncate font-mono text-xs">{activeOrderId(closingTrade)}</span>
               </div>
             </div>
           )}

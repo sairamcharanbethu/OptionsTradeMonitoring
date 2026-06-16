@@ -50,6 +50,12 @@ export interface Position {
   exit_requested_at?: string;
   exit_reason?: string;
   exit_order_type?: string;
+  profit_trim_status?: string;
+  profit_trim_quantity?: number;
+  profit_trim_price?: number;
+  profit_trim_order_id?: string;
+  profit_trim_trade_id?: string;
+  profit_trimmed_at?: string;
   notes?: string;
 }
 
@@ -122,6 +128,8 @@ const normalizePosition = (pos: any): Position => ({
   suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
   contracts_requested: pos.contracts_requested != null ? Number(pos.contracts_requested) : undefined,
   exit_price: pos.exit_price != null ? Number(pos.exit_price) : undefined,
+  profit_trim_quantity: pos.profit_trim_quantity != null ? Number(pos.profit_trim_quantity) : undefined,
+  profit_trim_price: pos.profit_trim_price != null ? Number(pos.profit_trim_price) : undefined,
   analysis_data: pos.analysis_data || undefined,
 });
 
