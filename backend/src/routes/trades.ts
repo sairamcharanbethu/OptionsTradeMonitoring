@@ -210,6 +210,15 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
     const body = request.body as { quantity?: number } | undefined;
+    const snaptradeService = new SnaptradeService(fastify);
+
+    try {
+      await snaptradeService.syncPendingBrokerOrders(userId);
+    } catch (err: any) {
+      fastify.log.warn(`[TradesClose] Wealthsimple status check failed before close for trade ${id}: ${err.message}`);
+      return reply.code(409).send({ error: 'Could not verify latest Wealthsimple order status before submitting another close. Try again after sync completes.' });
+    }
+
     const client = await fastify.pg.connect();
 
     try {
@@ -238,6 +247,10 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
         await client.query('ROLLBACK');
         return reply.code(400).send({ error: 'An exit order is already pending for this trade' });
       }
+      if (String(trade.execution_status || '').startsWith('EXIT_') && trade.broker_exit_order_id) {
+        await client.query('ROLLBACK');
+        return reply.code(409).send({ error: `Previous exit order ${trade.broker_exit_order_id} is ${trade.execution_status}. Verify it in Wealthsimple before submitting another close.` });
+      }
 
       const closeQuantity = Number(body?.quantity || trade.quantity || 1);
       if (!Number.isFinite(closeQuantity) || closeQuantity <= 0 || closeQuantity > Number(trade.quantity)) {
@@ -252,7 +265,6 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       }
 
       try {
-        const snaptradeService = new SnaptradeService(fastify);
         const optionSymbol = constructOSITicker(trade.symbol, Number(trade.strike_price), trade.option_type, trade.expiration_date);
         const order = await snaptradeService.placeOptionOrder(
           userId,

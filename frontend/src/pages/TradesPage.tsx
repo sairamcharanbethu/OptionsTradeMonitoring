@@ -214,7 +214,9 @@ export default function TradesPage() {
                     <tr><td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">No open Wealthsimple trades.</td></tr>
                   ) : openTrades.map((trade) => {
                     const pnl = livePnl(trade);
-                    const closeDisabled = trade.status !== 'OPEN' || trade.execution_status === 'PENDING_EXIT';
+                    const closeDisabled = trade.status !== 'OPEN'
+                      || trade.execution_status === 'PENDING_EXIT'
+                      || String(trade.execution_status || '').startsWith('EXIT_');
                     return (
                       <tr key={trade.id} className="border-t border-border/70">
                         <td className="px-3 py-3">

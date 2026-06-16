@@ -545,6 +545,7 @@ export class SnaptradeService {
                AND (
                  status = 'PENDING_ORDER'
                  OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
+                 OR (status = 'OPEN' AND execution_status LIKE 'EXIT_%')
                )
              ORDER BY created_at DESC`,
             [userId]
@@ -804,6 +805,7 @@ export class SnaptradeService {
                AND (
                  status = 'PENDING_ORDER'
                  OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
+                 OR (status = 'OPEN' AND execution_status LIKE 'EXIT_%')
                )`
         );
 
