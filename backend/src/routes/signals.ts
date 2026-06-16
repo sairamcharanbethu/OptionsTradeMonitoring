@@ -58,6 +58,29 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
   }, async (request, reply) => {
     try {
       const { id: userId } = (request as any).user;
+      await fastify.pg.query(`
+        UPDATE signals older
+        SET status = 'CANCELLED'
+        WHERE older.status = 'PENDING'
+          AND older.signal_type != 'NONE'
+          AND EXISTS (
+            SELECT 1
+            FROM signals newer
+            WHERE newer.symbol = older.symbol
+              AND newer.signal_type != 'NONE'
+              AND newer.status = 'PENDING'
+              AND newer.created_at > older.created_at
+          )
+      `);
+      await fastify.pg.query(`
+        UPDATE signal_user_executions sue
+        SET status = 'CANCELLED',
+            updated_at = CURRENT_TIMESTAMP
+        FROM signals s
+        WHERE sue.signal_id = s.id
+          AND s.status = 'CANCELLED'
+          AND sue.status = 'PENDING'
+      `);
       const query = `
         SELECT 
           s.id, 
@@ -70,10 +93,10 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           s.target_price::double precision, 
           s.confidence_score, 
           s.setup_grade, 
-          COALESCE(
-            sue.status,
-            CASE WHEN s.status IN ('EXECUTED', 'CANCELLED') THEN 'PENDING' ELSE s.status END
-          ) AS status, 
+          CASE
+            WHEN s.status IN ('EXECUTED', 'CANCELLED') THEN s.status
+            ELSE COALESCE(sue.status, s.status)
+          END AS status, 
           s.indicators, 
           s.gex, 
           s.volatility, 

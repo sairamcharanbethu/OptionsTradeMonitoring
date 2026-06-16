@@ -1388,6 +1388,11 @@ Rules:
       const signalId: number = insertResult.rows[0].id;
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} saved instantly for ${symbol} ${winningSide} with ML Probability: ${mlProbability}.`);
 
+      const cancelledResult = await this.retireOlderPendingSignals(symbol, signalId, winningSide as 'CALL' | 'PUT');
+      if (cancelledResult > 0) {
+        this.fastify.log.info(`[SignalScannerService] Retired ${cancelledResult} older pending ${symbol} setup(s) after signal #${signalId}.`);
+      }
+
       // Broadcast new signal via WebSocket
       if (this.fastify.websocketServer) {
         this.fastify.websocketServer.clients.forEach((client: any) => {
@@ -1557,6 +1562,39 @@ Rules:
   }
 
   // ── Async Signal Enrichment (fires after signal is already saved) ─────────
+
+  private async retireOlderPendingSignals(symbol: string, latestSignalId: number, latestSide: 'CALL' | 'PUT'): Promise<number> {
+    const { rowCount } = await this.fastify.pg.query(
+      `UPDATE signals
+       SET status = 'CANCELLED'
+       WHERE symbol = $1
+         AND id <> $2
+         AND status = 'PENDING'
+         AND signal_type != 'NONE'
+         AND (
+           signal_type <> $3
+           OR created_at < (SELECT created_at FROM signals WHERE id = $2)
+         )`,
+      [symbol, latestSignalId, latestSide]
+    );
+
+    await this.fastify.pg.query(
+      `INSERT INTO signal_user_executions (signal_id, user_id, status, updated_at)
+       SELECT s.id, sue.user_id, 'CANCELLED', CURRENT_TIMESTAMP
+       FROM signals s
+       JOIN signal_user_executions sue ON sue.signal_id = s.id
+       WHERE s.symbol = $1
+         AND s.id <> $2
+         AND s.status = 'CANCELLED'
+         AND sue.status = 'PENDING'
+       ON CONFLICT (signal_id, user_id) DO UPDATE
+       SET status = 'CANCELLED',
+           updated_at = CURRENT_TIMESTAMP`,
+      [symbol, latestSignalId]
+    );
+
+    return rowCount || 0;
+  }
 
   /**
    * Two-stage AI enrichment pipeline. Runs in the background after signal INSERT.

@@ -59,6 +59,12 @@ export class TradeExecutionService {
     const quantity = this.parsePositiveInt(settings.contracts_per_trade, 1, 100);
     const maxTradesPerDay = this.parsePositiveInt(settings.max_trades_per_day, 2, 100);
 
+    const supersededSummary = await this.closeSupersededPositions(input, settings, broker);
+    if (supersededSummary.blocked) {
+      await this.markSignalExecutionFailure(input.userId, input.signalId, supersededSummary.message);
+      return { success: false, broker, message: supersededSummary.message, superseded: supersededSummary };
+    }
+
     if (broker === 'none') {
       return this.createSimulatedPosition(input, quantity, 'Broker execution disabled');
     }
@@ -131,6 +137,236 @@ export class TradeExecutionService {
       [userId]
     );
     return Number(rows[0]?.count || 0);
+  }
+
+  private async closeSupersededPositions(input: ExecuteSignalInput, settings: ExecutionSettings, broker: ExecutionBroker) {
+    const { rows: positions } = await this.fastify.pg.query(
+      `SELECT *
+       FROM positions
+       WHERE user_id = $1
+         AND symbol = $2
+         AND option_type <> $3
+         AND status IN ('OPEN', 'PENDING_ORDER')
+         AND COALESCE(execution_status, '') <> 'PENDING_EXIT'
+       ORDER BY created_at DESC`,
+      [input.userId, input.symbol, input.winningSide]
+    );
+
+    const summary = {
+      checked: positions.length,
+      closed: 0,
+      supersededPending: 0,
+      errors: [] as string[],
+      blocked: false,
+      message: ''
+    };
+
+    for (const position of positions) {
+      try {
+        if (position.status === 'PENDING_ORDER') {
+          await this.markPendingPositionSuperseded(position, settings, broker, input.signalId);
+          summary.supersededPending += 1;
+          continue;
+        }
+
+        const closed = await this.submitSupersededExit(position, settings, broker, input.signalId);
+        if (closed) summary.closed += 1;
+      } catch (err: any) {
+        const message = `Position #${position.id}: ${err.message || String(err)}`;
+        summary.errors.push(message);
+        this.fastify.log.warn(`[TradeExecutionService] Failed to close superseded ${input.symbol} ${position.option_type}: ${message}`);
+      }
+    }
+
+    if (summary.errors.length > 0) {
+      summary.blocked = true;
+      summary.message = `Superseded ${input.symbol} order cleanup failed: ${summary.errors.join('; ')}`;
+    }
+
+    if (summary.closed > 0 || summary.supersededPending > 0) {
+      await this.invalidateUserCaches(input.userId);
+      const streamers = [
+        (this.fastify as any).alpacaMarketDataStreamer,
+        (this.fastify as any).streamer
+      ];
+      for (const streamer of streamers) {
+        if (streamer?.syncSubscriptions) {
+          streamer.syncSubscriptions().catch((err: any) => {
+            this.fastify.log.warn(`[TradeExecutionService] Failed to refresh stream subscriptions after superseded cleanup: ${err.message}`);
+          });
+        }
+      }
+    }
+
+    return summary;
+  }
+
+  private async markPendingPositionSuperseded(position: any, settings: ExecutionSettings, broker: ExecutionBroker, signalId: number) {
+    const executionBroker = String(position.execution_broker || broker || '');
+
+    if (!position.is_simulated && executionBroker === 'wealthsimple_snaptrade') {
+      const snaptradeService = new SnaptradeService(this.fastify);
+      await snaptradeService.syncPendingBrokerOrders(Number(position.user_id));
+      const { rows } = await this.fastify.pg.query(
+        `SELECT *
+         FROM positions
+         WHERE id = $1`,
+        [position.id]
+      );
+      const refreshed = rows[0];
+      if (refreshed?.status === 'OPEN') {
+        await this.submitSupersededExit(refreshed, settings, broker, signalId);
+        return;
+      }
+      if (refreshed?.status === 'CLOSED') return;
+      throw new Error(`SnapTrade entry order for position #${position.id} is still pending and cannot be safely auto-cancelled by this app`);
+    }
+
+    if (position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper') {
+      const keyId = settings.alpaca_key_id?.trim();
+      const secretKey = settings.alpaca_secret_key?.trim();
+      const orderId = String(position.broker_order_id || '').trim();
+      if (!keyId || !secretKey) throw new Error('Alpaca credentials are not configured for pending-order cancellation');
+      if (!orderId) throw new Error(`Alpaca pending position #${position.id} has no broker order id to cancel`);
+
+      const res = await fetch(`https://paper-api.alpaca.markets/v2/orders/${orderId}`, {
+        method: 'DELETE',
+        headers: {
+          'APCA-API-KEY-ID': keyId,
+          'APCA-API-SECRET-KEY': secretKey
+        }
+      });
+      if (!res.ok && res.status !== 404) {
+        const errorText = await res.text();
+        throw new Error(`Alpaca paper cancel failed: ${res.status} - ${errorText}`);
+      }
+    }
+
+    await this.fastify.pg.query(
+      `UPDATE positions
+       SET status = 'CLOSED',
+           execution_status = 'SUPERSEDED',
+           execution_error = NULL,
+           exit_reason = 'SUPERSEDED',
+           notes = COALESCE(notes, '') || $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+         AND status = 'PENDING_ORDER'`,
+      [` [Pending entry superseded by Signal #${signalId}${position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper' ? '; broker order cancel submitted' : ''}]`, position.id]
+    );
+  }
+
+  private async submitSupersededExit(position: any, settings: ExecutionSettings, broker: ExecutionBroker, signalId: number): Promise<boolean> {
+    if (position.execution_status === 'PENDING_EXIT') return false;
+
+    const executionBroker = String(position.execution_broker || broker || '');
+    if (!position.is_simulated && executionBroker === 'wealthsimple_snaptrade') {
+      const accountId = String(position.execution_account_id || position.account_id || settings.snaptrade_trading_account_id || '').trim();
+      if (!accountId) throw new Error('No SnapTrade account id is attached to the superseded position');
+
+      const snaptradeService = new SnaptradeService(this.fastify);
+      const osiTicker = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+      const order = await snaptradeService.placeOptionOrder(
+        Number(position.user_id),
+        accountId,
+        osiTicker,
+        'SELL_TO_CLOSE',
+        Number(position.quantity || 1),
+        'MARKET'
+      );
+
+      await this.fastify.pg.query(
+        `UPDATE positions
+         SET execution_status = 'PENDING_EXIT',
+             execution_error = NULL,
+             broker_exit_order_id = $1,
+             broker_exit_trade_id = $2,
+             exit_reason = 'SUPERSEDED',
+             exit_order_type = 'MARKET',
+             exit_requested_at = CURRENT_TIMESTAMP,
+             notes = COALESCE(notes, '') || $3,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $4
+           AND status = 'OPEN'`,
+        [
+          order.orderId || null,
+          order.tradeId || null,
+          ` [Superseded by Signal #${signalId}; SnapTrade MARKET exit submitted${order.orderId ? `: ${order.orderId}` : ''}]`,
+          position.id
+        ]
+      );
+      this.scheduleSnapTradePendingSync(Number(position.user_id));
+      return true;
+    }
+
+    if (position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper') {
+      const keyId = settings.alpaca_key_id?.trim();
+      const secretKey = settings.alpaca_secret_key?.trim();
+      if (!keyId || !secretKey) throw new Error('Alpaca credentials are not configured for superseded exit');
+
+      const osiTicker = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+      const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
+        method: 'POST',
+        headers: {
+          'APCA-API-KEY-ID': keyId,
+          'APCA-API-SECRET-KEY': secretKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          symbol: osiTicker,
+          qty: Number(position.quantity || 1),
+          side: 'sell',
+          type: 'market',
+          time_in_force: 'day'
+        })
+      });
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Alpaca paper superseded exit failed: ${res.status} - ${errorText}`);
+      }
+      const orderData: any = await res.json();
+      await this.fastify.pg.query(
+        `UPDATE positions
+         SET execution_status = 'PENDING_EXIT',
+             execution_error = NULL,
+             broker_exit_order_id = $1,
+             exit_reason = 'SUPERSEDED',
+             exit_order_type = 'MARKET',
+             exit_requested_at = CURRENT_TIMESTAMP,
+             notes = COALESCE(notes, '') || $2,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3
+           AND status = 'OPEN'`,
+        [
+          orderData.id || null,
+          ` [Superseded by Signal #${signalId}; Alpaca paper MARKET exit submitted${orderData.id ? `: ${orderData.id}` : ''}]`,
+          position.id
+        ]
+      );
+      return true;
+    }
+
+    const exitPrice = Number(position.current_price || position.entry_price || 0);
+    const realizedPnl = (exitPrice - Number(position.entry_price || 0)) * Number(position.quantity || 1) * 100;
+    await this.fastify.pg.query(
+      `UPDATE positions
+       SET status = 'CLOSED',
+           execution_status = 'SUPERSEDED',
+           exit_price = $1,
+           realized_pnl = $2,
+           exit_reason = 'SUPERSEDED',
+           notes = COALESCE(notes, '') || $3,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4
+         AND status = 'OPEN'`,
+      [
+        exitPrice,
+        realizedPnl,
+        ` [Simulated/non-live position superseded by Signal #${signalId}]`,
+        position.id
+      ]
+    );
+    return true;
   }
 
   private async executeAlpacaPaperTrade(input: ExecuteSignalInput, settings: ExecutionSettings, quantity: number) {
