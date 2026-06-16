@@ -59,6 +59,16 @@ export class TradeExecutionService {
     const quantity = this.parsePositiveInt(settings.contracts_per_trade, 1, 100);
     const maxTradesPerDay = this.parsePositiveInt(settings.max_trades_per_day, 2, 100);
 
+    const existingExecution = await this.getExistingSignalExecution(input.userId, input.signalId);
+    if (existingExecution && (existingExecution.broker_order_id || existingExecution.execution_status === 'PENDING' || existingExecution.execution_status === 'EXECUTED')) {
+      return {
+        success: false,
+        skipped: true,
+        broker,
+        message: `Signal #${input.signalId} already has execution status ${existingExecution.execution_status || existingExecution.status}`
+      };
+    }
+
     const supersededSummary = await this.closeSupersededPositions(input, settings, broker);
     if (supersededSummary.blocked) {
       await this.markSignalExecutionFailure(input.userId, input.signalId, supersededSummary.message);
@@ -122,6 +132,17 @@ export class TradeExecutionService {
     const parsed = Number(raw);
     if (!Number.isFinite(parsed) || parsed <= 0) return null;
     return Math.min(parsed, max);
+  }
+
+  private async getExistingSignalExecution(userId: number, signalId: number) {
+    const { rows } = await this.fastify.pg.query(
+      `SELECT status, execution_status, broker_order_id
+       FROM signal_user_executions
+       WHERE user_id = $1
+         AND signal_id = $2`,
+      [userId, signalId]
+    );
+    return rows[0] || null;
   }
 
   private async countTradesToday(userId: number): Promise<number> {

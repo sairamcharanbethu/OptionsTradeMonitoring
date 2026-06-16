@@ -1406,7 +1406,7 @@ Rules:
       const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
       if (this.isAutoExecutionEnabled(settings) && autoTradeMode === 'instant') {
         setImmediate(() => {
-          this.executeSignalWithConfiguredBroker({
+          this.executeSignalForEligibleUsers({
             userId,
             signalId,
             symbol,
@@ -1416,7 +1416,8 @@ Rules:
             stopUnderlying,
             targetUnderlying,
             mark,
-            settings
+            settings,
+            autoTradeMode: 'instant'
           }).catch((err: any) => {
             this.fastify.log.error(`[SignalScannerService] Instant auto-execution failed for signal #${signalId}: ${err.message}`);
           });
@@ -1587,6 +1588,9 @@ Rules:
          AND s.id <> $2
          AND s.status = 'CANCELLED'
          AND sue.status = 'PENDING'
+         AND sue.execution_broker IS NULL
+         AND sue.broker_order_id IS NULL
+         AND sue.execution_status IS NULL
        ON CONFLICT (signal_id, user_id) DO UPDATE
        SET status = 'CANCELLED',
            updated_at = CURRENT_TIMESTAMP`,
@@ -1825,7 +1829,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       // ── Broker Auto-Trade Execution (AI-Confirmed Entry, post-AI) ──
       const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
       if (finalVerdict === 'GO' && this.isAutoExecutionEnabled(settings) && autoTradeMode === 'ai_confirmed') {
-        await this.executeSignalWithConfiguredBroker({
+        await this.executeSignalForEligibleUsers({
           userId,
           signalId,
           symbol,
@@ -1835,7 +1839,8 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
           stopUnderlying,
           targetUnderlying,
           mark,
-          settings
+          settings,
+          autoTradeMode: 'ai_confirmed'
         });
       }
 
@@ -2349,6 +2354,34 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     return settings.alpaca_auto_trade === 'true' || settings.snaptrade_auto_trade === 'true';
   }
 
+  private async getAutoExecutionTargets(primaryUserId: number, symbol: string, autoTradeMode: 'instant' | 'ai_confirmed') {
+    const { rows } = await this.fastify.pg.query(
+      `SELECT id AS user_id
+       FROM users
+       ORDER BY id ASC`
+    );
+
+    const userIds = [...new Set([primaryUserId, ...rows.map((row: any) => Number(row.user_id)).filter(Boolean)])];
+    const targets: Array<{ userId: number; settings: any }> = [];
+
+    for (const targetUserId of userIds) {
+      const targetSettings = await this.getSettingsForUser(targetUserId);
+      if (targetSettings.day_trading_enabled !== 'true') continue;
+      if (!this.isAutoExecutionEnabled(targetSettings)) continue;
+      if ((targetSettings.alpaca_auto_trade_mode || 'instant') !== autoTradeMode) continue;
+
+      const symbols = String(targetSettings.day_trading_symbols || '')
+        .split(',')
+        .map((value: string) => value.trim().toUpperCase())
+        .filter(Boolean);
+      if (symbols.length > 0 && !symbols.includes(symbol)) continue;
+
+      targets.push({ userId: targetUserId, settings: targetSettings });
+    }
+
+    return targets;
+  }
+
   private async executeSignalWithConfiguredBroker(input: {
     userId: number;
     signalId: number;
@@ -2373,6 +2406,42 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       targetUnderlying: input.targetUnderlying,
       mark: input.mark
     }, input.settings);
+  }
+
+  private async executeSignalForEligibleUsers(input: {
+    userId: number;
+    signalId: number;
+    symbol: string;
+    winningSide: 'CALL' | 'PUT';
+    chosenStrike: number;
+    chosenExpiry: string;
+    stopUnderlying: number;
+    targetUnderlying: number;
+    mark: number | null;
+    settings: any;
+    autoTradeMode: 'instant' | 'ai_confirmed';
+  }) {
+    const targets = await this.getAutoExecutionTargets(input.userId, input.symbol, input.autoTradeMode);
+    if (targets.length === 0) return;
+
+    for (const target of targets) {
+      try {
+        await this.executeSignalWithConfiguredBroker({
+          userId: target.userId,
+          signalId: input.signalId,
+          symbol: input.symbol,
+          winningSide: input.winningSide,
+          chosenStrike: input.chosenStrike,
+          chosenExpiry: input.chosenExpiry,
+          stopUnderlying: input.stopUnderlying,
+          targetUnderlying: input.targetUnderlying,
+          mark: input.mark,
+          settings: target.settings
+        });
+      } catch (err: any) {
+        this.fastify.log.error(`[SignalScannerService] Auto-execution failed for signal #${input.signalId}, user ${target.userId}: ${err.message}`);
+      }
+    }
   }
 
   public async executeSignalForUser(userId: number, signalId: number) {

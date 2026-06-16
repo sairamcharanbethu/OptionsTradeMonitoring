@@ -815,7 +815,6 @@ export class MarketPoller {
     const hardPremiumStop = Number((entryPrice * 0.65).toFixed(2));
     const premiumSoftStopHit = engineResult.triggered && engineResult.triggerType === 'STOP_LOSS';
     const premiumHardStopHit = price <= hardPremiumStop;
-    const smartStopConfirmationMs = Number(process.env.SMART_STOP_CONFIRMATION_MS || 45000);
 
     // Strategy 1: Underlying structure informs stop-loss confirmation.
     const underlyingStop = position.suggested_stop_loss ? Number(position.suggested_stop_loss) : null;
@@ -842,56 +841,20 @@ export class MarketPoller {
         analysisDirty = true;
         this.fastify.log.info(`[MarketPoller] HARD STOP triggered for position ${position.id}: premium ${price} <= ${hardPremiumStop}`);
       } else if (premiumSoftStopHit) {
-        if (underlyingStopBroken) {
-          triggered = true;
-          triggerType = 'STOP_LOSS';
-          lossAvoided = entryPrice - price;
-          analysis.smartStopWarning = {
-            status: 'CONFIRMED_STRUCTURE_BREAK',
-            price,
-            softPremiumStop,
-            underlyingPrice,
-            underlyingStop,
-            triggeredAt: new Date().toISOString()
-          };
-          analysisDirty = true;
-          this.fastify.log.info(`[MarketPoller] Smart STOP confirmed for position ${position.id}: premium ${price} <= ${softPremiumStop} and structure broken.`);
-        } else {
-          const existingWarning = analysis.smartStopWarning;
-          const firstWarningAt = existingWarning?.triggeredAt ? new Date(existingWarning.triggeredAt).getTime() : Date.now();
-          const warningAgeMs = Date.now() - firstWarningAt;
-
-          if (existingWarning?.status === 'SOFT_STOP_WARNING' && warningAgeMs >= smartStopConfirmationMs) {
-            triggered = true;
-            triggerType = 'STOP_LOSS';
-            lossAvoided = entryPrice - price;
-            analysis.smartStopWarning = {
-              ...existingWarning,
-              status: 'CONFIRMED_TIMEOUT',
-              confirmedAt: new Date().toISOString(),
-              confirmedPrice: price,
-              underlyingPrice: underlyingPrice ?? existingWarning.underlyingPrice
-            };
-            analysisDirty = true;
-            this.fastify.log.info(`[MarketPoller] Smart STOP timeout confirmed for position ${position.id}: premium stayed below ${softPremiumStop} for ${Math.round(warningAgeMs / 1000)}s.`);
-          } else {
-            triggered = false;
-            triggerType = undefined;
-            lossAvoided = undefined;
-            analysis.smartStopWarning = {
-              status: 'SOFT_STOP_WARNING',
-              triggeredAt: existingWarning?.triggeredAt || new Date().toISOString(),
-              price,
-              softPremiumStop,
-              hardPremiumStop,
-              underlyingPrice: underlyingPrice ?? null,
-              underlyingStop,
-              message: 'Premium soft stop hit, but underlying structure has not confirmed the exit.'
-            };
-            analysisDirty = true;
-            this.fastify.log.info(`[MarketPoller] Soft stop warning for position ${position.id}: premium ${price} <= ${softPremiumStop}, structure still valid.`);
-          }
-        }
+        triggered = true;
+        triggerType = 'STOP_LOSS';
+        lossAvoided = entryPrice - price;
+        analysis.smartStopWarning = {
+          status: underlyingStopBroken ? 'PREMIUM_STOP_STRUCTURE_CONFIRMED' : 'PREMIUM_STOP_TRIGGERED',
+          price,
+          softPremiumStop,
+          hardPremiumStop,
+          underlyingPrice: underlyingPrice ?? null,
+          underlyingStop,
+          triggeredAt: new Date().toISOString()
+        };
+        analysisDirty = true;
+        this.fastify.log.info(`[MarketPoller] Premium STOP triggered for position ${position.id}: premium ${price} <= displayed stop ${softPremiumStop}.`);
       } else if (analysis.smartStopWarning) {
         delete analysis.smartStopWarning;
         analysisDirty = true;
