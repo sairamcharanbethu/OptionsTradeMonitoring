@@ -68,6 +68,7 @@ export default function TradesPage() {
   const [loadingClosed, setLoadingClosed] = useState(true);
   const [closingTrade, setClosingTrade] = useState<Position | null>(null);
   const [submittingClose, setSubmittingClose] = useState(false);
+  const [syncingOrders, setSyncingOrders] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     from: '',
@@ -76,8 +77,18 @@ export default function TradesPage() {
     result: 'all' as 'all' | 'win' | 'loss',
   });
 
-  const refreshOpen = async () => {
+  const refreshOpen = async (syncPending = true) => {
     setError(null);
+    if (syncPending) {
+      setSyncingOrders(true);
+      try {
+        await api.syncSnaptradePendingOrders();
+      } catch (err: any) {
+        setError(err.message || 'Failed to sync Wealthsimple orders');
+      } finally {
+        setSyncingOrders(false);
+      }
+    }
     const trades = await api.getOpenTrades();
     setOpenTrades(trades);
     setLoadingOpen(false);
@@ -100,7 +111,7 @@ export default function TradesPage() {
       setLoadingOpen(false);
     });
     const timer = window.setInterval(() => {
-      refreshOpen().catch((err) => setError(err.message));
+      refreshOpen(false).catch((err) => setError(err.message));
     }, 10000);
     return () => window.clearInterval(timer);
   }, []);
@@ -155,8 +166,8 @@ export default function TradesPage() {
           </div>
         </div>
         <Button variant="outline" className="gap-2" onClick={() => { refreshOpen(); refreshClosed(); }}>
-          <RefreshCw className="h-4 w-4" />
-          Refresh
+          <RefreshCw className={`h-4 w-4 ${syncingOrders ? 'animate-spin' : ''}`} />
+          {syncingOrders ? 'Syncing Orders' : 'Refresh'}
         </Button>
       </div>
 

@@ -387,7 +387,7 @@ export class SnaptradeService {
     }
 
     private collectOrderIds(order: any): string[] {
-        return [
+        const ids = [
             order?.id,
             order?.order_id,
             order?.orderId,
@@ -401,6 +401,14 @@ export class SnaptradeService {
         ]
             .filter((value) => value !== null && value !== undefined)
             .map((value) => String(value));
+
+        if (Array.isArray(order?.orders)) {
+            for (const childOrder of order.orders) {
+                ids.push(...this.collectOrderIds(childOrder));
+            }
+        }
+
+        return [...new Set(ids)];
     }
 
     private findMatchingOrder(orders: any[], position: any, phase: 'ENTRY' | 'EXIT' = 'ENTRY') {
@@ -426,6 +434,27 @@ export class SnaptradeService {
         return String(status || 'UNKNOWN').trim().toUpperCase();
     }
 
+    private hasFillEvidence(order: any): boolean {
+        const filledQuantity = this.getActualFilledQuantity(order);
+        const executionMarkers = [
+            order?.time_executed,
+            order?.executed_at,
+            order?.filled_at,
+            order?.last_fill_at
+        ];
+        const fillPrices = [
+            order?.execution_price,
+            order?.average_fill_price,
+            order?.filled_avg_price,
+            order?.avg_fill_price
+        ];
+
+        return filledQuantity > 0
+            || executionMarkers.some((value) => Boolean(value))
+            || fillPrices.some((value) => Number(value) > 0)
+            || (Array.isArray(order?.orders) && order.orders.some((childOrder: any) => this.hasFillEvidence(childOrder)));
+    }
+
     private getOrderFillPrice(order: any, fallback: number): number {
         const candidates = [
             order?.execution_price,
@@ -439,6 +468,12 @@ export class SnaptradeService {
             const value = Number(candidate);
             if (Number.isFinite(value) && value > 0) return value;
         }
+        if (Array.isArray(order?.orders)) {
+            for (const childOrder of order.orders) {
+                const childPrice = this.getOrderFillPrice(childOrder, 0);
+                if (childPrice > 0) return childPrice;
+            }
+        }
         return fallback;
     }
 
@@ -449,6 +484,27 @@ export class SnaptradeService {
             order?.total_quantity,
             order?.totalQuantity,
             order?.units
+        ];
+        for (const candidate of candidates) {
+            const value = Number(candidate);
+            if (Number.isFinite(value) && value > 0) return value;
+        }
+        if (Array.isArray(order?.orders)) {
+            for (const childOrder of order.orders) {
+                const childQuantity = this.getActualFilledQuantity(childOrder);
+                if (childQuantity > 0) return childQuantity;
+            }
+        }
+        return 0;
+    }
+
+    private getActualFilledQuantity(order: any): number {
+        const candidates = [
+            order?.filled_quantity,
+            order?.filledQuantity,
+            order?.filled,
+            order?.quantity_filled,
+            order?.filled_units
         ];
         for (const candidate of candidates) {
             const value = Number(candidate);
@@ -566,7 +622,8 @@ export class SnaptradeService {
                     continue;
                 }
 
-                const status = this.normalizeOrderStatus(order.status);
+                const rawStatus = this.normalizeOrderStatus(order.status);
+                const status = this.hasFillEvidence(order) && !closedStatuses.has(rawStatus) ? 'FILLED' : rawStatus;
                 if (openStatuses.has(status)) {
                     const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
                     if (phase === 'EXIT') {
@@ -699,7 +756,10 @@ export class SnaptradeService {
             `SELECT DISTINCT user_id
              FROM positions
              WHERE execution_broker = 'wealthsimple_snaptrade'
-               AND status = 'PENDING_ORDER'`
+               AND (
+                 status = 'PENDING_ORDER'
+                 OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
+               )`
         );
 
         const summary = {
