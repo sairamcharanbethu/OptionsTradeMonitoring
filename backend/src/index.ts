@@ -430,13 +430,16 @@ const start = async () => {
 
     const { SnaptradeService } = await import('./services/snaptrade-service');
     const snaptradeOrderSync = new SnaptradeService(fastify);
+    const { OrderWatchdogService } = await import('./services/order-watchdog-service');
+    const orderWatchdog = new OrderWatchdogService(fastify);
     const snaptradePendingOrderSyncHealth = {
       status: 'IDLE',
       running: false,
       lastRunAt: null as string | null,
       lastResult: null as any,
+      lastWatchdogResult: null as any,
       lastError: null as string | null,
-      intervalSeconds: Number(process.env.SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS || 60)
+      intervalSeconds: Number(process.env.SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS || 15)
     };
 
     const runSnaptradePendingOrderSync = async () => {
@@ -446,11 +449,13 @@ const start = async () => {
       snaptradePendingOrderSyncHealth.lastRunAt = new Date().toISOString();
       try {
         const result = await snaptradeOrderSync.syncAllPendingBrokerOrders();
+        const watchdogResult = await orderWatchdog.run();
         snaptradePendingOrderSyncHealth.lastResult = result;
+        snaptradePendingOrderSyncHealth.lastWatchdogResult = watchdogResult;
         snaptradePendingOrderSyncHealth.lastError = null;
         snaptradePendingOrderSyncHealth.status = 'UP';
-        if (result.checked > 0) {
-          fastify.log.info(`[SnapTradePendingSync] checked=${result.checked} opened=${result.opened} closed=${result.closed} pending=${result.stillPending} unmatched=${result.unmatched}`);
+        if (result.checked > 0 || watchdogResult.checked > 0) {
+          fastify.log.info(`[BrokerReconciliation] checked=${result.checked} opened=${result.opened} closed=${result.closed} pending=${result.stillPending} unmatched=${result.unmatched} watchdogEntryStale=${watchdogResult.entryStale} watchdogExitStale=${watchdogResult.exitStale}`);
         }
       } catch (err: any) {
         snaptradePendingOrderSyncHealth.lastError = err.message;

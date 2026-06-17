@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { redis } from '../lib/redis';
 import { SnaptradeService } from '../services/snaptrade-service';
 import { TradeExecutionService } from '../services/trade-execution-service';
+import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 
 const tradeResponseSchema = {
   type: 'object',
@@ -247,17 +248,11 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       }
 
       const trade = rows[0];
-      if (trade.status !== 'OPEN') {
+      try {
+        TradeLifecycleService.assertCanRequestExit(trade);
+      } catch (err: any) {
         await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'Only open Wealthsimple trades can be closed manually' });
-      }
-      if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))) {
-        await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'An exit or trim order is already pending for this trade' });
-      }
-      if (String(trade.execution_status || '').startsWith('EXIT_') && trade.broker_exit_order_id) {
-        await client.query('ROLLBACK');
-        return reply.code(409).send({ error: `Previous exit order ${trade.broker_exit_order_id} is ${trade.execution_status}. Verify it in Wealthsimple before submitting another close.` });
+        return reply.code(TradeLifecycleService.isBrokerExitReviewStatus(trade.execution_status) ? 409 : 400).send({ error: err.message });
       }
 
       const closeQuantity = Number(body?.quantity || trade.quantity || 1);
@@ -309,15 +304,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
         await redis.del(`USER_STATS:${userId}`);
         return updatedRows[0];
       } catch (err: any) {
-        await client.query(
-          `UPDATE positions
-           SET execution_status = 'EXIT_FAILED',
-               execution_error = $1,
-               notes = COALESCE(notes, '') || $2,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = $3`,
-          [err.message || String(err), ` [Manual Wealthsimple exit failed: ${err.message || String(err)}]`, id]
-        );
+        await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Wealthsimple exit failed');
         await client.query('COMMIT');
         await redis.del(`USER_POSITIONS:${userId}`);
         await redis.del(`USER_STATS:${userId}`);

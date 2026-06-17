@@ -6,6 +6,7 @@ import { AIService } from './ai-service';
 import { SnaptradeService } from './snaptrade-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import WebSocket from 'ws';
+import { TradeLifecycleService } from './trade-lifecycle-service';
 
 type ExitQuoteContext = {
   bid?: number;
@@ -212,15 +213,7 @@ export class MarketPoller {
   }
 
   private async markExitSubmissionFailure(position: any, message: string) {
-    await (this.fastify as any).pg.query(
-      `UPDATE positions
-       SET execution_status = 'EXIT_FAILED',
-           execution_error = $1,
-           notes = COALESCE(notes, '') || $2,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3 AND status = 'OPEN'`,
-      [message, ` [Exit submission failed: ${message}]`, position.id]
-    );
+    await TradeLifecycleService.markExitSubmissionFailure((this.fastify as any).pg, position.id, message);
   }
 
   private getProfitTrimQuantity(position: any): number {

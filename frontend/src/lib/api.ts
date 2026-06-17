@@ -744,6 +744,15 @@ export const api = {
       intervalSeconds?: number;
       signalSourceUserId?: number;
     };
+    snaptradePendingOrders?: {
+      status: string;
+      running: boolean;
+      lastRunAt: string | null;
+      lastResult: any;
+      lastWatchdogResult?: any;
+      lastError: string | null;
+      intervalSeconds: number;
+    };
     generatedAt: string;
   }> {
     const res = await authFetch(`${API_BASE}/services/health`);

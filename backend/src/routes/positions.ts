@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { redis } from '../lib/redis';
 import { AnalysisService } from '../services/analysis-service';
 import { SnaptradeService } from '../services/snaptrade-service';
+import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
@@ -592,18 +593,11 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
         return reply.code(400).send({ error: 'Invalid quantity' });
       }
 
-      if (position.status !== 'OPEN') {
+      try {
+        TradeLifecycleService.assertCanRequestExit(position);
+      } catch (err: any) {
         await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'Only open positions can be closed' });
-      }
-
-      if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(position.execution_status || ''))) {
-        await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'An exit or trim order is already pending for this position' });
-      }
-      if (String(position.execution_status || '').startsWith('EXIT_')) {
-        await client.query('ROLLBACK');
-        return reply.code(400).send({ error: `Previous exit order is ${position.execution_status}. Verify broker status before submitting another close.` });
+        return reply.code(400).send({ error: err.message });
       }
 
       const executionBroker = String(position.execution_broker || '');
@@ -653,15 +647,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
           await redis.set(`USER_POSITIONS:${userId}`, '', 1);
           return updatedRows[0];
         } catch (err: any) {
-          await client.query(
-            `UPDATE positions
-             SET execution_status = 'EXIT_FAILED',
-                 execution_error = $1,
-                 notes = COALESCE(notes, '') || $2,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $3`,
-            [err.message || String(err), ` [Manual SnapTrade exit failed: ${err.message || String(err)}]`, id]
-          );
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual SnapTrade exit failed');
           await client.query('COMMIT');
           await redis.set(`USER_POSITIONS:${userId}`, '', 1);
           return reply.code(400).send({ error: err.message || 'Failed to submit SnapTrade close order' });
@@ -717,15 +703,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
           await redis.set(`USER_POSITIONS:${userId}`, '', 1);
           return updatedRows[0];
         } catch (err: any) {
-          await client.query(
-            `UPDATE positions
-             SET execution_status = 'EXIT_FAILED',
-                 execution_error = $1,
-                 notes = COALESCE(notes, '') || $2,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $3`,
-            [err.message || String(err), ` [Manual Alpaca paper exit failed: ${err.message || String(err)}]`, id]
-          );
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Alpaca paper exit failed');
           await client.query('COMMIT');
           await redis.set(`USER_POSITIONS:${userId}`, '', 1);
           return reply.code(400).send({ error: err.message || 'Failed to submit Alpaca paper close order' });
