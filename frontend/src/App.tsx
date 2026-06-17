@@ -6,12 +6,13 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Button } from './components/ui/button';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Activity, FlaskConical, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
+import { Activity, FlaskConical, Info, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 import PositionDetailsPage from './pages/PositionDetailsPage';
 import DevLiveExitTestPage from './pages/DevLiveExitTestPage';
 import TradesPage from './pages/TradesPage';
 import SystemHealthPage from './pages/SystemHealthPage';
 import TradeCommandCenterPage from './pages/TradeCommandCenterPage';
+import StrategyGuidePage from './pages/StrategyGuidePage';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -79,6 +80,15 @@ function App() {
                   variant="ghost"
                   size="icon"
                   className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
+                  onClick={() => { window.location.href = '/strategy-guide'; }}
+                  title="Strategy Guide"
+                >
+                  <Info className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
                   onClick={() => { window.location.href = '/system-health'; }}
                   title="System Health"
                 >
@@ -112,6 +122,7 @@ function App() {
               <Route path="/trades" element={<TradesPage />} />
               <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
               <Route path="/system-health" element={<SystemHealthPage />} />
+              <Route path="/strategy-guide" element={<StrategyGuidePage />} />
               <Route path="/positions/:id" element={<PositionDetailsPage />} />
               <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />
             </Routes>
