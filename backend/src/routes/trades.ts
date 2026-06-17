@@ -52,6 +52,64 @@ function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT'
   return `${symbol.toUpperCase()}${year.slice(-2)}${month}${day}${side}${Math.round(strike * 1000).toString().padStart(8, '0')}`;
 }
 
+function getTradeNextAction(trade: any) {
+  const status = String(trade?.status || '');
+  const executionStatus = String(trade?.execution_status || '');
+
+  if (status === 'CLOSED') return { label: 'Closed', detail: 'No further action is expected for this trade.' };
+  if (status === 'PENDING_ORDER') return { label: 'Waiting for entry fill', detail: 'Broker reconciliation is watching the entry order.' };
+  if (executionStatus === 'PENDING_TRIM') return { label: 'Trim pending', detail: 'Waiting for broker confirmation of the partial profit-taking order.' };
+  if (executionStatus === 'PENDING_EXIT') return { label: 'Close pending', detail: 'Waiting for broker confirmation of the exit order.' };
+  if (executionStatus === 'EXIT_STALE') return { label: 'Verify broker', detail: 'Broker status must be checked before another close is submitted.' };
+  if (executionStatus.startsWith('EXIT_')) return { label: 'Broker review required', detail: `Exit status is ${executionStatus}; sync Wealthsimple before retrying.` };
+  if (trade?.profit_trim_status === 'DONE') return { label: 'Holding remainder', detail: 'Trim is complete; remaining contracts are managed by the active stop/exit plan.' };
+  if (status === 'OPEN') return { label: 'Holding', detail: 'Monitoring active stop loss, take profit, trim, and signal supersession rules.' };
+  return { label: 'Review state', detail: `Current state is ${status || 'unknown'}${executionStatus ? ` / ${executionStatus}` : ''}.` };
+}
+
+function getTradeRiskPlan(trade: any) {
+  const entryPrice = Number(trade?.entry_price || 0);
+  const quantity = Number(trade?.quantity || 0);
+  const stopLoss = trade?.stop_loss_trigger == null ? null : Number(trade.stop_loss_trigger);
+  const takeProfit = trade?.take_profit_trigger == null ? null : Number(trade.take_profit_trigger);
+  return {
+    entryPrice,
+    currentPrice: trade?.current_price == null ? null : Number(trade.current_price),
+    quantity,
+    stopLoss,
+    takeProfit,
+    trim: {
+      status: trade?.profit_trim_status || null,
+      quantity: trade?.profit_trim_quantity == null ? null : Number(trade.profit_trim_quantity),
+      price: trade?.profit_trim_price == null ? null : Number(trade.profit_trim_price),
+      orderId: trade?.profit_trim_order_id || null,
+      filledAt: trade?.profit_trimmed_at || null
+    },
+    estimatedMaxLoss: stopLoss !== null && entryPrice > 0 ? Number(((entryPrice - stopLoss) * quantity * 100).toFixed(2)) : null,
+    underlyingPlan: {
+      stop: trade?.suggested_stop_loss == null ? null : Number(trade.suggested_stop_loss),
+      target: trade?.suggested_take_profit_1 == null ? null : Number(trade.suggested_take_profit_1)
+    }
+  };
+}
+
+function getTradeBrokerProof(trade: any) {
+  return {
+    broker: trade?.execution_broker || trade?.account_id || 'unknown',
+    accountId: trade?.execution_account_id || trade?.account_id || null,
+    entryOrderId: trade?.broker_order_id || null,
+    entryTradeId: trade?.broker_trade_id || null,
+    exitOrderId: trade?.broker_exit_order_id || null,
+    exitTradeId: trade?.broker_exit_trade_id || null,
+    trimOrderId: trade?.profit_trim_order_id || null,
+    trimTradeId: trade?.profit_trim_trade_id || null,
+    lastBrokerStatus: trade?.last_broker_order_status || null,
+    lastBrokerSyncAt: trade?.last_broker_sync_at || null,
+    executionStatus: trade?.execution_status || null,
+    executionError: trade?.execution_error || null
+  };
+}
+
 export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
 
@@ -143,6 +201,113 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       source: 'db',
       ageMs: 0,
       data: rows[0]
+    };
+  });
+
+  fastify.get('/:id/events', {
+    schema: {
+      tags: ['Trades'],
+      summary: 'Get Wealthsimple trade event timeline',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const owned = await fastify.pg.query(
+      `SELECT id
+       FROM positions
+       WHERE id = $1
+         AND user_id = $2
+         AND execution_broker = 'wealthsimple_snaptrade'`,
+      [id, userId]
+    );
+    if (!owned.rows[0]) return reply.code(404).send({ error: 'Wealthsimple trade not found' });
+
+    const { rows } = await fastify.pg.query(
+      `SELECT id, user_id, position_id, event_type, message, metadata, created_at
+       FROM trade_events
+       WHERE user_id = $1
+         AND position_id = $2
+       ORDER BY created_at ASC, id ASC`,
+      [userId, id]
+    );
+    return rows;
+  });
+
+  fastify.get('/:id/command', {
+    schema: {
+      tags: ['Trades'],
+      summary: 'Get Wealthsimple trade command center replay',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const { rows } = await fastify.pg.query(
+      `SELECT *
+       FROM positions
+       WHERE id = $1
+         AND user_id = $2
+         AND execution_broker = 'wealthsimple_snaptrade'`,
+      [id, userId]
+    );
+    const trade = rows[0];
+    if (!trade) return reply.code(404).send({ error: 'Wealthsimple trade not found' });
+
+    const { rows: eventRows } = await fastify.pg.query(
+      `SELECT id, user_id, position_id, event_type, message, metadata, created_at
+       FROM trade_events
+       WHERE user_id = $1
+         AND position_id = $2
+       ORDER BY created_at ASC, id ASC`,
+      [userId, id]
+    );
+
+    const { rows: signalRows } = await fastify.pg.query(
+      `SELECT
+         s.id,
+         s.symbol,
+         s.signal_type,
+         s.trade_bias,
+         s.current_price::double precision,
+         s.entry_trigger::double precision,
+         s.stop_loss::double precision,
+         s.target_price::double precision,
+         s.confidence_score,
+         s.setup_grade,
+         s.indicators,
+         s.gex,
+         s.volatility,
+         s.no_trade_reasons,
+         s.option_expiration_date,
+         s.market_date,
+         s.option_details,
+         s.created_at,
+         sue.status AS user_execution_status,
+         sue.execution_broker,
+         sue.execution_status,
+         sue.execution_error,
+         sue.contracts_requested
+       FROM signal_user_executions sue
+       JOIN signals s ON s.id = sue.signal_id
+       WHERE sue.user_id = $1
+         AND (
+           (sue.broker_order_id IS NOT NULL AND sue.broker_order_id = $2)
+           OR (sue.broker_trade_id IS NOT NULL AND sue.broker_trade_id = $3)
+         )
+       ORDER BY sue.updated_at DESC
+       LIMIT 1`,
+      [userId, trade.broker_order_id || '', trade.broker_trade_id || '']
+    );
+
+    return {
+      trade,
+      signal: signalRows[0] || null,
+      nextAction: getTradeNextAction(trade),
+      riskPlan: getTradeRiskPlan(trade),
+      brokerProof: getTradeBrokerProof(trade),
+      events: eventRows,
+      generatedAt: new Date().toISOString()
     };
   });
 

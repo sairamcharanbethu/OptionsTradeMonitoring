@@ -90,6 +90,60 @@ export interface TradeRuntimeResponse<T> {
   data: T;
 }
 
+export interface TradeEvent {
+  id: number;
+  user_id: number;
+  position_id: number;
+  event_type: string;
+  message?: string | null;
+  metadata?: any;
+  created_at: string;
+}
+
+export interface TradeCommandCenterResponse {
+  trade: Position;
+  signal: any | null;
+  nextAction: {
+    label: string;
+    detail: string;
+  };
+  riskPlan: {
+    entryPrice: number;
+    currentPrice: number | null;
+    quantity: number;
+    stopLoss: number | null;
+    takeProfit: number | null;
+    estimatedMaxLoss: number | null;
+    trim: {
+      status: string | null;
+      quantity: number | null;
+      price: number | null;
+      orderId: string | null;
+      filledAt: string | null;
+    };
+    underlyingPlan: {
+      stop: number | null;
+      target: number | null;
+    };
+  };
+  brokerProof: {
+    broker: string;
+    accountId: string | null;
+    entryOrderId: string | null;
+    entryTradeId: string | null;
+    exitOrderId: string | null;
+    exitTradeId: string | null;
+    trimOrderId: string | null;
+    trimTradeId: string | null;
+    lastBrokerStatus: string | null;
+    lastBrokerSyncAt: string | null;
+    executionStatus: string | null;
+    executionError: string | null;
+  };
+  events: TradeEvent[];
+  generatedAt: string;
+}
+
 const API_BASE = '/api';
 
 const getToken = () => localStorage.getItem('token');
@@ -290,6 +344,19 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch Wealthsimple trade runtime state');
     const data = await res.json();
     return { ...data, data: normalizePosition(data.data) };
+  },
+
+  async getTradeCommandCenter(id: number): Promise<TradeCommandCenterResponse> {
+    const res = await authFetch(`${API_BASE}/trades/${id}/command?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch trade command center');
+    const data = await res.json();
+    return { ...data, trade: normalizePosition(data.trade) };
+  },
+
+  async getTradeEvents(id: number): Promise<TradeEvent[]> {
+    const res = await authFetch(`${API_BASE}/trades/${id}/events?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch trade events');
+    return res.json();
   },
 
   async getTradeUsage(): Promise<TradeUsageResponse> {

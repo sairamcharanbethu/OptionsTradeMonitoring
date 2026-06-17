@@ -549,7 +549,7 @@ export class TradeExecutionService {
       const entryPrice = await this.resolveEntryPriceFromAlpaca(osiTicker, input.mark, keyId, secretKey);
       const orderFilled = ['filled', 'partially_filled'].includes(String(orderData.status || '').toLowerCase());
       const executionStatus = orderFilled ? 'EXECUTED' : 'PENDING';
-      await this.insertExecutedPosition(input, {
+      const position = await this.insertExecutedPosition(input, {
         quantity,
         entryPrice,
         isSimulated: true,
@@ -563,6 +563,24 @@ export class TradeExecutionService {
         notes: `[Alpaca paper trade ${orderData.id || 'submitted'} from Signal #${input.signalId}]`
       });
 
+      await this.recordTradeEventBestEffort({
+        userId: input.userId,
+        positionId: position?.id || null,
+        eventType: orderFilled ? 'ENTRY_FILLED' : 'ENTRY_ORDER_SUBMITTED',
+        message: `Alpaca paper ${orderPayload.type} entry ${orderFilled ? 'filled' : 'submitted'} from Signal #${input.signalId}`,
+        metadata: {
+          signalId: input.signalId,
+          broker: 'alpaca_paper',
+          orderId: orderData.id || null,
+          quantity,
+          orderType: orderPayload.type,
+          setupGrade: await this.getSignalSetupGrade(input.signalId),
+          contract: this.contractLabel(input),
+          entryPrice,
+          stopUnderlying: input.stopUnderlying,
+          targetUnderlying: input.targetUnderlying
+        }
+      });
       await this.markSignalExecuted(input.userId, input.signalId, 'alpaca_paper', orderData.id || null, null, quantity, executionStatus);
       await this.invalidateUserCaches(input.userId);
       return { success: true, broker: 'alpaca_paper', orderId: orderData.id, quantity, executionStatus };
@@ -604,7 +622,7 @@ export class TradeExecutionService {
         limitPrice
       );
 
-      await this.insertExecutedPosition(input, {
+      const position = await this.insertExecutedPosition(input, {
         quantity,
         entryPrice: input.mark || Number(limitPrice || 1),
         isSimulated: false,
@@ -618,6 +636,26 @@ export class TradeExecutionService {
         notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId}]`
       });
 
+      await this.recordTradeEventBestEffort({
+        userId: input.userId,
+        positionId: position?.id || null,
+        eventType: 'ENTRY_ORDER_SUBMITTED',
+        message: `Wealthsimple ${orderType} entry submitted from Signal #${input.signalId}`,
+        metadata: {
+          signalId: input.signalId,
+          broker: 'wealthsimple_snaptrade',
+          orderId: result.orderId || null,
+          tradeId: result.tradeId || null,
+          quantity,
+          orderType,
+          limitPrice: limitPrice || null,
+          setupGrade: await this.getSignalSetupGrade(input.signalId),
+          contract: this.contractLabel(input),
+          mark: input.mark,
+          stopUnderlying: input.stopUnderlying,
+          targetUnderlying: input.targetUnderlying
+        }
+      });
       await this.markSignalExecuted(input.userId, input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity, 'PENDING');
       await this.invalidateUserCaches(input.userId);
       await TradeRedisService.requestBrokerSync(input.userId);
@@ -630,7 +668,7 @@ export class TradeExecutionService {
   }
 
   private async createSimulatedPosition(input: ExecuteSignalInput, quantity: number, reason: string) {
-    await this.insertExecutedPosition(input, {
+    const position = await this.insertExecutedPosition(input, {
       quantity,
       entryPrice: input.mark || 1,
       isSimulated: true,
@@ -640,6 +678,20 @@ export class TradeExecutionService {
       brokerTradeId: null,
       executionStatus: 'SIMULATED',
       notes: `[Simulated position from Signal #${input.signalId}: ${reason}]`
+    });
+    await this.recordTradeEventBestEffort({
+      userId: input.userId,
+      positionId: position?.id || null,
+      eventType: 'ENTRY_FILLED',
+      message: `Simulated entry created from Signal #${input.signalId}`,
+      metadata: {
+        signalId: input.signalId,
+        broker: 'simulated',
+        quantity,
+        setupGrade: await this.getSignalSetupGrade(input.signalId),
+        contract: this.contractLabel(input),
+        reason
+      }
     });
     await this.markSignalExecuted(input.userId, input.signalId, 'simulated', null, null, quantity);
     await this.invalidateUserCaches(input.userId);
@@ -666,7 +718,7 @@ export class TradeExecutionService {
       ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
       : null;
 
-    await this.fastify.pg.query(
+    const { rows } = await this.fastify.pg.query(
       `INSERT INTO positions (
         user_id, symbol, option_type, strike_price, expiration_date,
         entry_price, quantity, stop_loss_trigger, take_profit_trigger,
@@ -680,7 +732,8 @@ export class TradeExecutionService {
         $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
         $23, $24,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-      )`,
+      )
+      RETURNING *`,
       [
         input.userId,
         input.symbol,
@@ -719,6 +772,22 @@ export class TradeExecutionService {
           this.fastify.log.warn(`[TradeExecutionService] Failed to refresh stream subscriptions: ${err.message}`);
         });
       }
+    }
+
+    return rows[0] || null;
+  }
+
+  private async recordTradeEventBestEffort(event: {
+    userId: number;
+    positionId?: number | string | null;
+    eventType: string;
+    message?: string | null;
+    metadata?: any;
+  }) {
+    try {
+      await TradeRedisService.recordEvent(this.fastify.pg, event);
+    } catch (err: any) {
+      this.fastify.log.warn(`[TradeExecutionService] Failed to record trade event ${event.eventType}: ${err.message}`);
     }
   }
 

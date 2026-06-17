@@ -11,6 +11,7 @@ import PositionDetailsPage from './pages/PositionDetailsPage';
 import DevLiveExitTestPage from './pages/DevLiveExitTestPage';
 import TradesPage from './pages/TradesPage';
 import SystemHealthPage from './pages/SystemHealthPage';
+import TradeCommandCenterPage from './pages/TradeCommandCenterPage';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -109,6 +110,7 @@ function App() {
             <Routes>
               <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
               <Route path="/trades" element={<TradesPage />} />
+              <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
               <Route path="/system-health" element={<SystemHealthPage />} />
               <Route path="/positions/:id" element={<PositionDetailsPage />} />
               <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />

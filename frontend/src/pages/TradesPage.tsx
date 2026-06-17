@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BadgeDollarSign, Clock, RefreshCw, Search, ShieldCheck, XCircle } from 'lucide-react';
+import { ArrowLeft, BadgeDollarSign, Clock, ExternalLink, RefreshCw, Search, ShieldCheck, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, ClosedTradesResponse, Position } from '../lib/api';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -428,6 +428,12 @@ export default function TradesPage() {
                               <RefreshCw className={`h-3.5 w-3.5 ${syncingTradeId === trade.id ? 'animate-spin' : ''}`} />
                               Refresh
                             </Button>
+                            <Button asChild variant="outline" size="sm" className="h-7 gap-2">
+                              <Link to={`/trades/${trade.id}/command`}>
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                Command
+                              </Link>
+                            </Button>
                             {canRetryClose(trade) && (
                               <Button variant="destructive" size="sm" className="h-7 gap-2" onClick={() => retryClose(trade)} disabled={syncingTradeId === trade.id || retryingTradeId === trade.id}>
                                 <BadgeDollarSign className={`h-3.5 w-3.5 ${retryingTradeId === trade.id ? 'animate-pulse' : ''}`} />
@@ -509,9 +515,17 @@ export default function TradesPage() {
                           {trade.execution_error && <div className="mt-1 max-w-[220px] truncate text-xs text-red-500">{trade.execution_error}</div>}
                         </td>
                         <td className="px-3 py-3 text-right">
-                          <Button size="sm" variant="destructive" disabled={closeDisabled} onClick={() => setClosingTrade(trade)}>
-                            {actionLabel(trade)}
-                          </Button>
+                          <div className="flex justify-end gap-2">
+                            <Button asChild size="sm" variant="outline" className="gap-2">
+                              <Link to={`/trades/${trade.id}/command`}>
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                Command
+                              </Link>
+                            </Button>
+                            <Button size="sm" variant="destructive" disabled={closeDisabled} onClick={() => setClosingTrade(trade)}>
+                              {actionLabel(trade)}
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -606,7 +620,17 @@ export default function TradesPage() {
                             {trade.profit_trim_status === 'DONE' && <Badge variant="secondary">Profit trim</Badge>}
                           </div>
                         </td>
-                        <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{activeOrderId(trade)}</td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs text-muted-foreground">{activeOrderId(trade)}</span>
+                            <Button asChild variant="outline" size="sm" className="h-7 gap-2">
+                              <Link to={`/trades/${trade.id}/command`}>
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                Command
+                              </Link>
+                            </Button>
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
