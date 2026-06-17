@@ -3,6 +3,7 @@ import { redis } from '../lib/redis';
 import { SnaptradeService } from './snaptrade-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeRedisService } from './trade-redis-service';
+import { TradeLifecycleService } from './trade-lifecycle-service';
 
 type ExecutionBroker = 'none' | 'alpaca_paper' | 'wealthsimple_snaptrade' | 'simulated';
 
@@ -267,6 +268,10 @@ export class TradeExecutionService {
 
     for (const position of positions) {
       try {
+        if (TradeLifecycleService.isBrokerExitReviewStatus(position.execution_status)) {
+          throw new Error(`Position has ${position.execution_status}; verify broker status before opening the opposite signal`);
+        }
+
         if (position.status === 'PENDING_ORDER') {
           await this.markPendingPositionSuperseded(position, settings, broker, input.signalId);
           summary.supersededPending += 1;
@@ -361,46 +366,74 @@ export class TradeExecutionService {
   }
 
   private async submitSupersededExit(position: any, settings: ExecutionSettings, broker: ExecutionBroker, signalId: number): Promise<boolean> {
-    if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(position.execution_status || ''))) return false;
+    try {
+      TradeLifecycleService.assertCanRequestExit(position);
+    } catch (err: any) {
+      throw new Error(`Superseded exit blocked for position #${position.id}: ${err.message}`);
+    }
 
     const executionBroker = String(position.execution_broker || broker || '');
     if (!position.is_simulated && executionBroker === 'wealthsimple_snaptrade') {
-      const accountId = String(position.execution_account_id || position.account_id || settings.snaptrade_trading_account_id || '').trim();
-      if (!accountId) throw new Error('No SnapTrade account id is attached to the superseded position');
+      const exitLock = await TradeRedisService.acquireLock(TradeRedisService.keys.exitLock(position.id));
+      if (!exitLock.acquired) {
+        throw new Error(`Superseded exit blocked for position #${position.id}: another exit request is already in progress`);
+      }
 
-      const snaptradeService = new SnaptradeService(this.fastify);
-      const osiTicker = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
-      const order = await snaptradeService.placeOptionOrder(
-        Number(position.user_id),
-        accountId,
-        osiTicker,
-        'SELL_TO_CLOSE',
-        Number(position.quantity || 1),
-        'MARKET'
-      );
+      try {
+        const snaptradeService = new SnaptradeService(this.fastify);
+        await snaptradeService.syncPendingBrokerOrders(Number(position.user_id));
 
-      await this.fastify.pg.query(
-        `UPDATE positions
-         SET execution_status = 'PENDING_EXIT',
-             execution_error = NULL,
-             broker_exit_order_id = $1,
-             broker_exit_trade_id = $2,
-             exit_reason = 'SUPERSEDED',
-             exit_order_type = 'MARKET',
-             exit_requested_at = CURRENT_TIMESTAMP,
-             notes = COALESCE(notes, '') || $3,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $4
-           AND status = 'OPEN'`,
-        [
-          order.orderId || null,
-          order.tradeId || null,
-          ` [Superseded by Signal #${signalId}; SnapTrade MARKET exit submitted${order.orderId ? `: ${order.orderId}` : ''}]`,
-          position.id
-        ]
-      );
-      this.scheduleSnapTradePendingSync(Number(position.user_id));
-      return true;
+        const { rows } = await this.fastify.pg.query(
+          `SELECT *
+           FROM positions
+           WHERE id = $1`,
+          [position.id]
+        );
+        const refreshed = rows[0];
+        try {
+          TradeLifecycleService.assertCanRequestExit(refreshed);
+        } catch (err: any) {
+          if (refreshed?.status === 'CLOSED') return false;
+          throw new Error(`Superseded exit blocked for position #${position.id} after broker sync: ${err.message}`);
+        }
+
+        const accountId = String(refreshed.execution_account_id || refreshed.account_id || settings.snaptrade_trading_account_id || '').trim();
+        if (!accountId) throw new Error('No SnapTrade account id is attached to the superseded position');
+
+        const osiTicker = this.constructOSITicker(refreshed.symbol, Number(refreshed.strike_price), refreshed.option_type, refreshed.expiration_date);
+        const order = await snaptradeService.placeOptionOrder(
+          Number(refreshed.user_id),
+          accountId,
+          osiTicker,
+          'SELL_TO_CLOSE',
+          Number(refreshed.quantity || 1),
+          'MARKET'
+        );
+
+        await TradeLifecycleService.markExitSubmitted(
+          this.fastify.pg,
+          refreshed.id,
+          order,
+          {
+            reason: 'SUPERSEDED',
+            orderType: 'MARKET',
+            note: ` [Superseded by Signal #${signalId}; SnapTrade MARKET exit submitted${order.orderId ? `: ${order.orderId}` : ''}]`
+          }
+        );
+        await TradeRedisService.recordEvent(this.fastify.pg, {
+          userId: Number(refreshed.user_id),
+          positionId: refreshed.id,
+          eventType: 'EXIT_REQUESTED',
+          message: `Superseded by Signal #${signalId}; SnapTrade close submitted`,
+          metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, reason: 'SUPERSEDED' }
+        });
+        await TradeRedisService.rebuildOpenTrades(this.fastify.pg, Number(refreshed.user_id), this.fastify);
+        await TradeRedisService.requestBrokerSync(Number(refreshed.user_id));
+        this.scheduleSnapTradePendingSync(Number(refreshed.user_id));
+        return true;
+      } finally {
+        await TradeRedisService.releaseLock(exitLock);
+      }
     }
 
     if (position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper') {
