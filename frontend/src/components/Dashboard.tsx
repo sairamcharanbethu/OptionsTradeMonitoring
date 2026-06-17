@@ -93,6 +93,19 @@ interface DashboardProps {
   onUserUpdate: (user: User) => void;
 }
 
+const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'users'] as const;
+const DASHBOARD_TAB_STORAGE_KEY = 'options-monitoring:dashboard-tab';
+
+const getInitialDashboardTab = () => {
+  const urlTab = new URLSearchParams(window.location.search).get('tab');
+  if (urlTab && DASHBOARD_TABS.includes(urlTab as any)) return urlTab;
+
+  const storedTab = window.localStorage.getItem(DASHBOARD_TAB_STORAGE_KEY);
+  if (storedTab && DASHBOARD_TABS.includes(storedTab as any)) return storedTab;
+
+  return 'overview';
+};
+
 export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const queryClient = useQueryClient();
   const { data: positions = [], isLoading: loading, error: queryError, refetch: refetchPositions } = usePositions();
@@ -100,7 +113,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const { data: marketStatus } = useMarketStatus();
 
   // Local state for UI
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(getInitialDashboardTab);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
 
@@ -123,6 +136,22 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
   // WebSocket Integration
   const { lastMessage } = useWebSocket();
+
+  const handleTabChange = (tab: string) => {
+    const nextTab = DASHBOARD_TABS.includes(tab as any) && (tab !== 'users' || user.role === 'ADMIN') ? tab : 'overview';
+    setActiveTab(nextTab);
+    window.localStorage.setItem(DASHBOARD_TAB_STORAGE_KEY, nextTab);
+
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', nextTab);
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  };
+
+  useEffect(() => {
+    if (activeTab === 'users' && user.role !== 'ADMIN') {
+      handleTabChange('overview');
+    }
+  }, [activeTab, user.role]);
 
   // Debounce search
   useEffect(() => {
@@ -334,7 +363,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
   return (
     <div className="container mx-auto py-8 space-y-8">
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-8">
 
         {/* Header Section */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
@@ -392,7 +421,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               )}
             </TabsList>
             <div className="md:hidden order-2">
-              <Select value={activeTab} onValueChange={setActiveTab}>
+              <Select value={activeTab} onValueChange={handleTabChange}>
                 <SelectTrigger className="h-9 w-[130px]">
                   <SelectValue />
                 </SelectTrigger>
