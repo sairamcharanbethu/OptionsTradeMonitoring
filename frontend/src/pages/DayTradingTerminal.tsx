@@ -351,8 +351,10 @@ export default function DayTradingTerminal() {
   };
 
   // Filter signals: by symbol tab, then status and grade filters
-  const filteredSignals = signals
-    .filter(s => selectedSymbol === 'BOTH' || s.symbol === selectedSymbol)
+  const symbolSignals = signals
+    .filter(s => selectedSymbol === 'BOTH' || s.symbol === selectedSymbol);
+
+  const filteredSignals = symbolSignals
     .filter(s => filterStatus === 'ALL' || s.status === filterStatus)
     .filter(s => {
       if (filterGrade === 'ALL') return true;
@@ -383,8 +385,9 @@ export default function DayTradingTerminal() {
         token_usage: null
       } as unknown as Signal : null);
 
-  // Find the single LATEST actionable signal for QQQ or SPY (within the last 24h)
-  const latestActionableSignal = filteredSignals.find(s => s.signal_type !== 'NONE' && s.status === 'PENDING') || null;
+  // Find the single latest pending setup for the selected symbol scope.
+  // This card should not disappear just because table filters are narrowed.
+  const latestActionableSignal = symbolSignals.find(s => s.signal_type !== 'NONE' && s.status === 'PENDING') || null;
 
   // Active signals table should exclude the latest actionable setup alert
   const tableSignals = latestActionableSignal

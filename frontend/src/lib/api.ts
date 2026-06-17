@@ -794,7 +794,15 @@ export const api = {
     }));
   },
 
-  async updateSignalStatus(id: number, status: 'PENDING' | 'EXECUTED' | 'CANCELLED'): Promise<{ id: number; status: string }> {
+  async updateSignalStatus(id: number, status: 'PENDING' | 'EXECUTED' | 'CANCELLED'): Promise<{
+    id: number;
+    status: string;
+    execution_status?: string | null;
+    execution_broker?: string | null;
+    broker_order_id?: string | null;
+    broker_trade_id?: string | null;
+    quantity?: number | null;
+  }> {
     const res = await authFetch(`${API_BASE}/signals/${id}/status`, {
       method: 'PUT',
       body: JSON.stringify({ status })

@@ -588,8 +588,8 @@ Rules:
     const nyParts = this.getNyDateParts(now);
 
     // 1. Check Trading Window Blocker
-    const startMinutes = this.parseTimeStr(settings.trading_start_time);
-    const cutoffMinutes = this.parseTimeStr(settings.trading_cutoff_time);
+    const startMinutes = this.parseTimeToMinutes(settings.trading_start_time, '09:30');
+    const cutoffMinutes = this.parseTimeToMinutes(settings.trading_cutoff_time, '16:00');
     const currentMinutes = nyParts.minutes;
 
     const noTradeReasons: string[] = [];
@@ -974,6 +974,9 @@ Rules:
 
     // Afternoon threshold inflation
     let dynamicMinScore = Number(settings.min_signal_score);
+    if (!Number.isFinite(dynamicMinScore) || dynamicMinScore <= 0) {
+      dynamicMinScore = 70;
+    }
     if (currentMinutes >= 13 * 60 + 30) {
       dynamicMinScore += 15;
     }
@@ -2472,6 +2475,13 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     }
 
     const signal = rows[0];
+    if (signal.status !== 'PENDING') {
+      throw new Error(`Signal #${signalId} is ${signal.status} and cannot be executed`);
+    }
+    if (signal.signal_type === 'NONE') {
+      throw new Error(`Signal #${signalId} is a no-trade scanner record and cannot be executed`);
+    }
+
     const optionDetails = signal.option_details || {};
     const currentPrice = Number(signal.current_price);
     const winningSide = signal.signal_type === 'PUT' ? 'PUT' : 'CALL';

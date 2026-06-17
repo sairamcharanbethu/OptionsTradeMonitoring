@@ -228,7 +228,12 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           type: 'object',
           properties: {
             id: { type: 'integer' },
-            status: { type: 'string' }
+            status: { type: 'string' },
+            execution_status: { type: 'string', nullable: true },
+            execution_broker: { type: 'string', nullable: true },
+            broker_order_id: { type: 'string', nullable: true },
+            broker_trade_id: { type: 'string', nullable: true },
+            quantity: { type: 'integer', nullable: true }
           }
         }
       }
@@ -250,7 +255,15 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           return (reply as any).code(400).send({ error: executionResult.message || 'Signal execution was not placed' });
         }
 
-        return { id, status: 'EXECUTED' };
+        return {
+          id,
+          status: 'EXECUTED',
+          execution_status: executionResult?.executionStatus || null,
+          execution_broker: executionResult?.broker || null,
+          broker_order_id: executionResult?.orderId || null,
+          broker_trade_id: executionResult?.tradeId || null,
+          quantity: executionResult?.quantity || null
+        };
       } else {
         const { rows: signalRows } = await fastify.pg.query('SELECT id FROM signals WHERE id = $1', [id]);
 
