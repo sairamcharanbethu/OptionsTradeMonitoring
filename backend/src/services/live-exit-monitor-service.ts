@@ -95,6 +95,7 @@ export class LiveExitMonitorService {
           await (this.fastify as any).poller.processPositionExitUpdate(position, price, greeks, iv, underlyingPrice, quoteContext);
           this.matchedUpdates++;
           this.lastMatchedAt = new Date().toISOString();
+          this.lastError = null;
         } finally {
           this.streamUpdateLocks.delete(positionId);
         }

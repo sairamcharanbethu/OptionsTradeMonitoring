@@ -76,6 +76,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [orderType, setOrderType] = useState('LIMIT');
     const [entrySlippagePct, setEntrySlippagePct] = useState('3');
     const [takeProfitPct, setTakeProfitPct] = useState('');
+    const [stopLossEngineEnabled, setStopLossEngineEnabled] = useState(true);
     const [liveTradingAcknowledged, setLiveTradingAcknowledged] = useState(false);
 
     // Security & Profile State
@@ -262,6 +263,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setOrderType(data.order_type || 'LIMIT');
             setEntrySlippagePct(data.entry_slippage_pct || '3');
             setTakeProfitPct(data.take_profit_pct || '');
+            setStopLossEngineEnabled(data.stop_loss_engine_enabled !== 'false');
             setLiveTradingAcknowledged(data.live_trading_acknowledged === 'true');
 
             // Load Day Trading settings
@@ -471,6 +473,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 order_type: orderType,
                 entry_slippage_pct: entrySlippagePct,
                 take_profit_pct: takeProfitPct,
+                stop_loss_engine_enabled: stopLossEngineEnabled ? 'true' : 'false',
                 live_trading_acknowledged: liveTradingAcknowledged ? 'true' : 'false',
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 day_trading_symbols: dayTradingSymbols,
@@ -862,6 +865,29 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         />
                                         <p className="text-[10px] text-muted-foreground">
                                             Optional. Example: 20 exits at entry premium +20%. Leave blank to rely on the scanner suggested TP.
+                                        </p>
+                                    </div>
+
+                                    <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <Label htmlFor="stopLossEngineToggle" className="flex items-center gap-2">
+                                                Automatic Stop-Loss Engine
+                                                {stopLossEngineEnabled ? (
+                                                    <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
+                                                ) : (
+                                                    <Badge variant="secondary" className="h-5 text-[10px]">Paused</Badge>
+                                                )}
+                                            </Label>
+                                            <Switch
+                                                id="stopLossEngineToggle"
+                                                checked={stopLossEngineEnabled}
+                                                onCheckedChange={setStopLossEngineEnabled}
+                                            />
+                                        </div>
+                                        <p className={`text-[10px] ${stopLossEngineEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
+                                            {stopLossEngineEnabled
+                                                ? 'Stop-loss exits can be submitted automatically for this user. Take-profit monitoring also remains active.'
+                                                : 'Automatic stop-loss exits are paused for this user only. Take-profit and trim exits remain active.'}
                                         </p>
                                     </div>
                                 </section>

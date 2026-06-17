@@ -559,6 +559,7 @@ Rules:
       order_type: 'LIMIT',
       entry_slippage_pct: '3',
       take_profit_pct: '',
+      stop_loss_engine_enabled: 'true',
       live_trading_acknowledged: 'false'
     };
 

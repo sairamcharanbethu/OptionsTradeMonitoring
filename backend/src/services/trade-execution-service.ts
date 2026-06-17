@@ -29,6 +29,7 @@ interface ExecutionSettings {
   order_type?: string;
   entry_slippage_pct?: string;
   take_profit_pct?: string;
+  stop_loss_engine_enabled?: string;
   live_trading_acknowledged?: string;
   alpaca_key_id?: string;
   alpaca_secret_key?: string;
@@ -50,6 +51,7 @@ export class TradeExecutionService {
       order_type: 'LIMIT',
       entry_slippage_pct: '3',
       take_profit_pct: '',
+      stop_loss_engine_enabled: 'true',
       live_trading_acknowledged: 'false',
       ...dbSettings
     };
