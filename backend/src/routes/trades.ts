@@ -1,8 +1,8 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
-import { redis } from '../lib/redis';
 import { SnaptradeService } from '../services/snaptrade-service';
 import { TradeExecutionService } from '../services/trade-execution-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
+import { TradeRedisService } from '../services/trade-redis-service';
 
 const tradeResponseSchema = {
   type: 'object',
@@ -92,25 +92,9 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     }
   }, async (request) => {
     const { id: userId } = (request as any).user;
-    try {
-      const snaptradeService = new SnaptradeService(fastify);
-      await snaptradeService.syncPendingBrokerOrders(userId);
-    } catch (err: any) {
-      fastify.log.warn(`[TradesOpen] Wealthsimple pending-order sync failed before listing trades: ${err.message}`);
-    }
-
-    const { rows } = await fastify.pg.query(
-      `SELECT *
-       FROM positions
-       WHERE user_id = $1
-         AND execution_broker = 'wealthsimple_snaptrade'
-         AND status IN ('PENDING_ORDER', 'OPEN')
-       ORDER BY
-         CASE WHEN status = 'OPEN' THEN 0 ELSE 1 END,
-         created_at DESC`,
-      [userId]
-    );
-    return rows;
+    const cached = await TradeRedisService.getOpenTrades(userId);
+    if (cached) return cached;
+    return TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
   });
 
   fastify.get('/closed', {
@@ -230,91 +214,97 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     const { id } = request.params as { id: string };
     const body = request.body as { quantity?: number } | undefined;
     const snaptradeService = new SnaptradeService(fastify);
-
-    try {
-      await snaptradeService.syncPendingBrokerOrders(userId);
-    } catch (err: any) {
-      fastify.log.warn(`[TradesClose] Wealthsimple status check failed before close for trade ${id}: ${err.message}`);
-      return reply.code(409).send({ error: 'Could not verify latest Wealthsimple order status before submitting another close. Try again after sync completes.' });
+    const exitLock = await TradeRedisService.acquireLock(TradeRedisService.keys.exitLock(id));
+    if (!exitLock.acquired) {
+      return reply.code(409).send({ error: 'A close request is already in progress for this trade' });
     }
 
-    const client = await fastify.pg.connect();
-
     try {
-      await client.query('BEGIN');
-      const { rows } = await client.query(
-        `SELECT *
-         FROM positions
-         WHERE id = $1
-           AND user_id = $2
-           AND execution_broker = 'wealthsimple_snaptrade'
-         FOR UPDATE`,
-        [id, userId]
-      );
-
-      if (rows.length === 0) {
-        await client.query('ROLLBACK');
-        return reply.code(404).send({ error: 'Wealthsimple trade not found' });
-      }
-
-      const trade = rows[0];
       try {
-        TradeLifecycleService.assertCanRequestExit(trade);
+        await snaptradeService.syncPendingBrokerOrders(userId);
       } catch (err: any) {
-        await client.query('ROLLBACK');
-        return reply.code(TradeLifecycleService.isBrokerExitReviewStatus(trade.execution_status) ? 409 : 400).send({ error: err.message });
+        fastify.log.warn(`[TradesClose] Wealthsimple status check failed before close for trade ${id}: ${err.message}`);
+        return reply.code(409).send({ error: 'Could not verify latest Wealthsimple order status before submitting another close. Try again after sync completes.' });
       }
 
-      const closeQuantity = Number(body?.quantity || trade.quantity || 1);
-      if (!Number.isFinite(closeQuantity) || closeQuantity <= 0 || closeQuantity > Number(trade.quantity)) {
-        await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'Invalid close quantity' });
-      }
-
-      const accountId = String(trade.execution_account_id || trade.account_id || '').trim();
-      if (!accountId) {
-        await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'No Wealthsimple account id is attached to this trade' });
-      }
+      const client = await fastify.pg.connect();
 
       try {
-        const optionSymbol = constructOSITicker(trade.symbol, Number(trade.strike_price), trade.option_type, trade.expiration_date);
-        const order = await snaptradeService.placeOptionOrder(
-          userId,
-          accountId,
-          optionSymbol,
-          'SELL_TO_CLOSE',
-          closeQuantity,
-          'MARKET'
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `SELECT *
+           FROM positions
+           WHERE id = $1
+             AND user_id = $2
+             AND execution_broker = 'wealthsimple_snaptrade'
+           FOR UPDATE`,
+          [id, userId]
         );
 
-        const updatedTrade = await TradeLifecycleService.markExitSubmitted(
-          client,
-          id,
-          order,
-          {
-            reason: 'MANUAL',
-            orderType: 'MARKET',
-            note: ` [Manual Wealthsimple MARKET exit submitted for ${closeQuantity} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
-          }
-        );
+        if (rows.length === 0) {
+          await client.query('ROLLBACK');
+          return reply.code(404).send({ error: 'Wealthsimple trade not found' });
+        }
 
-        await client.query('COMMIT');
-        await redis.del(`USER_POSITIONS:${userId}`);
-        await redis.del(`USER_STATS:${userId}`);
-        return updatedTrade;
-      } catch (err: any) {
-        await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Wealthsimple exit failed');
-        await client.query('COMMIT');
-        await redis.del(`USER_POSITIONS:${userId}`);
-        await redis.del(`USER_STATS:${userId}`);
-        return reply.code(400).send({ error: err.message || 'Failed to submit Wealthsimple close order' });
+        const trade = rows[0];
+        try {
+          TradeLifecycleService.assertCanRequestExit(trade);
+        } catch (err: any) {
+          await client.query('ROLLBACK');
+          return reply.code(TradeLifecycleService.isBrokerExitReviewStatus(trade.execution_status) ? 409 : 400).send({ error: err.message });
+        }
+
+        const closeQuantity = Number(body?.quantity || trade.quantity || 1);
+        if (!Number.isFinite(closeQuantity) || closeQuantity <= 0 || closeQuantity > Number(trade.quantity)) {
+          await client.query('ROLLBACK');
+          return reply.code(400).send({ error: 'Invalid close quantity' });
+        }
+
+        const accountId = String(trade.execution_account_id || trade.account_id || '').trim();
+        if (!accountId) {
+          await client.query('ROLLBACK');
+          return reply.code(400).send({ error: 'No Wealthsimple account id is attached to this trade' });
+        }
+
+        try {
+          const optionSymbol = constructOSITicker(trade.symbol, Number(trade.strike_price), trade.option_type, trade.expiration_date);
+          const order = await snaptradeService.placeOptionOrder(
+            userId,
+            accountId,
+            optionSymbol,
+            'SELL_TO_CLOSE',
+            closeQuantity,
+            'MARKET'
+          );
+
+          const updatedTrade = await TradeLifecycleService.markExitSubmitted(
+            client,
+            id,
+            order,
+            {
+              reason: 'MANUAL',
+              orderType: 'MARKET',
+              note: ` [Manual Wealthsimple MARKET exit submitted for ${closeQuantity} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
+            }
+          );
+
+          await client.query('COMMIT');
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          return updatedTrade;
+        } catch (err: any) {
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Wealthsimple exit failed');
+          await client.query('COMMIT');
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          return reply.code(400).send({ error: err.message || 'Failed to submit Wealthsimple close order' });
+        }
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
     } finally {
-      client.release();
+      await TradeRedisService.releaseLock(exitLock);
     }
   });
 
@@ -354,6 +344,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       : null;
 
     await TradeLifecycleService.markBrokerSynced(fastify.pg, id, brokerStatus || null);
+    await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
 
     const { rows } = await fastify.pg.query(
       `SELECT *
@@ -390,6 +381,12 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     const { id } = request.params as { id: string };
     const body = request.body as { quantity?: number } | undefined;
     const snaptradeService = new SnaptradeService(fastify);
+    const exitLock = await TradeRedisService.acquireLock(TradeRedisService.keys.exitLock(id));
+    if (!exitLock.acquired) {
+      return reply.code(409).send({ error: 'A close retry is already in progress for this trade' });
+    }
+
+    try {
     const owned = await fastify.pg.query(
       `SELECT id
        FROM positions
@@ -413,86 +410,87 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       : null;
     await TradeLifecycleService.markBrokerSynced(fastify.pg, id, brokerStatus || null);
 
-    const client = await fastify.pg.connect();
-    try {
-      await client.query('BEGIN');
-      const { rows } = await client.query(
-        `SELECT *
-         FROM positions
-         WHERE id = $1
-           AND user_id = $2
-           AND execution_broker = 'wealthsimple_snaptrade'
-         FOR UPDATE`,
-        [id, userId]
-      );
-
-      const trade = rows[0];
-      if (!trade) {
-        await client.query('ROLLBACK');
-        return reply.code(404).send({ error: 'Wealthsimple trade not found' });
-      }
-      if (trade.status === 'CLOSED') {
-        await client.query('ROLLBACK');
-        return reply.code(409).send({ error: 'Broker sync already closed this trade; retry was not submitted.' });
-      }
-
-      const retryDecision = TradeLifecycleService.canRetryExit(trade);
-      if (!retryDecision.allowed) {
-        await client.query('ROLLBACK');
-        return reply.code(409).send({ error: retryDecision.reason || 'Exit retry is not allowed' });
-      }
-
-      const closeQuantity = Number(body?.quantity || trade.quantity || 1);
-      if (!Number.isFinite(closeQuantity) || closeQuantity <= 0 || closeQuantity > Number(trade.quantity)) {
-        await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'Invalid close quantity' });
-      }
-
-      const accountId = String(trade.execution_account_id || trade.account_id || '').trim();
-      if (!accountId) {
-        await client.query('ROLLBACK');
-        return reply.code(400).send({ error: 'No Wealthsimple account id is attached to this trade' });
-      }
-
+      const client = await fastify.pg.connect();
       try {
-        const optionSymbol = constructOSITicker(trade.symbol, Number(trade.strike_price), trade.option_type, trade.expiration_date);
-        const order = await snaptradeService.placeOptionOrder(
-          userId,
-          accountId,
-          optionSymbol,
-          'SELL_TO_CLOSE',
-          closeQuantity,
-          'MARKET'
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `SELECT *
+           FROM positions
+           WHERE id = $1
+             AND user_id = $2
+             AND execution_broker = 'wealthsimple_snaptrade'
+           FOR UPDATE`,
+          [id, userId]
         );
 
-        const updatedTrade = await TradeLifecycleService.markExitSubmitted(
-          client,
-          id,
-          order,
-          {
-            reason: trade.exit_reason || 'RETRY',
-            orderType: 'MARKET',
-            incrementRetry: true,
-            note: ` [Retry Wealthsimple MARKET exit submitted for ${closeQuantity} contract(s) after broker status ${brokerStatus || trade.execution_status}${order.orderId ? `: ${order.orderId}` : ''}]`
-          }
-        );
+        const trade = rows[0];
+        if (!trade) {
+          await client.query('ROLLBACK');
+          return reply.code(404).send({ error: 'Wealthsimple trade not found' });
+        }
+        if (trade.status === 'CLOSED') {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'Broker sync already closed this trade; retry was not submitted.' });
+        }
 
-        await client.query('COMMIT');
-        await redis.del(`USER_POSITIONS:${userId}`);
-        await redis.del(`USER_STATS:${userId}`);
-        return updatedTrade;
-      } catch (err: any) {
-        await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Retry Wealthsimple exit failed');
-        await client.query('COMMIT');
-        await redis.del(`USER_POSITIONS:${userId}`);
-        await redis.del(`USER_STATS:${userId}`);
-        return reply.code(400).send({ error: err.message || 'Failed to retry Wealthsimple close order' });
+        const retryDecision = TradeLifecycleService.canRetryExit(trade);
+        if (!retryDecision.allowed) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: retryDecision.reason || 'Exit retry is not allowed' });
+        }
+
+        const closeQuantity = Number(body?.quantity || trade.quantity || 1);
+        if (!Number.isFinite(closeQuantity) || closeQuantity <= 0 || closeQuantity > Number(trade.quantity)) {
+          await client.query('ROLLBACK');
+          return reply.code(400).send({ error: 'Invalid close quantity' });
+        }
+
+        const accountId = String(trade.execution_account_id || trade.account_id || '').trim();
+        if (!accountId) {
+          await client.query('ROLLBACK');
+          return reply.code(400).send({ error: 'No Wealthsimple account id is attached to this trade' });
+        }
+
+        try {
+          const optionSymbol = constructOSITicker(trade.symbol, Number(trade.strike_price), trade.option_type, trade.expiration_date);
+          const order = await snaptradeService.placeOptionOrder(
+            userId,
+            accountId,
+            optionSymbol,
+            'SELL_TO_CLOSE',
+            closeQuantity,
+            'MARKET'
+          );
+
+          const updatedTrade = await TradeLifecycleService.markExitSubmitted(
+            client,
+            id,
+            order,
+            {
+              reason: trade.exit_reason || 'RETRY',
+              orderType: 'MARKET',
+              incrementRetry: true,
+              note: ` [Retry Wealthsimple MARKET exit submitted for ${closeQuantity} contract(s) after broker status ${brokerStatus || trade.execution_status}${order.orderId ? `: ${order.orderId}` : ''}]`
+            }
+          );
+
+          await client.query('COMMIT');
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          return updatedTrade;
+        } catch (err: any) {
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Retry Wealthsimple exit failed');
+          await client.query('COMMIT');
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          return reply.code(400).send({ error: err.message || 'Failed to retry Wealthsimple close order' });
+        }
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
     } finally {
-      client.release();
+      await TradeRedisService.releaseLock(exitLock);
     }
   });
 }

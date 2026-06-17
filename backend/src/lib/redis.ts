@@ -92,6 +92,21 @@ class RedisClient {
         }
     }
 
+    async delIfValue(key: string, expectedValue: string): Promise<boolean> {
+        if (!this.isConnected || !this.client) return false;
+        try {
+            const result = await this.client.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                key,
+                expectedValue
+            );
+            return result === 1;
+        } catch (err) {
+            return false;
+        }
+    }
+
     async expire(key: string, seconds: number): Promise<boolean> {
         if (!this.isConnected || !this.client) return false;
         try {

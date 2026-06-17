@@ -4,6 +4,7 @@ import { redis } from '../lib/redis';
 import { AnalysisService } from '../services/analysis-service';
 import { SnaptradeService } from '../services/snaptrade-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
+import { TradeRedisService } from '../services/trade-redis-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
@@ -509,9 +510,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       fastify.log.error({ err }, 'Failed to trigger immediate sync');
     }
 
-    // Invalidate cache
-    await redis.del(`USER_POSITIONS:${userId}`);
-    await redis.del(`USER_STATS:${userId}`);
+    await TradeRedisService.invalidateUser(userId);
 
     return reply.code(201).send(newPosition);
   });
@@ -634,12 +633,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             }
           );
           await client.query('COMMIT');
-          await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
           return updatedPosition;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual SnapTrade exit failed');
           await client.query('COMMIT');
-          await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
           return reply.code(400).send({ error: err.message || 'Failed to submit SnapTrade close order' });
         }
       }
@@ -686,12 +685,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             }
           );
           await client.query('COMMIT');
-          await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
           return updatedPosition;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Alpaca paper exit failed');
           await client.query('COMMIT');
-          await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
           return reply.code(400).send({ error: err.message || 'Failed to submit Alpaca paper close order' });
         }
       }
@@ -747,8 +746,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       // COMMIT
       await client.query('COMMIT');
 
-      // Invalidate cache
-      await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+      await TradeRedisService.invalidateUser(userId);
 
       return resultPosition;
 
@@ -826,8 +824,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
         fastify.log.error({ err }, 'Failed to trigger immediate sync on reopen');
       }
 
-      // Invalidate cache
-      await redis.set(`USER_POSITIONS:${userId}`, '', 1);
+      await TradeRedisService.invalidateUser(userId);
 
       return rows[0];
 

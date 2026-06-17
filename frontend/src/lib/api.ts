@@ -778,6 +778,8 @@ export const api = {
       lastWatchdogResult?: any;
       lastError: string | null;
       intervalSeconds: number;
+      redisRehydratedAt?: string | null;
+      redisRehydratedUsers?: number;
     };
     generatedAt: string;
   }> {

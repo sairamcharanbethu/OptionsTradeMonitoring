@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { Snaptrade } from 'snaptrade-typescript-sdk';
 import { redis } from '../lib/redis';
 import crypto from 'crypto';
+import { TradeRedisService } from './trade-redis-service';
 
 export class SnaptradeService {
     private fastify: FastifyInstance;
@@ -537,6 +538,12 @@ export class SnaptradeService {
     }
 
     async syncPendingBrokerOrders(userId: number) {
+        const brokerSyncLock = await TradeRedisService.acquireLock(TradeRedisService.keys.brokerSyncLock(userId), 20);
+        if (!brokerSyncLock.acquired) {
+            throw new Error('Broker order reconciliation is already running for this user.');
+        }
+
+        try {
         const pendingRes = await this.fastify.pg.query(
             `SELECT *
              FROM positions
@@ -565,7 +572,10 @@ export class SnaptradeService {
             orders: [] as Array<{ positionId: number; status: string; action: string; brokerOrderId: string | null; brokerTradeId: string | null; fillPrice?: number }>
         };
 
-        if (pendingPositions.length === 0) return summary;
+        if (pendingPositions.length === 0) {
+            await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId);
+            return summary;
+        }
 
         const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
         const takeProfitPct = await this.getTakeProfitPct(userId);
@@ -848,7 +858,14 @@ export class SnaptradeService {
             }
         }
 
+        if (summary.unmatched > 0 || summary.checked > 0) {
+            await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId);
+        }
+
         return summary;
+        } finally {
+            await TradeRedisService.releaseLock(brokerSyncLock);
+        }
     }
 
     private async syncSignalExecutionFromOrder(

@@ -435,6 +435,7 @@ const start = async () => {
     const snaptradeOrderSync = new SnaptradeService(fastify);
     const { OrderWatchdogService } = await import('./services/order-watchdog-service');
     const orderWatchdog = new OrderWatchdogService(fastify);
+    const { TradeRedisService } = await import('./services/trade-redis-service');
     const snaptradePendingOrderSyncHealth = {
       status: 'IDLE',
       running: false,
@@ -442,8 +443,31 @@ const start = async () => {
       lastResult: null as any,
       lastWatchdogResult: null as any,
       lastError: null as string | null,
-      intervalSeconds: Number(process.env.SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS || 15)
+      intervalSeconds: Number(process.env.SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS || 15),
+      redisRehydratedAt: null as string | null,
+      redisRehydratedUsers: 0
     };
+
+    const hydrateTradeRedisReadModels = async () => {
+      const { rows } = await fastify.pg.query(
+        `SELECT DISTINCT user_id
+         FROM positions
+         WHERE execution_broker = 'wealthsimple_snaptrade'
+           AND status IN ('PENDING_ORDER', 'OPEN')`
+      );
+      for (const row of rows) {
+        await TradeRedisService.rebuildOpenTrades(fastify.pg, Number(row.user_id));
+      }
+      snaptradePendingOrderSyncHealth.redisRehydratedAt = new Date().toISOString();
+      snaptradePendingOrderSyncHealth.redisRehydratedUsers = rows.length;
+      if (rows.length > 0) {
+        fastify.log.info(`[TradeRedis] Rehydrated active trade read models for ${rows.length} user(s).`);
+      }
+    };
+
+    hydrateTradeRedisReadModels().catch((err: any) => {
+      fastify.log.warn(`[TradeRedis] Startup rehydration failed: ${err.message}`);
+    });
 
     const runSnaptradePendingOrderSync = async () => {
       if (snaptradePendingOrderSyncHealth.running) return;

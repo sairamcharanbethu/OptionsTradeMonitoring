@@ -76,8 +76,15 @@ export async function snaptradeRoutes(fastify: FastifyInstance, options: Fastify
     }
   }, async (request, reply) => {
     const { id: userId } = (request as any).user;
-    const result = await snaptradeService.syncPendingBrokerOrders(userId);
-    return result;
+    try {
+      const result = await snaptradeService.syncPendingBrokerOrders(userId);
+      return result;
+    } catch (err: any) {
+      if (String(err.message || '').includes('already running')) {
+        return reply.code(409).send({ error: err.message });
+      }
+      throw err;
+    }
   });
 
   // POST /dev/place-option-order

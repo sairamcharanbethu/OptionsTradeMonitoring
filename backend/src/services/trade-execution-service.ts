@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
 import { SnaptradeService } from './snaptrade-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { TradeRedisService } from './trade-redis-service';
 
 type ExecutionBroker = 'none' | 'alpaca_paper' | 'wealthsimple_snaptrade' | 'simulated';
 
@@ -77,6 +78,23 @@ export class TradeExecutionService {
       return { success: false, skipped: true, broker, message };
     }
 
+    const entryLockKey = TradeRedisService.keys.entryLock(
+      input.userId,
+      TradeRedisService.contractKey({
+        symbol: input.symbol,
+        optionType: input.winningSide,
+        strike: input.chosenStrike,
+        expiration: input.chosenExpiry
+      })
+    );
+    const entryLock = await TradeRedisService.acquireLock(entryLockKey);
+    if (!entryLock.acquired) {
+      const message = `Skipped duplicate entry: ${this.contractLabel(input)} already has an entry request in progress`;
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      return { success: false, skipped: true, broker, message };
+    }
+
+    try {
     if (broker === 'wealthsimple_snaptrade') {
       try {
         const snaptradeService = new SnaptradeService(this.fastify);
@@ -122,6 +140,9 @@ export class TradeExecutionService {
     }
 
     return this.createSimulatedPosition(input, quantity, 'Unknown execution broker');
+    } finally {
+      await TradeRedisService.releaseLock(entryLock);
+    }
   }
 
   public async getDailyTradeUsage(userId: number, settingsOverride?: ExecutionSettings) {
@@ -733,6 +754,7 @@ export class TradeExecutionService {
   private async invalidateUserCaches(userId: number) {
     await redis.del(`USER_POSITIONS:${userId}`);
     await redis.del(`USER_STATS:${userId}`);
+    await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId);
   }
 
   private scheduleSnapTradePendingSync(userId: number) {
