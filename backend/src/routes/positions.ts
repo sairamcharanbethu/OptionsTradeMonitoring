@@ -540,13 +540,34 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       response: {
         200: positionResponseSchema,
         400: errorSchema,
-        404: errorSchema
+        404: errorSchema,
+        409: errorSchema
       }
     }
   }, async (request, reply) => {
     const { id: userId } = (request as any).user;
     const { id } = request.params as { id: string };
     const body = request.body as { price?: number, quantity?: number } | undefined;
+
+    const { rows: precheckRows } = await fastify.pg.query(
+      `SELECT status, is_simulated, execution_broker
+       FROM positions
+       WHERE id = $1
+         AND user_id = $2`,
+      [id, userId]
+    );
+    const precheckPosition = precheckRows[0];
+    if (precheckPosition?.status === 'OPEN'
+      && !precheckPosition.is_simulated
+      && String(precheckPosition.execution_broker || '') === 'wealthsimple_snaptrade') {
+      try {
+        const snaptradeService = new SnaptradeService(fastify);
+        await snaptradeService.syncPendingBrokerOrders(userId);
+      } catch (err: any) {
+        fastify.log.warn(`[PositionsClose] Wealthsimple status check failed before close for position ${id}: ${err.message}`);
+        return reply.code(409).send({ error: 'Could not verify latest Wealthsimple order status before submitting another close. Try again after sync completes.' });
+      }
+    }
 
     const client = await fastify.pg.connect();
     try {

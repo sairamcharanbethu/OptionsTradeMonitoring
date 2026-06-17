@@ -87,6 +87,7 @@ interface ServiceHealthState {
     lastScanAt?: string | null;
     lastSkippedReason?: string | null;
     intervalSeconds?: number;
+    signalSourceUserId?: number;
   };
   generatedAt: string;
 }

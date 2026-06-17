@@ -742,6 +742,7 @@ export const api = {
       lastScanAt?: string | null;
       lastSkippedReason?: string | null;
       intervalSeconds?: number;
+      signalSourceUserId?: number;
     };
     generatedAt: string;
   }> {
@@ -807,7 +808,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ status })
     });
-    if (!res.ok) throw new Error('Failed to update signal status');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update signal status');
+    }
     return res.json();
   },
 
