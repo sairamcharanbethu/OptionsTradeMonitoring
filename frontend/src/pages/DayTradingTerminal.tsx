@@ -317,7 +317,6 @@ export default function DayTradingTerminal() {
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterGrade, setFilterGrade] = useState<string>('ALL');
   const [countdown, setCountdown] = useState(300);
-  const [showChart, setShowChart] = useState(true);
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
   const [healthData, setHealthData] = useState<ApiHealthState>({
@@ -1102,54 +1101,6 @@ export default function DayTradingTerminal() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* TradingView Chart Embed - Horizontal Full Width */}
-      <div className="motion-panel border border-emerald-500/20 rounded bg-zinc-900/30 overflow-hidden flex flex-col">
-        <div className="p-2.5 px-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
-          <div className="flex items-center gap-2 min-w-0">
-            <Activity className="h-4 w-4 text-emerald-400 animate-pulse shrink-0" />
-            <div className="min-w-0">
-              <span className="block text-xs font-bold text-emerald-300">
-                Live chart · {selectedSymbol === 'BOTH' ? 'QQQ and SPY' : selectedSymbol}
-              </span>
-              <span className="block text-[9px] text-zinc-500 truncate">5m candles with EMA9, EMA21, and VWAP</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowChart(!showChart)}
-              className="motion-press text-[9px] font-bold border border-emerald-500/35 text-emerald-400 hover:bg-emerald-950/20 px-2 py-0.5 rounded bg-zinc-950/40 transition-colors font-mono"
-            >
-              {showChart ? 'Collapse' : 'Expand'}
-            </button>
-            <Badge variant="outline" className="text-[9px] border-emerald-500/20 text-emerald-400 font-semibold font-mono">
-              Real-time
-            </Badge>
-          </div>
-        </div>
-        {showChart && (
-          <div className={`w-full ${selectedSymbol === 'BOTH' ? 'h-[300px] sm:h-[360px] lg:h-[420px] grid grid-cols-1 md:grid-cols-2 gap-2 p-2 bg-zinc-950' : 'h-[300px] sm:h-[360px] lg:h-[420px] bg-zinc-950'} animate-in fade-in slide-in-from-top-1 duration-200`}>
-            {(selectedSymbol === 'BOTH' || selectedSymbol === 'QQQ') && (
-              <iframe
-                title="TradingView Real-Time Chart QQQ"
-                src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart_qqq&symbol=NASDAQ:QQQ&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%22STD%3BEMA%22%2C%22STD%3BVWAP%22%5D&theme=dark&style=1&timezone=America%2FNew_York"
-                width="100%"
-                height="100%"
-                style={{ border: 'none' }}
-              />
-            )}
-            {(selectedSymbol === 'BOTH' || selectedSymbol === 'SPY') && (
-              <iframe
-                title="TradingView Real-Time Chart SPY"
-                src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart_spy&symbol=AMEX:SPY&interval=5&hidesidetoolbar=1&symboledit=1&saveimage=1&toolbarbg=18181b&studies=%5B%22STD%3BEMA%22%2C%22STD%3BVWAP%22%5D&theme=dark&style=1&timezone=America%2FNew_York"
-                width="100%"
-                height="100%"
-                style={{ border: 'none' }}
-              />
-            )}
-          </div>
-        )}
       </div>
 
       {/* Row 3: Signals Process Table + Detailed Inspector */}
