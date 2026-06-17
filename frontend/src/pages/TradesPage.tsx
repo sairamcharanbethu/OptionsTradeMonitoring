@@ -117,6 +117,42 @@ const isBreakevenStop = (trade: Position) =>
 const activeOrderId = (trade: Position) =>
   trade.broker_exit_order_id || trade.profit_trim_order_id || trade.broker_order_id || '-';
 
+type ClosedTradeRange = 'today' | 'past-day' | 'past-week' | 'past-month' | 'past-6-months' | 'past-year' | 'ytd';
+
+const CLOSED_TRADE_RANGES: Array<{ value: ClosedTradeRange; label: string }> = [
+  { value: 'today', label: 'Today' },
+  { value: 'past-day', label: 'Past day' },
+  { value: 'past-week', label: 'Past 1 week' },
+  { value: 'past-month', label: 'Past month' },
+  { value: 'past-6-months', label: 'Past 6 months' },
+  { value: 'past-year', label: 'Past 1 year' },
+  { value: 'ytd', label: 'YTD' },
+];
+
+const formatLocalDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const closedTradeDateRange = (range: ClosedTradeRange) => {
+  const today = new Date();
+  const from = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  if (range === 'past-day') from.setDate(from.getDate() - 1);
+  if (range === 'past-week') from.setDate(from.getDate() - 7);
+  if (range === 'past-month') from.setMonth(from.getMonth() - 1);
+  if (range === 'past-6-months') from.setMonth(from.getMonth() - 6);
+  if (range === 'past-year') from.setFullYear(from.getFullYear() - 1);
+  if (range === 'ytd') from.setMonth(0, 1);
+
+  return {
+    from: formatLocalDate(from),
+    to: formatLocalDate(today),
+  };
+};
+
 function SummaryTile({ label, value, tone }: { label: string; value: string; tone?: 'green' | 'red' }) {
   return (
     <div className="rounded-md border border-border/70 bg-card/80 px-4 py-3">
@@ -139,8 +175,7 @@ export default function TradesPage() {
   const [syncingTradeId, setSyncingTradeId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({
-    from: '',
-    to: '',
+    range: 'today' as ClosedTradeRange,
     symbol: '',
     result: 'all' as 'all' | 'win' | 'loss',
   });
@@ -164,9 +199,12 @@ export default function TradesPage() {
 
   const refreshClosed = async () => {
     setError(null);
+    setLoadingClosed(true);
+    const dateRange = closedTradeDateRange(filters.range);
     const data = await api.getClosedTrades({
-      ...filters,
+      ...dateRange,
       symbol: filters.symbol.trim().toUpperCase(),
+      result: filters.result,
       limit: 50
     });
     setClosedData(data);
@@ -189,7 +227,7 @@ export default function TradesPage() {
       setError(err.message);
       setLoadingClosed(false);
     });
-  }, [filters.result]);
+  }, [filters.range, filters.result]);
 
   const openSummary = useMemo(() => {
     const activeTrades = openTrades.filter((trade) => trade.status === 'OPEN' && !isWorkingOrder(trade));
@@ -404,14 +442,17 @@ export default function TradesPage() {
         </TabsContent>
 
         <TabsContent value="closed" className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-5">
+          <div className="grid gap-3 md:grid-cols-4">
             <div>
-              <Label className="text-xs">From</Label>
-              <Input type="date" value={filters.from} onChange={(e) => setFilters({ ...filters, from: e.target.value })} />
-            </div>
-            <div>
-              <Label className="text-xs">To</Label>
-              <Input type="date" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
+              <Label className="text-xs">Range</Label>
+              <Select value={filters.range} onValueChange={(value: ClosedTradeRange) => setFilters({ ...filters, range: value })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CLOSED_TRADE_RANGES.map((range) => (
+                    <SelectItem key={range.value} value={range.value}>{range.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label className="text-xs">Symbol</Label>
