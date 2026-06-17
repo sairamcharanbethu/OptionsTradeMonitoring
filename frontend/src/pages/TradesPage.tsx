@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, BadgeDollarSign, Clock, RefreshCw, Search, ShieldCheck, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, ClosedTradesResponse, Position } from '../lib/api';
+import { useWebSocket } from '../hooks/useWebSocket';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
@@ -170,6 +171,7 @@ function SummaryTile({ label, value, tone }: { label: string; value: string; ton
 }
 
 export default function TradesPage() {
+  const { lastMessage } = useWebSocket();
   const [openTrades, setOpenTrades] = useState<Position[]>([]);
   const [closedData, setClosedData] = useState<ClosedTradesResponse | null>(null);
   const [loadingOpen, setLoadingOpen] = useState(true);
@@ -245,6 +247,11 @@ export default function TradesPage() {
       setLoadingClosed(false);
     });
   }, [filters.range, filters.result]);
+
+  useEffect(() => {
+    if (lastMessage?.type !== 'TRADES_UPDATED') return;
+    refreshOpen(false).catch((err) => setError(err.message));
+  }, [lastMessage]);
 
   const openSummary = useMemo(() => {
     const activeTrades = openTrades.filter((trade) => trade.status === 'OPEN' && !isWorkingOrder(trade));

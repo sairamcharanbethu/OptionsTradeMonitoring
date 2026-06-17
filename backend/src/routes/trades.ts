@@ -94,7 +94,56 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     const { id: userId } = (request as any).user;
     const cached = await TradeRedisService.getOpenTrades(userId);
     if (cached) return cached;
-    return TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+    return TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
+  });
+
+  fastify.get('/open/runtime', {
+    schema: {
+      tags: ['Trades'],
+      summary: 'Get Redis-backed open Wealthsimple trades with freshness metadata',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request) => {
+    const { id: userId } = (request as any).user;
+    const cached = await TradeRedisService.getOpenTradesReadModel(userId);
+    if (cached) return cached;
+    const data = await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
+    return {
+      generatedAt: new Date().toISOString(),
+      source: 'db',
+      ageMs: 0,
+      data
+    };
+  });
+
+  fastify.get('/:id/runtime', {
+    schema: {
+      tags: ['Trades'],
+      summary: 'Get one Redis-backed Wealthsimple trade state',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const cached = await TradeRedisService.getTradeState(id);
+    if (cached?.data && Number(cached.data.user_id) === Number(userId)) return cached;
+
+    const { rows } = await fastify.pg.query(
+      `SELECT *
+       FROM positions
+       WHERE id = $1
+         AND user_id = $2
+         AND execution_broker = 'wealthsimple_snaptrade'`,
+      [id, userId]
+    );
+    if (!rows[0]) return reply.code(404).send({ error: 'Wealthsimple trade not found' });
+    await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
+    return {
+      generatedAt: new Date().toISOString(),
+      source: 'db',
+      ageMs: 0,
+      data: rows[0]
+    };
   });
 
   fastify.get('/closed', {
@@ -288,13 +337,28 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             }
           );
 
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'EXIT_REQUESTED',
+            message: 'Manual Wealthsimple close submitted',
+            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQuantity, orderType: 'MARKET' }
+          });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
+          await TradeRedisService.requestBrokerSync(userId);
           return updatedTrade;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Wealthsimple exit failed');
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'EXIT_SUBMISSION_FAILED',
+            message: err.message || String(err),
+            metadata: { source: 'manual-close' }
+          });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
           return reply.code(400).send({ error: err.message || 'Failed to submit Wealthsimple close order' });
         }
       } catch (err) {
@@ -353,7 +417,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       : null;
 
     await TradeLifecycleService.markBrokerSynced(fastify.pg, id, brokerStatus || null);
-    await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+    await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
 
     const { rows } = await fastify.pg.query(
       `SELECT *
@@ -483,13 +547,28 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             }
           );
 
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'EXIT_RETRY_REQUESTED',
+            message: 'Retry Wealthsimple close submitted',
+            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQuantity, brokerStatus }
+          });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
+          await TradeRedisService.requestBrokerSync(userId);
           return updatedTrade;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Retry Wealthsimple exit failed');
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'EXIT_RETRY_FAILED',
+            message: err.message || String(err),
+            metadata: { brokerStatus }
+          });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
           return reply.code(400).send({ error: err.message || 'Failed to retry Wealthsimple close order' });
         }
       } catch (err) {

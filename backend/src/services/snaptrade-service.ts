@@ -573,7 +573,7 @@ export class SnaptradeService {
         };
 
         if (pendingPositions.length === 0) {
-            await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId);
+            await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId, this.fastify);
             return summary;
         }
 
@@ -697,6 +697,13 @@ export class SnaptradeService {
                                 [filledQty, status, fillPrice, realizedPnl, ` [SnapTrade profit trim fill confirmed: sold ${filledQty}/${currentQty} @ $${fillPrice}]`, position.id]
                             );
                             summary.trimmed += 1;
+                            await TradeRedisService.recordEvent(this.fastify.pg, {
+                                userId,
+                                positionId: position.id,
+                                eventType: 'PROFIT_TRIM_CONFIRMED',
+                                message: `SnapTrade trim fill confirmed at $${fillPrice}`,
+                                metadata: { status, filledQty, currentQty, fillPrice }
+                            });
                         } else {
                             await this.fastify.pg.query(
                                 `UPDATE positions
@@ -713,6 +720,13 @@ export class SnaptradeService {
                                 [status, fillPrice, realizedPnl, ` [SnapTrade exit fill confirmed: ${status}]`, position.id]
                             );
                             summary.closed += 1;
+                            await TradeRedisService.recordEvent(this.fastify.pg, {
+                                userId,
+                                positionId: position.id,
+                                eventType: 'POSITION_CLOSED',
+                                message: `SnapTrade exit fill confirmed: ${status}`,
+                                metadata: { status, fillPrice, filledQty }
+                            });
                         }
                     } else {
                         const stopLoss = Number((fillPrice * 0.8).toFixed(2));
@@ -736,6 +750,13 @@ export class SnaptradeService {
                         );
                         summary.opened += 1;
                         await this.syncSignalExecutionFromOrder(position, 'EXECUTED', status);
+                        await TradeRedisService.recordEvent(this.fastify.pg, {
+                            userId,
+                            positionId: position.id,
+                            eventType: 'ENTRY_FILLED',
+                            message: `SnapTrade entry fill confirmed: ${status}`,
+                            metadata: { status, fillPrice }
+                        });
                     }
                     summary.orders.push({
                         positionId: position.id,
@@ -757,6 +778,13 @@ export class SnaptradeService {
                             [`EXIT_${status}`, order?.rejection_reason || order?.reason || null, ` [SnapTrade exit order EXIT_${status}]`, position.id]
                         );
                         summary.stillPending += 1;
+                        await TradeRedisService.recordEvent(this.fastify.pg, {
+                            userId,
+                            positionId: position.id,
+                            eventType: 'EXIT_BROKER_TERMINAL',
+                            message: `SnapTrade exit order ${status}`,
+                            metadata: { status, reason: order?.rejection_reason || order?.reason || null }
+                        });
                     } else {
                         await this.fastify.pg.query(
                             `UPDATE positions
@@ -770,6 +798,13 @@ export class SnaptradeService {
                         );
                         summary.closed += 1;
                         await this.syncSignalExecutionFromOrder(position, 'CANCELLED', status, order?.rejection_reason || order?.reason || null);
+                        await TradeRedisService.recordEvent(this.fastify.pg, {
+                            userId,
+                            positionId: position.id,
+                            eventType: 'ENTRY_BROKER_TERMINAL',
+                            message: `SnapTrade entry order ${status}`,
+                            metadata: { status, reason: order?.rejection_reason || order?.reason || null }
+                        });
                     }
                     summary.orders.push({
                         positionId: position.id,
@@ -803,6 +838,13 @@ export class SnaptradeService {
                             action: 'exit_stale',
                             brokerOrderId: position.broker_exit_order_id,
                             brokerTradeId: position.broker_exit_trade_id
+                        });
+                        await TradeRedisService.recordEvent(this.fastify.pg, {
+                            userId,
+                            positionId: position.id,
+                            eventType: 'EXIT_STALE',
+                            message: `SnapTrade limit exit marked stale while broker status is ${status}`,
+                            metadata: { status, brokerOrderId: position.broker_exit_order_id }
                         });
                         continue;
                     }
@@ -859,7 +901,7 @@ export class SnaptradeService {
         }
 
         if (summary.unmatched > 0 || summary.checked > 0) {
-            await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId);
+            await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId, this.fastify);
         }
 
         return summary;

@@ -587,6 +587,7 @@ export class TradeExecutionService {
 
       await this.markSignalExecuted(input.userId, input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity, 'PENDING');
       await this.invalidateUserCaches(input.userId);
+      await TradeRedisService.requestBrokerSync(input.userId);
       this.scheduleSnapTradePendingSync(input.userId);
       return { success: true, broker: 'wealthsimple_snaptrade', orderId: result.orderId, tradeId: result.tradeId, quantity, executionStatus: 'PENDING' };
     } catch (err: any) {
@@ -754,7 +755,7 @@ export class TradeExecutionService {
   private async invalidateUserCaches(userId: number) {
     await redis.del(`USER_POSITIONS:${userId}`);
     await redis.del(`USER_STATS:${userId}`);
-    await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId);
+    await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId, this.fastify);
   }
 
   private scheduleSnapTradePendingSync(userId: number) {

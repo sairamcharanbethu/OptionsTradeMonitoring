@@ -121,6 +121,44 @@ class RedisClient {
             return false;
         }
     }
+
+    async incr(key: string, ttlSeconds?: number): Promise<number | null> {
+        if (!this.isConnected || !this.client) return null;
+        try {
+            const value = await this.client.incr(key);
+            if (ttlSeconds && value === 1) await this.client.expire(key, ttlSeconds);
+            return value;
+        } catch (err) {
+            return null;
+        }
+    }
+
+    async lpush(key: string, value: string): Promise<void> {
+        if (!this.isConnected || !this.client) return;
+        try {
+            await this.client.lpush(key, value);
+        } catch (err) {
+            // Ignore
+        }
+    }
+
+    async rpop(key: string): Promise<string | null> {
+        if (!this.isConnected || !this.client) return null;
+        try {
+            return await this.client.rpop(key);
+        } catch (err) {
+            return null;
+        }
+    }
+
+    async llen(key: string): Promise<number | null> {
+        if (!this.isConnected || !this.client) return null;
+        try {
+            return await this.client.llen(key);
+        } catch (err) {
+            return null;
+        }
+    }
 }
 
 export const redis = new RedisClient();

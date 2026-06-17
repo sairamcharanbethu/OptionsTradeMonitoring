@@ -83,6 +83,13 @@ export interface TradeUsageResponse {
   remaining: number;
 }
 
+export interface TradeRuntimeResponse<T> {
+  generatedAt: string;
+  source: 'redis' | 'db';
+  ageMs: number;
+  data: T;
+}
+
 const API_BASE = '/api';
 
 const getToken = () => localStorage.getItem('token');
@@ -269,6 +276,20 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch open Wealthsimple trades');
     const data = await res.json();
     return data.map(normalizePosition);
+  },
+
+  async getOpenTradesRuntime(): Promise<TradeRuntimeResponse<Position[]>> {
+    const res = await authFetch(`${API_BASE}/trades/open/runtime?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch open Wealthsimple trade runtime state');
+    const data = await res.json();
+    return { ...data, data: data.data.map(normalizePosition) };
+  },
+
+  async getTradeRuntime(id: number): Promise<TradeRuntimeResponse<Position>> {
+    const res = await authFetch(`${API_BASE}/trades/${id}/runtime?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch Wealthsimple trade runtime state');
+    const data = await res.json();
+    return { ...data, data: normalizePosition(data.data) };
   },
 
   async getTradeUsage(): Promise<TradeUsageResponse> {
@@ -780,6 +801,14 @@ export const api = {
       intervalSeconds: number;
       redisRehydratedAt?: string | null;
       redisRehydratedUsers?: number;
+      queuedSyncLastRunAt?: string | null;
+      queuedSyncProcessed?: number;
+    };
+    tradeRedis?: {
+      status: string;
+      connected: boolean;
+      queueDepth: number | null;
+      metrics: Record<string, number>;
     };
     generatedAt: string;
   }> {

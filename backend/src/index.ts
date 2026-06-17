@@ -153,6 +153,18 @@ const ensureSchema = async (instance: any) => {
       );
     `);
 
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS trade_events (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        position_id INTEGER,
+        event_type VARCHAR(80) NOT NULL,
+        message TEXT,
+        metadata JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
     // 3. Ensure all extra columns are added to positions table
     const columns = [
       { name: 'delta', type: 'DECIMAL(10, 4)' },
@@ -198,6 +210,47 @@ const ensureSchema = async (instance: any) => {
       await instance.pg.query(`
         ALTER TABLE positions ADD COLUMN IF NOT EXISTS ${col.name} ${col.type};
       `);
+    }
+
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_positions_broker_pending
+        ON positions (user_id, execution_broker, status, execution_status, updated_at DESC);
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_trade_events_position_created
+        ON trade_events (position_id, created_at DESC);
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_trade_events_user_created
+        ON trade_events (user_id, created_at DESC);
+    `);
+    try {
+      await instance.pg.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_contract_per_user
+          ON positions (user_id, symbol, option_type, strike_price, expiration_date)
+          WHERE status IN ('OPEN', 'PENDING_ORDER');
+      `);
+    } catch (err: any) {
+      instance.log.warn(`[Database] Active-contract unique index skipped: ${err.message}`);
+    }
+    try {
+      await instance.pg.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = 'chk_positions_exit_retry_count'
+          ) THEN
+            ALTER TABLE positions
+              ADD CONSTRAINT chk_positions_exit_retry_count
+              CHECK (exit_retry_count IS NULL OR (exit_retry_count >= 0 AND exit_retry_count <= 5))
+              NOT VALID;
+          END IF;
+        END $$;
+      `);
+    } catch (err: any) {
+      instance.log.warn(`[Database] Exit retry check constraint skipped: ${err.message}`);
     }
 
     instance.log.info('[Database] Schema verification completed successfully.');
@@ -445,7 +498,9 @@ const start = async () => {
       lastError: null as string | null,
       intervalSeconds: Number(process.env.SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS || 15),
       redisRehydratedAt: null as string | null,
-      redisRehydratedUsers: 0
+      redisRehydratedUsers: 0,
+      queuedSyncLastRunAt: null as string | null,
+      queuedSyncProcessed: 0
     };
 
     const hydrateTradeRedisReadModels = async () => {
@@ -456,7 +511,7 @@ const start = async () => {
            AND status IN ('PENDING_ORDER', 'OPEN')`
       );
       for (const row of rows) {
-        await TradeRedisService.rebuildOpenTrades(fastify.pg, Number(row.user_id));
+        await TradeRedisService.rebuildOpenTrades(fastify.pg, Number(row.user_id), fastify);
       }
       snaptradePendingOrderSyncHealth.redisRehydratedAt = new Date().toISOString();
       snaptradePendingOrderSyncHealth.redisRehydratedUsers = rows.length;
@@ -493,6 +548,27 @@ const start = async () => {
       }
     };
 
+    const runQueuedBrokerSync = async () => {
+      let processed = 0;
+      for (let i = 0; i < 10; i += 1) {
+        const queuedUserId = await TradeRedisService.popBrokerSyncRequest();
+        if (!queuedUserId) break;
+        try {
+          await snaptradeOrderSync.syncPendingBrokerOrders(queuedUserId);
+          processed += 1;
+        } catch (err: any) {
+          fastify.log.warn(`[BrokerSyncQueue] Failed queued sync for user ${queuedUserId}: ${err.message}`);
+          if (!String(err.message || '').includes('already running')) {
+            await TradeRedisService.requestBrokerSync(queuedUserId);
+          }
+        }
+      }
+      if (processed > 0) {
+        snaptradePendingOrderSyncHealth.queuedSyncLastRunAt = new Date().toISOString();
+        snaptradePendingOrderSyncHealth.queuedSyncProcessed += processed;
+      }
+    };
+
     // Broadcast real-time quotes to all connected frontend clients
     const handleStreamQuote = async (quote: any) => {
       // Enrich with Symbol if missing
@@ -521,6 +597,7 @@ const start = async () => {
       const questradeHealth = streamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
       const scannerHealth = await scanner.getRuntimeStatus();
+      const tradeRedisHealth = await TradeRedisService.getHealth();
 
       return {
         liveExitMonitor: liveExitHealth,
@@ -534,6 +611,7 @@ const start = async () => {
         },
         scanner: scannerHealth,
         snaptradePendingOrders: snaptradePendingOrderSyncHealth,
+        tradeRedis: tradeRedisHealth,
         generatedAt: new Date().toISOString()
       };
     });
@@ -632,6 +710,7 @@ const start = async () => {
     // Start background services
     poller.start();
     scanner.start();
+    setInterval(runQueuedBrokerSync, 3000);
     setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000);
     runSnaptradePendingOrderSync().catch((err: any) => {
       fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);

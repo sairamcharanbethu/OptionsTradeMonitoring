@@ -632,13 +632,28 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
               note: ` [Manual SnapTrade MARKET exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
             }
           );
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'EXIT_REQUESTED',
+            message: 'Manual SnapTrade close submitted',
+            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQty, orderType: 'MARKET' }
+          });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
+          await TradeRedisService.requestBrokerSync(userId);
           return updatedPosition;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual SnapTrade exit failed');
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'EXIT_SUBMISSION_FAILED',
+            message: err.message || String(err),
+            metadata: { source: 'positions-close-snaptrade' }
+          });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
           return reply.code(400).send({ error: err.message || 'Failed to submit SnapTrade close order' });
         }
       }
@@ -684,13 +699,27 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
               note: ` [Manual Alpaca paper MARKET exit submitted for ${closeQty} contract(s)${orderData.id ? `: ${orderData.id}` : ''}]`
             }
           );
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'EXIT_REQUESTED',
+            message: 'Manual Alpaca paper close submitted',
+            metadata: { orderId: orderData.id || null, quantity: closeQty, orderType: 'MARKET' }
+          });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
           return updatedPosition;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Alpaca paper exit failed');
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'EXIT_SUBMISSION_FAILED',
+            message: err.message || String(err),
+            metadata: { source: 'positions-close-alpaca-paper' }
+          });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId);
+          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
           return reply.code(400).send({ error: err.message || 'Failed to submit Alpaca paper close order' });
         }
       }
