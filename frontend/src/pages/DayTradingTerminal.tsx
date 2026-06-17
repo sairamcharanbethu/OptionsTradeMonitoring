@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, useTradeUsage, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { api, Signal, ScannerLog } from '@/lib/api';
@@ -22,7 +23,6 @@ import {
   Sparkles,
   Zap,
   CheckCircle,
-  Heart,
   Loader2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -89,6 +89,16 @@ interface ServiceHealthState {
     intervalSeconds?: number;
     signalSourceUserId?: number;
   };
+  snaptradePendingOrders?: {
+    status: string;
+    running: boolean;
+    lastError: string | null;
+  };
+  tradeRedis?: {
+    status: string;
+    connected: boolean;
+    queueDepth: number | null;
+  };
   generatedAt: string;
 }
 
@@ -130,6 +140,60 @@ const formatRelativeTime = (timestamp?: string | null) => {
   const diffSeconds = Math.max(0, Math.round((Date.now() - new Date(timestamp).getTime()) / 1000));
   if (diffSeconds < 60) return `${diffSeconds}s ago`;
   return `${Math.round(diffSeconds / 60)}m ago`;
+};
+
+const getSystemHealthSummary = (apiHealth: ApiHealthState, services: ServiceHealthState, websocketConnected: boolean, loading: boolean) => {
+  if (loading) {
+    return {
+      label: 'Checking Systems',
+      detail: 'Refreshing service status',
+      tone: 'border-zinc-700 bg-zinc-950/50 text-zinc-300',
+      dot: 'text-zinc-400'
+    };
+  }
+
+  const issues: string[] = [];
+  const warnings: string[] = [];
+
+  Object.entries(apiHealth).forEach(([name, value]) => {
+    if (value?.status && value.status !== 'N/A' && value.status !== 'UP') issues.push(`${name} ${value.status}`);
+  });
+
+  if (['DOWN', 'ERROR', 'FAILED'].includes(String(services.liveExitMonitor.status || '').toUpperCase())) {
+    issues.push(`live exit ${services.liveExitMonitor.status}`);
+  } else if (String(services.liveExitMonitor.status || '').toUpperCase() === 'DEGRADED') {
+    warnings.push('live exit degraded');
+  }
+  if (services.liveExitMonitor.lastError) issues.push('live exit error');
+  if (!services.poller.running) warnings.push('poller off');
+  if (services.snaptradePendingOrders?.lastError) issues.push('broker sync error');
+  if (services.tradeRedis?.status === 'DEGRADED') warnings.push('Redis degraded');
+  if (!websocketConnected) warnings.push('browser stream disconnected');
+
+  if (issues.length > 0) {
+    return {
+      label: 'System Degraded',
+      detail: issues.slice(0, 2).join(', '),
+      tone: 'border-red-500/30 bg-red-950/20 text-red-300',
+      dot: 'text-red-400 animate-pulse'
+    };
+  }
+
+  if (warnings.length > 0) {
+    return {
+      label: 'System Warning',
+      detail: warnings.slice(0, 2).join(', '),
+      tone: 'border-amber-500/30 bg-amber-950/20 text-amber-300',
+      dot: 'text-amber-400 animate-pulse'
+    };
+  }
+
+  return {
+    label: 'All Systems Normal',
+    detail: 'System OK',
+    tone: 'border-emerald-500/25 bg-emerald-950/25 text-emerald-300',
+    dot: 'text-green-400 animate-pulse'
+  };
 };
 
 const renderTokenUsageBadge = (usage: any) => {
@@ -285,6 +349,7 @@ export default function DayTradingTerminal() {
   const scannerWindowLabel = serviceHealth.scanner.window
     ? `${serviceHealth.scanner.window.start}-${serviceHealth.scanner.window.cutoff} ET`
     : '09:30-16:00 ET';
+  const systemHealthSummary = getSystemHealthSummary(healthData, serviceHealth, isConnected, healthLoading);
 
   // Fetch Health on mount and on refresh
   const fetchHealth = async () => {
@@ -757,111 +822,22 @@ export default function DayTradingTerminal() {
           </div>
         </div>
 
-        {/* Widget 3: Real-Time API Health Panel */}
-        <div className="motion-panel p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
-          <div className="flex justify-between items-center mb-1.5">
-            <span className="text-[9px] text-emerald-500/70 block uppercase tracking-wider font-semibold">INTEGRATION HEALTH STATUS</span>
-            {healthLoading ? (
-              <Loader2 className="h-3 w-3 animate-spin text-emerald-500" />
-            ) : (
-              <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400 font-mono">Normal</Badge>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-1 text-[9px] font-mono justify-between">
-            {healthData.yahooFinance.status !== 'N/A' && (
-              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Yahoo Finance">
-                <span className={healthData.yahooFinance.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
-                <span className="text-zinc-500 font-bold">YF</span>
-                <span className="text-zinc-300">{healthData.yahooFinance.latencyMs}ms</span>
+        {/* Widget 3: Aggregate system health */}
+        <div className={`motion-panel p-3 border rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px] ${systemHealthSummary.tone}`}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <span className="text-[9px] block uppercase tracking-wider font-semibold opacity-80">SYSTEM HEALTH</span>
+              <div className="mt-1 flex items-center gap-2">
+                <span className={systemHealthSummary.dot}>●</span>
+                <span className="text-sm font-extrabold tracking-wide">{systemHealthSummary.label}</span>
               </div>
-            )}
-            {healthData.sscgexPortal.status !== 'N/A' && (
-              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="GEX Portal API">
-                <span className={healthData.sscgexPortal.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
-                <span className="text-zinc-500 font-bold">GEX</span>
-                <span className="text-zinc-300">{healthData.sscgexPortal.latencyMs}ms</span>
-              </div>
-            )}
-            {healthData.polygon.status !== 'N/A' && (
-              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Polygon API">
-                <span className={healthData.polygon.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
-                <span className="text-zinc-500 font-bold">POLY</span>
-                <span className="text-zinc-300">{healthData.polygon.latencyMs}ms</span>
-              </div>
-            )}
-            {healthData.openRouter.status !== 'N/A' && (
-              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="OpenRouter AI">
-                <span className={healthData.openRouter.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
-                <span className="text-zinc-500 font-bold">AI</span>
-                <span className="text-zinc-300">{healthData.openRouter.latencyMs}ms</span>
-              </div>
-            )}
-            {healthData.discord?.status !== 'N/A' && (
-              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Discord Webhook API">
-                <span className={healthData.discord?.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
-                <span className="text-zinc-500 font-bold">DISC</span>
-                <span className="text-zinc-300">{healthData.discord?.latencyMs ?? 0}ms</span>
-              </div>
-            )}
-            {healthData.alpaca?.status !== 'N/A' && (
-              <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Alpaca API">
-                <span className={healthData.alpaca?.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
-                <span className="text-zinc-500 font-bold">ALPA</span>
-                <span className="text-zinc-300">{healthData.alpaca?.latencyMs ?? 0}ms</span>
-              </div>
-            )}
-            <div className="px-1.5 py-0.5 border border-emerald-500/5 bg-zinc-950/40 rounded flex items-center gap-1" title="Real-Time Streaming WebSocket">
-              <span className={isConnected ? 'text-green-400 animate-pulse' : 'text-red-400 animate-pulse'}>●</span>
-              <span className="text-zinc-500 font-bold">STREAM</span>
-              <span className="text-zinc-300">{isConnected ? 'LIVE' : 'CONN...'}</span>
+              <div className="mt-1 truncate text-[10px] text-zinc-400">{systemHealthSummary.detail}</div>
             </div>
-          </div>
-        </div>
-
-        {/* Widget 4: Runtime service health */}
-        <div className="motion-panel p-3 border border-cyan-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
-          <div className="flex justify-between items-center mb-1.5">
-            <span className="text-[9px] text-cyan-300/80 block uppercase tracking-wider font-semibold">LIVE EXIT SERVICES</span>
-            <Badge
-              variant="outline"
-              className={`text-[8px] px-1 py-0.5 font-mono ${
-                serviceHealth.liveExitMonitor.status === 'UP'
-                  ? 'border-cyan-500/30 text-cyan-300'
-                  : serviceHealth.liveExitMonitor.status === 'DEGRADED'
-                    ? 'border-amber-500/40 text-amber-300'
-                    : 'border-red-500/40 text-red-300'
-              }`}
-            >
-              {serviceHealth.liveExitMonitor.provider.toUpperCase()}
-            </Badge>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[9px] font-mono">
-            <div className="px-1.5 py-1 border border-cyan-500/10 bg-zinc-950/40 rounded" title={serviceHealth.liveExitMonitor.lastError || 'Live exit monitor'}>
-              <div className="flex items-center gap-1">
-                <span className={serviceHealth.liveExitMonitor.status === 'UP' ? 'text-green-400 animate-pulse' : 'text-red-400'}>●</span>
-                <span className="text-zinc-500 font-bold">EXIT</span>
-              </div>
-              <div className="text-zinc-300">{serviceHealth.liveExitMonitor.matchedUpdates} matches</div>
-            </div>
-            <div className="px-1.5 py-1 border border-cyan-500/10 bg-zinc-950/40 rounded" title="Latest stream tick processed by live exit monitor">
-              <div className="text-zinc-500 font-bold">LAST TICK</div>
-              <div className="text-zinc-300">{formatRelativeTime(serviceHealth.liveExitMonitor.lastQuoteAt)}</div>
-            </div>
-            <div className="px-1.5 py-1 border border-cyan-500/10 bg-zinc-950/40 rounded" title="Active option stream subscriptions">
-              <div className="text-zinc-500 font-bold">SUBS</div>
-              <div className="text-zinc-300">
-                {serviceHealth.liveExitMonitor.provider === 'alpaca'
-                  ? serviceHealth.streams.alpaca.activeSubscriptions
-                  : serviceHealth.streams.questrade.activeSubscriptions}
-              </div>
-            </div>
-            <div className="px-1.5 py-1 border border-cyan-500/10 bg-zinc-950/40 rounded" title="Polling fallback remains available if stream misses ticks">
-              <div className="flex items-center gap-1">
-                <span className={serviceHealth.poller.running ? 'text-green-400' : 'text-red-400'}>●</span>
-                <span className="text-zinc-500 font-bold">FALLBACK</span>
-              </div>
-              <div className="text-zinc-300">{serviceHealth.poller.running ? 'poller on' : 'poller off'}</div>
-            </div>
+            <Button asChild variant="outline" size="sm" className="h-8 shrink-0 border-current bg-zinc-950/30 px-2 text-[10px]">
+              <Link to="/system-health">
+                Details
+              </Link>
+            </Button>
           </div>
         </div>
 

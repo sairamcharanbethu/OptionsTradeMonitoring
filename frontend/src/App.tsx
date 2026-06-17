@@ -6,10 +6,11 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Button } from './components/ui/button';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { FlaskConical, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
+import { Activity, FlaskConical, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 import PositionDetailsPage from './pages/PositionDetailsPage';
 import DevLiveExitTestPage from './pages/DevLiveExitTestPage';
 import TradesPage from './pages/TradesPage';
+import SystemHealthPage from './pages/SystemHealthPage';
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -77,6 +78,15 @@ function App() {
                   variant="ghost"
                   size="icon"
                   className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
+                  onClick={() => { window.location.href = '/system-health'; }}
+                  title="System Health"
+                >
+                  <Activity className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
                   onClick={() => { window.location.href = '/trades'; }}
                   title="Wealthsimple Trades"
                 >
@@ -99,6 +109,7 @@ function App() {
             <Routes>
               <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
               <Route path="/trades" element={<TradesPage />} />
+              <Route path="/system-health" element={<SystemHealthPage />} />
               <Route path="/positions/:id" element={<PositionDetailsPage />} />
               <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />
             </Routes>
