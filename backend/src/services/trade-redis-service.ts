@@ -15,10 +15,11 @@ export type RedisLock = {
   key: string;
   token: string;
   acquired: boolean;
+  degraded?: boolean;
 };
 
 export class TradeRedisService {
-  private static readonly OPEN_TRADES_TTL_SECONDS = Number(process.env.REDIS_OPEN_TRADES_TTL_SECONDS || 45);
+  private static readonly OPEN_TRADES_TTL_SECONDS = Number(process.env.REDIS_OPEN_TRADES_TTL_SECONDS || 8);
   private static readonly LOCK_TTL_SECONDS = Number(process.env.TRADE_LOCK_TTL_SECONDS || 30);
 
   static keys = {
@@ -49,12 +50,15 @@ export class TradeRedisService {
 
   static async acquireLock(key: string, ttlSeconds = this.LOCK_TTL_SECONDS): Promise<RedisLock> {
     const token = crypto.randomUUID();
+    if (!redis.isReady()) {
+      return { key, token, acquired: true, degraded: true };
+    }
     const acquired = await redis.setNX(key, token, ttlSeconds);
     return { key, token, acquired };
   }
 
   static async releaseLock(lock: RedisLock | null | undefined) {
-    if (!lock?.acquired) return;
+    if (!lock?.acquired || lock.degraded) return;
     await redis.delIfValue(lock.key, lock.token);
   }
 

@@ -76,6 +76,10 @@ class RedisClient {
         }
     }
 
+    isReady(): boolean {
+        return this.isConnected && Boolean(this.client);
+    }
+
     async quit() {
         if (this.client) {
             await this.client.quit();

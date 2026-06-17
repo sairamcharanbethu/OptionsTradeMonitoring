@@ -321,7 +321,8 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             sync: { type: 'object' }
           }
         },
-        404: { type: 'object', properties: { error: { type: 'string' } } }
+        404: { type: 'object', properties: { error: { type: 'string' } } },
+        409: { type: 'object', properties: { error: { type: 'string' } } }
       }
     }
   }, async (request, reply) => {
@@ -338,7 +339,15 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     if (!owned.rows[0]) return reply.code(404).send({ error: 'Wealthsimple trade not found' });
 
     const snaptradeService = new SnaptradeService(fastify);
-    const sync = await snaptradeService.syncPendingBrokerOrders(userId);
+    let sync: any;
+    try {
+      sync = await snaptradeService.syncPendingBrokerOrders(userId);
+    } catch (err: any) {
+      if (String(err.message || '').includes('already running')) {
+        return reply.code(409).send({ error: err.message });
+      }
+      throw err;
+    }
     const brokerStatus = Array.isArray(sync.orders)
       ? sync.orders.find((order: any) => Number(order.positionId) === Number(id))?.status
       : null;
