@@ -188,7 +188,10 @@ const ensureSchema = async (instance: any) => {
       { name: 'profit_trim_price', type: 'DECIMAL(10, 2)' },
       { name: 'profit_trim_order_id', type: 'VARCHAR(255)' },
       { name: 'profit_trim_trade_id', type: 'VARCHAR(255)' },
-      { name: 'profit_trimmed_at', type: 'TIMESTAMPTZ' }
+      { name: 'profit_trimmed_at', type: 'TIMESTAMPTZ' },
+      { name: 'exit_retry_count', type: 'INTEGER DEFAULT 0' },
+      { name: 'last_broker_sync_at', type: 'TIMESTAMPTZ' },
+      { name: 'last_broker_order_status', type: 'VARCHAR(50)' }
     ];
 
     for (const col of columns) {

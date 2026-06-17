@@ -117,6 +117,11 @@ const isBreakevenStop = (trade: Position) =>
 const activeOrderId = (trade: Position) =>
   trade.broker_exit_order_id || trade.profit_trim_order_id || trade.broker_order_id || '-';
 
+const canRetryClose = (trade: Position) =>
+  ['EXIT_REJECTED', 'EXIT_FAILED', 'EXIT_CANCELED', 'EXIT_CANCELLED', 'EXIT_EXPIRED', 'EXIT_STALE'].includes(String(trade.execution_status || ''))
+  && trade.status === 'OPEN'
+  && !!trade.broker_exit_order_id;
+
 type ClosedTradeRange = 'today' | 'past-day' | 'past-week' | 'past-month' | 'past-6-months' | 'past-year' | 'ytd';
 
 const CLOSED_TRADE_RANGES: Array<{ value: ClosedTradeRange; label: string }> = [
@@ -173,6 +178,8 @@ export default function TradesPage() {
   const [submittingClose, setSubmittingClose] = useState(false);
   const [syncingOrders, setSyncingOrders] = useState(false);
   const [syncingTradeId, setSyncingTradeId] = useState<number | null>(null);
+  const [retryingTradeId, setRetryingTradeId] = useState<number | null>(null);
+  const [brokerHealth, setBrokerHealth] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     range: 'today' as ClosedTradeRange,
@@ -194,7 +201,17 @@ export default function TradesPage() {
     }
     const trades = await api.getOpenTrades();
     setOpenTrades(trades);
+    await loadBrokerHealth();
     setLoadingOpen(false);
+  };
+
+  const loadBrokerHealth = async () => {
+    try {
+      const health = await api.getServicesHealth();
+      setBrokerHealth(health.snaptradePendingOrders || null);
+    } catch {
+      setBrokerHealth(null);
+    }
   };
 
   const refreshClosed = async () => {
@@ -259,13 +276,38 @@ export default function TradesPage() {
     if (!tradeId) setSyncingOrders(true);
     setError(null);
     try {
-      await api.syncSnaptradePendingOrders();
-      await refreshOpen(false);
+      if (tradeId) {
+        const result = await api.refreshWealthsimpleTradeOrderStatus(tradeId);
+        setOpenTrades((trades) => (
+          result.trade.status === 'CLOSED'
+            ? trades.filter((trade) => trade.id !== tradeId)
+            : trades.map((trade) => trade.id === tradeId ? result.trade : trade)
+        ));
+        if (result.trade.status === 'CLOSED') refreshClosed().catch((err) => setError(err.message));
+      } else {
+        await api.syncSnaptradePendingOrders();
+        await refreshOpen(false);
+      }
+      await loadBrokerHealth();
     } catch (err: any) {
       setError(err.message || 'Failed to sync Wealthsimple order status');
     } finally {
       setSyncingTradeId(null);
       if (!tradeId) setSyncingOrders(false);
+    }
+  };
+
+  const retryClose = async (trade: Position) => {
+    setRetryingTradeId(trade.id);
+    setError(null);
+    try {
+      const updated = await api.retryWealthsimpleClose(trade.id, trade.quantity);
+      setOpenTrades((trades) => trades.map((item) => item.id === trade.id ? updated : item));
+      await loadBrokerHealth();
+    } catch (err: any) {
+      setError(err.message || 'Failed to retry Wealthsimple close');
+    } finally {
+      setRetryingTradeId(null);
     }
   };
 
@@ -314,6 +356,20 @@ export default function TradesPage() {
             <SummaryTile label="Working Orders" value={String(openSummary.workingOrders)} />
           </div>
 
+          {brokerHealth && (
+            <div className="grid gap-3 md:grid-cols-4">
+              <SummaryTile label="Broker Sync" value={brokerHealth.status || 'N/A'} tone={brokerHealth.status === 'UP' ? 'green' : brokerHealth.status === 'DOWN' ? 'red' : undefined} />
+              <SummaryTile label="Last Broker Check" value={brokerHealth.lastRunAt ? compactDate(brokerHealth.lastRunAt) : '-'} />
+              <SummaryTile label="Pending Checked" value={String(brokerHealth.lastResult?.checked ?? 0)} />
+              <SummaryTile label="Watchdog Stale Entries" value={String(brokerHealth.lastWatchdogResult?.entryStale ?? 0)} tone={(brokerHealth.lastWatchdogResult?.entryStale ?? 0) > 0 ? 'red' : undefined} />
+              {brokerHealth.lastError && (
+                <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500 md:col-span-4">
+                  {brokerHealth.lastError}
+                </div>
+              )}
+            </div>
+          )}
+
           {workingOrders.length > 0 && (
             <div className="overflow-hidden rounded-md border border-amber-500/30 bg-amber-500/5">
               <div className="flex items-center justify-between border-b border-amber-500/20 px-3 py-2">
@@ -335,6 +391,7 @@ export default function TradesPage() {
                       <th className="px-3 py-2 text-right">Live</th>
                       <th className="px-3 py-2 text-left">Order State</th>
                       <th className="px-3 py-2 text-left">Exit Order</th>
+                      <th className="px-3 py-2 text-left">Broker Check</th>
                       <th className="px-3 py-2 text-left">Requested</th>
                       <th className="px-3 py-2 text-right">Action</th>
                     </tr>
@@ -353,12 +410,24 @@ export default function TradesPage() {
                           {trade.execution_error && <div className="mt-1 max-w-[260px] truncate text-xs text-red-500">{trade.execution_error}</div>}
                         </td>
                         <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{activeOrderId(trade)}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          <div>{trade.last_broker_order_status || '-'}</div>
+                          <div>{compactDate(trade.last_broker_sync_at)}</div>
+                        </td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">{compactDate(trade.exit_requested_at)}</td>
                         <td className="px-3 py-2 text-right">
-                          <Button variant="outline" size="sm" className="h-7 gap-2" onClick={() => syncTradeStatus(trade.id)} disabled={syncingTradeId === trade.id}>
-                            <RefreshCw className={`h-3.5 w-3.5 ${syncingTradeId === trade.id ? 'animate-spin' : ''}`} />
-                            {actionLabel(trade)}
-                          </Button>
+                          <div className="flex justify-end gap-2">
+                            <Button variant="outline" size="sm" className="h-7 gap-2" onClick={() => syncTradeStatus(trade.id)} disabled={syncingTradeId === trade.id || retryingTradeId === trade.id}>
+                              <RefreshCw className={`h-3.5 w-3.5 ${syncingTradeId === trade.id ? 'animate-spin' : ''}`} />
+                              Refresh
+                            </Button>
+                            {canRetryClose(trade) && (
+                              <Button variant="destructive" size="sm" className="h-7 gap-2" onClick={() => retryClose(trade)} disabled={syncingTradeId === trade.id || retryingTradeId === trade.id}>
+                                <BadgeDollarSign className={`h-3.5 w-3.5 ${retryingTradeId === trade.id ? 'animate-pulse' : ''}`} />
+                                Retry {Number(trade.exit_retry_count || 0)}/2
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -383,15 +452,16 @@ export default function TradesPage() {
                     <th className="px-3 py-3 text-right">TP</th>
                     <th className="px-3 py-3 text-right">Underlying</th>
                     <th className="px-3 py-3 text-left">Order</th>
+                    <th className="px-3 py-3 text-left">Broker Check</th>
                     <th className="px-3 py-3 text-left">State</th>
                     <th className="px-3 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loadingOpen ? (
-                    <tr><td colSpan={12} className="px-3 py-8 text-center text-muted-foreground">Loading Wealthsimple trades...</td></tr>
+                    <tr><td colSpan={13} className="px-3 py-8 text-center text-muted-foreground">Loading Wealthsimple trades...</td></tr>
                   ) : activeOpenTrades.length === 0 ? (
-                    <tr><td colSpan={12} className="px-3 py-8 text-center text-muted-foreground">No active open Wealthsimple positions.</td></tr>
+                    <tr><td colSpan={13} className="px-3 py-8 text-center text-muted-foreground">No active open Wealthsimple positions.</td></tr>
                   ) : activeOpenTrades.map((trade) => {
                     const pnl = livePnl(trade);
                     const realizedTrimPnl = trimPnl(trade);
@@ -418,6 +488,10 @@ export default function TradesPage() {
                         <td className="px-3 py-3 text-right font-mono text-emerald-500">{takeProfitLabel(trade)}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.underlying_price)}</td>
                         <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{activeOrderId(trade)}</td>
+                        <td className="px-3 py-3 text-xs text-muted-foreground">
+                          {trade.last_broker_order_status && <div>Broker {trade.last_broker_order_status}</div>}
+                          {trade.last_broker_sync_at && <div>{compactDate(trade.last_broker_sync_at)}</div>}
+                        </td>
                         <td className="px-3 py-3">
                           <div className="flex flex-wrap gap-1">
                             <Badge variant={stateTone(trade)}>{stateLabel(trade)}</Badge>

@@ -77,6 +77,25 @@ export class TradeExecutionService {
       return { success: false, skipped: true, broker, message };
     }
 
+    if (broker === 'wealthsimple_snaptrade') {
+      try {
+        const snaptradeService = new SnaptradeService(this.fastify);
+        await snaptradeService.syncPendingBrokerOrders(input.userId);
+      } catch (err: any) {
+        const message = `Could not verify Wealthsimple orders before entry: ${err.message || String(err)}`;
+        await this.markSignalExecutionFailure(input.userId, input.signalId, message);
+        return { success: false, broker, message };
+      }
+    }
+
+    const duplicate = await this.findDuplicateOpenEntry(input);
+    if (duplicate) {
+      const message = `Skipped duplicate entry: ${this.contractLabel(input)} already exists as position #${duplicate.id} (${duplicate.status}${duplicate.execution_status ? `/${duplicate.execution_status}` : ''})`;
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      this.fastify.log.info(`[TradeExecutionService] ${message}`);
+      return { success: false, skipped: true, broker, message, duplicatePositionId: duplicate.id };
+    }
+
     const supersededSummary = await this.closeSupersededPositions(input, settings, broker);
     if (supersededSummary.blocked) {
       await this.markSignalExecutionFailure(input.userId, input.signalId, supersededSummary.message);
@@ -165,6 +184,27 @@ export class TradeExecutionService {
     const normalized = String(setupGrade || '').toUpperCase();
     if (normalized.includes('A+')) return true;
     return /(^|[^A-Z])A([^A-Z+]|$)/.test(normalized);
+  }
+
+  private async findDuplicateOpenEntry(input: ExecuteSignalInput) {
+    const { rows } = await this.fastify.pg.query(
+      `SELECT id, status, execution_status, broker_order_id
+       FROM positions
+       WHERE user_id = $1
+         AND symbol = $2
+         AND option_type = $3
+         AND strike_price = $4
+         AND expiration_date::date = $5::date
+         AND status IN ('OPEN', 'PENDING_ORDER')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [input.userId, input.symbol, input.winningSide, input.chosenStrike, input.chosenExpiry]
+    );
+    return rows[0] || null;
+  }
+
+  private contractLabel(input: ExecuteSignalInput): string {
+    return `${input.symbol} ${input.chosenExpiry} ${input.winningSide} ${input.chosenStrike}`;
   }
 
   private async countTradesToday(userId: number): Promise<number> {

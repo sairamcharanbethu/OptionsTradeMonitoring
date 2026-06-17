@@ -628,6 +628,14 @@ export class SnaptradeService {
                 const order = this.findMatchingOrder(orders, position, phase);
 
                 if (!order) {
+                    await this.fastify.pg.query(
+                        `UPDATE positions
+                         SET last_broker_sync_at = CURRENT_TIMESTAMP,
+                             last_broker_order_status = 'UNKNOWN',
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = $1`,
+                        [position.id]
+                    );
                     summary.unmatched += 1;
                     summary.orders.push({
                         positionId: position.id,
@@ -641,6 +649,14 @@ export class SnaptradeService {
 
                 const rawStatus = this.normalizeOrderStatus(order.status);
                 const status = this.hasFillEvidence(order) && !closedStatuses.has(rawStatus) ? 'FILLED' : rawStatus;
+                await this.fastify.pg.query(
+                    `UPDATE positions
+                     SET last_broker_sync_at = CURRENT_TIMESTAMP,
+                         last_broker_order_status = $1,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $2`,
+                    [status, position.id]
+                );
                 if (openStatuses.has(status)) {
                     const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
                     if (phase === 'EXIT') {

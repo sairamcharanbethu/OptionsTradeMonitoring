@@ -623,29 +623,19 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             'MARKET'
           );
 
-          const { rows: updatedRows } = await client.query(
-            `UPDATE positions
-             SET execution_status = 'PENDING_EXIT',
-                 execution_error = NULL,
-                 broker_exit_order_id = $1,
-                 broker_exit_trade_id = $2,
-                 exit_reason = 'MANUAL',
-                 exit_order_type = 'MARKET',
-                 exit_requested_at = CURRENT_TIMESTAMP,
-                 notes = COALESCE(notes, '') || $3,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $4
-             RETURNING *`,
-            [
-              order.orderId || null,
-              order.tradeId || null,
-              ` [Manual SnapTrade MARKET exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`,
-              id
-            ]
+          const updatedPosition = await TradeLifecycleService.markExitSubmitted(
+            client,
+            id,
+            order,
+            {
+              reason: 'MANUAL',
+              orderType: 'MARKET',
+              note: ` [Manual SnapTrade MARKET exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
+            }
           );
           await client.query('COMMIT');
           await redis.set(`USER_POSITIONS:${userId}`, '', 1);
-          return updatedRows[0];
+          return updatedPosition;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual SnapTrade exit failed');
           await client.query('COMMIT');
@@ -685,23 +675,19 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             throw new Error(`Alpaca paper close failed: ${res.status} - ${errorText}`);
           }
           const orderData: any = await res.json();
-          const { rows: updatedRows } = await client.query(
-            `UPDATE positions
-             SET execution_status = 'PENDING_EXIT',
-                 execution_error = NULL,
-                 broker_exit_order_id = $1,
-                 exit_reason = 'MANUAL',
-                 exit_order_type = 'MARKET',
-                 exit_requested_at = CURRENT_TIMESTAMP,
-                 notes = COALESCE(notes, '') || $2,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = $3
-             RETURNING *`,
-            [orderData.id || null, ` [Manual Alpaca paper MARKET exit submitted for ${closeQty} contract(s)${orderData.id ? `: ${orderData.id}` : ''}]`, id]
+          const updatedPosition = await TradeLifecycleService.markExitSubmitted(
+            client,
+            id,
+            { orderId: orderData.id || null, tradeId: null },
+            {
+              reason: 'MANUAL',
+              orderType: 'MARKET',
+              note: ` [Manual Alpaca paper MARKET exit submitted for ${closeQty} contract(s)${orderData.id ? `: ${orderData.id}` : ''}]`
+            }
           );
           await client.query('COMMIT');
           await redis.set(`USER_POSITIONS:${userId}`, '', 1);
-          return updatedRows[0];
+          return updatedPosition;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Alpaca paper exit failed');
           await client.query('COMMIT');

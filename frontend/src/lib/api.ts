@@ -45,6 +45,9 @@ export interface Position {
   execution_account_id?: string;
   execution_status?: string;
   execution_error?: string;
+  exit_retry_count?: number;
+  last_broker_sync_at?: string;
+  last_broker_order_status?: string;
   contracts_requested?: number;
   exit_price?: number;
   exit_requested_at?: string;
@@ -128,6 +131,7 @@ const normalizePosition = (pos: any): Position => ({
   suggested_take_profit_2: pos.suggested_take_profit_2 != null ? Number(pos.suggested_take_profit_2) : undefined,
   contracts_requested: pos.contracts_requested != null ? Number(pos.contracts_requested) : undefined,
   exit_price: pos.exit_price != null ? Number(pos.exit_price) : undefined,
+  exit_retry_count: pos.exit_retry_count != null ? Number(pos.exit_retry_count) : undefined,
   profit_trim_quantity: pos.profit_trim_quantity != null ? Number(pos.profit_trim_quantity) : undefined,
   profit_trim_price: pos.profit_trim_price != null ? Number(pos.profit_trim_price) : undefined,
   analysis_data: pos.analysis_data || undefined,
@@ -303,6 +307,28 @@ export const api = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to submit Wealthsimple close order');
+    }
+    return normalizePosition(await res.json());
+  },
+
+  async refreshWealthsimpleTradeOrderStatus(id: number): Promise<{ trade: Position; sync: any }> {
+    const res = await authFetch(`${API_BASE}/trades/${id}/order-status`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to refresh Wealthsimple order status');
+    }
+    const data = await res.json();
+    return { ...data, trade: normalizePosition(data.trade) };
+  },
+
+  async retryWealthsimpleClose(id: number, quantity?: number): Promise<Position> {
+    const res = await authFetch(`${API_BASE}/trades/${id}/retry-close`, {
+      method: 'POST',
+      body: JSON.stringify({ quantity }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to retry Wealthsimple close order');
     }
     return normalizePosition(await res.json());
   },
