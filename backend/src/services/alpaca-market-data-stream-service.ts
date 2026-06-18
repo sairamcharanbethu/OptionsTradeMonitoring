@@ -23,6 +23,7 @@ export class AlpacaMarketDataStreamService extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private isConnected = false;
+  private isAuthenticated = false;
   private lastMessageAt: string | null = null;
   private lastError: string | null = null;
   private readonly MAX_RECONNECT_DELAY = 60000;
@@ -112,6 +113,7 @@ export class AlpacaMarketDataStreamService extends EventEmitter {
     this.ws.on('open', () => {
       this.fastify.log.info('[AlpacaMarketDataStream] Connected. Authenticating...');
       this.isConnected = true;
+      this.isAuthenticated = false;
       this.lastError = null;
       this.send({ action: 'auth', key: this.keyId, secret: this.secretKey });
     });
@@ -123,6 +125,7 @@ export class AlpacaMarketDataStreamService extends EventEmitter {
     });
     this.ws.on('close', (code: number, reason: Buffer) => {
       this.isConnected = false;
+      this.isAuthenticated = false;
       this.fastify.log.warn(`[AlpacaMarketDataStream] Closed (${code}): ${reason.toString()}. Scheduling reconnect...`);
       this.scheduleReconnect();
     });
@@ -138,6 +141,7 @@ export class AlpacaMarketDataStreamService extends EventEmitter {
         if (message.T === 'success') {
           this.fastify.log.info(`[AlpacaMarketDataStream] ${message.msg}`);
           if (message.msg === 'authenticated') {
+            this.isAuthenticated = true;
             this.reconnectAttempts = 0;
             this.sendSubscribe();
           }
@@ -154,8 +158,13 @@ export class AlpacaMarketDataStreamService extends EventEmitter {
           if (message.code === 403 && /already authenticated/i.test(errorMessage)) {
             this.lastError = null;
             this.reconnectAttempts = 0;
-            this.fastify.log.info('[AlpacaMarketDataStream] Already authenticated. Refreshing subscriptions.');
-            this.sendSubscribe();
+            if (!this.isAuthenticated) {
+              this.isAuthenticated = true;
+              this.fastify.log.info('[AlpacaMarketDataStream] Already authenticated. Refreshing subscriptions.');
+              this.sendSubscribe();
+            } else {
+              this.fastify.log.info('[AlpacaMarketDataStream] Duplicate auth response ignored.');
+            }
             continue;
           }
 
