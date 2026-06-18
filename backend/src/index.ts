@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
+import fs from 'fs';
 import path from 'path';
-import dotenv from 'dotenv';
 import cors from '@fastify/cors';
 import postgres from '@fastify/postgres';
 import swagger from '@fastify/swagger';
@@ -20,8 +20,23 @@ import { adminRoutes } from './routes/admin';
 import { snaptradeRoutes } from './routes/snaptrade';
 import { FastifyRequest, FastifyReply } from 'fastify';
 
-dotenv.config({ path: path.join(__dirname, '../../.env') });
-dotenv.config();
+function loadEnvFile(filePath: string) {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, 'utf8');
+  for (const line of content.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const separatorIndex = trimmed.indexOf('=');
+    if (separatorIndex <= 0) continue;
+    const key = trimmed.slice(0, separatorIndex).trim();
+    const rawValue = trimmed.slice(separatorIndex + 1).trim();
+    if (!key || process.env[key] !== undefined) continue;
+    process.env[key] = rawValue.replace(/^['"]|['"]$/g, '');
+  }
+}
+
+loadEnvFile(path.join(__dirname, '../../.env'));
+loadEnvFile(path.join(process.cwd(), '.env'));
 
 declare module 'fastify' {
   interface FastifyInstance {
