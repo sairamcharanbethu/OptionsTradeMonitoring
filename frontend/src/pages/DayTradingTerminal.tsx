@@ -237,11 +237,23 @@ const getExecutionBrokerLabel = (broker?: string | null) => {
 
 const getSignalExecutionTone = (signal?: Signal | null) => {
   if (!signal) return 'border-zinc-700 text-zinc-400 bg-zinc-950/40';
-  if (signal.execution_status === 'FAILED' || signal.execution_error) return 'border-red-500/40 text-red-300 bg-red-950/20';
   if (signal.execution_status === 'SKIPPED') return 'border-amber-500/40 text-amber-300 bg-amber-950/20';
+  if (signal.execution_status === 'FAILED' || signal.execution_error) return 'border-red-500/40 text-red-300 bg-red-950/20';
   if (signal.execution_status === 'PENDING') return 'border-amber-500/40 text-amber-300 bg-amber-950/20';
   if (signal.status === 'EXECUTED') return 'border-emerald-500/40 text-emerald-300 bg-emerald-950/20';
   return 'border-zinc-700 text-zinc-400 bg-zinc-950/40';
+};
+
+const getSignalExecutionLabel = (signal?: Signal | null) => {
+  if (!signal) return '';
+  if (signal.execution_status === 'SKIPPED') return 'SKIPPED';
+  if (signal.execution_error) return 'EXEC ERROR';
+  return signal.execution_status || '';
+};
+
+const getSignalExecutionDetailTone = (signal?: Signal | null) => {
+  if (signal?.execution_status === 'SKIPPED') return 'border-amber-500/30 bg-amber-950/20 text-amber-100';
+  return 'border-red-500/30 bg-red-950/20 text-red-200';
 };
 
 const getSetupGradeKey = (setupGrade?: string | null) => {
@@ -1319,7 +1331,7 @@ export default function DayTradingTerminal() {
                                     className={`px-1.5 py-0.5 rounded border text-[8px] font-bold w-fit max-w-[120px] truncate ${getSignalExecutionTone(sig)}`}
                                     title={sig.execution_error || sig.execution_status || ''}
                                   >
-                                    {sig.execution_error ? 'EXEC ERROR' : sig.execution_status}
+                                    {getSignalExecutionLabel(sig)}
                                   </span>
                                 )}
                               </div>
@@ -1566,7 +1578,7 @@ export default function DayTradingTerminal() {
                      </div>
                    </div>
                    {selectedSignal.execution_error && (
-                     <div className="mt-2 border-t border-current/20 pt-2 text-red-200 leading-relaxed">
+                     <div className={`mt-2 rounded-md border px-2 py-2 leading-relaxed ${getSignalExecutionDetailTone(selectedSignal)}`}>
                        {selectedSignal.execution_error}
                      </div>
                    )}
