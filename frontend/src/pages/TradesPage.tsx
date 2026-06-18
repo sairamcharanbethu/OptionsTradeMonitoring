@@ -170,6 +170,20 @@ function SummaryTile({ label, value, tone }: { label: string; value: string; ton
   );
 }
 
+function ExecutionIssue({ message }: { message?: string | null }) {
+  if (!message) return null;
+  return (
+    <details className="mt-1 max-w-[260px] text-xs">
+      <summary className="cursor-pointer list-none text-amber-600 hover:text-amber-500 dark:text-amber-400 dark:hover:text-amber-300">
+        Needs attention
+      </summary>
+      <div className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-200">
+        {message}
+      </div>
+    </details>
+  );
+}
+
 export default function TradesPage() {
   const { lastMessage } = useWebSocket();
   const [openTrades, setOpenTrades] = useState<Position[]>([]);
@@ -414,7 +428,7 @@ export default function TradesPage() {
                         <td className="px-3 py-2 text-right font-mono">{currency(trade.current_price)}</td>
                         <td className="px-3 py-2">
                           <Badge variant={stateTone(trade)}>{stateLabel(trade)}</Badge>
-                          {trade.execution_error && <div className="mt-1 max-w-[260px] truncate text-xs text-red-500">{trade.execution_error}</div>}
+                          <ExecutionIssue message={trade.execution_error} />
                         </td>
                         <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{activeOrderId(trade)}</td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">
@@ -512,7 +526,7 @@ export default function TradesPage() {
                             {isBreakevenStop(trade) && <Badge variant="outline">Breakeven stop</Badge>}
                             {trade.take_profit_trigger && <Badge variant="outline">TP live</Badge>}
                           </div>
-                          {trade.execution_error && <div className="mt-1 max-w-[220px] truncate text-xs text-red-500">{trade.execution_error}</div>}
+                          <ExecutionIssue message={trade.execution_error} />
                         </td>
                         <td className="px-3 py-3 text-right">
                           <div className="flex justify-end gap-2">
@@ -649,7 +663,7 @@ export default function TradesPage() {
               Close Wealthsimple Trade
             </DialogTitle>
             <DialogDescription>
-              This submits a live MARKET SELL_TO_CLOSE through SnapTrade. The trade stays open while Wealthsimple confirms the exit.
+              This submits a live MARKET SELL_TO_CLOSE through SnapTrade for the selected contract and quantity. The trade stays open while Wealthsimple confirms the exit.
             </DialogDescription>
           </DialogHeader>
           {closingTrade && (
@@ -676,7 +690,7 @@ export default function TradesPage() {
             <Button variant="outline" onClick={() => setClosingTrade(null)}>Cancel</Button>
             <Button variant="destructive" className="gap-2" onClick={submitClose} disabled={submittingClose}>
               {submittingClose ? <RefreshCw className="h-4 w-4 animate-spin" /> : <BadgeDollarSign className="h-4 w-4" />}
-              Submit Close
+              Submit Live Close
             </Button>
           </DialogFooter>
         </DialogContent>

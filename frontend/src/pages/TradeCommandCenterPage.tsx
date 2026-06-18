@@ -34,6 +34,35 @@ const statusTone = (value?: string | null): 'default' | 'destructive' | 'outline
   return 'outline';
 };
 
+const humanStatus = (value?: string | null) => {
+  const status = String(value || '').toUpperCase();
+  const labels: Record<string, string> = {
+    OPEN: 'Holding',
+    CLOSED: 'Closed',
+    FILLED: 'Filled',
+    EXECUTED: 'Executed',
+    PENDING: 'Waiting for broker',
+    PENDING_ORDER: 'Entry pending',
+    PENDING_EXIT: 'Close pending',
+    PENDING_TRIM: 'Trim pending',
+    EXIT_STALE: 'Needs broker check',
+    EXIT_REJECTED: 'Broker rejected exit',
+    EXIT_FAILED: 'Exit failed',
+    EXIT_CANCELED: 'Exit cancelled',
+    EXIT_CANCELLED: 'Exit cancelled',
+    EXIT_EXPIRED: 'Exit expired'
+  };
+  return labels[status] || String(value || 'N/A').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const nextActionButtonLabel = (label: string) => {
+  const normalized = label.toLowerCase();
+  if (normalized.includes('broker') || normalized.includes('verify') || normalized.includes('sync')) return 'Refresh broker proof';
+  if (normalized.includes('retry')) return 'Review retry path';
+  if (normalized.includes('close')) return 'Open trades';
+  return 'Refresh status';
+};
+
 function SummaryTile({ label, value, detail, icon: Icon }: { label: string; value: string; detail?: string; icon: any }) {
   return (
     <div className="rounded-md border border-border bg-card p-4">
@@ -153,13 +182,13 @@ export default function TradeCommandCenterPage() {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-semibold tracking-tight">{contractLabel(trade)}</h2>
-              <Badge variant={statusTone(trade.execution_status || trade.status)}>{trade.execution_status || trade.status}</Badge>
+              <Badge variant={statusTone(trade.execution_status || trade.status)}>{humanStatus(trade.execution_status || trade.status)}</Badge>
               {signal?.setup_grade && <Badge variant="outline">Setup {signal.setup_grade}</Badge>}
             </div>
             <p className="text-sm text-muted-foreground">Decision replay, broker proof, risk plan, and lifecycle timeline.</p>
           </div>
         </div>
-        <Button variant="outline" className="gap-2" onClick={() => load(true)} disabled={refreshing}>
+        <Button variant="outline" className="w-full gap-2 sm:w-auto" onClick={() => load(true)} disabled={refreshing}>
           <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           Refresh
         </Button>
@@ -176,7 +205,29 @@ export default function TradeCommandCenterPage() {
               <div className="text-sm text-muted-foreground">{nextAction.detail}</div>
             </div>
           </div>
-          <div className={`font-mono text-lg font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</div>
+          <div className="flex flex-col gap-2 sm:items-end">
+            <div className={`font-mono text-lg font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</div>
+            <Button
+              asChild={nextAction.label.toLowerCase().includes('close')}
+              size="sm"
+              variant={nextAction.label.toLowerCase().includes('broker') || nextAction.label.toLowerCase().includes('verify') ? 'default' : 'outline'}
+              className="gap-2"
+              onClick={nextAction.label.toLowerCase().includes('close') ? undefined : () => load(true)}
+              disabled={refreshing}
+            >
+              {nextAction.label.toLowerCase().includes('close') ? (
+                <Link to="/trades">
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  {nextActionButtonLabel(nextAction.label)}
+                </Link>
+              ) : (
+                <>
+                  <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+                  {nextActionButtonLabel(nextAction.label)}
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -184,7 +235,7 @@ export default function TradeCommandCenterPage() {
         <SummaryTile label="Entry" value={currency(riskPlan.entryPrice)} detail={`${riskPlan.quantity} contract(s)`} icon={BadgeDollarSign} />
         <SummaryTile label="Stop Loss" value={currency(riskPlan.stopLoss)} detail={riskPlan.estimatedMaxLoss !== null ? `Max loss ${currency(riskPlan.estimatedMaxLoss)}` : 'No premium stop'} icon={Siren} />
         <SummaryTile label="Take Profit" value={currency(riskPlan.takeProfit)} detail={riskPlan.trim.status ? `Trim ${riskPlan.trim.status}` : 'Primary target'} icon={Target} />
-        <SummaryTile label="Broker Sync" value={brokerProof.lastBrokerStatus || 'N/A'} detail={compactDate(brokerProof.lastBrokerSyncAt)} icon={Workflow} />
+        <SummaryTile label="Broker Sync" value={humanStatus(brokerProof.lastBrokerStatus)} detail={compactDate(brokerProof.lastBrokerSyncAt)} icon={Workflow} />
       </div>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
@@ -214,7 +265,7 @@ export default function TradeCommandCenterPage() {
           <DetailRow label="Entry trade" value={brokerProof.entryTradeId} />
           <DetailRow label="Exit order" value={brokerProof.exitOrderId} />
           <DetailRow label="Trim order" value={brokerProof.trimOrderId} />
-          <DetailRow label="Execution" value={brokerProof.executionStatus} />
+          <DetailRow label="Execution" value={humanStatus(brokerProof.executionStatus)} />
         </section>
 
         <section className="rounded-md border border-border bg-card p-4">
@@ -222,7 +273,7 @@ export default function TradeCommandCenterPage() {
             <Activity className="h-4 w-4 text-muted-foreground" />
             <h3 className="text-sm font-semibold">Plan State</h3>
           </div>
-          <DetailRow label="Status" value={trade.status} />
+          <DetailRow label="Status" value={humanStatus(trade.status)} />
           <DetailRow label="Exit reason" value={trade.exit_reason} />
           <DetailRow label="Exit type" value={trade.exit_order_type} />
           <DetailRow label="Exit requested" value={compactDate(trade.exit_requested_at)} />

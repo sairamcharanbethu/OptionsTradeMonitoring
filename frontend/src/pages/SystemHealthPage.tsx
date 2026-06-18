@@ -217,6 +217,12 @@ export default function SystemHealthPage() {
     });
   };
 
+  const resetIgnoredComponents = () => {
+    const next = new Set<string>();
+    saveIgnoredComponents(next);
+    setIgnoredComponents(next);
+  };
+
   const summary = useMemo(() => systemSummary(apiHealth, services, null, ignoredComponents), [apiHealth, services, ignoredComponents]);
   const apiEntries = apiHealth ? Object.entries(apiHealth).filter(([, value]) => value?.status !== 'N/A') : [];
   const activeProvider = services?.liveExitMonitor?.provider === 'alpaca' ? services?.streams?.alpaca : services?.streams?.questrade;
@@ -267,8 +273,11 @@ export default function SystemHealthPage() {
           <div className="shrink-0 text-xs text-muted-foreground">Generated {formatRelativeTime(services?.generatedAt)}</div>
         </div>
         {ignoredComponents.size > 0 && (
-          <div className="mt-3 rounded-md border border-border bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-            Ignoring {ignoredComponents.size} component{ignoredComponents.size === 1 ? '' : 's'} in this browser. Ignored components do not affect the summary banner.
+          <div className="mt-3 flex flex-col gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <span>Ignoring {ignoredComponents.size} component{ignoredComponents.size === 1 ? '' : 's'} in this browser. Ignored components do not affect the summary banner.</span>
+            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={resetIgnoredComponents}>
+              Reset ignored
+            </Button>
           </div>
         )}
       </div>

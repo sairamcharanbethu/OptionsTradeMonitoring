@@ -251,6 +251,19 @@ const getSignalExecutionLabel = (signal?: Signal | null) => {
   return signal.execution_status || '';
 };
 
+const getSignalExecutionDisplayStatus = (signal?: Signal | null) => {
+  if (!signal) return '';
+  const status = String(signal.execution_status || signal.status || '').toUpperCase();
+  const labels: Record<string, string> = {
+    PENDING: 'Waiting for broker',
+    EXECUTED: 'Executed',
+    FAILED: 'Execution failed',
+    SKIPPED: 'Skipped',
+    CANCELLED: 'Cancelled'
+  };
+  return labels[status] || status.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
 const getSignalExecutionDetailTone = (signal?: Signal | null) => {
   if (signal?.execution_status === 'SKIPPED') return 'border-amber-500/30 bg-amber-950/20 text-amber-100';
   return 'border-red-500/30 bg-red-950/20 text-red-200';
@@ -1032,7 +1045,7 @@ export default function DayTradingTerminal() {
                   </div>
                   <div className={`bg-zinc-950/50 border rounded p-2 ${getSignalExecutionTone(latestActionableSignal)}`}>
                     <span className="block uppercase font-bold opacity-80">Status</span>
-                    <span className="font-bold">{latestActionableSignal.execution_status || latestActionableSignal.status}</span>
+                    <span className="font-bold">{getSignalExecutionDisplayStatus(latestActionableSignal)}</span>
                   </div>
                 </div>
               </div>
@@ -1200,7 +1213,7 @@ export default function DayTradingTerminal() {
                     size="sm"
                     className="h-7 w-full text-[10px] font-bold border-emerald-500/30 text-emerald-400 hover:text-emerald-300 hover:border-emerald-400 hover:bg-emerald-950/30 gap-1 bg-zinc-950/40"
                     onClick={async () => {
-                      if (confirm("Are you sure you want to seed mock data?")) {
+                      if (confirm("Seed sample day-trading signals and scanner logs into this environment? Existing live signals are not removed.")) {
                         try {
                           const res = await api.seedSignals();
                           if (res.success) {
@@ -1218,7 +1231,7 @@ export default function DayTradingTerminal() {
                     size="sm"
                     className="h-7 w-full text-[10px] font-bold border-red-500/30 text-red-400 hover:text-red-300 hover:border-red-400 hover:bg-red-950/30 gap-1 bg-zinc-950/40"
                     onClick={async () => {
-                      if (confirm("Wipe all day trading signals and logs from database?")) {
+                      if (confirm("This permanently deletes all day-trading signals and scanner logs for this environment. Open trades are not closed. Continue?")) {
                         try {
                           const res = await api.clearSignals();
                           if (res.success) {
@@ -1239,7 +1252,111 @@ export default function DayTradingTerminal() {
           </div>
 
           {activeTab === 'signals' ? (
-            <div className="overflow-x-auto">
+            <>
+            <div className="space-y-2 md:hidden">
+              {isLoading && signals.length === 0 ? (
+                <div className="rounded border border-emerald-500/10 bg-zinc-950/60 px-3 py-6 text-center text-xs text-emerald-500/70">
+                  <RefreshCw className="mx-auto mb-2 h-4 w-4 animate-spin text-emerald-400" />
+                  Loading signals...
+                </div>
+              ) : tableSignals.length === 0 ? (
+                <div className="rounded border border-zinc-800 bg-zinc-950/60 px-3 py-6 text-center text-xs text-zinc-400">
+                  No signals match the current filters.
+                </div>
+              ) : tableSignals.map((sig) => {
+                const isSelected = sig.id === selectedSignalId;
+                const isSignalExecutable = isExecutableSetupGrade(sig);
+                const biasColor = sig.signal_type === 'CALL'
+                  ? 'text-green-400'
+                  : sig.signal_type === 'PUT'
+                    ? 'text-red-400'
+                    : 'text-zinc-500';
+
+                return (
+                  <div
+                    key={`mobile-${sig.id}`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedSignalId(sig.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedSignalId(sig.id);
+                      }
+                    }}
+                    className={`w-full rounded border p-3 text-left transition-colors ${
+                      isSelected
+                        ? 'border-emerald-400/60 bg-emerald-950/30'
+                        : 'border-emerald-500/10 bg-zinc-950/60 hover:border-emerald-500/30'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-xs text-emerald-500">#{sig.id}</span>
+                          <span className="font-bold text-emerald-100">{sig.symbol}</span>
+                          <span className={`font-bold ${biasColor}`}>{sig.signal_type}</span>
+                          <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-300">{sig.setup_grade || 'B'}</span>
+                        </div>
+                        <div className="mt-1 text-[10px] text-zinc-400">{sig.trade_bias || 'No bias recorded'}</div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <div className="font-mono text-sm font-bold text-sky-400">{sig.confidence_score}%</div>
+                        <div className="text-[9px] text-zinc-500">confidence</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]">
+                      <div className="rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                        <div className="text-zinc-500">Price</div>
+                        <div className="font-mono text-emerald-300">${Number(sig.current_price).toFixed(2)}</div>
+                      </div>
+                      <div className="rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                        <div className="text-zinc-500">SL</div>
+                        <div className="font-mono text-red-300">{sig.stop_loss ? `$${Number(sig.stop_loss).toFixed(2)}` : '-'}</div>
+                      </div>
+                      <div className="rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                        <div className="text-zinc-500">TP</div>
+                        <div className="font-mono text-green-300">{sig.target_price ? `$${Number(sig.target_price).toFixed(2)}` : '-'}</div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap gap-1">
+                        <span className="rounded-full border border-emerald-500/20 px-2 py-0.5 text-[9px] font-bold text-emerald-300">{sig.status}</span>
+                        {(sig.execution_status || sig.execution_error) && (
+                          <span className={`rounded border px-2 py-0.5 text-[9px] font-bold ${getSignalExecutionTone(sig)}`}>
+                            {getSignalExecutionLabel(sig)}
+                          </span>
+                        )}
+                      </div>
+                      {sig.status === 'PENDING' && (
+                        <div className="flex gap-1" onClick={(event) => event.stopPropagation()}>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-[10px]"
+                            disabled={isExecutionBlocked || !isSignalExecutable}
+                            onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
+                          >
+                            Execute
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-[10px] text-red-300"
+                            onClick={() => handleQuickStatus(sig.id, 'CANCELLED')}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-xs text-left border-collapse">
                 <thead>
                   <tr className="bg-zinc-900/80 border-b border-emerald-500/10 text-emerald-500/80 font-bold">
@@ -1398,6 +1515,7 @@ export default function DayTradingTerminal() {
                 </tbody>
               </table>
             </div>
+            </>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs text-left border-collapse">
@@ -1557,7 +1675,7 @@ export default function DayTradingTerminal() {
                  <div className={`rounded border p-2.5 text-[10px] ${getSignalExecutionTone(selectedSignal)}`}>
                    <div className="flex items-center justify-between gap-2 mb-2">
                      <span className="font-bold uppercase">EXECUTION_STATUS</span>
-                     <span className="font-bold">{selectedSignal.execution_status || selectedSignal.status}</span>
+                     <span className="font-bold">{getSignalExecutionDisplayStatus(selectedSignal)}</span>
                    </div>
                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono">
                      <div className="flex justify-between gap-2">

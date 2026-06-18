@@ -762,133 +762,157 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         <p className="text-[10px] text-muted-foreground">Route orders and cap exposure before a signal can be executed.</p>
                                     </div>
 
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="executionBroker">Execution Broker</Label>
-                                        <Select value={executionBroker} onValueChange={handleExecutionBrokerChange}>
-                                            <SelectTrigger id="executionBroker">
-                                                <SelectValue placeholder="Select Broker" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="none">No broker execution (Simulated)</SelectItem>
-                                                <SelectItem value="alpaca_paper">Alpaca Paper Trading</SelectItem>
-                                                <SelectItem value="wealthsimple_snaptrade">Wealthsimple via SnapTrade (Live)</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                        {executionBroker === 'wealthsimple_snaptrade' && (
-                                            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-200">
-                                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                                    <div>
-                                                        <div className="flex items-center gap-2 font-semibold">
-                                                            <AlertTriangle className="h-4 w-4" />
-                                                            Wealthsimple Live needs connection setup
-                                                        </div>
-                                                        <div className="mt-2 grid gap-1 text-[11px]">
-                                                            <span className={snaptradeAutoTrade ? 'text-green-600 dark:text-green-300' : ''}>
-                                                                {snaptradeAutoTrade ? 'OK' : 'Missing'}: Enable live execution
-                                                            </span>
-                                                            <span className={snaptradeTradingAccountId ? 'text-green-600 dark:text-green-300' : ''}>
-                                                                {snaptradeTradingAccountId ? 'OK' : 'Missing'}: Select synced account
-                                                            </span>
-                                                            <span className={liveTradingAcknowledged ? 'text-green-600 dark:text-green-300' : ''}>
-                                                                {liveTradingAcknowledged ? 'OK' : 'Missing'}: Acknowledge live trading
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                    <Button type="button" variant="outline" size="sm" onClick={() => setActiveSettingsTab('credentials')}>
-                                                        Open Connections
-                                                    </Button>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="maxTradesPerDay">Max Trades Per Day</Label>
-                                            <Input
-                                                id="maxTradesPerDay"
-                                                type="number"
-                                                min="1"
-                                                value={maxTradesPerDay}
-                                                onChange={(e) => setMaxTradesPerDay(e.target.value)}
-                                            />
+                                    <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
+                                        <div>
+                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Broker execution</h5>
+                                            <p className="text-[10px] text-muted-foreground">Choose where approved signals are sent.</p>
                                         </div>
                                         <div className="grid gap-2">
-                                            <Label htmlFor="contractsPerTrade">Contracts Per Trade</Label>
-                                            <Input
-                                                id="contractsPerTrade"
-                                                type="number"
-                                                min="1"
-                                                value={contractsPerTrade}
-                                                onChange={(e) => setContractsPerTrade(e.target.value)}
-                                            />
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="orderType">Entry Order Type</Label>
-                                            <Select value={orderType} onValueChange={setOrderType}>
-                                                <SelectTrigger id="orderType">
-                                                    <SelectValue placeholder="Select Order Type" />
+                                            <Label htmlFor="executionBroker">Execution Broker</Label>
+                                            <Select value={executionBroker} onValueChange={handleExecutionBrokerChange}>
+                                                <SelectTrigger id="executionBroker">
+                                                    <SelectValue placeholder="Select Broker" />
                                                 </SelectTrigger>
                                                 <SelectContent>
-                                                    <SelectItem value="LIMIT">Limit</SelectItem>
-                                                    <SelectItem value="MARKET">Market</SelectItem>
+                                                    <SelectItem value="none">No broker execution (Simulated)</SelectItem>
+                                                    <SelectItem value="alpaca_paper">Alpaca Paper Trading</SelectItem>
+                                                    <SelectItem value="wealthsimple_snaptrade">Wealthsimple via SnapTrade (Live)</SelectItem>
                                                 </SelectContent>
                                             </Select>
+                                            {executionBroker === 'wealthsimple_snaptrade' && (
+                                                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-200">
+                                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                                        <div>
+                                                            <div className="flex items-center gap-2 font-semibold">
+                                                                <AlertTriangle className="h-4 w-4" />
+                                                                Wealthsimple Live needs connection setup
+                                                            </div>
+                                                            <div className="mt-2 grid gap-1 text-[11px]">
+                                                                <span className={snaptradeAutoTrade ? 'text-green-600 dark:text-green-300' : ''}>
+                                                                    {snaptradeAutoTrade ? 'OK' : 'Missing'}: Enable live execution
+                                                                </span>
+                                                                <span className={snaptradeTradingAccountId ? 'text-green-600 dark:text-green-300' : ''}>
+                                                                    {snaptradeTradingAccountId ? 'OK' : 'Missing'}: Select synced account
+                                                                </span>
+                                                                <span className={liveTradingAcknowledged ? 'text-green-600 dark:text-green-300' : ''}>
+                                                                    {liveTradingAcknowledged ? 'OK' : 'Missing'}: Acknowledge live trading
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <Button type="button" variant="outline" size="sm" onClick={() => setActiveSettingsTab('credentials')}>
+                                                            Open Connections
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
+                                        <div>
+                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Safety limits</h5>
+                                            <p className="text-[10px] text-muted-foreground">Cap trade frequency and contract size before any broker order is attempted.</p>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="maxTradesPerDay">Max Trades Per Day</Label>
+                                                <Input
+                                                    id="maxTradesPerDay"
+                                                    type="number"
+                                                    min="1"
+                                                    value={maxTradesPerDay}
+                                                    onChange={(e) => setMaxTradesPerDay(e.target.value)}
+                                                />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="contractsPerTrade">Contracts Per Trade</Label>
+                                                <Input
+                                                    id="contractsPerTrade"
+                                                    type="number"
+                                                    min="1"
+                                                    value={contractsPerTrade}
+                                                    onChange={(e) => setContractsPerTrade(e.target.value)}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
+                                        <div>
+                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entry rules</h5>
+                                            <p className="text-[10px] text-muted-foreground">Control entry order type and slippage limits.</p>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="orderType">Entry Order Type</Label>
+                                                <Select value={orderType} onValueChange={setOrderType}>
+                                                    <SelectTrigger id="orderType">
+                                                        <SelectValue placeholder="Select Order Type" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="LIMIT">Limit</SelectItem>
+                                                        <SelectItem value="MARKET">Market</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="entrySlippagePct">Entry Slippage Cap (%)</Label>
+                                                <Input
+                                                    id="entrySlippagePct"
+                                                    type="number"
+                                                    min="0"
+                                                    step="0.5"
+                                                    value={entrySlippagePct}
+                                                    onChange={(e) => setEntrySlippagePct(e.target.value)}
+                                                    disabled={orderType !== 'LIMIT'}
+                                                />
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
+                                        <div>
+                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Risk exits</h5>
+                                            <p className="text-[10px] text-muted-foreground">Tune take-profit behavior and automatic stop-loss exits.</p>
                                         </div>
                                         <div className="grid gap-2">
-                                            <Label htmlFor="entrySlippagePct">Entry Slippage Cap (%)</Label>
+                                            <Label htmlFor="takeProfitPct">Premium Take Profit Override (%)</Label>
                                             <Input
-                                                id="entrySlippagePct"
+                                                id="takeProfitPct"
                                                 type="number"
                                                 min="0"
-                                                step="0.5"
-                                                value={entrySlippagePct}
-                                                onChange={(e) => setEntrySlippagePct(e.target.value)}
-                                                disabled={orderType !== 'LIMIT'}
+                                                step="1"
+                                                value={takeProfitPct}
+                                                onChange={(e) => setTakeProfitPct(e.target.value)}
+                                                placeholder="Blank = use suggested TP"
                                             />
+                                            <p className="text-[10px] text-muted-foreground">
+                                                Optional. Example: 20 exits at entry premium +20%. Leave blank to rely on the scanner suggested TP.
+                                            </p>
                                         </div>
-                                    </div>
 
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="takeProfitPct">Premium Take Profit Override (%)</Label>
-                                        <Input
-                                            id="takeProfitPct"
-                                            type="number"
-                                            min="0"
-                                            step="1"
-                                            value={takeProfitPct}
-                                            onChange={(e) => setTakeProfitPct(e.target.value)}
-                                            placeholder="Blank = use suggested TP"
-                                        />
-                                        <p className="text-[10px] text-muted-foreground">
-                                            Optional. Example: 20 exits at entry premium +20%. Leave blank to rely on the scanner suggested TP.
-                                        </p>
-                                    </div>
-
-                                    <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
-                                        <div className="flex items-center justify-between gap-3">
-                                            <Label htmlFor="stopLossEngineToggle" className="flex items-center gap-2">
-                                                Automatic Stop-Loss Engine
-                                                {stopLossEngineEnabled ? (
-                                                    <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
-                                                ) : (
-                                                    <Badge variant="secondary" className="h-5 text-[10px]">Paused</Badge>
-                                                )}
-                                            </Label>
-                                            <Switch
-                                                id="stopLossEngineToggle"
-                                                checked={stopLossEngineEnabled}
-                                                onCheckedChange={setStopLossEngineEnabled}
-                                            />
+                                        <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <Label htmlFor="stopLossEngineToggle" className="flex items-center gap-2">
+                                                    Automatic Stop-Loss Engine
+                                                    {stopLossEngineEnabled ? (
+                                                        <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
+                                                    ) : (
+                                                        <Badge variant="secondary" className="h-5 text-[10px]">Paused</Badge>
+                                                    )}
+                                                </Label>
+                                                <Switch
+                                                    id="stopLossEngineToggle"
+                                                    checked={stopLossEngineEnabled}
+                                                    onCheckedChange={setStopLossEngineEnabled}
+                                                />
+                                            </div>
+                                            <p className={`text-[10px] ${stopLossEngineEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
+                                                {stopLossEngineEnabled
+                                                    ? 'Stop-loss exits can be submitted automatically for this user. Take-profit monitoring also remains active.'
+                                                    : 'Automatic stop-loss exits are paused for this user only. Take-profit and trim exits remain active.'}
+                                            </p>
                                         </div>
-                                        <p className={`text-[10px] ${stopLossEngineEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
-                                            {stopLossEngineEnabled
-                                                ? 'Stop-loss exits can be submitted automatically for this user. Take-profit monitoring also remains active.'
-                                                : 'Automatic stop-loss exits are paused for this user only. Take-profit and trim exits remain active.'}
-                                        </p>
                                     </div>
                                 </section>
 
