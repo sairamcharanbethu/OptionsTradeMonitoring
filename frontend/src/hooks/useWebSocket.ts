@@ -1,29 +1,44 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface WebSocketMessage {
     type: string;
     data: any;
 }
 
-// Module-level shared states to act as a singleton connection manager
-let sharedSocket: WebSocket | null = null;
-let isConnectedGlobal = false;
-const subscribers = new Set<(msg: WebSocketMessage) => void>();
-const statusSubscribers = new Set<(connected: boolean) => void>();
-let reconnectTimeout: ReturnType<typeof setTimeout> | undefined = undefined;
-let closeTimeout: ReturnType<typeof setTimeout> | undefined = undefined;
-let pingInterval: ReturnType<typeof setInterval> | undefined = undefined;
+type WebSocketState = {
+    sharedSocket: WebSocket | null;
+    isConnected: boolean;
+    subscribers: Set<(msg: WebSocketMessage) => void>;
+    statusSubscribers: Set<(connected: boolean) => void>;
+    reconnectTimeout?: ReturnType<typeof setTimeout>;
+    closeTimeout?: ReturnType<typeof setTimeout>;
+    pingInterval?: ReturnType<typeof setInterval>;
+};
+
+declare global {
+    interface Window {
+        __optionsTradeWebSocketState?: WebSocketState;
+    }
+}
+
+// Browser-level singleton so lazy chunks or mixed import paths still share one socket per tab.
+const wsState = window.__optionsTradeWebSocketState ??= {
+    sharedSocket: null,
+    isConnected: false,
+    subscribers: new Set<(msg: WebSocketMessage) => void>(),
+    statusSubscribers: new Set<(connected: boolean) => void>(),
+};
 
 const connectGlobal = (url: string) => {
-    if (sharedSocket) return;
+    if (wsState.sharedSocket) return;
 
-    if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
-        reconnectTimeout = undefined;
+    if (wsState.reconnectTimeout) {
+        clearTimeout(wsState.reconnectTimeout);
+        wsState.reconnectTimeout = undefined;
     }
-    if (closeTimeout) {
-        clearTimeout(closeTimeout);
-        closeTimeout = undefined;
+    if (wsState.closeTimeout) {
+        clearTimeout(wsState.closeTimeout);
+        wsState.closeTimeout = undefined;
     }
 
     // Construct absolute URL if relative
@@ -36,14 +51,14 @@ const connectGlobal = (url: string) => {
 
     socket.onopen = () => {
         console.log('[WebSocket] Connected');
-        isConnectedGlobal = true;
-        statusSubscribers.forEach(cb => cb(true));
+        wsState.isConnected = true;
+        wsState.statusSubscribers.forEach(cb => cb(true));
 
         // Start heartbeat ping every 30 seconds to keep the connection alive (avoid reverse proxy timeouts)
-        if (pingInterval) clearInterval(pingInterval);
-        pingInterval = setInterval(() => {
-            if (sharedSocket && sharedSocket.readyState === WebSocket.OPEN) {
-                sharedSocket.send(JSON.stringify({ type: 'ping' }));
+        if (wsState.pingInterval) clearInterval(wsState.pingInterval);
+        wsState.pingInterval = setInterval(() => {
+            if (wsState.sharedSocket && wsState.sharedSocket.readyState === WebSocket.OPEN) {
+                wsState.sharedSocket.send(JSON.stringify({ type: 'ping' }));
             }
         }, 30000);
     };
@@ -54,7 +69,7 @@ const connectGlobal = (url: string) => {
             if (msg && msg.type === 'pong') {
                 return; // Heartbeat response, ignore
             }
-            subscribers.forEach(cb => cb(msg));
+            wsState.subscribers.forEach(cb => cb(msg));
         } catch (e) {
             console.error('[WebSocket] Failed to parse message:', e);
         }
@@ -62,19 +77,19 @@ const connectGlobal = (url: string) => {
 
     socket.onclose = () => {
         console.log('[WebSocket] Disconnected');
-        isConnectedGlobal = false;
-        statusSubscribers.forEach(cb => cb(false));
-        sharedSocket = null;
+        wsState.isConnected = false;
+        wsState.statusSubscribers.forEach(cb => cb(false));
+        wsState.sharedSocket = null;
 
-        if (pingInterval) {
-            clearInterval(pingInterval);
-            pingInterval = undefined;
+        if (wsState.pingInterval) {
+            clearInterval(wsState.pingInterval);
+            wsState.pingInterval = undefined;
         }
 
         // Only reconnect if there are active subscribers
-        if (subscribers.size > 0 || statusSubscribers.size > 0) {
+        if (wsState.subscribers.size > 0 || wsState.statusSubscribers.size > 0) {
             console.log('[WebSocket] Reconnecting in 3s...');
-            reconnectTimeout = setTimeout(() => connectGlobal(url), 3000);
+            wsState.reconnectTimeout = setTimeout(() => connectGlobal(url), 3000);
         }
     };
 
@@ -83,29 +98,29 @@ const connectGlobal = (url: string) => {
         socket.close();
     };
 
-    sharedSocket = socket;
+    wsState.sharedSocket = socket;
 };
 
 const disconnectGlobal = () => {
-    if (closeTimeout) {
-        clearTimeout(closeTimeout);
+    if (wsState.closeTimeout) {
+        clearTimeout(wsState.closeTimeout);
     }
     // Delay closing to handle fast tab switching / React dev mode double-mounts
-    closeTimeout = setTimeout(() => {
-        if (subscribers.size === 0 && statusSubscribers.size === 0 && sharedSocket) {
+    wsState.closeTimeout = setTimeout(() => {
+        if (wsState.subscribers.size === 0 && wsState.statusSubscribers.size === 0 && wsState.sharedSocket) {
             console.log('[WebSocket] No active subscribers. Closing connection.');
-            sharedSocket.close();
-            sharedSocket = null;
-            if (pingInterval) {
-                clearInterval(pingInterval);
-                pingInterval = undefined;
+            wsState.sharedSocket.close();
+            wsState.sharedSocket = null;
+            if (wsState.pingInterval) {
+                clearInterval(wsState.pingInterval);
+                wsState.pingInterval = undefined;
             }
         }
     }, 2000);
 };
 
 export const useWebSocket = (url: string = '/api/ws') => {
-    const [isConnected, setIsConnected] = useState(isConnectedGlobal);
+    const [isConnected, setIsConnected] = useState(wsState.isConnected);
     const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
 
     useEffect(() => {
@@ -117,28 +132,28 @@ export const useWebSocket = (url: string = '/api/ws') => {
             setIsConnected(connected);
         };
 
-        subscribers.add(handleMessage);
-        statusSubscribers.add(handleStatus);
+        wsState.subscribers.add(handleMessage);
+        wsState.statusSubscribers.add(handleStatus);
         
         // Sync local connection state with global state on mount
-        setIsConnected(isConnectedGlobal);
+        setIsConnected(wsState.isConnected);
 
         // Initiate connection
         connectGlobal(url);
 
         return () => {
-            subscribers.delete(handleMessage);
-            statusSubscribers.delete(handleStatus);
+            wsState.subscribers.delete(handleMessage);
+            wsState.statusSubscribers.delete(handleStatus);
 
-            if (subscribers.size === 0 && statusSubscribers.size === 0) {
+            if (wsState.subscribers.size === 0 && wsState.statusSubscribers.size === 0) {
                 disconnectGlobal();
             }
         };
     }, [url]);
 
     const sendMessage = useCallback((msg: any) => {
-        if (sharedSocket && sharedSocket.readyState === WebSocket.OPEN) {
-            sharedSocket.send(JSON.stringify(msg));
+        if (wsState.sharedSocket && wsState.sharedSocket.readyState === WebSocket.OPEN) {
+            wsState.sharedSocket.send(JSON.stringify(msg));
         } else {
             console.warn('[WebSocket] Cannot send message: socket is not open');
         }
