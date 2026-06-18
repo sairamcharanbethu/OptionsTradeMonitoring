@@ -52,12 +52,14 @@ export class DiscordAlertService {
 
   async send(input: DiscordAlertInput): Promise<boolean> {
     let webhookUrl: string | null = null;
+    let dedupeRedisKey: string | null = null;
     try {
       webhookUrl = await this.resolveWebhook(input.userId);
       if (!webhookUrl) return false;
 
       if (input.dedupeKey && redis.isReady()) {
-        const acquired = await redis.setNX(`discord-alert:${input.dedupeKey}`, String(Date.now()), input.dedupeSeconds || 900);
+        dedupeRedisKey = `discord-alert:${input.dedupeKey}`;
+        const acquired = await redis.setNX(dedupeRedisKey, String(Date.now()), input.dedupeSeconds || 900);
         if (!acquired) return false;
       }
     } catch (err: any) {
@@ -101,6 +103,7 @@ export class DiscordAlertService {
       }
       return true;
     } catch (err: any) {
+      if (dedupeRedisKey) await redis.del(dedupeRedisKey);
       this.fastify.log.warn(`[DiscordAlertService] Failed to send ${input.category || 'alert'} alert: ${err.message || String(err)}`);
       return false;
     } finally {
