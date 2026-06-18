@@ -6,6 +6,7 @@ import { decode, encode } from '@msgpack/msgpack';
 type AlpacaStreamMessage = {
   T?: string;
   msg?: string;
+  code?: number;
   S?: string;
   bp?: number;
   ap?: number;
@@ -149,6 +150,15 @@ export class AlpacaMarketDataStreamService extends EventEmitter {
         }
 
         if (message.T === 'error') {
+          const errorMessage = String(message.msg || '');
+          if (message.code === 403 && /already authenticated/i.test(errorMessage)) {
+            this.lastError = null;
+            this.reconnectAttempts = 0;
+            this.fastify.log.info('[AlpacaMarketDataStream] Already authenticated. Refreshing subscriptions.');
+            this.sendSubscribe();
+            continue;
+          }
+
           this.lastError = JSON.stringify(message);
           this.fastify.log.error(`[AlpacaMarketDataStream] Stream error: ${JSON.stringify(message)}`);
           continue;

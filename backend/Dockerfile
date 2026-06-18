@@ -1,4 +1,4 @@
-FROM node:20-slim AS build
+FROM node:22-slim AS build
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ COPY tsconfig.json copy-scripts.js ./
 COPY src ./src
 RUN npm run build
 
-FROM node:20-slim AS runtime
+FROM node:22-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv ca-certificates && \

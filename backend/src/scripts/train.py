@@ -2,6 +2,7 @@
 import sys
 import os
 import json
+from datetime import datetime, timezone
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -31,6 +32,95 @@ def get_db_connection():
         cursor_factory=RealDictCursor
     )
 
+def parse_time(value):
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+    if isinstance(value, (int, float)):
+        timestamp = value / 1000 if value > 100000000000 else value
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+
+    if isinstance(value, str):
+        try:
+            normalized = value.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    return None
+
+def parse_price(bar):
+    if not isinstance(bar, dict):
+        return None
+
+    for key in ("price", "close", "adjclose", "adjClose", "regularMarketPrice"):
+        value = bar.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+
+    return None
+
+def extract_history_bars(data):
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError:
+            return []
+
+    if isinstance(data, list):
+        return data
+
+    if not isinstance(data, dict):
+        return []
+
+    for key in ("quotes", "data", "prices", "history", "bars"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return value
+
+    result = (((data.get("chart") or {}).get("result") or [None])[0] or {})
+    timestamps = result.get("timestamp") or []
+    quote = ((((result.get("indicators") or {}).get("quote") or [None])[0]) or {})
+    closes = quote.get("close") or []
+    if timestamps and closes:
+        return [{"timestamp": ts, "close": close} for ts, close in zip(timestamps, closes)]
+
+    return []
+
+def normalize_history_candles(data, created_at):
+    created_time = parse_time(created_at)
+    candles = []
+
+    for bar in extract_history_bars(data):
+        if not isinstance(bar, dict):
+            continue
+
+        bar_time = None
+        for key in ("timestamp", "date", "datetime", "time", "regularMarketTime"):
+            bar_time = parse_time(bar.get(key))
+            if bar_time:
+                break
+
+        price = parse_price(bar)
+        if price is None:
+            continue
+
+        if created_time and bar_time and bar_time <= created_time:
+            continue
+
+        candles.append({"timestamp": bar_time or datetime.max.replace(tzinfo=timezone.utc), "price": price})
+
+    candles.sort(key=lambda candle: candle["timestamp"])
+    return candles[:100]
+
 def simulate_outcome(conn, signal):
     """
     Simulates signal success by tracking subsequent 5-minute candles in cache.
@@ -47,16 +137,15 @@ def simulate_outcome(conn, signal):
     if not entry or not sl or not tp:
         return None
         
-    # Query candles after the signal creation on that day
-    # Limit to the same trading day (max 8 hours of 5m candles = ~100 candles)
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT price::double precision FROM stock_history_cache
-            WHERE symbol = %s AND timestamp > %s
-            ORDER BY timestamp ASC
-            LIMIT 100
-        """, (symbol, created_at))
-        candles = cur.fetchall()
+            SELECT data FROM stock_history_cache
+            WHERE symbol = %s
+            LIMIT 1
+        """, (symbol,))
+        history = cur.fetchone()
+
+    candles = normalize_history_candles(history["data"], created_at) if history else []
         
     if not candles:
         return None
