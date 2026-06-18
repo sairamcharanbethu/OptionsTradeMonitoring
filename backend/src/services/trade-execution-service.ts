@@ -4,6 +4,7 @@ import { SnaptradeService } from './snaptrade-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeRedisService } from './trade-redis-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
+import { DiscordAlertService } from './discord-alert-service';
 
 type ExecutionBroker = 'none' | 'alpaca_paper' | 'wealthsimple_snaptrade' | 'simulated';
 
@@ -1137,6 +1138,20 @@ export class TradeExecutionService {
            updated_at = CURRENT_TIMESTAMP`,
       [signalId, userId, status, executionStatus, error]
     );
+
+    const severity = skipped
+      ? String(error || '').includes('Daily trade limit reached') ? 'info' : 'warning'
+      : 'critical';
+    await new DiscordAlertService(this.fastify).send({
+      userId,
+      title: skipped ? 'Trade entry skipped' : 'Trade execution failed',
+      message: `Signal #${signalId}: ${error}`,
+      severity,
+      category: skipped ? 'skipped-entry' : 'execution-failure',
+      signalId,
+      dedupeKey: `signal:${userId}:${signalId}:${executionStatus}:${String(error || '').slice(0, 120)}`,
+      dedupeSeconds: 900
+    });
   }
 
   private async invalidateUserCaches(userId: number) {

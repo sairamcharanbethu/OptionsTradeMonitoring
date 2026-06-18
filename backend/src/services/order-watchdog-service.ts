@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { DiscordAlertService } from './discord-alert-service';
 
 type WatchdogSummary = {
   checked: number;
@@ -17,7 +18,7 @@ export class OrderWatchdogService {
 
   async run(): Promise<WatchdogSummary> {
     const { rows } = await this.fastify.pg.query(
-      `SELECT id, status, execution_status, exit_order_type, created_at, exit_requested_at
+      `SELECT id, user_id, symbol, option_type, strike_price, expiration_date, status, execution_status, exit_order_type, created_at, exit_requested_at
        FROM positions
        WHERE execution_broker = 'wealthsimple_snaptrade'
          AND (
@@ -50,6 +51,16 @@ export class OrderWatchdogService {
                  AND COALESCE(execution_status, '') NOT IN ('EXECUTED', 'FILLED', 'FILLED_FULLY')`,
               [` [Watchdog marked entry stale after ${Math.round(this.entryStaleMs / 1000)}s]`, row.id]
             );
+            await new DiscordAlertService(this.fastify).send({
+              userId: Number(row.user_id),
+              title: 'Entry order stale',
+              message: `Position #${row.id} ${row.symbol} ${row.option_type} ${Number(row.strike_price)} has been pending for more than ${Math.round(this.entryStaleMs / 1000)} seconds. Verify Wealthsimple before placing another entry.`,
+              severity: 'warning',
+              category: 'stale-entry',
+              tradeId: row.id,
+              dedupeKey: `entry-stale:${row.id}`,
+              dedupeSeconds: 3600
+            });
             summary.entryStale += 1;
           } else {
             summary.stillPending += 1;

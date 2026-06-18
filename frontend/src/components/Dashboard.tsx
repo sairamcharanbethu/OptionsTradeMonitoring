@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { Suspense, lazy, useEffect, useState, useMemo, useRef } from 'react';
 import { api, Position, User } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePositions, usePortfolioStats, useMarketStatus, useClosedPositions, QUERY_KEYS } from '@/hooks/useDashboardData';
@@ -83,10 +83,11 @@ import PositionForm from './PositionForm';
 import SettingsDialog from './SettingsDialog';
 import GoalTracker from './GoalTracker';
 import WealthsimplePortfolio from './WealthsimplePortfolio';
-import DayTradingTerminal from '@/pages/DayTradingTerminal';
 import { StatsCard } from './StatsCard';
 import { PositionsTable } from './PositionsTable';
 import { cn, getDte, getPnL, getRoi } from '@/lib/utils';
+
+const DayTradingTerminal = lazy(() => import('@/pages/DayTradingTerminal'));
 
 interface DashboardProps {
   user: User;
@@ -874,7 +875,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
         </TabsContent>
 
         <TabsContent value="day-trading" className="mt-0">
-          <DayTradingTerminal />
+          <Suspense fallback={<div className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">Loading day trading workspace...</div>}>
+            <DayTradingTerminal />
+          </Suspense>
         </TabsContent>
 
         {user.role === 'ADMIN' && (

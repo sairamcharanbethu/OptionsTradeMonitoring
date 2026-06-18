@@ -1,0 +1,280 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, ArrowLeft, BarChart3, Bell, RefreshCw, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react';
+import { api, TradeAlertsResponse, TradeReportResponse } from '../lib/api';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+
+const RANGE_OPTIONS = [
+  { value: 'today', label: 'Today' },
+  { value: '7d', label: 'Past week' },
+  { value: '30d', label: 'Past month' },
+  { value: '90d', label: 'Past 3 months' },
+  { value: 'ytd', label: 'YTD' },
+  { value: '1y', label: 'Past year' }
+];
+
+const currency = (value?: number | null) => {
+  if (value == null || !Number.isFinite(Number(value))) return '-';
+  return Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+};
+
+const compactDate = (value?: string | null) => {
+  if (!value) return '-';
+  return new Date(value).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+};
+
+const contractLabel = (trade: any) => {
+  const expiry = String(trade.expiration_date || '').split('T')[0];
+  return `${trade.symbol} ${expiry} ${trade.option_type} ${Number(trade.strike_price).toFixed(0)}`;
+};
+
+const alertTone = (severity: string) => {
+  if (severity === 'critical') return 'border-red-500/30 bg-red-500/10 text-red-600';
+  if (severity === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-600';
+  return 'border-blue-500/30 bg-blue-500/10 text-blue-600';
+};
+
+function MetricTile({ label, value, detail, tone }: { label: string; value: string; detail?: string; tone?: 'green' | 'red' | 'amber' }) {
+  const toneClass = tone === 'green' ? 'text-emerald-500' : tone === 'red' ? 'text-red-500' : tone === 'amber' ? 'text-amber-500' : '';
+  return (
+    <div className="rounded-md border border-border bg-card p-4">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={`mt-1 font-mono text-xl font-semibold ${toneClass}`}>{value}</div>
+      {detail && <div className="mt-2 text-xs text-muted-foreground">{detail}</div>}
+    </div>
+  );
+}
+
+function SectionHeader({ icon: Icon, title, detail }: { icon: any; title: string; detail?: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+      <div className="flex items-center gap-2">
+        <Icon className="h-4 w-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold">{title}</h3>
+      </div>
+      {detail && <span className="text-xs text-muted-foreground">{detail}</span>}
+    </div>
+  );
+}
+
+export default function TradeIntelligencePage() {
+  const [range, setRange] = useState('30d');
+  const [report, setReport] = useState<TradeReportResponse | null>(null);
+  const [alerts, setAlerts] = useState<TradeAlertsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [reportData, alertData] = await Promise.all([
+        api.getTradeReport(range),
+        api.getTradeAlerts()
+      ]);
+      setReport(reportData);
+      setAlerts(alertData);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load trade intelligence');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [range]);
+
+  const summary = report?.summary;
+  const netTone = (summary?.totalPnl ?? 0) >= 0 ? 'green' : 'red';
+  const topAlerts = useMemo(() => alerts?.alerts.slice(0, 8) || [], [alerts]);
+
+  return (
+    <div className="mx-auto w-[95%] max-w-[1600px] py-4">
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-3">
+          <Button asChild variant="ghost" size="icon" className="rounded-full">
+            <Link to="/">
+              <ArrowLeft className="h-4 w-4" />
+            </Link>
+          </Button>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-xl font-semibold tracking-tight">Trade Intelligence</h2>
+              <Badge variant="outline" className="gap-1">
+                <BarChart3 className="h-3 w-3" />
+                Outcomes and alerts
+              </Badge>
+            </div>
+            <p className="text-sm text-muted-foreground">Review why trades worked, failed, or were skipped across the selected window.</p>
+          </div>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Select value={range} onValueChange={setRange}>
+            <SelectTrigger className="w-full sm:w-[170px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RANGE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" className="gap-2" onClick={load} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+          {error}
+        </div>
+      )}
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <MetricTile label="Closed trades" value={String(summary?.total ?? 0)} detail={`${summary?.wins ?? 0} wins / ${summary?.losses ?? 0} losses`} />
+        <MetricTile label="Net P&L" value={currency(summary?.totalPnl ?? 0)} tone={netTone} detail={`Avg ${currency(summary?.averagePnl ?? 0)}`} />
+        <MetricTile label="Win rate" value={`${summary?.winRate ?? 0}%`} detail={`Profit factor ${summary?.profitFactor ?? '-'}`} />
+        <MetricTile label="Open alerts" value={String(alerts?.summary.total ?? 0)} tone={(alerts?.summary.critical ?? 0) > 0 ? 'red' : (alerts?.summary.warning ?? 0) > 0 ? 'amber' : undefined} detail={`${alerts?.summary.critical ?? 0} critical / ${alerts?.summary.warning ?? 0} warning`} />
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-md border border-border bg-card">
+            <SectionHeader icon={BarChart3} title="Outcome Drivers" detail={report ? `Updated ${compactDate(report.generatedAt)}` : undefined} />
+            <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+              <MetricTile label="Take profit exits" value={String(summary?.takeProfitExits ?? 0)} tone="green" />
+              <MetricTile label="Stop-loss exits" value={String(summary?.stopLossExits ?? 0)} tone="red" />
+              <MetricTile label="Superseded exits" value={String(summary?.supersededExits ?? 0)} />
+              <MetricTile label="Trimmed winners" value={String(summary?.trimmedTrades ?? 0)} tone="green" />
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-md border border-border bg-card">
+            <SectionHeader icon={TrendingUp} title="Symbol Performance" />
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[700px] text-sm">
+                <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Symbol</th>
+                    <th className="px-4 py-2 text-right">Trades</th>
+                    <th className="px-4 py-2 text-right">Win rate</th>
+                    <th className="px-4 py-2 text-right">Avg P&L</th>
+                    <th className="px-4 py-2 text-right">Net P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(report?.bySymbol || []).length === 0 ? (
+                    <tr><td colSpan={5} className="px-4 py-6 text-center text-muted-foreground">No closed trades in this range.</td></tr>
+                  ) : report!.bySymbol.map((row) => (
+                    <tr key={row.symbol} className="border-t border-border">
+                      <td className="px-4 py-2 font-semibold">{row.symbol}</td>
+                      <td className="px-4 py-2 text-right font-mono">{row.total}</td>
+                      <td className="px-4 py-2 text-right font-mono">{row.winRate}%</td>
+                      <td className={`px-4 py-2 text-right font-mono ${row.averagePnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(row.averagePnl)}</td>
+                      <td className={`px-4 py-2 text-right font-mono ${row.totalPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(row.totalPnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-md border border-border bg-card">
+            <SectionHeader icon={TrendingDown} title="Recent Closed Trade Review" />
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[920px] text-sm">
+                <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Contract</th>
+                    <th className="px-4 py-2 text-right">Entry</th>
+                    <th className="px-4 py-2 text-right">Exit</th>
+                    <th className="px-4 py-2 text-right">P&L</th>
+                    <th className="px-4 py-2 text-left">Driver</th>
+                    <th className="px-4 py-2 text-left">Closed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(report?.recentOutcomes || []).length === 0 ? (
+                    <tr><td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">No closed trade outcomes to review.</td></tr>
+                  ) : report!.recentOutcomes.map((trade) => (
+                    <tr key={trade.id} className="border-t border-border">
+                      <td className="px-4 py-2">
+                        <Link to={`/trades/${trade.id}/command`} className="font-semibold hover:underline">{contractLabel(trade)}</Link>
+                        <div className="text-xs text-muted-foreground">{trade.exit_reason || trade.execution_status || 'Closed'}</div>
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono">{currency(trade.entry_price)}</td>
+                      <td className="px-4 py-2 text-right font-mono">{currency(trade.exit_price)}</td>
+                      <td className={`px-4 py-2 text-right font-mono ${(trade.realized_pnl ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</td>
+                      <td className="px-4 py-2">{trade.outcomeDriver}</td>
+                      <td className="px-4 py-2 text-xs text-muted-foreground">{compactDate(trade.updated_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-md border border-border bg-card">
+            <SectionHeader icon={Bell} title="Lifecycle Alerts" detail={alerts ? `Updated ${compactDate(alerts.generatedAt)}` : undefined} />
+            <div className="divide-y divide-border">
+              {topAlerts.length === 0 ? (
+                <div className="px-4 py-6 text-sm text-muted-foreground">No skipped-entry, stale-exit, or broker freshness alerts.</div>
+              ) : topAlerts.map((alert) => (
+                <div key={alert.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline" className={alertTone(alert.severity)}>{alert.severity}</Badge>
+                        <span className="text-sm font-semibold">{alert.title}</span>
+                      </div>
+                      <p className="mt-2 text-sm text-muted-foreground">{alert.message}</p>
+                      <div className="mt-2 text-xs text-muted-foreground">{compactDate(alert.createdAt)}</div>
+                    </div>
+                    {alert.tradeId && (
+                      <Button asChild variant="outline" size="sm">
+                        <Link to={`/trades/${alert.tradeId}/command`}>Review</Link>
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="overflow-hidden rounded-md border border-border bg-card">
+            <SectionHeader icon={ShieldAlert} title="Skipped Entry Review" />
+            <div className="divide-y divide-border">
+              {(report?.skippedExecutions || []).length === 0 ? (
+                <div className="px-4 py-6 text-sm text-muted-foreground">No skipped executions in this range.</div>
+              ) : report!.skippedExecutions.slice(0, 12).map((item) => (
+                <div key={`${item.signal_id}-${item.updated_at}`} className="p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="font-mono text-sm font-semibold">{item.symbol || 'Signal'} #{item.signal_id}</div>
+                    <Badge variant="outline">{item.setup_grade || 'N/A'}</Badge>
+                  </div>
+                  <div className="mt-2 flex items-start gap-2 text-sm text-muted-foreground">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>{item.execution_error || item.no_trade_reasons?.join(', ') || 'Skipped by execution filters'}</span>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">{compactDate(item.updated_at)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

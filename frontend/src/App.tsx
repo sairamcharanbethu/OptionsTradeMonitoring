@@ -1,18 +1,28 @@
-import { useState, useEffect } from 'react';
-import Dashboard from './components/Dashboard';
+import { Suspense, lazy, useState, useEffect } from 'react';
 import Auth from './components/Auth';
 import { api, User } from './lib/api';
 import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Button } from './components/ui/button';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Activity, FlaskConical, Info, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
-import PositionDetailsPage from './pages/PositionDetailsPage';
-import DevLiveExitTestPage from './pages/DevLiveExitTestPage';
-import TradesPage from './pages/TradesPage';
-import SystemHealthPage from './pages/SystemHealthPage';
-import TradeCommandCenterPage from './pages/TradeCommandCenterPage';
-import StrategyGuidePage from './pages/StrategyGuidePage';
+import { Activity, BarChart3, FlaskConical, Info, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
+
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const PositionDetailsPage = lazy(() => import('./pages/PositionDetailsPage'));
+const DevLiveExitTestPage = lazy(() => import('./pages/DevLiveExitTestPage'));
+const TradesPage = lazy(() => import('./pages/TradesPage'));
+const SystemHealthPage = lazy(() => import('./pages/SystemHealthPage'));
+const TradeCommandCenterPage = lazy(() => import('./pages/TradeCommandCenterPage'));
+const StrategyGuidePage = lazy(() => import('./pages/StrategyGuidePage'));
+const TradeIntelligencePage = lazy(() => import('./pages/TradeIntelligencePage'));
+
+function RouteLoader() {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -98,6 +108,15 @@ function App() {
                   variant="ghost"
                   size="icon"
                   className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
+                  onClick={() => { window.location.href = '/trade-intelligence'; }}
+                  title="Trade Intelligence"
+                >
+                  <BarChart3 className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
                   onClick={() => { window.location.href = '/trades'; }}
                   title="Wealthsimple Trades"
                 >
@@ -117,15 +136,18 @@ function App() {
         </div>
         <main className="pt-2">
           <BrowserRouter>
-            <Routes>
-              <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
-              <Route path="/trades" element={<TradesPage />} />
-              <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
-              <Route path="/system-health" element={<SystemHealthPage />} />
-              <Route path="/strategy-guide" element={<StrategyGuidePage />} />
-              <Route path="/positions/:id" element={<PositionDetailsPage />} />
-              <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />
-            </Routes>
+            <Suspense fallback={<RouteLoader />}>
+              <Routes>
+                <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
+                <Route path="/trades" element={<TradesPage />} />
+                <Route path="/trade-intelligence" element={<TradeIntelligencePage />} />
+                <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
+                <Route path="/system-health" element={<SystemHealthPage />} />
+                <Route path="/strategy-guide" element={<StrategyGuidePage />} />
+                <Route path="/positions/:id" element={<PositionDetailsPage />} />
+                <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />
+              </Routes>
+            </Suspense>
           </BrowserRouter>
         </main>
       </div>

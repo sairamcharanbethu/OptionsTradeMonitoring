@@ -144,6 +144,72 @@ export interface TradeCommandCenterResponse {
   generatedAt: string;
 }
 
+export interface TradeReportResponse {
+  range: string;
+  generatedAt: string;
+  summary: {
+    total: number;
+    totalPnl: number;
+    averagePnl: number;
+    wins: number;
+    losses: number;
+    winRate: number;
+    profitFactor: number | null;
+    bestTrade: number;
+    worstTrade: number;
+    averageWin: number;
+    averageLoss: number;
+    takeProfitExits: number;
+    stopLossExits: number;
+    supersededExits: number;
+    manualExits: number;
+    trimmedTrades: number;
+  };
+  bySymbol: Array<{
+    symbol: string;
+    total: number;
+    totalPnl: number;
+    wins: number;
+    losses: number;
+    winRate: number;
+    averagePnl: number;
+  }>;
+  recentOutcomes: Array<Position & { outcomeDriver: string }>;
+  skippedExecutions: Array<{
+    signal_id: number;
+    status?: string;
+    execution_status?: string;
+    execution_error?: string | null;
+    updated_at: string;
+    symbol?: string;
+    signal_type?: string;
+    trade_bias?: string;
+    setup_grade?: string;
+    no_trade_reasons?: string[];
+  }>;
+}
+
+export interface TradeAlertsResponse {
+  generatedAt: string;
+  summary: {
+    total: number;
+    critical: number;
+    warning: number;
+    info: number;
+  };
+  alerts: Array<{
+    id: string;
+    severity: 'critical' | 'warning' | 'info';
+    category: 'stale-entry' | 'stale-exit' | 'skipped-entry' | 'broker-degraded';
+    title: string;
+    message: string;
+    tradeId?: number;
+    signalId?: number;
+    createdAt: string;
+    metadata?: any;
+  }>;
+}
+
 const API_BASE = '/api';
 
 const getToken = () => localStorage.getItem('token');
@@ -385,6 +451,23 @@ export const api = {
       ...data,
       trades: data.trades.map(normalizePosition)
     };
+  },
+
+  async getTradeReport(range = '30d'): Promise<TradeReportResponse> {
+    const params = new URLSearchParams({ range, t: String(Date.now()) });
+    const res = await authFetch(`${API_BASE}/trades/report?${params.toString()}`);
+    if (!res.ok) throw new Error('Failed to fetch trade report');
+    const data = await res.json();
+    return {
+      ...data,
+      recentOutcomes: data.recentOutcomes.map(normalizePosition)
+    };
+  },
+
+  async getTradeAlerts(): Promise<TradeAlertsResponse> {
+    const res = await authFetch(`${API_BASE}/trades/alerts?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch trade alerts');
+    return res.json();
   },
 
   async closeWealthsimpleTrade(id: number, quantity?: number): Promise<Position> {

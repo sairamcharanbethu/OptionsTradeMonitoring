@@ -1,4 +1,6 @@
 import Fastify from 'fastify';
+import path from 'path';
+import dotenv from 'dotenv';
 import cors from '@fastify/cors';
 import postgres from '@fastify/postgres';
 import swagger from '@fastify/swagger';
@@ -17,6 +19,9 @@ import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
 import { snaptradeRoutes } from './routes/snaptrade';
 import { FastifyRequest, FastifyReply } from 'fastify';
+
+dotenv.config({ path: path.join(__dirname, '../../.env') });
+dotenv.config();
 
 declare module 'fastify' {
   interface FastifyInstance {

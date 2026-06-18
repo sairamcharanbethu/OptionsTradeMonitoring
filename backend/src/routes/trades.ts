@@ -3,6 +3,7 @@ import { SnaptradeService } from '../services/snaptrade-service';
 import { TradeExecutionService } from '../services/trade-execution-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
+import { DiscordAlertService } from '../services/discord-alert-service';
 
 const tradeResponseSchema = {
   type: 'object',
@@ -110,6 +111,29 @@ function getTradeBrokerProof(trade: any) {
   };
 }
 
+function reportRangeToInterval(range?: string) {
+  switch (String(range || '30d')) {
+    case 'today': return '1 day';
+    case '7d': return '7 days';
+    case '30d': return '30 days';
+    case '90d': return '90 days';
+    case 'ytd': return 'year';
+    case '1y': return '1 year';
+    default: return '30 days';
+  }
+}
+
+function describeTradeOutcome(trade: any) {
+  const pnl = Number(trade.realized_pnl || 0);
+  const exitReason = String(trade.exit_reason || '').toUpperCase();
+  const notes = String(trade.notes || '').toUpperCase();
+  if (exitReason.includes('TAKE_PROFIT') || exitReason.includes('PROFIT') || notes.includes('TRIM')) return 'Profit logic';
+  if (exitReason.includes('STOP') || pnl < 0) return 'Stop loss or adverse move';
+  if (exitReason.includes('SUPERSEDED')) return 'Signal superseded';
+  if (exitReason.includes('MANUAL')) return 'Manual exit';
+  return pnl >= 0 ? 'Closed profitable' : 'Closed loss';
+}
+
 export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
 
@@ -171,6 +195,264 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       source: 'db',
       ageMs: 0,
       data
+    };
+  });
+
+  fastify.get('/report', {
+    schema: {
+      tags: ['Trades'],
+      summary: 'Get trade outcome report and failure review',
+      security: [{ bearerAuth: [] }],
+      querystring: {
+        type: 'object',
+        properties: {
+          range: { type: 'string', enum: ['today', '7d', '30d', '90d', 'ytd', '1y'] }
+        }
+      }
+    }
+  }, async (request) => {
+    const { id: userId } = (request as any).user;
+    const { range = '30d' } = request.query as { range?: string };
+    const interval = reportRangeToInterval(range);
+    const rangePredicate = range === 'ytd'
+      ? "updated_at >= date_trunc('year', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'"
+      : `updated_at >= now() - INTERVAL '${interval}'`;
+    const signalRangePredicate = range === 'ytd'
+      ? "sue.updated_at >= date_trunc('year', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'"
+      : `sue.updated_at >= now() - INTERVAL '${interval}'`;
+
+    const { rows: summaryRows } = await fastify.pg.query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COALESCE(SUM(realized_pnl), 0)::float AS total_pnl,
+         COALESCE(AVG(realized_pnl), 0)::float AS average_pnl,
+         COUNT(*) FILTER (WHERE realized_pnl > 0)::int AS wins,
+         COUNT(*) FILTER (WHERE realized_pnl < 0)::int AS losses,
+         COALESCE(AVG(realized_pnl) FILTER (WHERE realized_pnl > 0), 0)::float AS average_win,
+         COALESCE(AVG(realized_pnl) FILTER (WHERE realized_pnl < 0), 0)::float AS average_loss,
+         COALESCE(MAX(realized_pnl), 0)::float AS best_trade,
+         COALESCE(MIN(realized_pnl), 0)::float AS worst_trade,
+         COUNT(*) FILTER (WHERE exit_reason ILIKE '%TAKE%' OR exit_reason ILIKE '%PROFIT%')::int AS take_profit_exits,
+         COUNT(*) FILTER (WHERE exit_reason ILIKE '%STOP%')::int AS stop_loss_exits,
+         COUNT(*) FILTER (WHERE exit_reason ILIKE '%SUPERSEDED%')::int AS superseded_exits,
+         COUNT(*) FILTER (WHERE exit_reason ILIKE '%MANUAL%')::int AS manual_exits,
+         COUNT(*) FILTER (WHERE profit_trim_status = 'DONE')::int AS trimmed_trades
+       FROM positions
+       WHERE user_id = $1
+         AND execution_broker = 'wealthsimple_snaptrade'
+         AND status = 'CLOSED'
+         AND ${rangePredicate}`,
+      [userId]
+    );
+
+    const { rows: symbolRows } = await fastify.pg.query(
+      `SELECT symbol,
+              COUNT(*)::int AS total,
+              COALESCE(SUM(realized_pnl), 0)::float AS total_pnl,
+              COUNT(*) FILTER (WHERE realized_pnl > 0)::int AS wins,
+              COUNT(*) FILTER (WHERE realized_pnl < 0)::int AS losses,
+              COALESCE(AVG(realized_pnl), 0)::float AS average_pnl
+       FROM positions
+       WHERE user_id = $1
+         AND execution_broker = 'wealthsimple_snaptrade'
+         AND status = 'CLOSED'
+         AND ${rangePredicate}
+       GROUP BY symbol
+       ORDER BY total_pnl DESC`,
+      [userId]
+    );
+
+    const { rows: recentClosedRows } = await fastify.pg.query(
+      `SELECT id, symbol, option_type, strike_price, expiration_date, entry_price, exit_price,
+              quantity, realized_pnl, exit_reason, execution_status, profit_trim_status,
+              last_broker_order_status, broker_order_id, broker_exit_order_id, notes, created_at, updated_at
+       FROM positions
+       WHERE user_id = $1
+         AND execution_broker = 'wealthsimple_snaptrade'
+         AND status = 'CLOSED'
+         AND ${rangePredicate}
+       ORDER BY updated_at DESC
+       LIMIT 25`,
+      [userId]
+    );
+
+    const { rows: skippedRows } = await fastify.pg.query(
+      `SELECT sue.signal_id,
+              sue.status,
+              sue.execution_status,
+              sue.execution_error,
+              sue.updated_at,
+              s.symbol,
+              s.signal_type,
+              s.trade_bias,
+              s.setup_grade,
+              s.no_trade_reasons
+       FROM signal_user_executions sue
+       LEFT JOIN signals s ON s.id = sue.signal_id
+       WHERE sue.user_id = $1
+         AND ${signalRangePredicate}
+         AND (
+           sue.status = 'SKIPPED'
+           OR sue.execution_status = 'SKIPPED'
+           OR sue.execution_error ILIKE 'Entry skipped:%'
+           OR sue.execution_error ILIKE 'Daily trade limit reached%'
+         )
+       ORDER BY sue.updated_at DESC
+       LIMIT 25`,
+      [userId]
+    );
+
+    const summary = summaryRows[0] || {};
+    const total = Number(summary.total || 0);
+    const wins = Number(summary.wins || 0);
+    const losses = Number(summary.losses || 0);
+
+    return {
+      range,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        total,
+        totalPnl: Number(summary.total_pnl || 0),
+        averagePnl: Number(summary.average_pnl || 0),
+        wins,
+        losses,
+        winRate: total > 0 ? Number(((wins / total) * 100).toFixed(1)) : 0,
+        profitFactor: Math.abs(Number(summary.average_loss || 0) * losses) > 0
+          ? Number(((Number(summary.average_win || 0) * wins) / Math.abs(Number(summary.average_loss || 0) * losses)).toFixed(2))
+          : null,
+        bestTrade: Number(summary.best_trade || 0),
+        worstTrade: Number(summary.worst_trade || 0),
+        averageWin: Number(summary.average_win || 0),
+        averageLoss: Number(summary.average_loss || 0),
+        takeProfitExits: Number(summary.take_profit_exits || 0),
+        stopLossExits: Number(summary.stop_loss_exits || 0),
+        supersededExits: Number(summary.superseded_exits || 0),
+        manualExits: Number(summary.manual_exits || 0),
+        trimmedTrades: Number(summary.trimmed_trades || 0)
+      },
+      bySymbol: symbolRows.map((row: any) => ({
+        symbol: row.symbol,
+        total: Number(row.total || 0),
+        totalPnl: Number(row.total_pnl || 0),
+        wins: Number(row.wins || 0),
+        losses: Number(row.losses || 0),
+        winRate: Number(row.total || 0) > 0 ? Number(((Number(row.wins || 0) / Number(row.total)) * 100).toFixed(1)) : 0,
+        averagePnl: Number(row.average_pnl || 0)
+      })),
+      recentOutcomes: recentClosedRows.map((trade: any) => ({
+        ...trade,
+        outcomeDriver: describeTradeOutcome(trade)
+      })),
+      skippedExecutions: skippedRows
+    };
+  });
+
+  fastify.get('/alerts', {
+    schema: {
+      tags: ['Trades'],
+      summary: 'Get broker and trade lifecycle alerts',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request) => {
+    const { id: userId } = (request as any).user;
+    const alerts: any[] = [];
+
+    const { rows: staleRows } = await fastify.pg.query(
+      `SELECT id, symbol, option_type, strike_price, expiration_date, execution_status,
+              execution_error, exit_requested_at, last_broker_sync_at, last_broker_order_status, updated_at
+       FROM positions
+       WHERE user_id = $1
+         AND execution_broker = 'wealthsimple_snaptrade'
+         AND status IN ('OPEN', 'PENDING_ORDER')
+         AND (
+           (execution_status IN ('PENDING_EXIT', 'PENDING_TRIM', 'EXIT_STALE') AND COALESCE(exit_requested_at, updated_at) < now() - INTERVAL '5 minutes')
+           OR (status = 'PENDING_ORDER' AND updated_at < now() - INTERVAL '10 minutes')
+           OR execution_status IN ('EXIT_REJECTED', 'EXIT_FAILED')
+         )
+       ORDER BY updated_at DESC
+       LIMIT 20`,
+      [userId]
+    );
+
+    staleRows.forEach((trade: any) => {
+      const isPendingEntry = trade.status === 'PENDING_ORDER';
+      alerts.push({
+        id: `trade-${trade.id}-${trade.execution_status || trade.status}`,
+        severity: trade.execution_status === 'EXIT_REJECTED' || trade.execution_status === 'EXIT_FAILED' ? 'critical' : 'warning',
+        category: isPendingEntry ? 'stale-entry' : 'stale-exit',
+        title: isPendingEntry ? 'Entry order has not reconciled' : 'Exit order needs broker verification',
+        message: `${trade.symbol} ${trade.option_type} ${Number(trade.strike_price)} is ${trade.execution_status || trade.status}. Check Wealthsimple status before sending another order.`,
+        tradeId: Number(trade.id),
+        createdAt: trade.updated_at,
+        metadata: trade
+      });
+    });
+
+    const { rows: skippedRows } = await fastify.pg.query(
+      `SELECT sue.signal_id, sue.execution_error, sue.execution_status, sue.updated_at,
+              s.symbol, s.signal_type, s.setup_grade
+       FROM signal_user_executions sue
+       LEFT JOIN signals s ON s.id = sue.signal_id
+       WHERE sue.user_id = $1
+         AND sue.updated_at >= now() - INTERVAL '24 hours'
+         AND (
+           sue.status = 'SKIPPED'
+           OR sue.execution_status = 'SKIPPED'
+           OR sue.execution_error ILIKE 'Entry skipped:%'
+           OR sue.execution_error ILIKE 'Daily trade limit reached%'
+         )
+       ORDER BY sue.updated_at DESC
+       LIMIT 20`,
+      [userId]
+    );
+
+    skippedRows.forEach((row: any) => {
+      alerts.push({
+        id: `signal-${row.signal_id}-skipped`,
+        severity: String(row.execution_error || '').includes('Daily trade limit') ? 'info' : 'warning',
+        category: 'skipped-entry',
+        title: 'Entry skipped',
+        message: row.execution_error || `Signal #${row.signal_id} was skipped by execution safeguards.`,
+        signalId: Number(row.signal_id),
+        createdAt: row.updated_at,
+        metadata: row
+      });
+    });
+
+    const { rows: brokerRows } = await fastify.pg.query(
+      `SELECT COUNT(*)::int AS open_trades,
+              COUNT(*) FILTER (WHERE last_broker_sync_at IS NULL OR last_broker_sync_at < now() - INTERVAL '15 minutes')::int AS stale_syncs
+       FROM positions
+       WHERE user_id = $1
+         AND execution_broker = 'wealthsimple_snaptrade'
+         AND status IN ('OPEN', 'PENDING_ORDER')`,
+      [userId]
+    );
+    const broker = brokerRows[0] || {};
+    if (Number(broker.open_trades || 0) > 0 && Number(broker.stale_syncs || 0) > 0) {
+      alerts.push({
+        id: 'broker-stale-sync',
+        severity: 'warning',
+        category: 'broker-degraded',
+        title: 'Broker sync freshness degraded',
+        message: `${broker.stale_syncs}/${broker.open_trades} open Wealthsimple trades have stale or missing broker sync timestamps.`,
+        createdAt: new Date().toISOString(),
+        metadata: broker
+      });
+    }
+
+    const severityRank: Record<string, number> = { critical: 0, warning: 1, info: 2 };
+    alerts.sort((a, b) => (severityRank[a.severity] ?? 9) - (severityRank[b.severity] ?? 9) || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    return {
+      generatedAt: new Date().toISOString(),
+      summary: {
+        total: alerts.length,
+        critical: alerts.filter((alert) => alert.severity === 'critical').length,
+        warning: alerts.filter((alert) => alert.severity === 'warning').length,
+        info: alerts.filter((alert) => alert.severity === 'info').length
+      },
+      alerts
     };
   });
 
@@ -522,6 +804,16 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             message: err.message || String(err),
             metadata: { source: 'manual-close' }
           });
+          await new DiscordAlertService(fastify).send({
+            userId,
+            title: 'Manual close failed',
+            message: `Position #${id} ${trade.symbol} ${trade.option_type} ${Number(trade.strike_price)} manual close failed: ${err.message || String(err)}`,
+            severity: 'critical',
+            category: 'exit-failure',
+            tradeId: id,
+            dedupeKey: `manual-close-failed:${id}:${String(err.message || err).slice(0, 120)}`,
+            dedupeSeconds: 900
+          });
           await client.query('COMMIT');
           await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
           return reply.code(400).send({ error: err.message || 'Failed to submit Wealthsimple close order' });
@@ -731,6 +1023,16 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             eventType: 'EXIT_RETRY_FAILED',
             message: err.message || String(err),
             metadata: { brokerStatus }
+          });
+          await new DiscordAlertService(fastify).send({
+            userId,
+            title: 'Close retry failed',
+            message: `Position #${id} ${trade.symbol} ${trade.option_type} ${Number(trade.strike_price)} close retry failed after broker status ${brokerStatus || trade.execution_status || 'unknown'}: ${err.message || String(err)}`,
+            severity: 'critical',
+            category: 'exit-failure',
+            tradeId: id,
+            dedupeKey: `retry-close-failed:${id}:${String(err.message || err).slice(0, 120)}`,
+            dedupeSeconds: 900
           });
           await client.query('COMMIT');
           await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);

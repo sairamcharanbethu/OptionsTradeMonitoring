@@ -3,6 +3,7 @@ import { Snaptrade } from 'snaptrade-typescript-sdk';
 import { redis } from '../lib/redis';
 import crypto from 'crypto';
 import { TradeRedisService } from './trade-redis-service';
+import { DiscordAlertService } from './discord-alert-service';
 
 export class SnaptradeService {
     private fastify: FastifyInstance;
@@ -845,6 +846,16 @@ export class SnaptradeService {
                             eventType: 'EXIT_STALE',
                             message: `SnapTrade limit exit marked stale while broker status is ${status}`,
                             metadata: { status, brokerOrderId: position.broker_exit_order_id }
+                        });
+                        await new DiscordAlertService(this.fastify).send({
+                            userId,
+                            title: 'Exit order stale',
+                            message: `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)} limit exit is still pending after 120 seconds. Broker status: ${status || 'unknown'}. Verify Wealthsimple before retrying.`,
+                            severity: 'warning',
+                            category: 'stale-exit',
+                            tradeId: position.id,
+                            dedupeKey: `exit-stale:${position.id}:${position.broker_exit_order_id || ''}`,
+                            dedupeSeconds: 3600
                         });
                         continue;
                     }

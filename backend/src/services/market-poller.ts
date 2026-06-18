@@ -7,6 +7,7 @@ import { SnaptradeService } from './snaptrade-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import WebSocket from 'ws';
 import { TradeLifecycleService } from './trade-lifecycle-service';
+import { DiscordAlertService } from './discord-alert-service';
 
 type ExitQuoteContext = {
   bid?: number;
@@ -214,6 +215,16 @@ export class MarketPoller {
 
   private async markExitSubmissionFailure(position: any, message: string) {
     await TradeLifecycleService.markExitSubmissionFailure((this.fastify as any).pg, position.id, message);
+    await new DiscordAlertService(this.fastify).send({
+      userId: Number(position.user_id),
+      title: 'Automated exit failed',
+      message: `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)} exit submission failed: ${message}`,
+      severity: 'critical',
+      category: 'exit-failure',
+      tradeId: position.id,
+      dedupeKey: `auto-exit-failed:${position.id}:${String(message || '').slice(0, 120)}`,
+      dedupeSeconds: 900
+    });
   }
 
   private getProfitTrimQuantity(position: any): number {
