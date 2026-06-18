@@ -366,51 +366,34 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
       <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-8">
 
         {/* Header Section */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-card p-4 rounded-lg border shadow-sm">
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2">
-              <h2 className="text-xl sm:text-2xl font-bold transition-all">Positions Monitor</h2>
-              <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-mono">
-                v{import.meta.env.VITE_APP_VERSION || '1.4.0'} {import.meta.env.VITE_APP_BUILD_SHA && `(${import.meta.env.VITE_APP_BUILD_SHA.substring(0, 7)})`}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 mt-1">
-              <p className="text-[8px] sm:text-xs text-muted-foreground">Track your options with structured queries</p>
+        <div className="sticky top-3 z-20 rounded-lg border border-border/80 bg-background/90 p-2 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/75">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               {marketStatus && (
-                <>
-                  <span className="text-[10px] text-muted-foreground mr-1">|</span>
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-2 h-2 rounded-full ${marketStatus.open ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
-                    <span className={`text-[8px] sm:text-xs font-medium uppercase tracking-wider ${marketStatus.open ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                      Market {marketStatus.open ? 'Open' : 'Closed'}
-                    </span>
-                  </div>
-
-                  <span className="text-[10px] text-muted-foreground mr-1">|</span>
-                  <div className="flex items-center gap-1.5" title="Questrade API Connection">
-                    <div className={`w-2 h-2 rounded-full ${(marketStatus as any).connectionStatus === 'CONNECTED' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500 animate-pulse'}`} />
-                    <span className={`text-[8px] sm:text-xs font-medium uppercase tracking-wider ${(marketStatus as any).connectionStatus === 'CONNECTED' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                      Broker {(marketStatus as any).connectionStatus === 'CONNECTED' ? 'Live' : 'Offline'}
-                    </span>
-                  </div>
-                </>
+                <div className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5">
+                  <div className={`h-2 w-2 rounded-full ${marketStatus.open ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${marketStatus.open ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                    Market {marketStatus.open ? 'Open' : 'Closed'}
+                  </span>
+                </div>
+              )}
+              {marketStatus && (
+                <div className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5" title="Questrade API Connection">
+                  <div className={`h-2 w-2 rounded-full ${(marketStatus as any).connectionStatus === 'CONNECTED' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500 animate-pulse'}`} />
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${(marketStatus as any).connectionStatus === 'CONNECTED' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                    Broker {(marketStatus as any).connectionStatus === 'CONNECTED' ? 'Live' : 'Offline'}
+                  </span>
+                </div>
               )}
               {queryError && (
-                <>
-                  <span className="text-[10px] text-muted-foreground mr-1">|</span>
-                  <div className="flex items-center gap-1.5 text-red-500 animate-pulse">
-                    <AlertTriangle className="h-3 w-3" />
-                    <span className="text-[10px] font-bold uppercase tracking-tighter">
-                      Offline
-                    </span>
-                  </div>
-                </>
+                <div className="flex items-center gap-2 rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-red-500">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wide">Data offline</span>
+                </div>
               )}
             </div>
-          </div>
 
-          <div className="flex items-center gap-2">
-            <TabsList className="hidden md:flex order-2 md:order-1">
+            <TabsList className="hidden h-9 shrink-0 rounded-md bg-muted/60 p-1 lg:flex">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
               <TabsTrigger value="wealthsimple">Wealthsimple</TabsTrigger>
@@ -420,9 +403,11 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 <TabsTrigger value="users">Users</TabsTrigger>
               )}
             </TabsList>
-            <div className="md:hidden order-2">
+
+            <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
+            <div className="lg:hidden">
               <Select value={activeTab} onValueChange={handleTabChange}>
-                <SelectTrigger className="h-9 w-[130px]">
+                <SelectTrigger className="h-9 w-[150px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -437,22 +422,24 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 </SelectContent>
               </Select>
             </div>
+            <div className="ml-auto flex items-center gap-1 rounded-md border border-border bg-card p-1 lg:ml-0">
             <SettingsDialog user={user} onUpdate={onUserUpdate} />
-            <Button variant="outline" size="sm" className="hidden md:flex gap-1 text-xs" onClick={handleForceSync} disabled={loading}>
+            <Button variant="ghost" size="sm" className="hidden gap-1 text-xs lg:flex" onClick={handleForceSync} disabled={loading}>
               <Zap className={`h-3 w-3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
               Force Sync
             </Button>
-            <Button variant="outline" size="icon" className="md:hidden" onClick={handleForceSync} disabled={loading}>
+            <Button variant="ghost" size="icon" className="lg:hidden" onClick={handleForceSync} disabled={loading}>
               <Zap className={`h-4 w-4 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
             </Button>
 
-            <Button variant="outline" size="icon" onClick={() => refetchPositions()}>
+            <Button variant="ghost" size="icon" onClick={() => refetchPositions()}>
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
+            </div>
 
             <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) setEditingPosition(null); }}>
               <DialogTrigger asChild>
-                <Button className="rounded-full md:rounded-md w-9 h-9 md:w-auto md:h-10 p-0 md:px-4 text-xs md:text-sm">
+                <Button className="h-9 rounded-full px-3 text-xs sm:rounded-md sm:px-4 sm:text-sm">
                   <Plus className="h-4 w-4 md:mr-2" />
                   <span className="hidden md:inline">Track Position</span>
                 </Button>
@@ -470,7 +457,8 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 />
               </DialogContent>
             </Dialog>
-          </div>
+        </div>
+        </div>
         </div>
 
         {/* Details Modal removed - now using separate page */}
