@@ -22,6 +22,8 @@ const severityColor = (severity: DiscordAlertSeverity) => {
   return 0x3b82f6;
 };
 
+const DISCORD_ALERT_TIMEOUT_MS = Number(process.env.DISCORD_ALERT_TIMEOUT_MS || 5000);
+
 function truncate(value: string, maxLength: number) {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 3)}...`;
@@ -49,12 +51,18 @@ export class DiscordAlertService {
   }
 
   async send(input: DiscordAlertInput): Promise<boolean> {
-    const webhookUrl = await this.resolveWebhook(input.userId);
-    if (!webhookUrl) return false;
+    let webhookUrl: string | null = null;
+    try {
+      webhookUrl = await this.resolveWebhook(input.userId);
+      if (!webhookUrl) return false;
 
-    if (input.dedupeKey && redis.isReady()) {
-      const acquired = await redis.setNX(`discord-alert:${input.dedupeKey}`, String(Date.now()), input.dedupeSeconds || 900);
-      if (!acquired) return false;
+      if (input.dedupeKey && redis.isReady()) {
+        const acquired = await redis.setNX(`discord-alert:${input.dedupeKey}`, String(Date.now()), input.dedupeSeconds || 900);
+        if (!acquired) return false;
+      }
+    } catch (err: any) {
+      this.fastify.log.warn(`[DiscordAlertService] Failed to prepare ${input.category || 'alert'} alert: ${err.message || String(err)}`);
+      return false;
     }
 
     const severity = input.severity || 'info';
@@ -78,11 +86,14 @@ export class DiscordAlertService {
       ]
     };
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DISCORD_ALERT_TIMEOUT_MS);
     try {
       const response = await fetch(webhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
+        signal: controller.signal
       });
       if (!response.ok) {
         const detail = await response.text().catch(() => '');
@@ -92,6 +103,8 @@ export class DiscordAlertService {
     } catch (err: any) {
       this.fastify.log.warn(`[DiscordAlertService] Failed to send ${input.category || 'alert'} alert: ${err.message || String(err)}`);
       return false;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 }

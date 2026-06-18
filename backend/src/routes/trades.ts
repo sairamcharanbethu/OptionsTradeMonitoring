@@ -113,7 +113,6 @@ function getTradeBrokerProof(trade: any) {
 
 function reportRangeToInterval(range?: string) {
   switch (String(range || '30d')) {
-    case 'today': return '1 day';
     case '7d': return '7 days';
     case '30d': return '30 days';
     case '90d': return '90 days';
@@ -214,10 +213,14 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     const { id: userId } = (request as any).user;
     const { range = '30d' } = request.query as { range?: string };
     const interval = reportRangeToInterval(range);
-    const rangePredicate = range === 'ytd'
+    const rangePredicate = range === 'today'
+      ? "updated_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'"
+      : range === 'ytd'
       ? "updated_at >= date_trunc('year', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'"
       : `updated_at >= now() - INTERVAL '${interval}'`;
-    const signalRangePredicate = range === 'ytd'
+    const signalRangePredicate = range === 'today'
+      ? "sue.updated_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'"
+      : range === 'ytd'
       ? "sue.updated_at >= date_trunc('year', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'"
       : `sue.updated_at >= now() - INTERVAL '${interval}'`;
 
@@ -358,7 +361,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     const alerts: any[] = [];
 
     const { rows: staleRows } = await fastify.pg.query(
-      `SELECT id, symbol, option_type, strike_price, expiration_date, execution_status,
+      `SELECT id, symbol, option_type, strike_price, expiration_date, status, execution_status,
               execution_error, exit_requested_at, last_broker_sync_at, last_broker_order_status, updated_at
        FROM positions
        WHERE user_id = $1

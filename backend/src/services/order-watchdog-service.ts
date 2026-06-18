@@ -40,7 +40,7 @@ export class OrderWatchdogService {
         if (row.status === 'PENDING_ORDER') {
           const createdAtMs = new Date(row.created_at).getTime();
           if (Number.isFinite(createdAtMs) && Date.now() - createdAtMs > this.entryStaleMs) {
-            await this.fastify.pg.query(
+            const staleUpdate = await this.fastify.pg.query(
               `UPDATE positions
                SET execution_status = 'ENTRY_STALE',
                    execution_error = 'Entry order is still pending after watchdog timeout; broker reconciliation is required before another entry.',
@@ -48,9 +48,13 @@ export class OrderWatchdogService {
                    updated_at = CURRENT_TIMESTAMP
                WHERE id = $2
                  AND status = 'PENDING_ORDER'
-                 AND COALESCE(execution_status, '') NOT IN ('EXECUTED', 'FILLED', 'FILLED_FULLY')`,
+                 AND COALESCE(execution_status, '') NOT IN ('EXECUTED', 'FILLED', 'FILLED_FULLY', 'ENTRY_STALE')`,
               [` [Watchdog marked entry stale after ${Math.round(this.entryStaleMs / 1000)}s]`, row.id]
             );
+            if (staleUpdate.rowCount === 0) {
+              summary.stillPending += 1;
+              continue;
+            }
             await new DiscordAlertService(this.fastify).send({
               userId: Number(row.user_id),
               title: 'Entry order stale',
