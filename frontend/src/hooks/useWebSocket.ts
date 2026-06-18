@@ -8,6 +8,7 @@ interface WebSocketMessage {
 type WebSocketState = {
     sharedSocket: WebSocket | null;
     isConnected: boolean;
+    clientId: string;
     subscribers: Set<(msg: WebSocketMessage) => void>;
     statusSubscribers: Set<(connected: boolean) => void>;
     reconnectTimeout?: ReturnType<typeof setTimeout>;
@@ -25,8 +26,16 @@ declare global {
 const wsState = window.__optionsTradeWebSocketState ??= {
     sharedSocket: null,
     isConnected: false,
+    clientId: window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     subscribers: new Set<(msg: WebSocketMessage) => void>(),
     statusSubscribers: new Set<(connected: boolean) => void>(),
+};
+
+const withClientId = (rawUrl: string) => {
+    const wsUrl = new URL(rawUrl, window.location.href);
+    wsUrl.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    wsUrl.searchParams.set('wsClientId', wsState.clientId);
+    return wsUrl.toString();
 };
 
 const connectGlobal = (url: string) => {
@@ -42,9 +51,7 @@ const connectGlobal = (url: string) => {
     }
 
     // Construct absolute URL if relative
-    const wsUrl = url.startsWith('/')
-        ? `ws${window.location.protocol === 'https:' ? 's' : ''}://${window.location.host}${url}`
-        : url;
+    const wsUrl = withClientId(url);
 
     console.log('[WebSocket] Connecting to:', wsUrl);
     const socket = new WebSocket(wsUrl);

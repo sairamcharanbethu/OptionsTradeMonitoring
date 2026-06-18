@@ -692,6 +692,8 @@ const start = async () => {
       };
     });
 
+    const wsClients = new Map<any, string>();
+
     // Public WebSocket endpoint
     // Note: @fastify/websocket v10+ passes the socket directly, not connection.socket
     fastify.get('/api/ws', { websocket: true }, (socket: any, req: any) => {
@@ -700,7 +702,13 @@ const start = async () => {
         return;
       }
 
-      fastify.log.info('[WebSocket] Client connected');
+      const query = req.query as { wsClientId?: string } | undefined;
+      const clientId = query?.wsClientId || 'unknown';
+      wsClients.set(socket, clientId);
+
+      fastify.log.info(
+        `[WebSocket] Client connected id=${clientId} active=${wsClients.size} remote=${req.ip || 'unknown'}`
+      );
 
       socket.on('message', (message: any) => {
         try {
@@ -716,11 +724,12 @@ const start = async () => {
       });
 
       socket.on('close', () => {
-        fastify.log.info('[WebSocket] Client disconnected');
+        wsClients.delete(socket);
+        fastify.log.info(`[WebSocket] Client disconnected id=${clientId} active=${wsClients.size}`);
       });
 
       socket.on('error', (err: any) => {
-        fastify.log.error(`[WebSocket] Client error: ${err.message}`);
+        fastify.log.error(`[WebSocket] Client error id=${clientId}: ${err.message}`);
       });
     });
 
