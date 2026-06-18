@@ -7,6 +7,9 @@ class RedisClient {
     private isConnected = false;
 
     constructor() {
+        if (process.env.NODE_ENV === 'test') {
+            return;
+        }
         this.connect();
     }
 
