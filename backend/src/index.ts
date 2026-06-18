@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import cors from '@fastify/cors';
@@ -694,6 +695,23 @@ const start = async () => {
 
     const wsClients = new Map<any, string>();
 
+    const getLegacyWsClientId = (req: any) => {
+      const fingerprint = [
+        req.ip || req.headers?.['x-forwarded-for'] || 'unknown',
+        req.headers?.['user-agent'] || 'unknown',
+        req.headers?.['accept-language'] || 'unknown'
+      ].join('|');
+      return `legacy-${crypto.createHash('sha1').update(fingerprint).digest('hex').slice(0, 10)}`;
+    };
+
+    const getActiveWsCountForClient = (clientId: string) => {
+      let count = 0;
+      for (const activeClientId of wsClients.values()) {
+        if (activeClientId === clientId) count++;
+      }
+      return count;
+    };
+
     // Public WebSocket endpoint
     // Note: @fastify/websocket v10+ passes the socket directly, not connection.socket
     fastify.get('/api/ws', { websocket: true }, (socket: any, req: any) => {
@@ -703,11 +721,13 @@ const start = async () => {
       }
 
       const query = req.query as { wsClientId?: string } | undefined;
-      const clientId = query?.wsClientId || 'unknown';
+      const hasBrowserClientId = Boolean(query?.wsClientId);
+      const clientId = query?.wsClientId || getLegacyWsClientId(req);
       wsClients.set(socket, clientId);
+      const activeForClient = getActiveWsCountForClient(clientId);
 
       fastify.log.info(
-        `[WebSocket] Client connected id=${clientId} active=${wsClients.size} remote=${req.ip || 'unknown'}`
+        `[WebSocket] Client connected id=${clientId} legacy=${!hasBrowserClientId} active=${wsClients.size} activeForClient=${activeForClient} remote=${req.ip || 'unknown'}`
       );
 
       socket.on('message', (message: any) => {
@@ -725,7 +745,7 @@ const start = async () => {
 
       socket.on('close', () => {
         wsClients.delete(socket);
-        fastify.log.info(`[WebSocket] Client disconnected id=${clientId} active=${wsClients.size}`);
+        fastify.log.info(`[WebSocket] Client disconnected id=${clientId} active=${wsClients.size} activeForClient=${getActiveWsCountForClient(clientId)}`);
       });
 
       socket.on('error', (err: any) => {
