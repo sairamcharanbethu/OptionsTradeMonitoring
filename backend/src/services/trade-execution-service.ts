@@ -35,8 +35,37 @@ interface ExecutionSettings {
   alpaca_secret_key?: string;
 }
 
+type EntryQuoteSnapshot = {
+  ticker: string;
+  bid: number;
+  ask: number;
+  last: number;
+  mid: number;
+  mark: number;
+  spreadPct: number | null;
+  quoteAgeMs: number | null;
+  tradeAgeMs: number | null;
+  timestamp: string | null;
+};
+
+type EntryQuoteValidation = {
+  quote: EntryQuoteSnapshot;
+  protectedLimit: number;
+  baselineMark: number | null;
+  movePct: number | null;
+  stabilityMovePct: number | null;
+};
+
 export class TradeExecutionService {
   constructor(private fastify: FastifyInstance) {}
+
+  private readonly ENTRY_MAX_QUOTE_AGE_MS = 2_000;
+  private readonly ENTRY_MAX_SPREAD_PCT = 15;
+  private readonly ENTRY_MIN_BID_TO_ENTRY_RATIO = 0.90;
+  private readonly ENTRY_MAX_PREMIUM_JUMP_PCT = 8;
+  private readonly ENTRY_MAX_STABILITY_MOVE_PCT = 8;
+  private readonly ENTRY_STABILITY_DELAY_MS = 1_500;
+  private readonly ENTRY_PROTECTED_LIMIT_OVER_MID_PCT = 3;
 
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
@@ -508,6 +537,143 @@ export class TradeExecutionService {
     return true;
   }
 
+  private wait(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async getSignalOptionDetails(signalId: number): Promise<any> {
+    const { rows } = await this.fastify.pg.query(
+      'SELECT option_details FROM signals WHERE id = $1',
+      [signalId]
+    );
+    const raw = rows[0]?.option_details;
+    if (!raw) return {};
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    }
+    return raw;
+  }
+
+  private parseAlpacaTimestamp(value: any): number | null {
+    if (!value) return null;
+    const parsed = new Date(value).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private async fetchAlpacaOptionSnapshot(osiTicker: string, keyId?: string, secretKey?: string): Promise<EntryQuoteSnapshot | null> {
+    const alpacaKeyId = keyId?.trim();
+    const alpacaSecretKey = secretKey?.trim();
+    if (!alpacaKeyId || !alpacaSecretKey) return null;
+
+    const snapRes = await fetch(`https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${encodeURIComponent(osiTicker)}`, {
+      headers: {
+        'APCA-API-KEY-ID': alpacaKeyId,
+        'APCA-API-SECRET-KEY': alpacaSecretKey
+      }
+    });
+    if (!snapRes.ok) {
+      const detail = await snapRes.text().catch(() => '');
+      throw new Error(`Alpaca option quote check failed: ${snapRes.status}${detail ? ` - ${detail}` : ''}`);
+    }
+
+    const snapData: any = await snapRes.json();
+    const snap = snapData.snapshots?.[osiTicker];
+    if (!snap) return null;
+
+    const bid = Number(snap.latestQuote?.bp || 0);
+    const ask = Number(snap.latestQuote?.ap || 0);
+    const last = Number(snap.latestTrade?.p || 0);
+    const mid = bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : 0;
+    const mark = mid > 0 ? mid : last > 0 ? Number(last.toFixed(2)) : 0;
+    const spreadPct = bid > 0 && ask > 0 && mid > 0 ? Number((((ask - bid) / mid) * 100).toFixed(2)) : null;
+    const quoteTimeMs = this.parseAlpacaTimestamp(snap.latestQuote?.t);
+    const tradeTimeMs = this.parseAlpacaTimestamp(snap.latestTrade?.t);
+    const now = Date.now();
+    const quoteAgeMs = quoteTimeMs ? Math.max(0, now - quoteTimeMs) : null;
+    const tradeAgeMs = tradeTimeMs ? Math.max(0, now - tradeTimeMs) : null;
+    const timestampMs = quoteTimeMs || tradeTimeMs;
+
+    return {
+      ticker: osiTicker,
+      bid,
+      ask,
+      last,
+      mid,
+      mark,
+      spreadPct,
+      quoteAgeMs,
+      tradeAgeMs,
+      timestamp: timestampMs ? new Date(timestampMs).toISOString() : null
+    };
+  }
+
+  private assertEntryQuote(quote: EntryQuoteSnapshot, intendedEntry: number, baselineMark: number | null, stabilityMovePct: number | null) {
+    if (!quote || quote.mark <= 0) {
+      throw new Error('Entry skipped: no usable live option quote was available');
+    }
+    if (quote.quoteAgeMs !== null && quote.quoteAgeMs > this.ENTRY_MAX_QUOTE_AGE_MS) {
+      throw new Error(`Entry skipped: option quote is stale (${Math.round(quote.quoteAgeMs / 1000)}s old)`);
+    }
+    if (!quote.bid || !quote.ask || quote.bid <= 0 || quote.ask <= 0 || quote.spreadPct === null) {
+      throw new Error('Entry skipped: option quote is missing a usable bid/ask spread');
+    }
+    if (quote.spreadPct > this.ENTRY_MAX_SPREAD_PCT) {
+      throw new Error(`Entry skipped: option spread ${quote.spreadPct}% is wider than ${this.ENTRY_MAX_SPREAD_PCT}%`);
+    }
+    if (intendedEntry > 0 && quote.bid < intendedEntry * this.ENTRY_MIN_BID_TO_ENTRY_RATIO) {
+      const underwaterPct = Number(((1 - quote.bid / intendedEntry) * 100).toFixed(1));
+      throw new Error(`Entry skipped: immediate sellable bid $${quote.bid.toFixed(2)} is ${underwaterPct}% below intended entry $${intendedEntry.toFixed(2)}`);
+    }
+    if (baselineMark && baselineMark > 0) {
+      const movePct = ((quote.mark - baselineMark) / baselineMark) * 100;
+      if (movePct > this.ENTRY_MAX_PREMIUM_JUMP_PCT) {
+        throw new Error(`Entry skipped: premium jumped ${movePct.toFixed(1)}% from signal mark $${baselineMark.toFixed(2)} to $${quote.mark.toFixed(2)}`);
+      }
+    }
+    if (stabilityMovePct !== null && Math.abs(stabilityMovePct) > this.ENTRY_MAX_STABILITY_MOVE_PCT) {
+      throw new Error(`Entry skipped: premium moved ${Math.abs(stabilityMovePct).toFixed(1)}% during quote stability check`);
+    }
+  }
+
+  private async validateEntryQuote(input: ExecuteSignalInput, settings: ExecutionSettings, osiTicker: string, plannedLimit: number | undefined): Promise<EntryQuoteValidation> {
+    const optionDetails = await this.getSignalOptionDetails(input.signalId);
+    const baselineMark = Number(optionDetails?.mark || input.mark || 0) > 0 ? Number(optionDetails?.mark || input.mark) : null;
+    const intendedEntry = Number(plannedLimit || baselineMark || input.mark || 0);
+
+    const firstQuote = await this.fetchAlpacaOptionSnapshot(osiTicker, settings.alpaca_key_id, settings.alpaca_secret_key);
+    if (!firstQuote) {
+      throw new Error('Entry skipped: live option quote validation is unavailable');
+    }
+    await this.wait(this.ENTRY_STABILITY_DELAY_MS);
+    const finalQuote = await this.fetchAlpacaOptionSnapshot(osiTicker, settings.alpaca_key_id, settings.alpaca_secret_key);
+    if (!finalQuote) {
+      throw new Error('Entry skipped: final live option quote validation is unavailable');
+    }
+
+    const stabilityMovePct = firstQuote.mark > 0
+      ? Number((((finalQuote.mark - firstQuote.mark) / firstQuote.mark) * 100).toFixed(2))
+      : null;
+    const effectiveIntendedEntry = intendedEntry > 0 ? intendedEntry : finalQuote.mark;
+    this.assertEntryQuote(finalQuote, effectiveIntendedEntry, baselineMark, stabilityMovePct);
+
+    const protectedLimit = Number(Math.min(
+      finalQuote.ask,
+      finalQuote.mid * (1 + this.ENTRY_PROTECTED_LIMIT_OVER_MID_PCT / 100)
+    ).toFixed(2));
+
+    return {
+      quote: finalQuote,
+      protectedLimit,
+      baselineMark,
+      movePct: baselineMark ? Number((((finalQuote.mark - baselineMark) / baselineMark) * 100).toFixed(2)) : null,
+      stabilityMovePct
+    };
+  }
+
   private async executeAlpacaPaperTrade(input: ExecuteSignalInput, settings: ExecutionSettings, quantity: number) {
     const keyId = settings.alpaca_key_id?.trim();
     const secretKey = settings.alpaca_secret_key?.trim();
@@ -520,13 +686,25 @@ export class TradeExecutionService {
     const osiTicker = this.constructOSITicker(input.symbol, input.chosenStrike, input.winningSide, input.chosenExpiry);
     const slippagePct = Math.max(0, Number(settings.entry_slippage_pct || 3));
     const useLimitOrder = input.mark !== null && input.mark > 0 && (settings.order_type || 'LIMIT') === 'LIMIT';
-    const limitPrice = useLimitOrder ? Number((input.mark! * (1 + slippagePct / 100)).toFixed(2)) : undefined;
+    let limitPrice = useLimitOrder ? Number((input.mark! * (1 + slippagePct / 100)).toFixed(2)) : undefined;
+    let entryQuoteValidation: EntryQuoteValidation | null = null;
+
+    try {
+      const validatedQuote = await this.validateEntryQuote(input, settings, osiTicker, limitPrice);
+      entryQuoteValidation = validatedQuote;
+      limitPrice = validatedQuote.protectedLimit;
+    } catch (err: any) {
+      const message = err.message || String(err);
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      this.fastify.log.info(`[TradeExecutionService] ${message}`);
+      return { success: false, skipped: true, broker: 'alpaca_paper', message };
+    }
 
     const orderPayload: any = {
       symbol: osiTicker,
       qty: quantity,
       side: 'buy',
-      type: useLimitOrder ? 'limit' : 'market',
+      type: 'limit',
       time_in_force: 'day'
     };
     if (limitPrice) orderPayload.limit_price = limitPrice.toString();
@@ -548,7 +726,7 @@ export class TradeExecutionService {
       }
 
       const orderData: any = await res.json();
-      const entryPrice = await this.resolveEntryPriceFromAlpaca(osiTicker, input.mark, keyId, secretKey);
+      const entryPrice = entryQuoteValidation?.quote.mark || await this.resolveEntryPriceFromAlpaca(osiTicker, input.mark, keyId, secretKey);
       const orderFilled = ['filled', 'partially_filled'].includes(String(orderData.status || '').toLowerCase());
       const executionStatus = orderFilled ? 'EXECUTED' : 'PENDING';
       const position = await this.insertExecutedPosition(input, {
@@ -576,6 +754,8 @@ export class TradeExecutionService {
           orderId: orderData.id || null,
           quantity,
           orderType: orderPayload.type,
+          protectedLimit: limitPrice,
+          entryQuoteValidation,
           setupGrade: await this.getSignalSetupGrade(input.signalId),
           contract: this.contractLabel(input),
           entryPrice,
@@ -609,10 +789,23 @@ export class TradeExecutionService {
     const osiTicker = this.constructOSITicker(input.symbol, input.chosenStrike, input.winningSide, input.chosenExpiry);
     const slippagePct = Math.max(0, Number(settings.entry_slippage_pct || 3));
     const useLimitOrder = input.mark !== null && input.mark > 0 && (settings.order_type || 'LIMIT') === 'LIMIT';
-    const limitPrice = useLimitOrder ? (input.mark! * (1 + slippagePct / 100)).toFixed(2) : undefined;
-    const orderType: 'LIMIT' | 'MARKET' = useLimitOrder ? 'LIMIT' : 'MARKET';
+    let limitPrice = useLimitOrder ? (input.mark! * (1 + slippagePct / 100)).toFixed(2) : undefined;
+    let orderType: 'LIMIT' | 'MARKET' = useLimitOrder ? 'LIMIT' : 'MARKET';
+    let entryQuoteValidation: EntryQuoteValidation | null = null;
 
     try {
+      try {
+        const validatedQuote = await this.validateEntryQuote(input, settings, osiTicker, limitPrice ? Number(limitPrice) : undefined);
+        entryQuoteValidation = validatedQuote;
+        limitPrice = validatedQuote.protectedLimit.toFixed(2);
+        orderType = 'LIMIT';
+      } catch (err: any) {
+        const message = err.message || String(err);
+        await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+        this.fastify.log.info(`[TradeExecutionService] ${message}`);
+        return { success: false, skipped: true, broker: 'wealthsimple_snaptrade', message };
+      }
+
       const snaptradeService = new SnaptradeService(this.fastify);
       const result = await snaptradeService.placeOptionOrder(
         input.userId,
@@ -626,7 +819,7 @@ export class TradeExecutionService {
 
       const position = await this.insertExecutedPosition(input, {
         quantity,
-        entryPrice: input.mark || Number(limitPrice || 1),
+        entryPrice: entryQuoteValidation?.quote.mark || input.mark || Number(limitPrice || 1),
         isSimulated: false,
         accountId,
         executionBroker: 'wealthsimple_snaptrade',
@@ -651,6 +844,7 @@ export class TradeExecutionService {
           quantity,
           orderType,
           limitPrice: limitPrice || null,
+          entryQuoteValidation,
           setupGrade: await this.getSignalSetupGrade(input.signalId),
           contract: this.contractLabel(input),
           mark: input.mark,
