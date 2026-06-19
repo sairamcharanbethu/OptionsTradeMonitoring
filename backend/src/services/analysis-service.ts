@@ -1,5 +1,6 @@
 
 import { FastifyInstance } from 'fastify';
+import { ThetaDataService } from './thetadata-service';
 
 
 interface Candle {
@@ -38,25 +39,34 @@ export class AnalysisService {
             // 3-minute candles. 100 candles = 300 minutes (5 hours). 
             // Let's fetch 2 days to be safe.
 
-            const questrade = (this.fastify as any).questrade;
-            if (!questrade) throw new Error('Questrade Service not available');
-
-            // Resolve Symbol ID
-            // NOTE: The 'symbol' in position is the Option Ticker (ISO format).
-            const symbolId = await questrade.getSymbolId(symbol);
-            if (!symbolId) throw new Error(`Could not resolve symbol ID for ${symbol}`);
-
             const endTime = new Date();
             const startTime = new Date(endTime.getTime() - 5 * 24 * 60 * 60 * 1000); // 5 days back
 
-            // Fetch 3-minute candles (using 'ThreeMinutes' if supported, else 'OneMinute' and aggregate?)
-            // Questrade API Docs say 'ThreeMinutes' is valid.
-            let candles: Candle[] = await questrade.getHistoricalData(symbolId, startTime, endTime, 'ThreeMinutes');
+            const thetaData = new ThetaDataService(this.fastify);
+            const strike = Number(position.strike_price || position.strike || 0);
+            const optionType: 'call' | 'put' = String(position.option_type || '').toUpperCase() === 'PUT' ? 'put' : 'call';
+            const expiration = String(position.expiration_date || position.expiration || '').split('T')[0];
+            if (!symbol || !strike || !expiration) {
+                throw new Error('Position is missing symbol, strike, or expiration for ThetaData analysis');
+            }
+
+            let candles: Candle[] = await thetaData.getOptionOhlcHistory(
+                Number(position.user_id || 0) || null,
+                { symbol, strike, right: optionType, expiration },
+                startTime,
+                endTime,
+                '5m'
+            );
 
             if (!candles || candles.length < 30) {
-                // Fallback to OneHour if 3m is too sparse/empty (common for options)
-                this.fastify.log.warn(`[Analysis] Not enough 3m data for ${symbol}. Falling back to 1h.`);
-                candles = await questrade.getHistoricalData(symbolId, startTime, endTime, 'OneHour');
+                this.fastify.log.warn(`[Analysis] Not enough 5m ThetaData for ${symbol}. Falling back to 1h.`);
+                candles = await thetaData.getOptionOhlcHistory(
+                    Number(position.user_id || 0) || null,
+                    { symbol, strike, right: optionType, expiration },
+                    startTime,
+                    endTime,
+                    '1h'
+                );
                 if (!candles || candles.length < 20) {
                     throw new Error('Insufficient historical data for analysis');
                 }

@@ -476,9 +476,9 @@ const start = async () => {
       return { message: 'Options Monitoring API' };
     });
 
-    const { QuestradeService } = await import('./services/questrade-service');
-    const questrade = new QuestradeService(fastify);
-    fastify.decorate('questrade', questrade);
+    const { ThetaDataService } = await import('./services/thetadata-service');
+    const thetaData = new ThetaDataService(fastify);
+    fastify.decorate('thetaData', thetaData);
 
     // Initialize poller BEFORE listen
     const { MarketPoller } = await import('./services/market-poller');
@@ -493,9 +493,9 @@ const start = async () => {
     await fastify.register(import('@fastify/websocket'));
     const { redis } = await import('./lib/redis');
 
-    const { QuestradeStreamService } = await import('./services/questrade-stream-service');
-    const streamer = new QuestradeStreamService(fastify);
-    fastify.decorate('streamer', streamer);
+    const { ThetaDataStreamService } = await import('./services/thetadata-stream-service');
+    const thetaDataStreamer = new ThetaDataStreamService(fastify);
+    fastify.decorate('thetaDataStreamer', thetaDataStreamer);
 
     const { AlpacaMarketDataStreamService } = await import('./services/alpaca-market-data-stream-service');
     const alpacaMarketDataStreamer = new AlpacaMarketDataStreamService(fastify);
@@ -610,12 +610,12 @@ const start = async () => {
       await liveExitMonitor.handleQuote(quote);
     };
 
-    streamer.on('quote', handleStreamQuote);
+    thetaDataStreamer.on('quote', handleStreamQuote);
     alpacaMarketDataStreamer.on('quote', handleStreamQuote);
 
     fastify.get('/api/services/health', { preHandler: fastify.authenticate }, async () => {
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
-      const questradeHealth = streamer.getHealth();
+      const thetaDataHealth = thetaDataStreamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
       const scannerHealth = await scanner.getRuntimeStatus();
       const tradeRedisHealth = await TradeRedisService.getHealth();
@@ -624,7 +624,7 @@ const start = async () => {
         liveExitMonitor: liveExitHealth,
         streams: {
           alpaca: alpacaHealth,
-          questrade: questradeHealth
+          thetadata: thetaDataHealth
         },
         poller: {
           status: poller.isRunning() ? 'UP' : 'DOWN',
@@ -769,9 +769,9 @@ const start = async () => {
       liveExitMonitor.start('alpaca');
       fastify.log.info('[Stream] Alpaca option market data stream enabled for live exit monitoring.');
     } else {
-      streamer.start();
-      liveExitMonitor.start('questrade');
-      fastify.log.info('[Stream] Questrade stream enabled as market data fallback.');
+      await thetaDataStreamer.start();
+      liveExitMonitor.start('thetadata');
+      fastify.log.info('[Stream] ThetaData stream enabled as market data fallback.');
     }
 
     fastify.log.info(`Server listening on http://localhost:${port}`);

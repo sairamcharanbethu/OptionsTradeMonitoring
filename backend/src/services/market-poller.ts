@@ -8,6 +8,7 @@ import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import WebSocket from 'ws';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
+import { ThetaDataService } from './thetadata-service';
 
 type ExitQuoteContext = {
   bid?: number;
@@ -561,67 +562,35 @@ export class MarketPoller {
         };
       }
 
-      // Fallback: Questrade Integration
-      const questrade = (this.fastify as any).questrade;
-
-      // 1. Get/Resolve Option Symbol ID
-      // We can STILL cache the symbolId for the ticker (it never changes for a specific option)
-      const SYMBOL_ID_CACHE_KEY = `SYMBOL_ID:${ticker}`;
-      let symbolId: number | null = null;
-
-      const cachedId = await this.redisClient.get(SYMBOL_ID_CACHE_KEY);
-      if (cachedId) {
-        symbolId = parseInt(cachedId, 10);
-      } else {
-        this.fastify.log.info(`[MarketPoller] Resolving Questrade Symbol ID for ${ticker}...`);
-        symbolId = await questrade.getSymbolId(ticker);
-        if (symbolId) {
-          await this.redisClient.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
-          await this.redisClient.set(`SYMBOL_NAME:${symbolId}`, ticker, 86400);
-        }
-      }
-
-      if (!symbolId) {
-        this.fastify.log.warn(`[MarketPoller] Could not resolve symbol ID for ${ticker} on Questrade.`);
-        return null;
-      }
-
-      // 2. Get Quote from Questrade (FRESH EVERY TIME)
-      const quote = await questrade.getOptionQuote(symbolId);
+      const thetaData = new ThetaDataService(this.fastify);
+      const quote = await thetaData.getOptionQuote(userId, {
+        symbol,
+        strike,
+        right: type === 'CALL' ? 'call' : 'put',
+        expiration
+      });
       if (!quote) return null;
-
-      // 3. Fetch Underlying Price (Questrade option quote doesn't include it in JSON)
-      let underlyingPrice = 0;
-      if (quote.underlyingId) {
-        const uQuotes = await questrade.getQuote([quote.underlyingId]);
-        if (uQuotes && uQuotes.length > 0) {
-          underlyingPrice = uQuotes[0].lastTradePrice || 0;
-        }
-      }
-
-      // Calculate premium (use Mid price if available, else last)
-      const bid = quote.bidPrice || 0;
-      const ask = quote.askPrice || 0;
-      const price = (bid > 0 && ask > 0) ? (bid + ask) / 2 : quote.lastTradePrice || 0;
 
       const result = {
         status: 'ok',
         symbol: ticker,
-        price,
-        quote: this.normalizeQuoteContext(price, {
-          bid,
-          ask,
-          last: quote.lastTradePrice || 0,
-          source: 'questrade'
+        price: quote.mark,
+        quote: this.normalizeQuoteContext(quote.mark, {
+          bid: quote.bid,
+          ask: quote.ask,
+          last: quote.last,
+          mid: quote.mid,
+          spreadPct: quote.spreadPct || undefined,
+          source: 'thetadata'
         }),
-        iv: quote.volatility || 0,
-        underlying_price: underlyingPrice,
+        iv: 0,
+        underlying_price: 0,
         greeks: {
-          delta: quote.delta || 0,
-          gamma: quote.gamma || 0,
-          theta: quote.theta || 0,
-          vega: quote.vega || 0,
-          rho: quote.rho || 0
+          delta: 0,
+          gamma: 0,
+          theta: 0,
+          vega: 0,
+          rho: 0
         },
         metadata: {
           symbol,

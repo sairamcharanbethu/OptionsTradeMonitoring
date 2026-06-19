@@ -90,10 +90,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [profileError, setProfileError] = useState<string | null>(null);
     const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
 
-    // Questrade State
-    const [qtClientId, setQtClientId] = useState('');
-    const [qtConnecting, setQtConnecting] = useState(false);
-    const [qtSaved, setQtSaved] = useState(false);
+    // ThetaData State
+    const [thetaDataApiKey, setThetaDataApiKey] = useState('');
+    const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://127.0.0.1:25503');
+    const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('ws://127.0.0.1:25520/v1/events');
 
     // SnapTrade State
     const [snaptradeClientId, setSnaptradeClientId] = useState('');
@@ -136,9 +136,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     useEffect(() => {
         if (open) {
             loadSettings();
-            if (isAdmin) {
-                loadQuestradeConfig();
-            }
             setPwError(null);
             setPwSuccess(null);
             setProfileError(null);
@@ -148,95 +145,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setUsername(user.username);
         }
     }, [open, user.username, isAdmin]);
-
-    // Handle OAuth Callback on mount/refresh
-    useEffect(() => {
-        const hash = window.location.hash;
-        if (isAdmin && hash && hash.includes('access_token=')) {
-            handleQuestradeCallback(hash);
-        }
-    }, [isAdmin]);
-
-    async function loadQuestradeConfig() {
-        try {
-            const config = await api.getQuestradeConfig();
-            if (config.clientId) {
-                setQtClientId(config.clientId);
-            }
-            setQtSaved(!!config.isLinked);
-        } catch (err) {
-            console.error(err);
-        }
-    }
-
-    async function handleQuestradeCallback(hash: string) {
-        setQtConnecting(true);
-        try {
-            // Parse hash params: #access_token=...&refresh_token=...
-            const params = new URLSearchParams(hash.replace('#', '?'));
-            const data = {
-                access_token: params.get('access_token'),
-                refresh_token: params.get('refresh_token'),
-                api_server: params.get('api_server'),
-                token_type: params.get('token_type'),
-                expires_in: params.get('expires_in')
-            };
-
-            if (data.access_token && data.refresh_token) {
-                await api.saveQuestradeToken(data);
-                // Clear hash
-                window.history.replaceState(null, '', window.location.pathname + window.location.search);
-                await loadQuestradeConfig(); // Refresh status
-                setOpen(true); // Re-open dialog
-                alert('Questrade connected successfully!');
-            }
-        } catch (err) {
-            console.error('Failed to parse Questrade callback:', err);
-        } finally {
-            setQtConnecting(false);
-        }
-    }
-
-    async function initiateQuestradeLogin() {
-        if (!qtClientId) {
-            alert('Please enter your Questrade Key or Token first.');
-            return;
-        }
-
-        setQtConnecting(true);
-        try {
-            // Step 1: Attempt direct manual Refresh Token verification first
-            console.log('[Questrade] Attempting direct connection via manual Refresh Token...');
-            await api.saveQuestradeManualToken(qtClientId);
-            
-            // If it succeeds, the token is verified and refreshed successfully
-            await loadQuestradeConfig();
-            alert('Questrade connected successfully using Refresh Token!');
-            setQtConnecting(false);
-        } catch (err: any) {
-            console.warn('[Questrade] Direct Refresh Token link failed. Checking fallback to redirect OAuth...', err);
-            
-            // Step 2: Fallback prompt for standard OAuth redirect if it is a Client ID/Consumer Key
-            const confirmRedirect = window.confirm(
-                `Failed to connect directly: ${err.message}\n\nDo you want to treat this key as a Consumer Key (Client ID) and perform a standard Questrade OAuth Redirect Login?`
-            );
-            
-            if (confirmRedirect) {
-                try {
-                    await api.saveQuestradeClient(qtClientId);
-                    const redirectUri = window.location.origin + window.location.pathname;
-                    const authUrl = `https://login.questrade.com/oauth2/authorize?client_id=${qtClientId}&response_type=token&redirect_uri=${encodeURIComponent(redirectUri)}`;
-                    window.location.href = authUrl;
-                } catch (oauthErr) {
-                    console.error(oauthErr);
-                    alert('OAuth redirect initiation failed.');
-                    setQtConnecting(false);
-                }
-            } else {
-                setQtConnecting(false);
-            }
-        }
-    }
 
     async function loadSettings() {
         setLoading(true);
@@ -253,6 +161,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
             setAlpacaKeyId(data.alpaca_key_id || '');
             setAlpacaSecretKey(data.alpaca_secret_key || '');
+            setThetaDataApiKey(data.thetadata_api_key || '');
+            setThetaDataBaseUrl(data.thetadata_base_url || 'http://127.0.0.1:25503');
+            setThetaDataStreamUrl(data.thetadata_stream_url || 'ws://127.0.0.1:25520/v1/events');
             setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
             setAlpacaAutoTradeMode(data.alpaca_auto_trade_mode || 'instant');
             setExecutionBroker(data.execution_broker || 'none');
@@ -465,6 +376,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 snaptrade_trading_account_id: snaptradeTradingAccountId,
                 alpaca_key_id: alpacaKeyId,
                 alpaca_secret_key: alpacaSecretKey,
+                thetadata_api_key: thetaDataApiKey,
+                thetadata_base_url: thetaDataBaseUrl,
+                thetadata_stream_url: thetaDataStreamUrl,
                 alpaca_auto_trade: alpacaAutoTrade ? 'true' : 'false',
                 alpaca_auto_trade_mode: alpacaAutoTradeMode,
                 execution_broker: executionBroker,
@@ -1054,41 +968,50 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     )}
                                 </div>
 
-                                {/* Brokerage Integrations */}
+                                {/* Market data and brokerage integrations */}
                                 <div className="border rounded-lg p-6 bg-card space-y-6">
-                                    <h4 className="font-semibold text-sm border-b pb-2">Brokerages</h4>
+                                    <h4 className="font-semibold text-sm border-b pb-2">Market data and brokerages</h4>
                                     
-                                    {/* Questrade */}
+                                    {/* ThetaData */}
                                     {isAdmin && (
                                         <div className="space-y-3">
                                             <div className="flex items-center justify-between">
-                                                <h5 className="font-medium text-sm">Questrade Brokerage</h5>
-                                                <Badge variant={qtSaved ? "default" : "secondary"}>
-                                                    {qtSaved ? "Connected" : "Not Linked"}
+                                                <h5 className="font-medium text-sm">ThetaData Market Data</h5>
+                                                <Badge variant={thetaDataApiKey || thetaDataBaseUrl ? "default" : "secondary"}>
+                                                    {thetaDataApiKey || thetaDataBaseUrl ? "Configured" : "Not Configured"}
                                                 </Badge>
                                             </div>
                                             <div className="grid gap-2 p-4 border rounded-md bg-muted/30">
-                                                <Label htmlFor="qt-client">Questrade API Key / Refresh Token</Label>
+                                                <Label htmlFor="thetadata-key">ThetaData API Key</Label>
                                                 <Input
-                                                    id="qt-client"
-                                                    value={qtClientId}
-                                                    onChange={(e) => setQtClientId(e.target.value)}
-                                                    placeholder="Paste your manually generated Refresh Token or Consumer Key"
+                                                    id="thetadata-key"
+                                                    value={thetaDataApiKey}
+                                                    onChange={(e) => setThetaDataApiKey(e.target.value)}
+                                                    placeholder="Paste ThetaData key"
                                                     type="password"
                                                 />
+                                                <div className="grid gap-3 sm:grid-cols-2">
+                                                    <div className="space-y-1.5">
+                                                        <Label htmlFor="thetadata-base-url">REST URL</Label>
+                                                        <Input
+                                                            id="thetadata-base-url"
+                                                            value={thetaDataBaseUrl}
+                                                            onChange={(e) => setThetaDataBaseUrl(e.target.value)}
+                                                            placeholder="http://127.0.0.1:25503"
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1.5">
+                                                        <Label htmlFor="thetadata-stream-url">Stream URL</Label>
+                                                        <Input
+                                                            id="thetadata-stream-url"
+                                                            value={thetaDataStreamUrl}
+                                                            onChange={(e) => setThetaDataStreamUrl(e.target.value)}
+                                                            placeholder="ws://127.0.0.1:25520/v1/events"
+                                                        />
+                                                    </div>
+                                                </div>
                                                 <p className="text-[10px] text-muted-foreground leading-normal">
-                                                    <strong>Recommended:</strong> Click <strong>"New manual authorization"</strong> in your Questrade API Centre, copy the Refresh Token, and paste it here. Or, enter your static **Consumer Key (Client ID)** to use the redirect flow.
-                                                </p>
-                                                <Button
-                                                    onClick={initiateQuestradeLogin}
-                                                    disabled={qtConnecting}
-                                                    className="w-full mt-2 bg-[#ffcc00] text-black hover:bg-[#e6b800] font-bold transition-all duration-200 shadow-md hover:shadow-lg"
-                                                >
-                                                    {qtConnecting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                                    Connect Questrade
-                                                </Button>
-                                                <p className="text-[10px] text-center text-muted-foreground italic mt-1">
-                                                    The application will automatically detect, verify, and rotate your token directly.
+                                                    ThetaData requires the local Theta Terminal to be running where the backend runs. The app uses ThetaData for live option bid/ask snapshots and quote streams.
                                                 </p>
                                             </div>
                                         </div>

@@ -687,37 +687,6 @@ export const api = {
     return res.json();
   },
 
-  // Questrade Integration
-  async getQuestradeConfig(): Promise<any> {
-    const res = await authFetch(`${API_BASE}/settings/questrade/config`);
-    if (!res.ok) throw new Error('Failed to fetch Questrade config');
-    return res.json();
-  },
-  async saveQuestradeClient(clientId: string): Promise<void> {
-    const res = await authFetch(`${API_BASE}/settings/questrade/client`, {
-      method: 'POST',
-      body: JSON.stringify({ clientId })
-    });
-    if (!res.ok) throw new Error('Failed to save Questrade client ID');
-  },
-  async saveQuestradeManualToken(refreshToken: string): Promise<void> {
-    const res = await authFetch(`${API_BASE}/settings/questrade/manual-token`, {
-      method: 'POST',
-      body: JSON.stringify({ refreshToken })
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to verify manual refresh token');
-    }
-  },
-  async saveQuestradeToken(data: any): Promise<void> {
-    const res = await authFetch(`${API_BASE}/settings/questrade/token`, {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error('Failed to save Questrade token');
-  },
-
   async updateSettings(settings: Record<string, string>): Promise<void> {
     const res = await authFetch(`${API_BASE}/settings`, {
       method: 'POST',
@@ -915,7 +884,7 @@ export const api = {
         lastError: string | null;
         reconnectAttempts: number;
       };
-      questrade: {
+      thetadata: {
         status: string;
         connected: boolean;
         provider: string;

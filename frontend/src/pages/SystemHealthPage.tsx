@@ -53,7 +53,7 @@ const isBadStatus = (status?: string | null) => {
 const isWatchedStream = (
   componentKey: string,
   provider: string,
-  stream: NonNullable<ServiceHealth['streams']>['alpaca'] | NonNullable<ServiceHealth['streams']>['questrade'] | undefined,
+  stream: NonNullable<ServiceHealth['streams']>['alpaca'] | NonNullable<ServiceHealth['streams']>['thetadata'] | undefined,
   services: ServiceHealth,
   ignoredComponents: Set<string>
 ) => {
@@ -86,8 +86,8 @@ const systemSummary = (
     if (isWatchedStream('stream:alpaca', 'alpaca', services.streams?.alpaca, services, ignoredComponents) && isBadStatus(services.streams?.alpaca?.status)) {
       issues.push(`Alpaca stream ${services.streams.alpaca.status}`);
     }
-    if (isWatchedStream('stream:questrade', 'questrade', services.streams?.questrade, services, ignoredComponents) && isBadStatus(services.streams?.questrade?.status)) {
-      issues.push(`Questrade stream ${services.streams.questrade.status}`);
+    if (isWatchedStream('stream:thetadata', 'thetadata', services.streams?.thetadata, services, ignoredComponents) && isBadStatus(services.streams?.thetadata?.status)) {
+      issues.push(`ThetaData stream ${services.streams.thetadata.status}`);
     }
     if (!ignoredComponents.has('service:poller') && !services.poller?.running) degraded.push('poller stopped');
     if (!ignoredComponents.has('service:scanner') && isBadStatus(services.scanner?.status)) issues.push(`scanner ${services.scanner.status}`);
@@ -225,7 +225,7 @@ export default function SystemHealthPage() {
 
   const summary = useMemo(() => systemSummary(apiHealth, services, null, ignoredComponents), [apiHealth, services, ignoredComponents]);
   const apiEntries = apiHealth ? Object.entries(apiHealth).filter(([, value]) => value?.status !== 'N/A') : [];
-  const activeProvider = services?.liveExitMonitor?.provider === 'alpaca' ? services?.streams?.alpaca : services?.streams?.questrade;
+  const activeProvider = services?.liveExitMonitor?.provider === 'alpaca' ? services?.streams?.alpaca : services?.streams?.thetadata;
 
   return (
     <div className="mx-auto w-full max-w-[1500px] px-3 py-4 sm:w-[95%] sm:px-0">
@@ -348,7 +348,7 @@ export default function SystemHealthPage() {
           <div className="divide-y divide-border">
             {[
               ['Alpaca', 'stream:alpaca', services?.streams?.alpaca],
-              ['Questrade', 'stream:questrade', services?.streams?.questrade]
+              ['ThetaData', 'stream:thetadata', services?.streams?.thetadata]
             ].map(([name, componentKey, stream]: any) => (
               <HealthRow
                 key={name}

@@ -11,14 +11,14 @@ export async function marketRoutes(fastify: FastifyInstance, options: FastifyPlu
             }
 
             const isOpen = poller.isMarketOpen();
-            const questrade = (fastify as any).questrade;
+            const thetaData = (fastify as any).thetaData;
 
-            // Check if Questrade credentials are configured and valid
+            // Check if ThetaData terminal/API is reachable.
             let connectionStatus = 'DISCONNECTED';
-            if (questrade) {
+            if (thetaData) {
                 try {
-                    const token = await questrade.getActiveToken();
-                    connectionStatus = token ? 'CONNECTED' : 'DISCONNECTED';
+                    const health = await thetaData.getHealth();
+                    connectionStatus = health.connected ? 'CONNECTED' : 'DISCONNECTED';
                 } catch (e) {
                     connectionStatus = 'DISCONNECTED';
                 }

@@ -65,7 +65,7 @@ interface ServiceHealthState {
       lastMessageAt: string | null;
       reconnectAttempts: number;
     };
-    questrade: {
+    thetadata: {
       status: string;
       connected: boolean;
       activeSubscriptions: number;
@@ -122,7 +122,7 @@ const defaultServiceHealth: ServiceHealthState = {
       lastMessageAt: null,
       reconnectAttempts: 0
     },
-    questrade: {
+    thetadata: {
       status: 'N/A',
       connected: false,
       activeSubscriptions: 0,

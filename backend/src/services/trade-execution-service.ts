@@ -5,6 +5,7 @@ import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeRedisService } from './trade-redis-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
+import { ThetaDataService } from './thetadata-service';
 
 type ExecutionBroker = 'none' | 'alpaca_paper' | 'wealthsimple_snaptrade' | 'simulated';
 
@@ -34,10 +35,12 @@ interface ExecutionSettings {
   live_trading_acknowledged?: string;
   alpaca_key_id?: string;
   alpaca_secret_key?: string;
+  thetadata_api_key?: string;
+  thetadata_base_url?: string;
 }
 
 type EntryQuoteSnapshot = {
-  source: 'alpaca' | 'snaptrade';
+  source: 'alpaca' | 'snaptrade' | 'thetadata';
   ticker: string;
   bid: number;
   ask: number;
@@ -332,7 +335,7 @@ export class TradeExecutionService {
       await this.invalidateUserCaches(input.userId);
       const streamers = [
         (this.fastify as any).alpacaMarketDataStreamer,
-        (this.fastify as any).streamer
+        (this.fastify as any).thetaDataStreamer
       ];
       for (const streamer of streamers) {
         if (streamer?.syncSubscriptions) {
@@ -651,12 +654,43 @@ export class TradeExecutionService {
     };
   }
 
+  private async fetchThetaDataOptionQuote(userId: number, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
+    const thetaData = new ThetaDataService(this.fastify);
+    const quote = await thetaData.getOptionQuoteForOsi(userId, osiTicker);
+    if (!quote) return null;
+
+    return {
+      source: 'thetadata',
+      ticker: osiTicker,
+      bid: quote.bid,
+      ask: quote.ask,
+      last: quote.last,
+      mid: quote.mid,
+      mark: quote.mark,
+      spreadPct: quote.spreadPct,
+      syntheticOnly: false,
+      quoteAgeMs: quote.quoteAgeMs,
+      tradeAgeMs: null,
+      timestamp: quote.timestamp
+    };
+  }
+
   private async fetchEntryQuoteSnapshot(input: ExecuteSignalInput, settings: ExecutionSettings, osiTicker: string, snaptradeAccountId?: string): Promise<EntryQuoteSnapshot | null> {
     try {
       const alpacaQuote = await this.fetchAlpacaOptionSnapshot(osiTicker, settings.alpaca_key_id, settings.alpaca_secret_key);
       if (alpacaQuote) return alpacaQuote;
     } catch (err: any) {
       this.fastify.log.warn(`[TradeExecutionService] Alpaca entry quote unavailable for ${osiTicker}: ${err.message || String(err)}`);
+    }
+
+    try {
+      const thetaDataQuote = await this.fetchThetaDataOptionQuote(input.userId, osiTicker);
+      if (thetaDataQuote) {
+        this.fastify.log.info(`[TradeExecutionService] Using ThetaData option quote for ${osiTicker}`);
+        return thetaDataQuote;
+      }
+    } catch (err: any) {
+      this.fastify.log.warn(`[TradeExecutionService] ThetaData entry quote unavailable for ${osiTicker}: ${err.message || String(err)}`);
     }
 
     if (!snaptradeAccountId) return null;
@@ -1050,7 +1084,7 @@ export class TradeExecutionService {
 
     const streamers = [
       (this.fastify as any).alpacaMarketDataStreamer,
-      (this.fastify as any).streamer
+      (this.fastify as any).thetaDataStreamer
     ];
     for (const streamer of streamers) {
       if (streamer?.syncSubscriptions) {

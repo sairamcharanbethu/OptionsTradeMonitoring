@@ -19,6 +19,30 @@ services:
       timeout: 5s
       retries: 5
 
+  thetadata:
+    build:
+      context: ./thetadata
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      THETADATA_API_KEY: ${THETADATA_API_KEY}
+      THETADATA_USERNAME: ${THETADATA_USERNAME:-}
+      THETADATA_PASSWORD: ${THETADATA_PASSWORD:-}
+      THETADATA_TERMINAL_ARGS: ${THETADATA_TERMINAL_ARGS:-}
+      THETADATA_JAVA_OPTS: ${THETADATA_JAVA_OPTS:-}
+    ports:
+      - "${PORT_THETADATA_REST:-25503}:25503"
+      - "${PORT_THETADATA_STREAM:-25520}:25520"
+    volumes:
+      - thetadata-data:/var/lib/thetadata
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:25503/v3/stock/list/symbols?format=json >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
   backend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:latest
     build:
@@ -45,14 +69,16 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       AI_MODEL: ${AI_MODEL:-mistral:7b-instruct-q4_K_M}
       MORNING_BRIEFING_SCHEDULE: ${MORNING_BRIEFING_SCHEDULE:-30 8 * * *}
-      QUESTRADE_TOKEN_KEY: ${QUESTRADE_TOKEN_KEY:-questrade_refresh_token}
-      QUESTRADE_CLIENT_ID: ${QUESTRADE_CLIENT_ID}
-      QUESTRADE_REFRESH_TOKEN: ${QUESTRADE_REFRESH_TOKEN}
+      THETADATA_API_KEY: ${THETADATA_API_KEY}
+      THETADATA_BASE_URL: ${THETADATA_BASE_URL:-http://thetadata:25503}
+      THETADATA_STREAM_URL: ${THETADATA_STREAM_URL:-ws://thetadata:25520/v1/events}
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      thetadata:
+        condition: service_started
     networks:
       - ssmedia_ssmedia_net
       - default
@@ -105,3 +131,4 @@ networks:
 
 volumes:
   db-data:
+  thetadata-data:
