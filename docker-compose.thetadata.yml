@@ -15,7 +15,6 @@ services:
       THETADATA_STREAM_POLL_SECONDS: ${THETADATA_STREAM_POLL_SECONDS:-2}
     ports:
       - "${PORT_THETADATA_REST:-25510}:25510"
-      - "${PORT_THETADATA_STREAM:-25520}:25510"
     networks:
       ssmedia_ssmedia_net:
         aliases:
