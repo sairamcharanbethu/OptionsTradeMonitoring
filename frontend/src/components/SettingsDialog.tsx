@@ -46,6 +46,14 @@ function normalizeThetaDataBaseUrl(baseUrl: string) {
     return cleaned;
 }
 
+function normalizeThetaDataStreamUrl(streamUrl: string) {
+    const cleaned = streamUrl.trim();
+    if (!cleaned) return 'ws://thetadata:25510/v1/events';
+    return cleaned
+        .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25520\/v1\/events$/i, 'ws://thetadata:25510/v1/events')
+        .replace(/^ws:\/\/thetadata:25520\/v1\/events$/i, 'ws://thetadata:25510/v1/events');
+}
+
 export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) {
     const queryClient = useQueryClient();
     const [open, setOpen] = useState(false);
@@ -101,7 +109,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     // ThetaData State
     const [thetaDataApiKey, setThetaDataApiKey] = useState('');
     const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://thetadata:25510');
-    const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('ws://127.0.0.1:25520/v1/events');
+    const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('ws://thetadata:25510/v1/events');
 
     // SnapTrade State
     const [snaptradeClientId, setSnaptradeClientId] = useState('');
@@ -171,7 +179,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setAlpacaSecretKey(data.alpaca_secret_key || '');
             setThetaDataApiKey(data.thetadata_api_key || '');
             setThetaDataBaseUrl(normalizeThetaDataBaseUrl(data.thetadata_base_url || 'http://thetadata:25510'));
-            setThetaDataStreamUrl(data.thetadata_stream_url || 'ws://127.0.0.1:25520/v1/events');
+            setThetaDataStreamUrl(normalizeThetaDataStreamUrl(data.thetadata_stream_url || 'ws://thetadata:25510/v1/events'));
             setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
             setAlpacaAutoTradeMode(data.alpaca_auto_trade_mode || 'instant');
             setExecutionBroker(data.execution_broker || 'none');
@@ -1014,12 +1022,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                             id="thetadata-stream-url"
                                                             value={thetaDataStreamUrl}
                                                             onChange={(e) => setThetaDataStreamUrl(e.target.value)}
-                                                            placeholder="ws://127.0.0.1:25520/v1/events"
+                                                            placeholder="ws://thetadata:25510/v1/events"
                                                         />
                                                     </div>
                                                 </div>
                                                 <p className="text-[10px] text-muted-foreground leading-normal">
-                                                    ThetaData requires the local Theta Terminal to be running where the backend runs. The app uses ThetaData for live option bid/ask snapshots and quote streams.
+                                                    ThetaData uses the internal Python market-data sidecar for live option bid/ask snapshots and quote streams.
                                                 </p>
                                             </div>
                                         </div>

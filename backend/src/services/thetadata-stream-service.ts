@@ -11,7 +11,7 @@ type ThetaContract = {
 
 export class ThetaDataStreamService extends EventEmitter {
   private ws: WebSocket | null = null;
-  private baseWsUrl = process.env.THETADATA_STREAM_URL || 'ws://127.0.0.1:25520/v1/events';
+  private baseWsUrl = process.env.THETADATA_STREAM_URL || 'ws://127.0.0.1:25510/v1/events';
   private apiKey = process.env.THETADATA_API_KEY || '';
   private activeContracts: Map<string, ThetaContract> = new Map();
   private isConnected = false;
@@ -55,8 +55,17 @@ export class ThetaDataStreamService extends EventEmitter {
       acc[row.key] = row.value;
       return acc;
     }, {});
-    this.baseWsUrl = String(settings.thetadata_stream_url || process.env.THETADATA_STREAM_URL || this.baseWsUrl).trim();
+    const envStreamUrl = String(process.env.THETADATA_STREAM_URL || '');
+    this.baseWsUrl = this.normalizeStreamUrl(String(settings.thetadata_stream_url || envStreamUrl || this.baseWsUrl));
     this.apiKey = String(settings.thetadata_api_key || process.env.THETADATA_API_KEY || this.apiKey).trim();
+  }
+
+  private normalizeStreamUrl(url: string): string {
+    const cleaned = url.trim();
+    if (!cleaned) return 'ws://127.0.0.1:25510/v1/events';
+    return cleaned
+      .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25520\/v1\/events$/i, 'ws://thetadata:25510/v1/events')
+      .replace(/^ws:\/\/thetadata:25520\/v1\/events$/i, 'ws://thetadata:25510/v1/events');
   }
 
   private async refreshActiveContracts() {

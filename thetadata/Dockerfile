@@ -1,16 +1,15 @@
-FROM eclipse-temurin:21-jre
+FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates wget && \
-    mkdir -p /opt/thetadata /var/lib/thetadata /var/lib/thetadata/files /root/.theta /root/ThetaData/ThetaTerminal /root/.ThetaData/ThetaTerminal && \
-    wget -q https://download-latest.thetadata.us -O /opt/thetadata/ThetaTerminal.jar && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-COPY start-terminal.sh /usr/local/bin/start-terminal
-RUN chmod +x /usr/local/bin/start-terminal
+WORKDIR /app
 
-WORKDIR /var/lib/thetadata
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-EXPOSE 25510 25520 11000 10000
+COPY app.py .
 
-CMD ["start-terminal"]
+EXPOSE 25510
+
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "25510"]
