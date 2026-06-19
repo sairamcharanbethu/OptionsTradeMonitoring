@@ -27,9 +27,12 @@ async def get_client() -> ThetaClient:
             api_key = os.getenv("THETADATA_API_KEY") or os.getenv("THETA_DATA_API_KEY")
             if api_key:
                 kwargs["api_key"] = api_key
-            mdds_type = os.getenv("THETADATA_MDDS_TYPE")
-            if mdds_type:
-                kwargs["mdds_type"] = mdds_type
+            email = os.getenv("THETADATA_EMAIL") or os.getenv("THETADATA_USERNAME")
+            password = os.getenv("THETADATA_PASSWORD")
+            if not api_key and email and password:
+                kwargs["email"] = email
+                kwargs["password"] = password
+            kwargs["mdds_type"] = os.getenv("THETADATA_MDDS_TYPE") or "PROD"
             _client = await run_in_threadpool(lambda: ThetaClient(**kwargs))
         return _client
 
@@ -125,8 +128,11 @@ async def health() -> Dict[str, Any]:
 
 @app.get("/v3/terminal/mdds/status", response_class=PlainTextResponse)
 async def mdds_status() -> str:
-    await get_client()
-    return "CONNECTED"
+    try:
+        await get_client()
+        return "CONNECTED"
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.get("/v3/option/snapshot/quote")
@@ -136,8 +142,13 @@ async def option_snapshot_quote(
     right: str = Query("both"),
     strike: str = Query("*"),
 ) -> Dict[str, Any]:
-    rows = await get_option_quote_rows(symbol, expiration, strike, right)
-    return {"response": rows}
+    try:
+        rows = await get_option_quote_rows(symbol, expiration, strike, right)
+        return {"response": rows}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.get("/v3/option/history/ohlc")
@@ -150,18 +161,23 @@ async def option_history_ohlc(
     end_date: str = Query(...),
     interval: str = Query("5m"),
 ) -> Dict[str, Any]:
-    client = await get_client()
-    kwargs = {
-        "symbol": symbol.upper(),
-        "expiration": parse_date(expiration),
-        "strike": normalize_strike(strike),
-        "right": normalize_right(right),
-        "interval": interval,
-        "start_date": parse_date(start_date),
-        "end_date": parse_date(end_date),
-    }
-    frame = await run_in_threadpool(lambda: client.option_history_ohlc(**kwargs))
-    return {"response": dataframe_rows(frame)}
+    try:
+        client = await get_client()
+        kwargs = {
+            "symbol": symbol.upper(),
+            "expiration": parse_date(expiration),
+            "strike": normalize_strike(strike),
+            "right": normalize_right(right),
+            "interval": interval,
+            "start_date": parse_date(start_date),
+            "end_date": parse_date(end_date),
+        }
+        frame = await run_in_threadpool(lambda: client.option_history_ohlc(**kwargs))
+        return {"response": dataframe_rows(frame)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.websocket("/v1/events")
