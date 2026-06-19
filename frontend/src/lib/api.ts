@@ -852,7 +852,7 @@ export const api = {
   async getSignalsHealth(): Promise<{
     yahooFinance: { status: string; latencyMs: number };
     sscgexPortal: { status: string; latencyMs: number };
-    polygon: { status: string; latencyMs: number };
+    thetaData: { status: string; latencyMs: number };
     openRouter: { status: string; latencyMs: number };
     discord: { status: string; latencyMs: number };
     alpaca: { status: string; latencyMs: number };

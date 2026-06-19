@@ -123,6 +123,18 @@ async def get_option_quote_rows(symbol: str, expiration: str, strike: Any, right
     return dataframe_rows(frame)
 
 
+async def get_option_greeks_rows(symbol: str, expiration: str, strike: Any, right: str) -> List[Dict[str, Any]]:
+    client = await get_client()
+    kwargs = {
+        "symbol": symbol.upper(),
+        "expiration": parse_date(expiration),
+        "strike": normalize_strike(strike),
+        "right": normalize_right(right),
+    }
+    frame = await run_in_threadpool(lambda: client.option_snapshot_greeks_all(**kwargs))
+    return dataframe_rows(frame)
+
+
 def quote_payload(row: Dict[str, Any], contract: Dict[str, Any]) -> Dict[str, Any]:
     quote = {
         "bid": row.get("bid"),
@@ -163,6 +175,22 @@ async def option_snapshot_quote(
 ) -> Dict[str, Any]:
     try:
         rows = await get_option_quote_rows(symbol, expiration, strike, right)
+        return {"response": rows}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise theta_error(exc)
+
+
+@app.get("/v3/option/snapshot/greeks")
+async def option_snapshot_greeks(
+    symbol: str = Query(...),
+    expiration: str = Query(...),
+    right: str = Query("both"),
+    strike: str = Query("*"),
+) -> Dict[str, Any]:
+    try:
+        rows = await get_option_greeks_rows(symbol, expiration, strike, right)
         return {"response": rows}
     except HTTPException:
         raise

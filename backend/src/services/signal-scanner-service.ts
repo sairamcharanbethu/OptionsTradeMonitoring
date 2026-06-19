@@ -10,6 +10,7 @@ import path from 'path';
 import fs from 'fs';
 import { TradeExecutionService } from './trade-execution-service';
 import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { ThetaDataOptionChainQuote, ThetaDataService } from './thetadata-service';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -137,6 +138,7 @@ type OptionContractCandidate = {
 
 type OptionQuoteCandidate = OptionContractCandidate & {
   alpacaTicker: string;
+  source?: string;
   bid: number | null;
   ask: number | null;
   spread: number | null;
@@ -145,6 +147,10 @@ type OptionQuoteCandidate = OptionContractCandidate & {
   volume: number | null;
   openInterest: number | null;
   last: number | null;
+  delta?: number | null;
+  gamma?: number | null;
+  theta?: number | null;
+  impliedVolatility?: number | null;
   score: number;
   reasons: string[];
 };
@@ -452,11 +458,11 @@ Rules:
   }
 
   private async getPrimaryUserId(): Promise<number> {
-    // 1. Try to find the first user who has polygon_api_key set in the settings table
+    // Use the first user with signal-critical credentials, then fall back to the first user.
     const { rows } = await this.fastify.pg.query(`
-      SELECT user_id 
-      FROM settings 
-      WHERE key = 'polygon_api_key' AND value IS NOT NULL AND value != '' 
+      SELECT user_id
+      FROM settings
+      WHERE key IN ('thetadata_api_key', 'sscgex_password') AND value IS NOT NULL AND value != ''
       ORDER BY user_id ASC
       LIMIT 1
     `);
@@ -573,13 +579,12 @@ Rules:
     }
   }
 
-  public async getSettingsForUser(userId: number) {
+  public async getSettingsForUser(userId: number): Promise<Record<string, string>> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
     const defaults = {
       day_trading_enabled: 'true',
       day_trading_symbols: 'QQQ,SPY',
-      polygon_api_key: '',
       sscgex_password: '',
       discord_webhook_url: '',
       discord_alerts_enabled: 'false',
@@ -1121,8 +1126,7 @@ Rules:
         tradeBias = winningSide === 'CALL' ? 'BUY_CALL_ON_DIP' : 'BUY_PUT_ON_RIP';
       }
 
-      // Fetch nearby contracts with Polygon, then use live Alpaca snapshots to select the cleanest contract.
-      const polygonApiKey = settings.polygon_api_key;
+      // Fetch the expiry chain from ThetaData and select the cleanest nearby contract.
       const strikeOffset = parseInt(settings.strike_offset, 10) || 0;
       const todayDateStr = nyParts.dateStr;
       const targetExpiryDateStr = this.getTargetDayTradeExpiry(todayDateStr, nyParts.minutes);
@@ -1134,63 +1138,7 @@ Rules:
       let contractCandidates: OptionContractCandidate[] = [];
       let preferredStrike = Math.round(currentPrice);
 
-      if (polygonApiKey) {
-        try {
-          const contractsRes = await axios.get('https://api.polygon.io/v3/reference/options/contracts', {
-            params: {
-              underlying_ticker: symbol,
-              contract_type: winningSide === 'CALL' ? 'call' : 'put',
-              expiration_date: targetExpiryDateStr,
-              limit: 250,
-              sort: 'strike_price',
-              order: 'asc',
-              apikey: polygonApiKey
-            },
-            timeout: 8000
-          });
-
-          const contracts = (contractsRes.data as any).results || [];
-          if (contracts.length > 0) {
-            // Parse contracts
-            const parsed: OptionContractCandidate[] = contracts
-              .map((c: any) => ({
-                ticker: c.ticker,
-                strike: Number(c.strike_price),
-                expiry: c.expiration_date
-              }))
-              .filter((c: any) => !isNaN(c.strike))
-              .sort((a: any, b: any) => a.strike - b.strike);
-
-            // Find closest ATM strike index
-            let atmIdx = 0;
-            let minDistance = Infinity;
-            for (let i = 0; i < parsed.length; i++) {
-              const dist = Math.abs(parsed[i].strike - currentPrice);
-              if (dist < minDistance) {
-                minDistance = dist;
-                atmIdx = i;
-              }
-            }
-
-            // Adjust by offset
-            let chosenIdx = atmIdx;
-            if (winningSide === 'CALL') {
-              chosenIdx = atmIdx + strikeOffset;
-            } else {
-              chosenIdx = atmIdx - strikeOffset;
-            }
-
-            chosenIdx = Math.max(0, Math.min(parsed.length - 1, chosenIdx));
-            chosenContract = parsed[chosenIdx];
-            preferredStrike = chosenContract?.strike || parsed[atmIdx]?.strike || Math.round(currentPrice);
-            contractCandidates = this.getContractWindow(parsed, atmIdx, winningSide, strikeOffset);
-          }
-        } catch (contractErr: any) {
-          this.fastify.log.warn(`[SignalScannerService] Polygon reference option call failed: ${contractErr.message}`);
-        }
-      }
-
-      // 8. Contract pricing (Alpaca live snapshot -> Polygon snapshot -> Black-Scholes fallback)
+      // 8. Contract pricing (ThetaData chain snapshot -> Black-Scholes fallback)
       let bid: number | null = null;
       let ask: number | null = null;
       let spread: number | null = null;
@@ -1205,23 +1153,57 @@ Rules:
       const minOpenInterest = 500;
       let candidateSelection: any = null;
 
-      const defaultContractName = `${symbol}${targetExpiryDateStr.replace(/-/g, '').slice(2)}${winningSide === 'CALL' ? 'C' : 'P'}${Math.round(currentPrice)}`;
-      optionTicker = chosenContract?.ticker || defaultContractName;
-      chosenStrike = chosenContract?.strike || Math.round(currentPrice);
-      chosenExpiry = chosenContract?.expiry || targetExpiryDateStr;
+      const defaultContractName = this.buildOsiTicker(symbol, targetExpiryDateStr, winningSide, Math.round(currentPrice));
+      optionTicker = defaultContractName;
+      chosenStrike = Math.round(currentPrice);
+      chosenExpiry = targetExpiryDateStr;
 
-      // Try fetching live option contract snapshot from Alpaca API if credentials exist
-      const alpacaKeyId = settings.alpaca_key_id?.trim();
-      const alpacaSecretKey = settings.alpaca_secret_key?.trim();
+      try {
+        const thetaData = new ThetaDataService(this.fastify);
+        const chain = await thetaData.getOptionChainSnapshot(
+          userId,
+          symbol,
+          targetExpiryDateStr,
+          winningSide === 'CALL' ? 'call' : 'put'
+        );
+        const parsed = chain
+          .map((quote) => ({
+            ticker: quote.ticker,
+            strike: quote.strike,
+            expiry: quote.expiration
+          }))
+          .filter((candidate, idx, arr) =>
+            Number.isFinite(candidate.strike) &&
+            arr.findIndex((other) => other.ticker === candidate.ticker) === idx
+          )
+          .sort((a, b) => a.strike - b.strike);
 
-      if (alpacaKeyId && alpacaSecretKey && contractCandidates.length > 0) {
-        try {
-          this.fastify.log.info(`[SignalScannerService] Querying Alpaca live option snapshots for ${contractCandidates.length} ${symbol} candidates...`);
-          const selection = await this.fetchBestAlpacaOptionCandidate({
+        if (parsed.length > 0) {
+          let atmIdx = 0;
+          let minDistance = Infinity;
+          for (let i = 0; i < parsed.length; i++) {
+            const dist = Math.abs(parsed[i].strike - currentPrice);
+            if (dist < minDistance) {
+              minDistance = dist;
+              atmIdx = i;
+            }
+          }
+
+          const preferredIdx = Math.max(
+            0,
+            Math.min(parsed.length - 1, winningSide === 'CALL' ? atmIdx + strikeOffset : atmIdx - strikeOffset)
+          );
+          chosenContract = parsed[preferredIdx];
+          preferredStrike = chosenContract?.strike || parsed[atmIdx]?.strike || Math.round(currentPrice);
+          contractCandidates = this.getContractWindow(parsed, atmIdx, winningSide, strikeOffset);
+        }
+
+        if (contractCandidates.length > 0) {
+          this.fastify.log.info(`[SignalScannerService] Querying ThetaData option chain for ${contractCandidates.length}/${chain.length} ${symbol} candidates...`);
+          const selection = this.fetchBestThetaDataOptionCandidate({
+            chain,
             candidates: contractCandidates,
             preferredStrike,
-            alpacaKeyId,
-            alpacaSecretKey,
             minOptionMark,
             maxBidAskSpreadPct,
             minOptionVolume,
@@ -1230,7 +1212,7 @@ Rules:
 
           const selected = selection.selected;
           candidateSelection = {
-            source: 'alpaca_multi_candidate',
+            source: 'thetadata_chain',
             preferredStrike,
             selectedScore: selected?.score ?? null,
             selectedReasons: selected?.reasons ?? [],
@@ -1243,6 +1225,10 @@ Rules:
               spreadPct: candidate.spreadPct,
               volume: candidate.volume,
               openInterest: candidate.openInterest,
+              delta: candidate.delta ?? null,
+              gamma: candidate.gamma ?? null,
+              theta: candidate.theta ?? null,
+              impliedVolatility: candidate.impliedVolatility ?? null,
               score: candidate.score,
               reasons: candidate.reasons
             }))
@@ -1265,38 +1251,35 @@ Rules:
             volume = selected.volume;
             openInterest = selected.openInterest;
             usingTheoreticalPricing = false;
-            this.fastify.log.info(`[SignalScannerService] Selected ${selected.ticker} from ${selection.ranked.length} Alpaca candidates: strike=${selected.strike}, mark=$${mark}, spread=${spreadPct}%, volume=${volume}, OI=${openInterest}, score=${selected.score}.`);
+            this.fastify.log.info(`[SignalScannerService] Selected ${selected.ticker} from ${selection.ranked.length} ThetaData candidates: strike=${selected.strike}, mark=$${mark}, spread=${spreadPct}%, volume=${volume}, OI=${openInterest}, score=${selected.score}.`);
           }
-        } catch (alpacaErr: any) {
-          this.fastify.log.warn(`[SignalScannerService] Alpaca option candidate snapshot query failed: ${alpacaErr.message}`);
         }
+      } catch (thetaErr: any) {
+        this.fastify.log.warn(`[SignalScannerService] ThetaData option chain selection failed: ${thetaErr.message}`);
       }
 
-      if (usingTheoreticalPricing && polygonApiKey && chosenContract) {
+      if (usingTheoreticalPricing && chosenContract) {
         try {
-          const snapRes = await axios.get(`https://api.polygon.io/v3/snapshot/options/${symbol}/${chosenContract.ticker}`, {
-            params: { apikey: polygonApiKey },
-            timeout: 8000
+          const thetaData = new ThetaDataService(this.fastify);
+          const quote = await thetaData.getOptionQuote(userId, {
+            symbol,
+            expiration: chosenContract.expiry,
+            right: winningSide === 'CALL' ? 'call' : 'put',
+            strike: chosenContract.strike
           });
-
-          const snapData = snapRes.data as any;
-          if (snapData && snapData.status !== 'NOT_AUTHORIZED' && snapData.results) {
-            const snap = snapData.results;
-            const quote = snap.last_quote || {};
-            bid = this.toNumber(quote.bid);
-            ask = this.toNumber(quote.ask);
-            if (bid !== null && ask !== null) {
-              spread = ask - bid;
-              const mid = (bid + ask) / 2;
-              mark = Number(mid.toFixed(2));
-              spreadPct = Number(((spread / mid) * 100).toFixed(2));
-              usingTheoreticalPricing = false;
-            }
-            volume = snap.day?.volume ?? null;
-            openInterest = snap.open_interest ?? null;
+          if (quote) {
+            optionTicker = quote.ticker;
+            bid = quote.bid;
+            ask = quote.ask;
+            spread = bid > 0 && ask > 0 ? Number((ask - bid).toFixed(2)) : null;
+            spreadPct = quote.spreadPct;
+            mark = quote.mark;
+            volume = null;
+            openInterest = null;
+            usingTheoreticalPricing = false;
           }
-        } catch (snapErr: any) {
-          this.fastify.log.warn(`[SignalScannerService] Polygon option snapshot failed: ${snapErr.message}`);
+        } catch (quoteErr: any) {
+          this.fastify.log.warn(`[SignalScannerService] ThetaData single-contract quote fallback failed: ${quoteErr.message}`);
         }
       }
 
@@ -1892,10 +1875,6 @@ Rules:
     ].join('\n');
   }
 
-  private toAlpacaOptionTicker(ticker: string): string {
-    return String(ticker || '').replace(/^O:/, '');
-  }
-
   private getContractWindow(parsedContracts: OptionContractCandidate[], atmIdx: number, side: string, strikeOffset: number): OptionContractCandidate[] {
     const preferredIdx = Math.max(
       0,
@@ -1972,64 +1951,39 @@ Rules:
     return { score: Number(score.toFixed(2)), reasons };
   }
 
-  private async fetchBestAlpacaOptionCandidate(input: {
+  private fetchBestThetaDataOptionCandidate(input: {
+    chain: ThetaDataOptionChainQuote[];
     candidates: OptionContractCandidate[];
     preferredStrike: number;
-    alpacaKeyId: string;
-    alpacaSecretKey: string;
     minOptionMark: number;
     maxBidAskSpreadPct: number;
     minOptionVolume: number;
     minOpenInterest: number;
-  }): Promise<{ selected: OptionQuoteCandidate | null; ranked: OptionQuoteCandidate[] }> {
+  }): { selected: OptionQuoteCandidate | null; ranked: OptionQuoteCandidate[] } {
     const uniqueCandidates = input.candidates.filter((candidate, idx, arr) =>
       candidate?.ticker && arr.findIndex((other) => other.ticker === candidate.ticker) === idx
     );
     if (uniqueCandidates.length === 0) return { selected: null, ranked: [] };
 
-    const alpacaTickers = uniqueCandidates.map((candidate) => this.toAlpacaOptionTicker(candidate.ticker));
-    const params = new URLSearchParams({
-      symbols: alpacaTickers.join(',')
-    });
-    const alpacaRes = await axios.get(`https://data.alpaca.markets/v1beta1/options/snapshots?${params.toString()}`, {
-      headers: {
-        'APCA-API-KEY-ID': input.alpacaKeyId,
-        'APCA-API-SECRET-KEY': input.alpacaSecretKey
-      },
-      timeout: 8000
-    });
-
-    const snapshots = (alpacaRes.data as any)?.snapshots || {};
+    const chainByTicker = new Map(input.chain.map((quote) => [quote.ticker, quote]));
     const ranked = uniqueCandidates.map((candidate) => {
-      const alpacaTicker = this.toAlpacaOptionTicker(candidate.ticker);
-      const snap = snapshots[alpacaTicker];
-      const bid = this.toNumber(snap?.latestQuote?.bp);
-      const ask = this.toNumber(snap?.latestQuote?.ap);
-      const last = this.toNumber(snap?.latestTrade?.p);
-      const mark = bid !== null && ask !== null && bid > 0 && ask > 0
-        ? Number(((bid + ask) / 2).toFixed(2))
-        : last !== null && last > 0
-          ? Number(last.toFixed(2))
-          : null;
-      const spread = bid !== null && ask !== null && bid > 0 && ask > 0
-        ? Number((ask - bid).toFixed(2))
-        : null;
-      const spreadPct = spread !== null && mark !== null && mark > 0
-        ? Number(((spread / mark) * 100).toFixed(2))
-        : null;
-      const volume = this.toNumber(snap?.day?.volume);
-      const openInterest = this.toNumber(snap?.open_interest);
+      const quote = chainByTicker.get(candidate.ticker);
       const base = {
         ...candidate,
-        alpacaTicker,
-        bid,
-        ask,
-        spread,
-        spreadPct,
-        mark,
-        volume,
-        openInterest,
-        last
+        alpacaTicker: candidate.ticker,
+        source: 'thetadata_chain',
+        bid: quote?.bid ?? null,
+        ask: quote?.ask ?? null,
+        spread: quote?.spread ?? null,
+        spreadPct: quote?.spreadPct ?? null,
+        mark: quote?.mark ?? null,
+        volume: quote?.volume ?? null,
+        openInterest: quote?.openInterest ?? null,
+        last: quote?.last ?? null,
+        delta: quote?.delta ?? null,
+        gamma: quote?.gamma ?? null,
+        theta: quote?.theta ?? null,
+        impliedVolatility: quote?.impliedVolatility ?? null
       };
       const scored = this.scoreOptionCandidate(
         base,
@@ -2056,6 +2010,16 @@ Rules:
     ) || null;
 
     return { selected, ranked };
+  }
+
+  private buildOsiTicker(symbol: string, expiration: string, side: 'CALL' | 'PUT', strike: number): string {
+    const cleanDate = expiration.replace(/-/g, '');
+    const yy = cleanDate.slice(2, 4);
+    const mm = cleanDate.slice(4, 6);
+    const dd = cleanDate.slice(6, 8);
+    const right = side === 'CALL' ? 'C' : 'P';
+    const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
+    return `${symbol.toUpperCase()}${yy}${mm}${dd}${right}${strikeValue}`;
   }
 
   /**
@@ -2764,12 +2728,12 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     let targetUserId = userId;
     let settings = await this.getSettingsForUser(targetUserId);
 
-    // If the logged-in user hasn't configured keys, try using the primary user settings
-    if (!settings.polygon_api_key && !settings.sscgex_password) {
+    // If the logged-in user hasn't configured signal keys, try using the primary user settings.
+    if (!settings.thetadata_api_key && !settings.sscgex_password) {
       const primaryId = await this.getPrimaryUserId();
       if (primaryId !== userId) {
         const primarySettings = await this.getSettingsForUser(primaryId);
-        if (primarySettings.polygon_api_key || primarySettings.sscgex_password) {
+        if (primarySettings.thetadata_api_key || primarySettings.sscgex_password) {
           targetUserId = primaryId;
           settings = primarySettings;
         }
@@ -2804,12 +2768,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       });
     }, !!settings.sscgex_password);
 
-    const polygonCheck = checkLatency(async () => {
-      await axios.get('https://api.polygon.io/v3/reference/options/contracts', {
-        params: { underlying_ticker: 'QQQ', limit: 1, apikey: settings.polygon_api_key },
-        timeout: 4000
-      });
-    }, !!settings.polygon_api_key);
+    const thetaDataCheck = checkLatency(async () => {
+      const thetaData = new ThetaDataService(this.fastify);
+      const health = await thetaData.getHealth(targetUserId);
+      if (!health.connected) throw new Error(health.lastError || 'ThetaData unavailable');
+    }, !!settings.thetadata_base_url || !!settings.thetadata_api_key || !!process.env.THETADATA_BASE_URL || !!process.env.THETADATA_API_KEY);
 
     const openrouterCheck = checkLatency(async () => {
       const key = await this.getAiApiKey(settings.day_trading_ai_provider);
@@ -2845,10 +2808,10 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       }
     }, !!settings.alpaca_key_id && !!settings.alpaca_secret_key);
 
-    const [yahoo, sscgex, polygon, openrouter, discord, alpaca] = await Promise.all([
+    const [yahoo, sscgex, thetaData, openrouter, discord, alpaca] = await Promise.all([
       yahooCheck,
       sscgexCheck,
-      polygonCheck,
+      thetaDataCheck,
       openrouterCheck,
       discordCheck,
       alpacaCheck
@@ -2857,7 +2820,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     return {
       yahooFinance: yahoo,
       sscgexPortal: sscgex,
-      polygon: polygon,
+      thetaData,
       openRouter: openrouter,
       discord: discord,
       alpaca: alpaca

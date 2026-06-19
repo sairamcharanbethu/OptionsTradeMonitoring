@@ -22,6 +22,29 @@ export type ThetaDataContract = {
   strike: number;
 };
 
+export type ThetaDataOptionChainQuote = {
+  source: 'thetadata_chain';
+  ticker: string;
+  symbol: string;
+  expiration: string;
+  right: 'call' | 'put';
+  strike: number;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  mark: number | null;
+  spread: number | null;
+  spreadPct: number | null;
+  volume: number | null;
+  openInterest: number | null;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  impliedVolatility: number | null;
+  raw: any;
+};
+
 export class ThetaDataService {
   constructor(private fastify: FastifyInstance) {}
 
@@ -68,6 +91,27 @@ export class ThetaDataService {
       timestamp,
       raw: quote
     };
+  }
+
+  public async getOptionChainSnapshot(
+    userId: number | null,
+    symbol: string,
+    expiration: string,
+    right: 'call' | 'put' | 'both' = 'both'
+  ): Promise<ThetaDataOptionChainQuote[]> {
+    const config = await this.getConfig(userId);
+    const params = new URLSearchParams({
+      symbol,
+      expiration: expiration.replace(/-/g, ''),
+      right,
+      strike: '*',
+      format: 'json'
+    });
+
+    const data = await this.fetchJson(config, `/v3/option/snapshot/greeks?${params.toString()}`);
+    return this.rows(data)
+      .map((row: any) => this.normalizeChainRow(symbol, expiration, right, row))
+      .filter((row: ThetaDataOptionChainQuote | null): row is ThetaDataOptionChainQuote => Boolean(row));
   }
 
   public async getOptionOhlcHistory(
@@ -207,6 +251,58 @@ export class ThetaDataService {
     if (Array.isArray(data?.data)) return data.data;
     if (Array.isArray(data?.rows)) return data.rows;
     return [];
+  }
+
+  private normalizeChainRow(symbol: string, expiration: string, requestedRight: 'call' | 'put' | 'both', row: any): ThetaDataOptionChainQuote | null {
+    const rawStrike = this.pickNumber(row, ['strike', 'strike_price', 'strikePrice']);
+    const strike = rawStrike !== null && rawStrike > 10000 ? rawStrike / 1000 : rawStrike;
+    if (strike === null || strike <= 0) return null;
+
+    const rowRight = String(row.right ?? row.option_type ?? row.optionType ?? row.contract_type ?? row.contractType ?? requestedRight).toLowerCase();
+    const right: 'call' | 'put' = rowRight.startsWith('p') ? 'put' : 'call';
+    if (requestedRight !== 'both' && right !== requestedRight) return null;
+
+    const bid = this.pickNumber(row, ['bid', 'bid_price', 'bidPrice']);
+    const ask = this.pickNumber(row, ['ask', 'ask_price', 'askPrice']);
+    const last = this.pickNumber(row, ['last', 'last_price', 'lastPrice', 'price']);
+    const mid = bid !== null && ask !== null && bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : null;
+    const mark = mid !== null ? mid : last !== null && last > 0 ? Number(last.toFixed(2)) : null;
+    const spread = bid !== null && ask !== null && bid > 0 && ask > 0 ? Number((ask - bid).toFixed(2)) : null;
+    const spreadPct = spread !== null && mark !== null && mark > 0 ? Number(((spread / mark) * 100).toFixed(2)) : null;
+    const normalizedExpiration = String(row.expiration ?? row.expiration_date ?? row.expirationDate ?? expiration).split('T')[0];
+
+    return {
+      source: 'thetadata_chain',
+      ticker: String(row.ticker ?? row.osi ?? row.symbol ?? this.constructOSITicker(symbol, strike, right === 'call' ? 'CALL' : 'PUT', normalizedExpiration)),
+      symbol: symbol.toUpperCase(),
+      expiration: normalizedExpiration,
+      right,
+      strike,
+      bid,
+      ask,
+      last,
+      mark,
+      spread,
+      spreadPct,
+      volume: this.pickNumber(row, ['volume', 'day_volume', 'dayVolume']),
+      openInterest: this.pickNumber(row, ['open_interest', 'openInterest', 'oi']),
+      delta: this.pickNumber(row, ['delta']),
+      gamma: this.pickNumber(row, ['gamma']),
+      theta: this.pickNumber(row, ['theta']),
+      vega: this.pickNumber(row, ['vega']),
+      impliedVolatility: this.pickNumber(row, ['implied_volatility', 'impliedVolatility', 'iv', 'bid_iv', 'mid_iv', 'ask_iv']),
+      raw: row
+    };
+  }
+
+  private pickNumber(row: any, keys: string[]): number | null {
+    for (const key of keys) {
+      const value = row?.[key];
+      if (value === null || value === undefined || value === '') continue;
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
   }
 
   private parseCompactOsiTicker(ticker: string): ThetaDataContract | null {

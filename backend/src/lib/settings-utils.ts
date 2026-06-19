@@ -8,7 +8,6 @@ const GLOBAL_SETTING_KEYS = [
   'thetadata_api_key',
   'thetadata_base_url',
   'thetadata_stream_url',
-  'polygon_api_key',
   'sscgex_password',
   'discord_webhook_url',
   'discord_alerts_enabled',

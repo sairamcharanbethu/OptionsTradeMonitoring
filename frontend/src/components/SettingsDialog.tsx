@@ -80,7 +80,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [tradingCutoffTime, setTradingCutoffTime] = useState('16:00');
     const [discordAlertsEnabled, setDiscordAlertsEnabled] = useState(false);
     const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
-    const [polygonApiKey, setPolygonApiKey] = useState('');
     const [sscgexPassword, setSscgexPassword] = useState('');
     const [dayTradingAiEnabled, setDayTradingAiEnabled] = useState(true);
     const [dayTradingAiProvider, setDayTradingAiProvider] = useState('openrouter');
@@ -202,7 +201,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setTradingCutoffTime(data.trading_cutoff_time || '16:00');
             setDiscordAlertsEnabled(data.discord_alerts_enabled === 'true');
             setDiscordWebhookUrl(data.discord_webhook_url || '');
-            setPolygonApiKey(data.polygon_api_key || '');
             setSscgexPassword(data.sscgex_password || '');
             setDayTradingAiEnabled(data.day_trading_ai_enabled !== 'false');
             setDayTradingAiProvider(data.day_trading_ai_provider || 'openrouter');
@@ -413,7 +411,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 trading_cutoff_time: tradingCutoffTime,
                 discord_alerts_enabled: discordAlertsEnabled ? 'true' : 'false',
                 discord_webhook_url: discordWebhookUrl,
-                polygon_api_key: polygonApiKey,
                 sscgex_password: sscgexPassword,
                 day_trading_ai_enabled: dayTradingAiEnabled ? 'true' : 'false',
                 day_trading_ai_provider: dayTradingAiProvider,
@@ -916,17 +913,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             value={openRouterKey}
                                             onChange={(e) => setOpenRouterKey(e.target.value)}
                                             placeholder="sk-or-..."
-                                        />
-                                    </div>
-
-                                    <div className="grid gap-2 pt-2">
-                                        <Label htmlFor="dtPolygonKey">Polygon.io API Key</Label>
-                                        <Input
-                                            id="dtPolygonKey"
-                                            type="password"
-                                            value={polygonApiKey}
-                                            onChange={(e) => setPolygonApiKey(e.target.value)}
-                                            placeholder="Enter Polygon Key"
                                         />
                                     </div>
 

@@ -39,7 +39,7 @@ import {
 interface ApiHealthState {
   yahooFinance: { status: string; latencyMs: number };
   sscgexPortal: { status: string; latencyMs: number };
-  polygon: { status: string; latencyMs: number };
+  thetaData: { status: string; latencyMs: number };
   openRouter: { status: string; latencyMs: number };
   discord: { status: string; latencyMs: number };
   alpaca?: { status: string; latencyMs: number };
@@ -347,7 +347,7 @@ export default function DayTradingTerminal() {
   const [healthData, setHealthData] = useState<ApiHealthState>({
     yahooFinance: { status: 'UP', latencyMs: 95 },
     sscgexPortal: { status: 'UP', latencyMs: 140 },
-    polygon: { status: 'UP', latencyMs: 110 },
+    thetaData: { status: 'UP', latencyMs: 110 },
     openRouter: { status: 'UP', latencyMs: 310 },
     discord: { status: 'UP', latencyMs: 120 },
     alpaca: { status: 'N/A', latencyMs: 0 }
