@@ -3,6 +3,7 @@ services:
     build:
       context: ./thetadata
       dockerfile: Dockerfile
+    image: optionstrademonitoring-thetadata:latest
     platform: ${THETADATA_PLATFORM:-linux/arm64}
     restart: unless-stopped
     environment:
@@ -16,8 +17,16 @@ services:
     ports:
       - "${PORT_THETADATA_REST:-25510}:25510"
       - "${PORT_THETADATA_STREAM:-25520}:25510"
+    networks:
+      ssmedia_ssmedia_net:
+        aliases:
+          - thetadata
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:25510/health', timeout=5).read()"]
-      interval: 15s
+      interval: 30s
       timeout: 5s
       retries: 5
+
+networks:
+  ssmedia_ssmedia_net:
+    external: true

@@ -19,31 +19,6 @@ services:
       timeout: 5s
       retries: 5
 
-  thetadata:
-    build:
-      context: ./thetadata
-      dockerfile: Dockerfile
-    platform: ${THETADATA_PLATFORM:-linux/arm64}
-    restart: unless-stopped
-    environment:
-      THETADATA_API_KEY: ${THETADATA_API_KEY}
-      THETA_DATA_API_KEY: ${THETADATA_API_KEY}
-      THETADATA_EMAIL: ${THETADATA_EMAIL:-${THETADATA_USERNAME:-}}
-      THETADATA_PASSWORD: ${THETADATA_PASSWORD:-}
-      THETADATA_DATAFRAME_TYPE: ${THETADATA_DATAFRAME_TYPE:-polars}
-      THETADATA_MDDS_TYPE: ${THETADATA_MDDS_TYPE:-PROD}
-      THETADATA_STREAM_POLL_SECONDS: ${THETADATA_STREAM_POLL_SECONDS:-2}
-    ports:
-      - "${PORT_THETADATA_REST:-25510}:25510"
-      - "${PORT_THETADATA_STREAM:-25520}:25510"
-    networks:
-      - default
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:25510/health', timeout=5).read()"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-
   backend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:latest
     build:
@@ -78,8 +53,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      thetadata:
-        condition: service_started
     networks:
       - ssmedia_ssmedia_net
       - default
