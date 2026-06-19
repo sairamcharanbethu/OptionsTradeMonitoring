@@ -4,6 +4,7 @@ import math
 import os
 from typing import Any, Dict, List, Optional
 
+import grpc
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
@@ -92,6 +93,24 @@ def json_ready(value: Any) -> Any:
     return value
 
 
+def theta_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, grpc.RpcError):
+        code = exc.code()
+        details = exc.details() or str(exc)
+        if code == grpc.StatusCode.PERMISSION_DENIED:
+            return HTTPException(status_code=403, detail=details)
+        if code == grpc.StatusCode.UNAUTHENTICATED:
+            return HTTPException(status_code=401, detail=details)
+        if code == grpc.StatusCode.INVALID_ARGUMENT:
+            return HTTPException(status_code=400, detail=details)
+        if code == grpc.StatusCode.NOT_FOUND:
+            return HTTPException(status_code=404, detail=details)
+        if code == grpc.StatusCode.UNAVAILABLE:
+            return HTTPException(status_code=503, detail=details)
+        return HTTPException(status_code=502, detail=details)
+    return HTTPException(status_code=503, detail=str(exc))
+
+
 async def get_option_quote_rows(symbol: str, expiration: str, strike: Any, right: str) -> List[Dict[str, Any]]:
     client = await get_client()
     kwargs = {
@@ -148,7 +167,7 @@ async def option_snapshot_quote(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise theta_error(exc)
 
 
 @app.get("/v3/option/history/ohlc")
@@ -177,7 +196,7 @@ async def option_history_ohlc(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        raise theta_error(exc)
 
 
 @app.websocket("/v1/events")
