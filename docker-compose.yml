@@ -23,6 +23,7 @@ services:
     build:
       context: ./thetadata
       dockerfile: Dockerfile
+    platform: ${THETADATA_PLATFORM:-linux/arm64}
     restart: unless-stopped
     environment:
       THETADATA_API_KEY: ${THETADATA_API_KEY}
