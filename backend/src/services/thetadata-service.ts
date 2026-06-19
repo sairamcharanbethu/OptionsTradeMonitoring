@@ -105,17 +105,19 @@ export class ThetaDataService {
     const config = await this.getConfig(userId);
     const startedAt = Date.now();
     try {
-      const res = await fetch(`${config.baseUrl}/v3/stock/list/symbols?format=json`, {
+      const res = await fetch(`${config.baseUrl}/v3/terminal/mdds/status`, {
         headers: this.headers(config),
         signal: AbortSignal.timeout(2500)
       });
+      const body = (await res.text().catch(() => '')).trim();
+      const connected = res.ok && body.toUpperCase().includes('CONNECTED');
       return {
-        status: res.ok ? 'UP' : 'DEGRADED',
-        connected: res.ok,
+        status: connected ? 'UP' : 'DEGRADED',
+        connected,
         provider: 'thetadata',
         baseUrl: config.baseUrl,
         latencyMs: Date.now() - startedAt,
-        lastError: res.ok ? null : `ThetaData HTTP ${res.status}`
+        lastError: connected ? null : `ThetaData MDDS status ${res.status}: ${body || 'empty response'}`
       };
     } catch (err: any) {
       return {

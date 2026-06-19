@@ -41,7 +41,7 @@ services:
     networks:
       - default
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:25510/v3/stock/list/symbols?format=json >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:25510/v3/terminal/mdds/status | grep -q CONNECTED"]
       interval: 30s
       timeout: 5s
       retries: 5
