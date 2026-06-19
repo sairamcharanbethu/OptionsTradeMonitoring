@@ -105,6 +105,50 @@ interface Candle {
   timestamp: number;
 }
 
+type TradePlanMode = 'HOLD_FOR_TP2' | 'BOOK_GREEN_FAST';
+
+type TradeManagementPlan = {
+  mode: TradePlanMode;
+  bull_case: string;
+  bear_case: string;
+  tp1: {
+    underlying: number | null;
+    option_bid: number | null;
+    action: string;
+  };
+  tp2: {
+    underlying: number | null;
+    option_bid: number | null;
+    action: string;
+  };
+  out: {
+    underlying: number | null;
+    option_bid: number | null;
+    action: string;
+  };
+  reason: string;
+};
+
+type OptionContractCandidate = {
+  ticker: string;
+  strike: number;
+  expiry: string;
+};
+
+type OptionQuoteCandidate = OptionContractCandidate & {
+  alpacaTicker: string;
+  bid: number | null;
+  ask: number | null;
+  spread: number | null;
+  spreadPct: number | null;
+  mark: number | null;
+  volume: number | null;
+  openInterest: number | null;
+  last: number | null;
+  score: number;
+  reasons: string[];
+};
+
 export class SignalScannerService {
   private fastify: FastifyInstance;
   private aiService: AIService;
@@ -830,6 +874,20 @@ Rules:
       noTradeReasons.push('VIX data unavailable from Yahoo response');
     }
 
+    let tenYearYield: number | null = null;
+    let tenYearPreviousClose: number | null = null;
+    let tenYearChangePct: number | null = null;
+    try {
+      const tenYearData = await (yahooFinance as any).quote('^TNX');
+      tenYearYield = tenYearData.regularMarketPrice ?? null;
+      tenYearPreviousClose = tenYearData.regularMarketPreviousClose ?? null;
+      if (tenYearYield && tenYearPreviousClose) {
+        tenYearChangePct = ((tenYearYield - tenYearPreviousClose) / tenYearPreviousClose) * 100;
+      }
+    } catch (yieldErr: any) {
+      this.fastify.log.warn(`[SignalScannerService] Failed to fetch US 10Y yield (^TNX): ${yieldErr.message}`);
+    }
+
     // 5. Fetch Mega-Cap Internals
     let bullishInternals = 0;
     let bearishInternals = 0;
@@ -1063,7 +1121,7 @@ Rules:
         tradeBias = winningSide === 'CALL' ? 'BUY_CALL_ON_DIP' : 'BUY_PUT_ON_RIP';
       }
 
-      // Fetch ATM option contract using Polygon API
+      // Fetch nearby contracts with Polygon, then use live Alpaca snapshots to select the cleanest contract.
       const polygonApiKey = settings.polygon_api_key;
       const strikeOffset = parseInt(settings.strike_offset, 10) || 0;
       const todayDateStr = nyParts.dateStr;
@@ -1072,7 +1130,9 @@ Rules:
         this.fastify.log.info(`[SignalScannerService] ${symbol} scan is after 1:00 PM ET. Selecting 1DTE expiry ${targetExpiryDateStr} instead of 0DTE ${todayDateStr}.`);
       }
 
-      let chosenContract: any = null;
+      let chosenContract: OptionContractCandidate | null = null;
+      let contractCandidates: OptionContractCandidate[] = [];
+      let preferredStrike = Math.round(currentPrice);
 
       if (polygonApiKey) {
         try {
@@ -1092,7 +1152,7 @@ Rules:
           const contracts = (contractsRes.data as any).results || [];
           if (contracts.length > 0) {
             // Parse contracts
-            const parsed = contracts
+            const parsed: OptionContractCandidate[] = contracts
               .map((c: any) => ({
                 ticker: c.ticker,
                 strike: Number(c.strike_price),
@@ -1122,6 +1182,8 @@ Rules:
 
             chosenIdx = Math.max(0, Math.min(parsed.length - 1, chosenIdx));
             chosenContract = parsed[chosenIdx];
+            preferredStrike = chosenContract?.strike || parsed[atmIdx]?.strike || Math.round(currentPrice);
+            contractCandidates = this.getContractWindow(parsed, atmIdx, winningSide, strikeOffset);
           }
         } catch (contractErr: any) {
           this.fastify.log.warn(`[SignalScannerService] Polygon reference option call failed: ${contractErr.message}`);
@@ -1137,6 +1199,11 @@ Rules:
       let volume: number | null = null;
       let openInterest: number | null = null;
       let usingTheoreticalPricing = true;
+      const minOptionMark = 0.30;
+      const maxBidAskSpreadPct = 12;
+      const minOptionVolume = 200;
+      const minOpenInterest = 500;
+      let candidateSelection: any = null;
 
       const defaultContractName = `${symbol}${targetExpiryDateStr.replace(/-/g, '').slice(2)}${winningSide === 'CALL' ? 'C' : 'P'}${Math.round(currentPrice)}`;
       optionTicker = chosenContract?.ticker || defaultContractName;
@@ -1147,39 +1214,61 @@ Rules:
       const alpacaKeyId = settings.alpaca_key_id?.trim();
       const alpacaSecretKey = settings.alpaca_secret_key?.trim();
 
-      if (alpacaKeyId && alpacaSecretKey && chosenContract) {
+      if (alpacaKeyId && alpacaSecretKey && contractCandidates.length > 0) {
         try {
-          const alpacaTicker = chosenContract.ticker.replace(/^O:/, '');
-          this.fastify.log.info(`[SignalScannerService] Querying Alpaca live option snapshot for ${alpacaTicker}...`);
-          const alpacaRes = await axios.get(`https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${alpacaTicker}`, {
-            headers: {
-              'APCA-API-KEY-ID': alpacaKeyId,
-              'APCA-API-SECRET-KEY': alpacaSecretKey
-            },
-            timeout: 8000
+          this.fastify.log.info(`[SignalScannerService] Querying Alpaca live option snapshots for ${contractCandidates.length} ${symbol} candidates...`);
+          const selection = await this.fetchBestAlpacaOptionCandidate({
+            candidates: contractCandidates,
+            preferredStrike,
+            alpacaKeyId,
+            alpacaSecretKey,
+            minOptionMark,
+            maxBidAskSpreadPct,
+            minOptionVolume,
+            minOpenInterest
           });
 
-          const snapData = alpacaRes.data as any;
-          const snap = snapData.snapshots?.[alpacaTicker];
-          if (snap) {
-            bid = snap.latestQuote?.bp || null;
-            ask = snap.latestQuote?.ap || null;
-            if (bid !== null && ask !== null && bid > 0 && ask > 0) {
-              spread = ask - bid;
-              const mid = (bid + ask) / 2;
-              mark = Number(mid.toFixed(2));
-              spreadPct = Number(((spread / mid) * 100).toFixed(2));
-              usingTheoreticalPricing = false;
-            } else if (snap.latestTrade?.p) {
-              mark = snap.latestTrade.p;
-              usingTheoreticalPricing = false;
-            }
-            volume = snap.day?.volume ?? null;
-            openInterest = snap.open_interest ?? null;
-            this.fastify.log.info(`[SignalScannerService] Alpaca live option price fetched successfully: mark=$${mark}, bid=$${bid}, ask=$${ask}`);
+          const selected = selection.selected;
+          candidateSelection = {
+            source: 'alpaca_multi_candidate',
+            preferredStrike,
+            selectedScore: selected?.score ?? null,
+            selectedReasons: selected?.reasons ?? [],
+            candidates: selection.ranked.slice(0, 9).map((candidate) => ({
+              ticker: candidate.ticker,
+              strike: candidate.strike,
+              bid: candidate.bid,
+              ask: candidate.ask,
+              mark: candidate.mark,
+              spreadPct: candidate.spreadPct,
+              volume: candidate.volume,
+              openInterest: candidate.openInterest,
+              score: candidate.score,
+              reasons: candidate.reasons
+            }))
+          };
+
+          if (selected) {
+            chosenContract = {
+              ticker: selected.ticker,
+              strike: selected.strike,
+              expiry: selected.expiry
+            };
+            optionTicker = selected.ticker;
+            chosenStrike = selected.strike;
+            chosenExpiry = selected.expiry;
+            bid = selected.bid;
+            ask = selected.ask;
+            spread = selected.spread;
+            spreadPct = selected.spreadPct;
+            mark = selected.mark;
+            volume = selected.volume;
+            openInterest = selected.openInterest;
+            usingTheoreticalPricing = false;
+            this.fastify.log.info(`[SignalScannerService] Selected ${selected.ticker} from ${selection.ranked.length} Alpaca candidates: strike=${selected.strike}, mark=$${mark}, spread=${spreadPct}%, volume=${volume}, OI=${openInterest}, score=${selected.score}.`);
           }
         } catch (alpacaErr: any) {
-          this.fastify.log.warn(`[SignalScannerService] Alpaca option snapshot query failed: ${alpacaErr.message}`);
+          this.fastify.log.warn(`[SignalScannerService] Alpaca option candidate snapshot query failed: ${alpacaErr.message}`);
         }
       }
 
@@ -1253,11 +1342,6 @@ Rules:
       }
 
       // Check premium actionability constraints
-      const minOptionMark = 0.30;
-      const maxBidAskSpreadPct = 12;
-      const minOptionVolume = 200;
-      const minOpenInterest = 500;
-
       const pricingWarnings: string[] = [];
       if (mark !== null && mark < minOptionMark) pricingWarnings.push(`Option premium $${mark} below limit $${minOptionMark}`);
       if (spreadPct !== null && spreadPct > maxBidAskSpreadPct) pricingWarnings.push(`Spread ${spreadPct}% exceeds ceiling ${maxBidAskSpreadPct}%`);
@@ -1289,6 +1373,7 @@ Rules:
         mark,
         volume,
         openInterest,
+        candidateSelection,
         suggestedStopLoss: optionStopLoss,
         suggestedTakeProfit: optionTakeProfit,
         usingTheoreticalPricing
@@ -1386,7 +1471,9 @@ Rules:
         }),
         JSON.stringify({
           vixQuote: vixPrice,
-          vixChangePercent: vixChangePct
+          vixChangePercent: vixChangePct,
+          tenYearYield,
+          tenYearChangePercent: tenYearChangePct
         }),
         noTradeReasons,
         chosenExpiry,
@@ -1490,7 +1577,56 @@ Rules:
             settings,
             userId,
             mark,
-            chosenExpiry: chosenExpiry || ''
+            chosenExpiry: chosenExpiry || '',
+            mlProbability,
+            rsi5,
+            rsi14,
+            openingRangeHigh,
+            openingRangeLow,
+            previousDayHigh: pdh,
+            previousDayLow: pdl,
+            overnightHigh: onh,
+            overnightLow: onl,
+            atr14,
+            latestCandle: latest.close >= latest.open ? 'green' : 'red',
+            optionDetails: pricingData,
+            marketStructure: {
+              netGex: qqqNetGex,
+              netChex: qqqNetChex,
+              regime: qqqGexRegime,
+              flipStrike: qqqGexFlip,
+              callWall: qqqCallWall,
+              putWall: qqqPutWall,
+              floor: qqqFloor,
+              ceiling: qqqCeiling,
+              kingNode: qqqKingNode,
+              flowDirection: qqqFlowDirection
+            },
+            marketContext: {
+              vix: vixPrice,
+              vixChangePct,
+              tenYearYield,
+              tenYearChangePct
+            },
+            internals: {
+              aaplChangePct: applePct,
+              msftChangePct: microsoftPct,
+              nvdaChangePct: nvidiaPct,
+              alignment: winningSide === 'CALL'
+                ? (hasBullishInternals ? 'bullish' : hasBearishInternals ? 'bearish' : 'mixed')
+                : (hasBearishInternals ? 'bearish' : hasBullishInternals ? 'bullish' : 'mixed')
+            },
+            riskFlags: {
+              lateDayRisk: currentMinutes >= 13 * 60 + 30,
+              optionSpreadAcceptable: spreadPct !== null ? spreadPct <= maxBidAskSpreadPct : false,
+              liquidityAcceptable: (volume ?? 0) >= minOptionVolume && (openInterest ?? 0) >= minOpenInterest,
+              flowAlignedWithSignal: winningSide === 'CALL'
+                ? qqqFlowDirection === 'bullish'
+                : qqqFlowDirection === 'bearish',
+              internalsAlignedWithSignal: winningSide === 'CALL' ? hasBullishInternals : hasBearishInternals,
+              trendAlignedWithSignal: Boolean(trendAlignedNum),
+              macroSupportsSignal: null
+            }
           }).catch((err: any) => {
             this.fastify.log.error(`[SignalScannerService] enrichSignalAsync failed for #${signalId}: ${err.message}`);
           });
@@ -1610,6 +1746,318 @@ Rules:
     return rowCount || 0;
   }
 
+  private isASetupGrade(setupGrade: string): boolean {
+    const normalized = String(setupGrade || '').toUpperCase();
+    return normalized.includes('A+') || /(^|[^A-Z])A([^A-Z+]|$)/.test(normalized);
+  }
+
+  private finiteNumber(value: any): number | null {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  private roundTo(value: any, decimals = 2): number | null {
+    const numeric = this.finiteNumber(value);
+    if (numeric === null) return null;
+    const multiplier = Math.pow(10, decimals);
+    return Math.round(numeric * multiplier) / multiplier;
+  }
+
+  private optionBidEstimate(mark: number | null, target: number | null, progress: number): number | null {
+    if (mark === null || target === null || target <= mark) return mark;
+    return this.roundTo(mark + (target - mark) * progress);
+  }
+
+  private chooseDirectionalLevel(side: string, currentPrice: number, targetUnderlying: number, candidates: Array<number | null | undefined>): number {
+    const unique = [...new Set(candidates
+      .map((value) => this.finiteNumber(value))
+      .filter((value): value is number => value !== null && value > 0)
+      .map((value) => Number(value.toFixed(2))))];
+
+    const directional = side === 'CALL'
+      ? unique.filter((value) => value > currentPrice && value <= Math.max(targetUnderlying, currentPrice))
+      : unique.filter((value) => value < currentPrice && value >= Math.min(targetUnderlying, currentPrice));
+
+    if (directional.length === 0) return Number(targetUnderlying.toFixed(2));
+    return side === 'CALL'
+      ? directional.sort((a, b) => a - b)[0]
+      : directional.sort((a, b) => b - a)[0];
+  }
+
+  private buildFallbackTradePlan(ctx: {
+    winningSide: string;
+    currentPrice: number;
+    targetUnderlying: number;
+    stopUnderlying: number;
+    optionDetails?: any;
+    openingRangeHigh?: number;
+    openingRangeLow?: number;
+    previousDayHigh?: number | null;
+    previousDayLow?: number | null;
+    overnightHigh?: number | null;
+    overnightLow?: number | null;
+    vwap: number;
+    marketStructure?: any;
+  }): TradeManagementPlan {
+    const optionMark = this.roundTo(ctx.optionDetails?.mark);
+    const optionTarget = this.roundTo(ctx.optionDetails?.suggestedTakeProfit);
+    const optionStop = this.roundTo(ctx.optionDetails?.suggestedStopLoss ?? (optionMark !== null ? optionMark * 0.92 : null));
+    const tp1Underlying = this.chooseDirectionalLevel(ctx.winningSide, ctx.currentPrice, ctx.targetUnderlying, [
+      ctx.openingRangeHigh,
+      ctx.openingRangeLow,
+      ctx.previousDayHigh,
+      ctx.previousDayLow,
+      ctx.overnightHigh,
+      ctx.overnightLow,
+      ctx.vwap,
+      ctx.marketStructure?.flipStrike,
+      ctx.marketStructure?.callWall,
+      ctx.marketStructure?.putWall,
+      ctx.marketStructure?.floor,
+      ctx.marketStructure?.ceiling,
+      ctx.marketStructure?.kingNode
+    ]);
+
+    return {
+      mode: 'BOOK_GREEN_FAST',
+      bull_case: 'Scanner produced an A/A+ setup, but AI trade-plan output was unavailable or invalid.',
+      bear_case: '0DTE uncertainty requires using conservative scanner exits until a valid plan is available.',
+      tp1: {
+        underlying: tp1Underlying,
+        option_bid: this.optionBidEstimate(optionMark, optionTarget, 0.4),
+        action: 'Book partial profit or move stop to breakeven at the first nearby structural level.'
+      },
+      tp2: {
+        underlying: this.roundTo(ctx.targetUnderlying),
+        option_bid: optionTarget,
+        action: 'Close the remaining position at the scanner target.'
+      },
+      out: {
+        underlying: this.roundTo(ctx.stopUnderlying),
+        option_bid: optionStop,
+        action: 'Exit if the underlying stop breaks or option bid loses breakeven protection.'
+      },
+      reason: 'Fallback plan uses scanner-derived TP/OUT levels because model output was not trusted.'
+    };
+  }
+
+  private normalizeTradePlan(raw: any, fallback: TradeManagementPlan): TradeManagementPlan {
+    const mode = raw?.mode === 'HOLD_FOR_TP2' || raw?.mode === 'BOOK_GREEN_FAST'
+      ? raw.mode
+      : fallback.mode;
+
+    const normalizeLeg = (rawLeg: any, fallbackLeg: TradeManagementPlan['tp1']) => ({
+      underlying: this.roundTo(rawLeg?.underlying) ?? fallbackLeg.underlying,
+      option_bid: this.roundTo(rawLeg?.option_bid) ?? fallbackLeg.option_bid,
+      action: String(rawLeg?.action || fallbackLeg.action).slice(0, 180)
+    });
+
+    return {
+      mode,
+      bull_case: String(raw?.bull_case || fallback.bull_case).slice(0, 220),
+      bear_case: String(raw?.bear_case || fallback.bear_case).slice(0, 220),
+      tp1: normalizeLeg(raw?.tp1, fallback.tp1),
+      tp2: normalizeLeg(raw?.tp2, fallback.tp2),
+      out: normalizeLeg(raw?.out, fallback.out),
+      reason: String(raw?.reason || fallback.reason).slice(0, 240)
+    };
+  }
+
+  private formatTradeLevel(level: number | null | undefined, prefix = '$'): string {
+    return level === null || level === undefined ? 'N/A' : `${prefix}${Number(level).toFixed(2)}`;
+  }
+
+  private formatTradePlanCommentary(plan: TradeManagementPlan): string {
+    const label = plan.mode === 'HOLD_FOR_TP2' ? 'HOLD FOR TP2' : 'BOOK GREEN FAST';
+    return [
+      `${label}`,
+      `TP1: underlying ${this.formatTradeLevel(plan.tp1.underlying)} / option bid ~${this.formatTradeLevel(plan.tp1.option_bid)} - ${plan.tp1.action}`,
+      `TP2: underlying ${this.formatTradeLevel(plan.tp2.underlying)} / option bid ~${this.formatTradeLevel(plan.tp2.option_bid)} - ${plan.tp2.action}`,
+      `OUT: underlying ${this.formatTradeLevel(plan.out.underlying)} / option bid ~${this.formatTradeLevel(plan.out.option_bid)} - ${plan.out.action}`,
+      `Reason: ${plan.reason}`
+    ].join('\n');
+  }
+
+  private formatDiscordTradePlan(symbol: string, signalId: number, plan: TradeManagementPlan, macroVerdict: string): string {
+    const icon = plan.mode === 'HOLD_FOR_TP2' ? '🟢' : '🔴';
+    const label = plan.mode === 'HOLD_FOR_TP2' ? 'HOLD FOR TP2' : 'BOOK GREEN FAST';
+    return [
+      `${icon} **${label} · ${symbol} #${signalId}** · Macro: ${macroVerdict}`,
+      '',
+      `**TP1:** ${symbol} ${this.formatTradeLevel(plan.tp1.underlying)} / option bid ~${this.formatTradeLevel(plan.tp1.option_bid)} — ${plan.tp1.action}`,
+      `**TP2:** ${symbol} ${this.formatTradeLevel(plan.tp2.underlying)} / option bid ~${this.formatTradeLevel(plan.tp2.option_bid)} — ${plan.tp2.action}`,
+      `**OUT:** ${symbol} ${this.formatTradeLevel(plan.out.underlying)} / option bid ~${this.formatTradeLevel(plan.out.option_bid)} — ${plan.out.action}`,
+      '',
+      `**Reason:** ${plan.reason}`
+    ].join('\n');
+  }
+
+  private toAlpacaOptionTicker(ticker: string): string {
+    return String(ticker || '').replace(/^O:/, '');
+  }
+
+  private getContractWindow(parsedContracts: OptionContractCandidate[], atmIdx: number, side: string, strikeOffset: number): OptionContractCandidate[] {
+    const preferredIdx = Math.max(
+      0,
+      Math.min(
+        parsedContracts.length - 1,
+        side === 'CALL' ? atmIdx + strikeOffset : atmIdx - strikeOffset
+      )
+    );
+
+    const indices = new Set<number>();
+    for (let delta = -4; delta <= 4; delta++) {
+      const idx = preferredIdx + delta;
+      if (idx >= 0 && idx < parsedContracts.length) indices.add(idx);
+    }
+    indices.add(atmIdx);
+    indices.add(preferredIdx);
+
+    return [...indices]
+      .sort((a, b) => a - b)
+      .map((idx) => parsedContracts[idx])
+      .filter(Boolean);
+  }
+
+  private scoreOptionCandidate(candidate: Omit<OptionQuoteCandidate, 'score' | 'reasons'>, preferredStrike: number, minOptionMark: number, maxBidAskSpreadPct: number, minOptionVolume: number, minOpenInterest: number): { score: number; reasons: string[] } {
+    const reasons: string[] = [];
+    let score = 100;
+
+    const mark = Number(candidate.mark || 0);
+    const spreadPct = candidate.spreadPct === null ? null : Number(candidate.spreadPct);
+    const volume = Number(candidate.volume || 0);
+    const openInterest = Number(candidate.openInterest || 0);
+    const bid = Number(candidate.bid || 0);
+    const ask = Number(candidate.ask || 0);
+
+    if (mark <= 0) {
+      score -= 80;
+      reasons.push('missing usable mark');
+    } else if (mark < minOptionMark) {
+      score -= 25;
+      reasons.push(`premium below ${minOptionMark}`);
+    }
+
+    if (bid <= 0 || ask <= 0) {
+      score -= 45;
+      reasons.push('missing bid/ask');
+    }
+
+    if (spreadPct === null) {
+      score -= 25;
+      reasons.push('missing spread');
+    } else if (spreadPct > maxBidAskSpreadPct) {
+      score -= Math.min(45, (spreadPct - maxBidAskSpreadPct) * 3);
+      reasons.push(`wide spread ${spreadPct.toFixed(1)}%`);
+    } else {
+      score += Math.max(0, maxBidAskSpreadPct - spreadPct);
+    }
+
+    if (volume < minOptionVolume) {
+      score -= 15;
+      reasons.push(`volume below ${minOptionVolume}`);
+    } else {
+      score += Math.min(12, Math.log10(volume + 1) * 3);
+    }
+
+    if (openInterest < minOpenInterest) {
+      score -= 10;
+      reasons.push(`OI below ${minOpenInterest}`);
+    } else {
+      score += Math.min(10, Math.log10(openInterest + 1) * 2);
+    }
+
+    score -= Math.abs(candidate.strike - preferredStrike) * 2;
+
+    return { score: Number(score.toFixed(2)), reasons };
+  }
+
+  private async fetchBestAlpacaOptionCandidate(input: {
+    candidates: OptionContractCandidate[];
+    preferredStrike: number;
+    alpacaKeyId: string;
+    alpacaSecretKey: string;
+    minOptionMark: number;
+    maxBidAskSpreadPct: number;
+    minOptionVolume: number;
+    minOpenInterest: number;
+  }): Promise<{ selected: OptionQuoteCandidate | null; ranked: OptionQuoteCandidate[] }> {
+    const uniqueCandidates = input.candidates.filter((candidate, idx, arr) =>
+      candidate?.ticker && arr.findIndex((other) => other.ticker === candidate.ticker) === idx
+    );
+    if (uniqueCandidates.length === 0) return { selected: null, ranked: [] };
+
+    const alpacaTickers = uniqueCandidates.map((candidate) => this.toAlpacaOptionTicker(candidate.ticker));
+    const params = new URLSearchParams({
+      symbols: alpacaTickers.join(',')
+    });
+    const alpacaRes = await axios.get(`https://data.alpaca.markets/v1beta1/options/snapshots?${params.toString()}`, {
+      headers: {
+        'APCA-API-KEY-ID': input.alpacaKeyId,
+        'APCA-API-SECRET-KEY': input.alpacaSecretKey
+      },
+      timeout: 8000
+    });
+
+    const snapshots = (alpacaRes.data as any)?.snapshots || {};
+    const ranked = uniqueCandidates.map((candidate) => {
+      const alpacaTicker = this.toAlpacaOptionTicker(candidate.ticker);
+      const snap = snapshots[alpacaTicker];
+      const bid = this.toNumber(snap?.latestQuote?.bp);
+      const ask = this.toNumber(snap?.latestQuote?.ap);
+      const last = this.toNumber(snap?.latestTrade?.p);
+      const mark = bid !== null && ask !== null && bid > 0 && ask > 0
+        ? Number(((bid + ask) / 2).toFixed(2))
+        : last !== null && last > 0
+          ? Number(last.toFixed(2))
+          : null;
+      const spread = bid !== null && ask !== null && bid > 0 && ask > 0
+        ? Number((ask - bid).toFixed(2))
+        : null;
+      const spreadPct = spread !== null && mark !== null && mark > 0
+        ? Number(((spread / mark) * 100).toFixed(2))
+        : null;
+      const volume = this.toNumber(snap?.day?.volume);
+      const openInterest = this.toNumber(snap?.open_interest);
+      const base = {
+        ...candidate,
+        alpacaTicker,
+        bid,
+        ask,
+        spread,
+        spreadPct,
+        mark,
+        volume,
+        openInterest,
+        last
+      };
+      const scored = this.scoreOptionCandidate(
+        base,
+        input.preferredStrike,
+        input.minOptionMark,
+        input.maxBidAskSpreadPct,
+        input.minOptionVolume,
+        input.minOpenInterest
+      );
+      return { ...base, ...scored };
+    }).sort((a, b) => b.score - a.score);
+
+    const selected = ranked.find((candidate) =>
+      candidate.mark !== null &&
+      candidate.mark >= input.minOptionMark &&
+      candidate.bid !== null &&
+      candidate.ask !== null &&
+      candidate.bid > 0 &&
+      candidate.ask > 0 &&
+      candidate.spreadPct !== null &&
+      candidate.spreadPct <= input.maxBidAskSpreadPct &&
+      Number(candidate.volume || 0) >= input.minOptionVolume &&
+      Number(candidate.openInterest || 0) >= input.minOpenInterest
+    ) || null;
+
+    return { selected, ranked };
+  }
+
   /**
    * Two-stage AI enrichment pipeline. Runs in the background after signal INSERT.
    *
@@ -1644,11 +2092,30 @@ Rules:
     userId: number;
     mark: number | null;
     chosenExpiry: string;
+    mlProbability?: number | null;
+    rsi5?: number;
+    rsi14?: number;
+    openingRangeHigh?: number;
+    openingRangeLow?: number;
+    previousDayHigh?: number | null;
+    previousDayLow?: number | null;
+    overnightHigh?: number | null;
+    overnightLow?: number | null;
+    atr14?: number;
+    latestCandle?: string;
+    optionDetails?: any;
+    marketStructure?: any;
+    marketContext?: any;
+    internals?: any;
+    riskFlags?: any;
   }): Promise<void> {
     const {
       signalId, symbol, winningSide, chosenStrike, currentPrice, vwap, emaShort, emaLong,
       qqqGexRegime, qqqFlowDirection, stopUnderlying, targetUnderlying, finalConfidence,
-      setupGrade, entryTrigger, nyDateStr, settings, userId, mark, chosenExpiry
+      setupGrade, entryTrigger, nyDateStr, settings, userId, mark, chosenExpiry,
+      mlProbability, rsi5, rsi14, openingRangeHigh, openingRangeLow, previousDayHigh,
+      previousDayLow, overnightHigh, overnightLow, atr14, latestCandle, optionDetails,
+      marketStructure, marketContext, internals, riskFlags
     } = ctx;
 
     const key = await this.getAiApiKey(settings.day_trading_ai_provider);
@@ -1753,17 +2220,30 @@ Rules:
     );
 
     // ── Stage 2: Claude Sonnet — full signal coaching ─────────────────────────
-    // Check if we have a cached coaching commentary and verdict for this fingerprint
-    const commentaryCacheKey = `COACHING_DATA:${symbol}:${newFingerprint}`;
+    // Check if we have a cached coaching commentary and verdict for this exact setup.
+    const isASetup = this.isASetupGrade(setupGrade);
+    const setupCacheFingerprint = [
+      newFingerprint || 'no-news',
+      winningSide,
+      chosenStrike,
+      chosenExpiry,
+      entryTrigger,
+      stopUnderlying,
+      targetUnderlying,
+      setupGrade
+    ].join(':');
+    const commentaryCacheKey = `COACHING_DATA:${symbol}:${setupCacheFingerprint}`;
     const cachedData = await redis.get(commentaryCacheKey);
     let finalCommentary = '';
     let finalVerdict = 'WAIT';
+    let finalDiscordContent = '';
 
     if (cachedData) {
       try {
         const parsed = JSON.parse(cachedData);
         finalCommentary = parsed.analysis || '';
         finalVerdict = parsed.verdict || 'WAIT';
+        finalDiscordContent = parsed.discordContent || '';
         this.fastify.log.info(`[SignalScannerService] Reusing cached coaching commentary and verdict (${finalVerdict}) for signal #${signalId}`);
       } catch {
         finalCommentary = cachedData;
@@ -1782,7 +2262,175 @@ Rules:
       const nowNyParts = this.getNyDateParts(new Date());
       const formattedTimeStr = `${nowNyParts.hour.toString().padStart(2, '0')}:${nowNyParts.minute.toString().padStart(2, '0')} ET`;
 
-      const coachPrompt = `You are an expert 0DTE options coach at StockSurfer Capital. Analyze this signal and produce a one-sentence recommendation for a novice trader.
+      const fallbackPlan = this.buildFallbackTradePlan({
+        winningSide,
+        currentPrice,
+        targetUnderlying,
+        stopUnderlying,
+        optionDetails,
+        openingRangeHigh,
+        openingRangeLow,
+        previousDayHigh,
+        previousDayLow,
+        overnightHigh,
+        overnightLow,
+        vwap,
+        marketStructure
+      });
+
+      if (isASetup) {
+        const macroSupportsSignal = macroVerdict === 'NEUTRAL'
+          ? null
+          : winningSide === 'CALL'
+            ? macroVerdict === 'RISK_ON'
+            : macroVerdict === 'RISK_OFF';
+        const enrichedRiskFlags = {
+          ...(riskFlags || {}),
+          macroSupportsSignal
+        };
+        const scannerData = {
+          symbol,
+          side: winningSide,
+          strike: chosenStrike,
+          expiry: chosenExpiry,
+          signal_time_et: formattedTimeStr,
+          setup_grade: setupGrade,
+          confidence_score: finalConfidence,
+          ml_probability: mlProbability ?? null,
+          underlying: {
+            price: this.roundTo(currentPrice),
+            vwap: this.roundTo(vwap),
+            ema9: this.roundTo(emaShort),
+            ema21: this.roundTo(emaLong),
+            rsi5: this.roundTo(rsi5),
+            rsi14: this.roundTo(rsi14),
+            opening_range_high: this.roundTo(openingRangeHigh),
+            opening_range_low: this.roundTo(openingRangeLow),
+            previous_day_high: this.roundTo(previousDayHigh),
+            previous_day_low: this.roundTo(previousDayLow),
+            overnight_high: this.roundTo(overnightHigh),
+            overnight_low: this.roundTo(overnightLow),
+            atr14: this.roundTo(atr14),
+            latest_candle: latestCandle || 'unknown',
+            price_vs_vwap: currentPrice >= vwap ? 'above' : 'below',
+            trend_alignment: enrichedRiskFlags.trendAlignedWithSignal ? 'aligned' : 'not_aligned'
+          },
+          trade_plan: {
+            entry_trigger_underlying: this.roundTo(entryTrigger),
+            stop_underlying: this.roundTo(stopUnderlying),
+            target_underlying: this.roundTo(targetUnderlying),
+            distance_to_stop: this.roundTo(Math.abs(currentPrice - stopUnderlying)),
+            distance_to_target: this.roundTo(Math.abs(targetUnderlying - currentPrice))
+          },
+          option_contract: {
+            ticker: optionDetails?.ticker || null,
+            bid: this.roundTo(optionDetails?.bid),
+            ask: this.roundTo(optionDetails?.ask),
+            mark: this.roundTo(optionDetails?.mark ?? mark),
+            spread_pct: this.roundTo(optionDetails?.spreadPct),
+            volume: this.finiteNumber(optionDetails?.volume),
+            open_interest: this.finiteNumber(optionDetails?.openInterest),
+            using_theoretical_pricing: Boolean(optionDetails?.usingTheoreticalPricing),
+            suggested_premium_stop: this.roundTo(optionDetails?.suggestedStopLoss),
+            suggested_premium_target: this.roundTo(optionDetails?.suggestedTakeProfit)
+          },
+          market_structure: marketStructure || {},
+          market_context: {
+            vix: this.roundTo(marketContext?.vix),
+            vix_change_pct: this.roundTo(marketContext?.vixChangePct),
+            us_10y_yield: this.roundTo(marketContext?.tenYearYield, 3),
+            us_10y_change_pct: this.roundTo(marketContext?.tenYearChangePct),
+            macro_news_verdict: macroVerdict,
+            macro_news_rationale: macroRationale,
+            economic_calendar: getEconomicCalendarContext(nyDateStr)
+          },
+          internals: internals || {},
+          risk_flags: enrichedRiskFlags,
+          allowed_levels: {
+            tp1_candidates: [
+              openingRangeHigh,
+              openingRangeLow,
+              previousDayHigh,
+              previousDayLow,
+              overnightHigh,
+              overnightLow,
+              vwap,
+              marketStructure?.flipStrike,
+              marketStructure?.callWall,
+              marketStructure?.putWall,
+              marketStructure?.floor,
+              marketStructure?.ceiling,
+              marketStructure?.kingNode
+            ].map((value) => this.roundTo(value)).filter((value) => value !== null),
+            tp2_default_underlying: this.roundTo(targetUnderlying),
+            out_default_underlying: this.roundTo(stopUnderlying),
+            option_stop_default: this.roundTo(optionDetails?.suggestedStopLoss),
+            option_target_default: this.roundTo(optionDetails?.suggestedTakeProfit)
+          }
+        };
+
+        const coachPrompt = `You are a 0DTE options trade-management judge.
+
+Return one actionable management plan for this A/A+ setup.
+
+No neutral answer is allowed.
+
+Modes:
+- HOLD_FOR_TP2 = setup quality supports holding for TP2 while OUT remains valid.
+- BOOK_GREEN_FAST = setup is valid, but risk is high enough that profit should be taken quickly.
+
+Use a Bull/Bear/Judge process:
+1. BULL CASE: strongest evidence for holding.
+2. BEAR CASE: strongest evidence for booking profit fast.
+3. JUDGE: choose exactly one mode and produce TP1, TP2, and OUT.
+
+Rules:
+- Use only levels present in SCANNER_DATA.allowed_levels or trade_plan. Do not invent unrelated prices.
+- TP1 must be the nearest meaningful level in the trade direction.
+- TP2 must be the scanner target or the next major structural/GEX level from allowed_levels.
+- OUT must be the scanner stop, VWAP failure, or option bid losing breakeven/protection.
+- Distinguish underlying levels from option bid levels.
+- Never use overconfident language like guaranteed, safe without conditions, or certain.
+- If data is missing, treat it as uncertainty; for 0DTE uncertainty favors BOOK_GREEN_FAST.
+- Keep each action under 22 words.
+- Return valid JSON only.
+
+SCANNER_DATA:
+${JSON.stringify(scannerData, null, 2)}
+
+Return exactly this JSON shape:
+{
+  "bull_case": "one sentence",
+  "bear_case": "one sentence",
+  "mode": "HOLD_FOR_TP2|BOOK_GREEN_FAST",
+  "tp1": {"underlying": 0, "option_bid": 0, "action": "one sentence"},
+  "tp2": {"underlying": 0, "option_bid": 0, "action": "one sentence"},
+  "out": {"underlying": 0, "option_bid": 0, "action": "one sentence"},
+  "reason": "one sentence"
+}`;
+
+        try {
+          const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 1000);
+          const plan = this.normalizeTradePlan(sonnetRes, fallbackPlan);
+          finalCommentary = this.formatTradePlanCommentary(plan);
+          finalDiscordContent = this.formatDiscordTradePlan(symbol, signalId, plan, macroVerdict);
+          finalVerdict = 'GO';
+          claudeUsage = sonnetRes.usage || null;
+          await redis.set(
+            commentaryCacheKey,
+            JSON.stringify({ verdict: finalVerdict, analysis: finalCommentary, discordContent: finalDiscordContent, plan }),
+            1800
+          );
+          this.fastify.log.info(`[SignalScannerService] Sonnet trade plan ready for signal #${signalId}: ${plan.mode} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
+        } catch (sonnetErr: any) {
+          this.fastify.log.error(`[SignalScannerService] Sonnet trade-plan judge failed for #${signalId}: ${sonnetErr.message}`);
+          const plan = fallbackPlan;
+          finalCommentary = this.formatTradePlanCommentary(plan);
+          finalDiscordContent = this.formatDiscordTradePlan(symbol, signalId, plan, macroVerdict);
+          finalVerdict = 'GO';
+        }
+      } else {
+        const coachPrompt = `You are an expert 0DTE options coach at StockSurfer Capital. Analyze this signal and produce a one-sentence recommendation for a novice trader.
 
 SIGNAL: ${symbol} ${winningSide} $${chosenStrike}
 SIGNAL TIME: ${formattedTimeStr} (Date: ${nyDateStr})
@@ -1804,21 +2452,22 @@ Write a single-sentence recommendation (maximum 25 words) advising whether the t
 
 Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recommendation here"}`;
 
-      try {
-        const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 800);
-        finalCommentary = sonnetRes.analysis || sonnetRes.verdict || '';
-        finalVerdict = sonnetRes.verdict || 'WAIT';
-        claudeUsage = sonnetRes.usage || null;
-        if (finalCommentary) {
-          await redis.set(
-            commentaryCacheKey,
-            JSON.stringify({ verdict: finalVerdict, analysis: finalCommentary }),
-            1800
-          );
+        try {
+          const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 800);
+          finalCommentary = sonnetRes.analysis || sonnetRes.verdict || '';
+          finalVerdict = sonnetRes.verdict || 'WAIT';
+          claudeUsage = sonnetRes.usage || null;
+          if (finalCommentary) {
+            await redis.set(
+              commentaryCacheKey,
+              JSON.stringify({ verdict: finalVerdict, analysis: finalCommentary }),
+              1800
+            );
+          }
+          this.fastify.log.info(`[SignalScannerService] Sonnet coaching ready for signal #${signalId}: ${finalVerdict} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
+        } catch (sonnetErr: any) {
+          this.fastify.log.error(`[SignalScannerService] Sonnet coach failed for #${signalId}: ${sonnetErr.message}`);
         }
-        this.fastify.log.info(`[SignalScannerService] Sonnet coaching ready for signal #${signalId}: ${finalVerdict} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
-      } catch (sonnetErr: any) {
-        this.fastify.log.error(`[SignalScannerService] Sonnet coach failed for #${signalId}: ${sonnetErr.message}`);
       }
     } else {
       this.fastify.log.info(`[SignalScannerService] Reusing cached coaching commentary for signal #${signalId}`);
@@ -1871,7 +2520,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       try {
         const macroIcon = macroVerdict === 'RISK_OFF' ? '⚠️' : macroVerdict === 'RISK_ON' ? '✅' : 'ℹ️';
         await axios.post(settings.discord_webhook_url, {
-          content: `🧠 **AI Coach · ${symbol} #${signalId}** ${macroIcon} Macro: ${macroVerdict}\n\n${finalCommentary}`
+          content: finalDiscordContent || `🧠 **AI Coach · ${symbol} #${signalId}** ${macroIcon} Macro: ${macroVerdict}\n\n${finalCommentary}`
         }, { timeout: 8000 });
       } catch (discErr: any) {
         this.fastify.log.error(`[SignalScannerService] Discord coaching follow-up failed: ${discErr.message}`);
