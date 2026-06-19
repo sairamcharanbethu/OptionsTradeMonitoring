@@ -7,7 +7,6 @@ services:
     platform: ${THETADATA_PLATFORM:-linux/arm64}
     restart: unless-stopped
     environment:
-      THETA_DATA_API_KEY: ${THETADATA_API_KEY}
       THETADATA_API_KEY: ${THETADATA_API_KEY}
       THETADATA_EMAIL: ${THETADATA_EMAIL:-${THETADATA_USERNAME:-}}
       THETADATA_PASSWORD: ${THETADATA_PASSWORD:-}
