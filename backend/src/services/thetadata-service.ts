@@ -148,10 +148,21 @@ export class ThetaDataService {
       }, {});
     }
 
+    const baseUrl = String(settings.thetadata_base_url || process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25510');
+
     return {
-      baseUrl: String(settings.thetadata_base_url || process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503').replace(/\/$/, ''),
+      baseUrl: this.normalizeBaseUrl(baseUrl),
       apiKey: String(settings.thetadata_api_key || process.env.THETADATA_API_KEY || '').trim()
     };
+  }
+
+  private normalizeBaseUrl(baseUrl: string): string {
+    const cleaned = baseUrl.trim().replace(/\/$/, '');
+    if (!cleaned) return 'http://127.0.0.1:25510';
+    if (cleaned.endsWith(':25503')) {
+      return `${cleaned.slice(0, -6)}:25510`;
+    }
+    return cleaned;
   }
 
   private async fetchJson(config: { baseUrl: string; apiKey: string }, path: string) {

@@ -38,6 +38,13 @@ function formatAccountBalance(account: any) {
     }).format(numericBalance);
 }
 
+function normalizeThetaDataBaseUrl(baseUrl: string) {
+    const cleaned = baseUrl.trim().replace(/\/$/, '');
+    if (!cleaned) return 'http://127.0.0.1:25510';
+    if (cleaned.endsWith(':25503')) return `${cleaned.slice(0, -6)}:25510`;
+    return cleaned;
+}
+
 export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) {
     const queryClient = useQueryClient();
     const [open, setOpen] = useState(false);
@@ -92,7 +99,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
     // ThetaData State
     const [thetaDataApiKey, setThetaDataApiKey] = useState('');
-    const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://127.0.0.1:25503');
+    const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://127.0.0.1:25510');
     const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('ws://127.0.0.1:25520/v1/events');
 
     // SnapTrade State
@@ -162,7 +169,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setAlpacaKeyId(data.alpaca_key_id || '');
             setAlpacaSecretKey(data.alpaca_secret_key || '');
             setThetaDataApiKey(data.thetadata_api_key || '');
-            setThetaDataBaseUrl(data.thetadata_base_url || 'http://127.0.0.1:25503');
+            setThetaDataBaseUrl(normalizeThetaDataBaseUrl(data.thetadata_base_url || 'http://127.0.0.1:25510'));
             setThetaDataStreamUrl(data.thetadata_stream_url || 'ws://127.0.0.1:25520/v1/events');
             setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
             setAlpacaAutoTradeMode(data.alpaca_auto_trade_mode || 'instant');
@@ -997,7 +1004,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                             id="thetadata-base-url"
                                                             value={thetaDataBaseUrl}
                                                             onChange={(e) => setThetaDataBaseUrl(e.target.value)}
-                                                            placeholder="http://127.0.0.1:25503"
+                                                            placeholder="http://127.0.0.1:25510"
                                                         />
                                                     </div>
                                                     <div className="space-y-1.5">

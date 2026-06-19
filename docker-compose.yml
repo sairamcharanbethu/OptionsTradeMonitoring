@@ -31,18 +31,17 @@ services:
       THETADATA_PASSWORD: ${THETADATA_PASSWORD:-}
       THETADATA_TERMINAL_ARGS: ${THETADATA_TERMINAL_ARGS:-}
       THETADATA_JAVA_OPTS: ${THETADATA_JAVA_OPTS:-}
-      THETADATA_HOST: ${THETADATA_HOST:-0.0.0.0}
-      THETADATA_PORT: 25503
-      THETADATA_REQUEST_QUEUE_LENGTH: ${THETADATA_REQUEST_QUEUE_LENGTH:-200}
+      THETADATA_HTTP_PORT: 25510
+      THETADATA_WS_PORT: 25520
     ports:
-      - "${PORT_THETADATA_REST:-25503}:25503"
+      - "${PORT_THETADATA_REST:-25510}:25510"
       - "${PORT_THETADATA_STREAM:-25520}:25520"
     volumes:
       - thetadata-data:/var/lib/thetadata
     networks:
       - default
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:25503/v3/stock/list/symbols?format=json >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:25510/v3/stock/list/symbols?format=json >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -74,7 +73,7 @@ services:
       AI_MODEL: ${AI_MODEL:-mistral:7b-instruct-q4_K_M}
       MORNING_BRIEFING_SCHEDULE: ${MORNING_BRIEFING_SCHEDULE:-30 8 * * *}
       THETADATA_API_KEY: ${THETADATA_API_KEY}
-      THETADATA_BASE_URL: ${THETADATA_BASE_URL:-http://thetadata:25503}
+      THETADATA_BASE_URL: ${THETADATA_BASE_URL:-http://thetadata:25510}
       THETADATA_STREAM_URL: ${THETADATA_STREAM_URL:-ws://thetadata:25520/v1/events}
     depends_on:
       db:

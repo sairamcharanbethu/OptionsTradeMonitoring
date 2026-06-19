@@ -124,7 +124,7 @@ jobs:
             echo "PORT_FRONTEND=8100" >> $GITHUB_ENV
             echo "PORT_DB=5432" >> $GITHUB_ENV
             echo "PORT_REDIS=6379" >> $GITHUB_ENV
-            echo "PORT_THETADATA_REST=25503" >> $GITHUB_ENV
+            echo "PORT_THETADATA_REST=25510" >> $GITHUB_ENV
             echo "PORT_THETADATA_STREAM=25520" >> $GITHUB_ENV
             echo "INFISICAL_ENV=prod" >> $GITHUB_ENV
           else
@@ -135,8 +135,8 @@ jobs:
             echo "PORT_FRONTEND=8200" >> $GITHUB_ENV
             echo "PORT_DB=5432" >> $GITHUB_ENV
             echo "PORT_REDIS=46380" >> $GITHUB_ENV
-            echo "PORT_THETADATA_REST=25513" >> $GITHUB_ENV
-            echo "PORT_THETADATA_STREAM=25530" >> $GITHUB_ENV
+            echo "PORT_THETADATA_REST=25510" >> $GITHUB_ENV
+            echo "PORT_THETADATA_STREAM=25520" >> $GITHUB_ENV
             echo "INFISICAL_ENV=staging" >> $GITHUB_ENV
           fi
 
