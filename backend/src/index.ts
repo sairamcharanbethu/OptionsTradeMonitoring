@@ -764,14 +764,31 @@ const start = async () => {
     runSnaptradePendingOrderSync().catch((err: any) => {
       fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);
     });
-    const alpacaStreamStarted = await alpacaMarketDataStreamer.start();
-    if (alpacaStreamStarted) {
-      liveExitMonitor.start('alpaca');
-      fastify.log.info('[Stream] Alpaca option market data stream enabled for live exit monitoring.');
-    } else {
-      await thetaDataStreamer.start();
-      liveExitMonitor.start('thetadata');
-      fastify.log.info('[Stream] ThetaData stream enabled as market data fallback.');
+    const thetaDataConfigured = Boolean(process.env.THETADATA_BASE_URL || process.env.THETADATA_STREAM_URL);
+    let liveExitStreamStarted = false;
+
+    if (thetaDataConfigured) {
+      try {
+        await thetaDataStreamer.start();
+        liveExitMonitor.start('thetadata');
+        fastify.log.info('[Stream] ThetaData option market data stream enabled for live exit monitoring.');
+        liveExitStreamStarted = true;
+      } catch (err: any) {
+        fastify.log.warn(`[Stream] ThetaData option market data stream failed to start: ${err.message}`);
+      }
+    }
+
+    if (!liveExitStreamStarted) {
+      const alpacaStreamStarted = await alpacaMarketDataStreamer.start();
+      if (alpacaStreamStarted) {
+        liveExitMonitor.start('alpaca');
+        fastify.log.info('[Stream] Alpaca option market data stream enabled for live exit monitoring.');
+        liveExitStreamStarted = true;
+      }
+    }
+
+    if (!liveExitStreamStarted) {
+      fastify.log.warn('[Stream] No option market data stream started for live exit monitoring.');
     }
 
     fastify.log.info(`Server listening on http://localhost:${port}`);
