@@ -3,7 +3,7 @@ set -eu
 
 THETA_HOME="${THETA_HOME:-/opt/thetadata}"
 THETA_JAR="${THETA_JAR:-${THETA_HOME}/ThetaTerminalv3.jar}"
-THETA_HTTP_URL="${THETA_HTTP_URL:-http://127.0.0.1:25510/v3/terminal/mdds/status}"
+THETA_HTTP_URL="${THETA_HTTP_URL:-http://127.0.0.1:25503/v3/terminal/mdds/status}"
 THETA_MIN_TERMINAL_HEAP="${THETA_MIN_TERMINAL_HEAP:-2G}"
 THETA_MAX_TERMINAL_HEAP="${THETA_MAX_TERMINAL_HEAP:-6G}"
 

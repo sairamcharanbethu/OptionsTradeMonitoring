@@ -195,7 +195,7 @@ export class ThetaDataService {
     }
 
     const envBaseUrl = String(process.env.THETADATA_BASE_URL || '');
-    const baseUrl = String(settings.thetadata_base_url || envBaseUrl || 'http://127.0.0.1:25510');
+    const baseUrl = String(settings.thetadata_base_url || envBaseUrl || 'http://127.0.0.1:25503');
 
     return {
       baseUrl: this.normalizeBaseUrl(baseUrl, envBaseUrl)
@@ -204,7 +204,7 @@ export class ThetaDataService {
 
   private normalizeBaseUrl(baseUrl: string, envBaseUrl: string): string {
     const cleaned = baseUrl.trim().replace(/\/$/, '');
-    if (!cleaned) return 'http://127.0.0.1:25510';
+    if (!cleaned) return 'http://127.0.0.1:25503';
     if (
       envBaseUrl.trim() &&
       /^https?:\/\/(127\.0\.0\.1|localhost):255(03|10)$/i.test(cleaned)
@@ -212,10 +212,10 @@ export class ThetaDataService {
       return this.normalizeBaseUrl(envBaseUrl, '');
     }
     if (/^https?:\/\/thetadata:25510$/i.test(cleaned)) {
-      return 'http://127.0.0.1:25510';
+      return 'http://127.0.0.1:25503';
     }
-    if (cleaned.endsWith(':25503')) {
-      return `${cleaned.slice(0, -6)}:25510`;
+    if (/^https?:\/\/(127\.0\.0\.1|localhost):25510$/i.test(cleaned)) {
+      return 'http://127.0.0.1:25503';
     }
     return cleaned;
   }
