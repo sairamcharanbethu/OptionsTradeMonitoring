@@ -23,13 +23,12 @@ ENV NODE_ENV=production
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:/opt/venv/bin:$PATH"
 ENV THETA_HOME=/opt/thetadata
-ENV THETA_CONFIG=/opt/thetadata/config
-ENV THETA_LOGS=/opt/thetadata/logs
-ENV JAVA_OPTS="-Xms2G -Xmx6G"
+ENV THETA_MIN_TERMINAL_HEAP=2G
+ENV THETA_MAX_TERMINAL_HEAP=6G
 
 COPY --from=java-runtime /opt/java/openjdk /opt/java/openjdk
 
-RUN mkdir -p /opt/thetadata/config /opt/thetadata/logs /root/ThetaData/ThetaTerminal /root/.ThetaData/ThetaTerminal
+RUN mkdir -p /opt/thetadata /root/ThetaData/ThetaTerminal /root/.ThetaData/ThetaTerminal
 
 WORKDIR /app
 
@@ -37,7 +36,6 @@ COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
-COPY theta-config.properties /opt/thetadata/config/config_0.properties
 COPY docker-entrypoint.sh /usr/local/bin/options-backend-entrypoint
 
 RUN curl -fsSL --retry 3 --retry-delay 5 \

@@ -2,13 +2,12 @@
 set -eu
 
 THETA_HOME="${THETA_HOME:-/opt/thetadata}"
-THETA_CONFIG="${THETA_CONFIG:-/opt/thetadata/config}"
-THETA_LOGS="${THETA_LOGS:-/opt/thetadata/logs}"
 THETA_JAR="${THETA_JAR:-${THETA_HOME}/ThetaTerminalv3.jar}"
-THETA_CONFIG_FILE="${THETA_CONFIG_FILE:-${THETA_CONFIG}/config_0.properties}"
 THETA_HTTP_URL="${THETA_HTTP_URL:-http://127.0.0.1:25510/v3/terminal/mdds/status}"
+THETA_MIN_TERMINAL_HEAP="${THETA_MIN_TERMINAL_HEAP:-2G}"
+THETA_MAX_TERMINAL_HEAP="${THETA_MAX_TERMINAL_HEAP:-6G}"
 
-mkdir -p "$THETA_CONFIG" "$THETA_LOGS" /root/ThetaData/ThetaTerminal /root/.ThetaData/ThetaTerminal
+mkdir -p "$THETA_HOME" /root/ThetaData/ThetaTerminal /root/.ThetaData/ThetaTerminal
 
 if [ ! -f "$THETA_JAR" ]; then
   echo "[ThetaData] Missing terminal jar at $THETA_JAR" >&2
@@ -39,10 +38,10 @@ trap cleanup INT TERM EXIT
 
 if [ -n "$CREDS_FILE" ]; then
   echo "[ThetaData] Starting Theta Terminal v3 on 127.0.0.1..."
-  java ${JAVA_OPTS:-} -jar "$THETA_JAR" \
+  java -jar "$THETA_JAR" \
     --creds-file "$CREDS_FILE" \
-    --config "$THETA_CONFIG_FILE" \
-    --log-directory "$THETA_LOGS" &
+    --min-terminal-heap "$THETA_MIN_TERMINAL_HEAP" \
+    --max-terminal-heap "$THETA_MAX_TERMINAL_HEAP" &
   THETA_PID="$!"
 
   echo "[ThetaData] Waiting for terminal status at $THETA_HTTP_URL"
