@@ -150,7 +150,7 @@ export class ThetaDataService {
     const startedAt = Date.now();
     try {
       const res = await fetch(`${config.baseUrl}/v3/terminal/mdds/status`, {
-        headers: this.headers(config),
+        headers: { Accept: 'text/plain, application/json' },
         signal: AbortSignal.timeout(2500)
       });
       const body = (await res.text().catch(() => '')).trim();
@@ -175,7 +175,7 @@ export class ThetaDataService {
     }
   }
 
-  private async getConfig(userId: number | null): Promise<{ baseUrl: string; apiKey: string }> {
+  private async getConfig(userId: number | null): Promise<{ baseUrl: string }> {
     let settings: Record<string, string> = {};
     if (userId) {
       settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
@@ -183,7 +183,7 @@ export class ThetaDataService {
       const { rows } = await (this.fastify as any).pg.query(
         `SELECT DISTINCT ON (key) key, value
          FROM settings
-         WHERE key IN ('thetadata_base_url', 'thetadata_api_key')
+         WHERE key IN ('thetadata_base_url')
            AND value IS NOT NULL
            AND value != ''
          ORDER BY key, updated_at DESC`
@@ -198,8 +198,7 @@ export class ThetaDataService {
     const baseUrl = String(settings.thetadata_base_url || envBaseUrl || 'http://127.0.0.1:25510');
 
     return {
-      baseUrl: this.normalizeBaseUrl(baseUrl, envBaseUrl),
-      apiKey: String(settings.thetadata_api_key || process.env.THETADATA_API_KEY || '').trim()
+      baseUrl: this.normalizeBaseUrl(baseUrl, envBaseUrl)
     };
   }
 
@@ -212,15 +211,18 @@ export class ThetaDataService {
     ) {
       return this.normalizeBaseUrl(envBaseUrl, '');
     }
+    if (/^https?:\/\/thetadata:25510$/i.test(cleaned)) {
+      return 'http://127.0.0.1:25510';
+    }
     if (cleaned.endsWith(':25503')) {
       return `${cleaned.slice(0, -6)}:25510`;
     }
     return cleaned;
   }
 
-  private async fetchJson(config: { baseUrl: string; apiKey: string }, path: string) {
+  private async fetchJson(config: { baseUrl: string }, path: string) {
     const res = await fetch(`${config.baseUrl}${path}`, {
-      headers: this.headers(config),
+      headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(5000)
     });
     if (!res.ok) {
@@ -228,15 +230,6 @@ export class ThetaDataService {
       throw new Error(`ThetaData request failed: ${res.status}${detail ? ` - ${detail.slice(0, 300)}` : ''}`);
     }
     return res.json();
-  }
-
-  private headers(config: { apiKey: string }) {
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (config.apiKey) {
-      headers['TD-TERMINAL-KEY'] = config.apiKey;
-      headers.Authorization = `Bearer ${config.apiKey}`;
-    }
-    return headers;
   }
 
   private firstRow(data: any): any | null {

@@ -35,7 +35,6 @@ interface ExecutionSettings {
   live_trading_acknowledged?: string;
   alpaca_key_id?: string;
   alpaca_secret_key?: string;
-  thetadata_api_key?: string;
   thetadata_base_url?: string;
 }
 

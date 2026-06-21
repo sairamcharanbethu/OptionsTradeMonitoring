@@ -11,8 +11,7 @@ type ThetaContract = {
 
 export class ThetaDataStreamService extends EventEmitter {
   private ws: WebSocket | null = null;
-  private baseWsUrl = process.env.THETADATA_STREAM_URL || 'ws://127.0.0.1:25510/v1/events';
-  private apiKey = process.env.THETADATA_API_KEY || '';
+  private baseWsUrl = process.env.THETADATA_STREAM_URL || 'ws://127.0.0.1:25520/v1/events';
   private activeContracts: Map<string, ThetaContract> = new Map();
   private isConnected = false;
   private lastMessageAt: string | null = null;
@@ -46,7 +45,7 @@ export class ThetaDataStreamService extends EventEmitter {
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT DISTINCT ON (key) key, value
        FROM settings
-       WHERE key IN ('thetadata_stream_url', 'thetadata_api_key')
+       WHERE key IN ('thetadata_stream_url')
          AND value IS NOT NULL
          AND value != ''
        ORDER BY key, updated_at DESC`
@@ -57,15 +56,15 @@ export class ThetaDataStreamService extends EventEmitter {
     }, {});
     const envStreamUrl = String(process.env.THETADATA_STREAM_URL || '');
     this.baseWsUrl = this.normalizeStreamUrl(String(settings.thetadata_stream_url || envStreamUrl || this.baseWsUrl));
-    this.apiKey = String(settings.thetadata_api_key || process.env.THETADATA_API_KEY || this.apiKey).trim();
   }
 
   private normalizeStreamUrl(url: string): string {
     const cleaned = url.trim();
-    if (!cleaned) return 'ws://127.0.0.1:25510/v1/events';
+    if (!cleaned) return 'ws://127.0.0.1:25520/v1/events';
     return cleaned
-      .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25520\/v1\/events$/i, 'ws://thetadata:25510/v1/events')
-      .replace(/^ws:\/\/thetadata:25520\/v1\/events$/i, 'ws://thetadata:25510/v1/events');
+      .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
+      .replace(/^ws:\/\/thetadata:25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
+      .replace(/^ws:\/\/thetadata:25520\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events');
   }
 
   private async refreshActiveContracts() {
@@ -91,12 +90,7 @@ export class ThetaDataStreamService extends EventEmitter {
     }
 
     this.fastify.log.info(`[ThetaDataStream] Connecting to ${this.baseWsUrl}...`);
-    this.ws = new WebSocket(this.baseWsUrl, {
-      headers: this.apiKey ? {
-        'TD-TERMINAL-KEY': this.apiKey,
-        Authorization: `Bearer ${this.apiKey}`
-      } : undefined
-    });
+    this.ws = new WebSocket(this.baseWsUrl);
 
     this.ws.on('open', () => {
       this.fastify.log.info('[ThetaDataStream] Connected.');

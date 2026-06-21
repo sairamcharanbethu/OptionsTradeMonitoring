@@ -40,18 +40,19 @@ function formatAccountBalance(account: any) {
 
 function normalizeThetaDataBaseUrl(baseUrl: string) {
     const cleaned = baseUrl.trim().replace(/\/$/, '');
-    if (!cleaned) return 'http://thetadata:25510';
-    if (/^https?:\/\/(127\.0\.0\.1|localhost):255(03|10)$/i.test(cleaned)) return 'http://thetadata:25510';
+    if (!cleaned) return 'http://127.0.0.1:25510';
+    if (/^https?:\/\/thetadata:25510$/i.test(cleaned)) return 'http://127.0.0.1:25510';
     if (cleaned.endsWith(':25503')) return `${cleaned.slice(0, -6)}:25510`;
     return cleaned;
 }
 
 function normalizeThetaDataStreamUrl(streamUrl: string) {
     const cleaned = streamUrl.trim();
-    if (!cleaned) return 'ws://thetadata:25510/v1/events';
+    if (!cleaned) return 'ws://127.0.0.1:25520/v1/events';
     return cleaned
-        .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25520\/v1\/events$/i, 'ws://thetadata:25510/v1/events')
-        .replace(/^ws:\/\/thetadata:25520\/v1\/events$/i, 'ws://thetadata:25510/v1/events');
+        .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
+        .replace(/^ws:\/\/thetadata:25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
+        .replace(/^ws:\/\/thetadata:25520\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events');
 }
 
 export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) {
@@ -106,9 +107,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
 
     // ThetaData State
-    const [thetaDataApiKey, setThetaDataApiKey] = useState('');
-    const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://thetadata:25510');
-    const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('ws://thetadata:25510/v1/events');
+    const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://127.0.0.1:25510');
+    const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('ws://127.0.0.1:25520/v1/events');
 
     // SnapTrade State
     const [snaptradeClientId, setSnaptradeClientId] = useState('');
@@ -176,9 +176,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
             setAlpacaKeyId(data.alpaca_key_id || '');
             setAlpacaSecretKey(data.alpaca_secret_key || '');
-            setThetaDataApiKey(data.thetadata_api_key || '');
-            setThetaDataBaseUrl(normalizeThetaDataBaseUrl(data.thetadata_base_url || 'http://thetadata:25510'));
-            setThetaDataStreamUrl(normalizeThetaDataStreamUrl(data.thetadata_stream_url || 'ws://thetadata:25510/v1/events'));
+            setThetaDataBaseUrl(normalizeThetaDataBaseUrl(data.thetadata_base_url || 'http://127.0.0.1:25510'));
+            setThetaDataStreamUrl(normalizeThetaDataStreamUrl(data.thetadata_stream_url || 'ws://127.0.0.1:25520/v1/events'));
             setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
             setAlpacaAutoTradeMode(data.alpaca_auto_trade_mode || 'instant');
             setExecutionBroker(data.execution_broker || 'none');
@@ -390,7 +389,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 snaptrade_trading_account_id: snaptradeTradingAccountId,
                 alpaca_key_id: alpacaKeyId,
                 alpaca_secret_key: alpacaSecretKey,
-                thetadata_api_key: thetaDataApiKey,
                 thetadata_base_url: thetaDataBaseUrl,
                 thetadata_stream_url: thetaDataStreamUrl,
                 alpaca_auto_trade: alpacaAutoTrade ? 'true' : 'false',
@@ -979,19 +977,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         <div className="space-y-3">
                                             <div className="flex items-center justify-between">
                                                 <h5 className="font-medium text-sm">ThetaData Market Data</h5>
-                                                <Badge variant={thetaDataApiKey || thetaDataBaseUrl ? "default" : "secondary"}>
-                                                    {thetaDataApiKey || thetaDataBaseUrl ? "Configured" : "Not Configured"}
+                                                <Badge variant={thetaDataBaseUrl ? "default" : "secondary"}>
+                                                    {thetaDataBaseUrl ? "Configured" : "Not Configured"}
                                                 </Badge>
                                             </div>
                                             <div className="grid gap-2 p-4 border rounded-md bg-muted/30">
-                                                <Label htmlFor="thetadata-key">ThetaData API Key</Label>
-                                                <Input
-                                                    id="thetadata-key"
-                                                    value={thetaDataApiKey}
-                                                    onChange={(e) => setThetaDataApiKey(e.target.value)}
-                                                    placeholder="Paste ThetaData key"
-                                                    type="password"
-                                                />
                                                 <div className="grid gap-3 sm:grid-cols-2">
                                                     <div className="space-y-1.5">
                                                         <Label htmlFor="thetadata-base-url">REST URL</Label>
@@ -999,7 +989,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                             id="thetadata-base-url"
                                                             value={thetaDataBaseUrl}
                                                             onChange={(e) => setThetaDataBaseUrl(e.target.value)}
-                                                            placeholder="http://thetadata:25510"
+                                                            placeholder="http://127.0.0.1:25510"
                                                         />
                                                     </div>
                                                     <div className="space-y-1.5">
@@ -1008,12 +998,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                             id="thetadata-stream-url"
                                                             value={thetaDataStreamUrl}
                                                             onChange={(e) => setThetaDataStreamUrl(e.target.value)}
-                                                            placeholder="ws://thetadata:25510/v1/events"
+                                                            placeholder="ws://127.0.0.1:25520/v1/events"
                                                         />
                                                     </div>
                                                 </div>
                                                 <p className="text-[10px] text-muted-foreground leading-normal">
-                                                    ThetaData uses the internal Python market-data sidecar for live option bid/ask snapshots and quote streams.
+                                                    ThetaData Terminal v3 runs inside the backend container; credentials come from Infisical environment variables.
                                                 </p>
                                             </div>
                                         </div>

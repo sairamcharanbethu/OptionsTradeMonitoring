@@ -462,7 +462,7 @@ Rules:
     const { rows } = await this.fastify.pg.query(`
       SELECT user_id
       FROM settings
-      WHERE key IN ('thetadata_api_key', 'sscgex_password') AND value IS NOT NULL AND value != ''
+      WHERE key IN ('thetadata_base_url', 'sscgex_password') AND value IS NOT NULL AND value != ''
       ORDER BY user_id ASC
       LIMIT 1
     `);
@@ -2729,11 +2729,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     let settings = await this.getSettingsForUser(targetUserId);
 
     // If the logged-in user hasn't configured signal keys, try using the primary user settings.
-    if (!settings.thetadata_api_key && !settings.sscgex_password) {
+    if (!settings.thetadata_base_url && !settings.sscgex_password) {
       const primaryId = await this.getPrimaryUserId();
       if (primaryId !== userId) {
         const primarySettings = await this.getSettingsForUser(primaryId);
-        if (primarySettings.thetadata_api_key || primarySettings.sscgex_password) {
+        if (primarySettings.thetadata_base_url || primarySettings.sscgex_password) {
           targetUserId = primaryId;
           settings = primarySettings;
         }
@@ -2772,7 +2772,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       const thetaData = new ThetaDataService(this.fastify);
       const health = await thetaData.getHealth(targetUserId);
       if (!health.connected) throw new Error(health.lastError || 'ThetaData unavailable');
-    }, !!settings.thetadata_base_url || !!settings.thetadata_api_key || !!process.env.THETADATA_BASE_URL || !!process.env.THETADATA_API_KEY);
+    }, !!settings.thetadata_base_url || !!process.env.THETADATA_BASE_URL);
 
     const openrouterCheck = checkLatency(async () => {
       const key = await this.getAiApiKey(settings.day_trading_ai_provider);

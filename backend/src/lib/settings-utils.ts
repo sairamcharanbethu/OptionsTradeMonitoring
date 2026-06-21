@@ -5,7 +5,6 @@ const GLOBAL_SETTING_KEYS = [
   'alpaca_key_id',
   'alpaca_secret_key',
   'alpaca_options_feed',
-  'thetadata_api_key',
   'thetadata_base_url',
   'thetadata_stream_url',
   'sscgex_password',
