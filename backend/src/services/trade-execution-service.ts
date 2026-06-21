@@ -39,7 +39,7 @@ interface ExecutionSettings {
 }
 
 type EntryQuoteSnapshot = {
-  source: 'alpaca' | 'snaptrade' | 'thetadata';
+  source: 'alpaca' | 'thetadata';
   ticker: string;
   bid: number;
   ask: number;
@@ -71,9 +71,6 @@ export class TradeExecutionService {
   private readonly ENTRY_MAX_STABILITY_MOVE_PCT = 8;
   private readonly ENTRY_STABILITY_DELAY_MS = 1_500;
   private readonly ENTRY_PROTECTED_LIMIT_OVER_MID_PCT = 3;
-  private readonly SNAPTRADE_SYNTHETIC_MAX_AGE_MS = 30_000;
-  private readonly SNAPTRADE_SYNTHETIC_MAX_DEVIATION_PCT = 5;
-
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
@@ -620,39 +617,6 @@ export class TradeExecutionService {
     };
   }
 
-  private async fetchSnapTradeOptionQuote(userId: number, accountId: string, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
-    const snaptradeService = new SnaptradeService(this.fastify);
-    const quote: any = await snaptradeService.getOptionQuote(userId, accountId, osiTicker);
-
-    const bid = Number(quote?.bid_price ?? quote?.bidPrice ?? quote?.bid ?? 0);
-    const ask = Number(quote?.ask_price ?? quote?.askPrice ?? quote?.ask ?? 0);
-    const synthetic = Number(quote?.synthetic_price ?? quote?.syntheticPrice ?? quote?.mark ?? quote?.price ?? 0);
-    const rawLast = quote?.last_trade_price ?? quote?.lastTradePrice ?? quote?.last ?? synthetic;
-    const last = Number(rawLast || 0);
-    const mid = bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : synthetic > 0 ? Number(synthetic.toFixed(2)) : 0;
-    const mark = mid > 0 ? mid : last > 0 ? Number(last.toFixed(2)) : 0;
-    if (mark <= 0) return null;
-
-    const spreadPct = bid > 0 && ask > 0 && mid > 0 ? Number((((ask - bid) / mid) * 100).toFixed(2)) : null;
-    const timestampMs = this.parseAlpacaTimestamp(quote?.timestamp ?? quote?.time ?? quote?.updated_at ?? quote?.updatedAt);
-    const quoteAgeMs = timestampMs ? Math.max(0, Date.now() - timestampMs) : null;
-
-    return {
-      source: 'snaptrade',
-      ticker: osiTicker,
-      bid,
-      ask,
-      last,
-      mid,
-      mark,
-      spreadPct,
-      syntheticOnly: !(bid > 0 && ask > 0),
-      quoteAgeMs,
-      tradeAgeMs: null,
-      timestamp: timestampMs ? new Date(timestampMs).toISOString() : null
-    };
-  }
-
   private async fetchThetaDataOptionQuote(userId: number, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
     const thetaData = new ThetaDataService(this.fastify);
     const quote = await thetaData.getOptionQuoteForOsi(userId, osiTicker);
@@ -674,14 +638,7 @@ export class TradeExecutionService {
     };
   }
 
-  private async fetchEntryQuoteSnapshot(input: ExecuteSignalInput, settings: ExecutionSettings, osiTicker: string, snaptradeAccountId?: string): Promise<EntryQuoteSnapshot | null> {
-    try {
-      const alpacaQuote = await this.fetchAlpacaOptionSnapshot(osiTicker, settings.alpaca_key_id, settings.alpaca_secret_key);
-      if (alpacaQuote) return alpacaQuote;
-    } catch (err: any) {
-      this.fastify.log.warn(`[TradeExecutionService] Alpaca entry quote unavailable for ${osiTicker}: ${err.message || String(err)}`);
-    }
-
+  private async fetchEntryQuoteSnapshot(input: ExecuteSignalInput, settings: ExecutionSettings, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
     try {
       const thetaDataQuote = await this.fetchThetaDataOptionQuote(input.userId, osiTicker);
       if (thetaDataQuote) {
@@ -692,18 +649,16 @@ export class TradeExecutionService {
       this.fastify.log.warn(`[TradeExecutionService] ThetaData entry quote unavailable for ${osiTicker}: ${err.message || String(err)}`);
     }
 
-    if (!snaptradeAccountId) return null;
+    const canUseAlpacaMarketDataFallback = (settings.execution_broker || '') === 'alpaca_paper';
+    if (!canUseAlpacaMarketDataFallback) return null;
 
     try {
-      const snaptradeQuote = await this.fetchSnapTradeOptionQuote(input.userId, snaptradeAccountId, osiTicker);
-      if (snaptradeQuote) {
-        this.fastify.log.info(`[TradeExecutionService] Using SnapTrade option quote fallback for ${osiTicker}`);
-      }
-      return snaptradeQuote;
+      const alpacaQuote = await this.fetchAlpacaOptionSnapshot(osiTicker, settings.alpaca_key_id, settings.alpaca_secret_key);
+      if (alpacaQuote) return alpacaQuote;
     } catch (err: any) {
-      this.fastify.log.warn(`[TradeExecutionService] SnapTrade entry quote unavailable for ${osiTicker}: ${err.message || String(err)}`);
-      return null;
+      this.fastify.log.warn(`[TradeExecutionService] Alpaca entry quote fallback unavailable for ${osiTicker}: ${err.message || String(err)}`);
     }
+    return null;
   }
 
   private assertEntryQuote(quote: EntryQuoteSnapshot, intendedEntry: number, baselineMark: number | null, stabilityMovePct: number | null) {
@@ -711,27 +666,7 @@ export class TradeExecutionService {
       throw new Error('Entry skipped: no usable live option quote was available');
     }
     if (quote.syntheticOnly) {
-      if (quote.source !== 'snaptrade') {
-        throw new Error('Entry skipped: option quote is missing a usable bid/ask spread');
-      }
-      if (quote.quoteAgeMs === null) {
-        throw new Error('Entry skipped: SnapTrade synthetic option quote is missing a freshness timestamp');
-      }
-      if (quote.quoteAgeMs > this.SNAPTRADE_SYNTHETIC_MAX_AGE_MS) {
-        throw new Error(`Entry skipped: SnapTrade synthetic option quote is stale (${Math.round(quote.quoteAgeMs / 1000)}s old)`);
-      }
-      const reference = intendedEntry > 0 ? intendedEntry : baselineMark;
-      if (!reference || reference <= 0) {
-        throw new Error('Entry skipped: SnapTrade synthetic option quote needs a signal price reference');
-      }
-      const deviationPct = Math.abs(((quote.mark - reference) / reference) * 100);
-      if (deviationPct > this.SNAPTRADE_SYNTHETIC_MAX_DEVIATION_PCT) {
-        throw new Error(`Entry skipped: SnapTrade synthetic option quote differs ${deviationPct.toFixed(1)}% from intended entry $${reference.toFixed(2)}`);
-      }
-      if (stabilityMovePct !== null && Math.abs(stabilityMovePct) > this.ENTRY_MAX_STABILITY_MOVE_PCT) {
-        throw new Error(`Entry skipped: premium moved ${Math.abs(stabilityMovePct).toFixed(1)}% during quote stability check`);
-      }
-      return;
+      throw new Error('Entry skipped: option quote is missing a usable bid/ask spread');
     }
     if (quote.quoteAgeMs !== null && quote.quoteAgeMs > this.ENTRY_MAX_QUOTE_AGE_MS) {
       throw new Error(`Entry skipped: option quote is stale (${Math.round(quote.quoteAgeMs / 1000)}s old)`);
@@ -757,17 +692,17 @@ export class TradeExecutionService {
     }
   }
 
-  private async validateEntryQuote(input: ExecuteSignalInput, settings: ExecutionSettings, osiTicker: string, plannedLimit: number | undefined, snaptradeAccountId?: string): Promise<EntryQuoteValidation> {
+  private async validateEntryQuote(input: ExecuteSignalInput, settings: ExecutionSettings, osiTicker: string, plannedLimit: number | undefined): Promise<EntryQuoteValidation> {
     const optionDetails = await this.getSignalOptionDetails(input.signalId);
     const baselineMark = Number(optionDetails?.mark || input.mark || 0) > 0 ? Number(optionDetails?.mark || input.mark) : null;
     const intendedEntry = Number(plannedLimit || baselineMark || input.mark || 0);
 
-    const firstQuote = await this.fetchEntryQuoteSnapshot(input, settings, osiTicker, snaptradeAccountId);
+    const firstQuote = await this.fetchEntryQuoteSnapshot(input, settings, osiTicker);
     if (!firstQuote) {
       throw new Error('Entry skipped: live option quote validation is unavailable');
     }
     await this.wait(this.ENTRY_STABILITY_DELAY_MS);
-    const finalQuote = await this.fetchEntryQuoteSnapshot(input, settings, osiTicker, snaptradeAccountId);
+    const finalQuote = await this.fetchEntryQuoteSnapshot(input, settings, osiTicker);
     if (!finalQuote) {
       throw new Error('Entry skipped: final live option quote validation is unavailable');
     }
@@ -781,12 +716,10 @@ export class TradeExecutionService {
     const effectiveIntendedEntry = intendedEntry > 0 ? intendedEntry : finalQuote.mark;
     this.assertEntryQuote(finalQuote, effectiveIntendedEntry, baselineMark, stabilityMovePct);
 
-    const protectedLimit = finalQuote.syntheticOnly
-      ? Number(finalQuote.mark.toFixed(2))
-      : Number(Math.min(
-        finalQuote.ask,
-        finalQuote.mid * (1 + this.ENTRY_PROTECTED_LIMIT_OVER_MID_PCT / 100)
-      ).toFixed(2));
+    const protectedLimit = Number(Math.min(
+      finalQuote.ask,
+      finalQuote.mid * (1 + this.ENTRY_PROTECTED_LIMIT_OVER_MID_PCT / 100)
+    ).toFixed(2));
 
     return {
       quote: finalQuote,
@@ -918,7 +851,7 @@ export class TradeExecutionService {
 
     try {
       try {
-        const validatedQuote = await this.validateEntryQuote(input, settings, osiTicker, limitPrice ? Number(limitPrice) : undefined, accountId);
+        const validatedQuote = await this.validateEntryQuote(input, settings, osiTicker, limitPrice ? Number(limitPrice) : undefined);
         entryQuoteValidation = validatedQuote;
         limitPrice = validatedQuote.protectedLimit.toFixed(2);
         orderType = 'LIMIT';

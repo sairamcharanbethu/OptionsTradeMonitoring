@@ -1189,26 +1189,6 @@ export class SnaptradeService {
         }
     }
 
-    async getOptionQuote(userId: number, accountId: string, optionSymbol: string) {
-        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
-        const snaptradeOptionSymbol = this.toSnaptradeOccSymbol(optionSymbol);
-        const snaptradeAccountId = this.toSnaptradeAccountId(accountId);
-
-        try {
-            const quoteRes = await snaptrade.trading.getUserAccountOptionQuotes({
-                userId: userIdStr,
-                userSecret,
-                accountId: snaptradeAccountId,
-                symbol: snaptradeOptionSymbol
-            });
-            return quoteRes.data;
-        } catch (err: any) {
-            const detail = err.responseBody?.detail || err.message || String(err);
-            this.fastify.log.warn(`[SnaptradeService] Failed to fetch option quote for ${snaptradeOptionSymbol}: ${detail}`);
-            throw new Error(`Failed to fetch SnapTrade option quote: ${detail}`);
-        }
-    }
-
     private toSnaptradeOccSymbol(optionSymbol: string): string {
         const compact = String(optionSymbol || '').replace(/\s+/g, '').toUpperCase();
         const match = compact.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);

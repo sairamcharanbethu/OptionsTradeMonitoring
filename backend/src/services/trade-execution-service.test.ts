@@ -1,6 +1,5 @@
 import '@fastify/postgres';
 import { redis } from '../lib/redis';
-import { SnaptradeService } from './snaptrade-service';
 import { TradeExecutionService } from './trade-execution-service';
 import { TradeRedisService } from './trade-redis-service';
 
@@ -38,17 +37,17 @@ function createSignalInput(overrides: Partial<any> = {}) {
   };
 }
 
-function createSnapTradeQuote(overrides: Partial<any> = {}) {
+function createEntryQuote(overrides: Partial<any> = {}) {
   return {
-    source: 'snaptrade',
+    source: 'thetadata',
     ticker: 'QQQ260616P00738000',
-    bid: 0,
-    ask: 0,
+    bid: 2,
+    ask: 2.08,
     last: 2.04,
     mid: 2.04,
     mark: 2.04,
-    spreadPct: null,
-    syntheticOnly: true,
+    spreadPct: 3.92,
+    syntheticOnly: false,
     quoteAgeMs: 1_000,
     tradeAgeMs: null,
     timestamp: new Date().toISOString(),
@@ -56,47 +55,12 @@ function createSnapTradeQuote(overrides: Partial<any> = {}) {
   };
 }
 
-async function testSnapTradeOptionQuoteFormatsRequest() {
-  const service = new SnaptradeService(createFastifyMock());
-  let capturedRequest: any = null;
-
-  (service as any).getSnaptradeClient = async () => ({
-    userIdStr: 'snap-user',
-    userSecret: 'snap-secret',
-    snaptrade: {
-      trading: {
-        getUserAccountOptionQuotes: async (request: any) => {
-          capturedRequest = request;
-          return {
-            data: {
-              symbol: request.symbol,
-              synthetic_price: 2.04,
-              timestamp: new Date().toISOString()
-            }
-          };
-        }
-      }
-    }
-  });
-
-  const quote = await service.getOptionQuote(7, '7:wealthsimple-account', 'QQQ260616P00738000');
-
-  assert(quote.synthetic_price === 2.04, 'Should return SnapTrade option quote data');
-  assert(capturedRequest.userId === 'snap-user', 'Should pass SnapTrade user id');
-  assert(capturedRequest.userSecret === 'snap-secret', 'Should pass SnapTrade user secret');
-  assert(capturedRequest.accountId === 'wealthsimple-account', 'Should unwrap user-prefixed SnapTrade account id');
-  assert(capturedRequest.symbol === 'QQQ   260616P00738000', `Should convert compact OSI to OCC symbol, got ${capturedRequest.symbol}`);
-}
-
-async function testSnapTradeSyntheticQuoteFallbackAllowsProtectedLimit() {
+async function testThetaDataQuoteAllowsProtectedLimit() {
   const service = new TradeExecutionService(createFastifyMock());
   const input = createSignalInput();
 
   (service as any).getSignalOptionDetails = async () => ({ mark: 2 });
-  (service as any).fetchAlpacaOptionSnapshot = async () => {
-    throw new Error('Alpaca unavailable');
-  };
-  (service as any).fetchSnapTradeOptionQuote = async () => createSnapTradeQuote();
+  (service as any).fetchThetaDataOptionQuote = async () => createEntryQuote();
   (service as any).wait = async () => {};
 
   const validation = await (service as any).validateEntryQuote(
@@ -107,18 +71,41 @@ async function testSnapTradeSyntheticQuoteFallbackAllowsProtectedLimit() {
     '7:wealthsimple-account'
   );
 
-  assert(validation.quote.source === 'snaptrade', 'Should use SnapTrade quote fallback');
-  assert(validation.quote.syntheticOnly === true, 'Should mark fallback quote as synthetic-only');
-  assert(validation.protectedLimit === 2.04, `Should anchor protected limit to synthetic quote, got ${validation.protectedLimit}`);
-  assert(validation.stabilityMovePct === 0, `Stable repeated synthetic quotes should have 0% move, got ${validation.stabilityMovePct}`);
+  assert(validation.quote.source === 'thetadata', 'Should use ThetaData quote validation');
+  assert(validation.quote.syntheticOnly === false, 'Should require non-synthetic bid/ask data');
+  assert(validation.protectedLimit === 2.08, `Should cap protected limit with live ask, got ${validation.protectedLimit}`);
+  assert(validation.stabilityMovePct === 0, `Stable repeated live quotes should have 0% move, got ${validation.stabilityMovePct}`);
+}
+
+async function testSnapTradeQuoteIsNotUsedForEntryValidation() {
+  const service = new TradeExecutionService(createFastifyMock());
+  let snapTradeQuoteCalled = false;
+
+  (service as any).getSignalOptionDetails = async () => ({ mark: 2 });
+  (service as any).fetchThetaDataOptionQuote = async () => null;
+  (service as any).fetchAlpacaOptionSnapshot = async () => null;
+  (service as any).fetchSnapTradeOptionQuote = async () => {
+    snapTradeQuoteCalled = true;
+    throw new Error('SnapTrade quote endpoint should not be called');
+  };
+
+  const quote = await (service as any).fetchEntryQuoteSnapshot(
+    createSignalInput(),
+    { execution_broker: 'wealthsimple_snaptrade' },
+    'QQQ260616P00738000',
+    '7:wealthsimple-account'
+  );
+
+  assert(quote === null, 'Should not use SnapTrade option quotes for entry market data');
+  assert(snapTradeQuoteCalled === false, 'Should not call SnapTrade option quote endpoint during entry validation');
 }
 
 async function testEntryValidationRejectsQuoteSourceSwitch() {
   const service = new TradeExecutionService(createFastifyMock());
   const quotes = [
-    createSnapTradeQuote({ source: 'snaptrade' }),
+    createEntryQuote({ source: 'thetadata' }),
     {
-      ...createSnapTradeQuote({
+      ...createEntryQuote({
         source: 'alpaca',
         bid: 2,
         ask: 2.1,
@@ -207,8 +194,8 @@ async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
 
 async function runTests() {
   console.log('Running TradeExecutionService broker lifecycle tests...');
-  await testSnapTradeOptionQuoteFormatsRequest();
-  await testSnapTradeSyntheticQuoteFallbackAllowsProtectedLimit();
+  await testThetaDataQuoteAllowsProtectedLimit();
+  await testSnapTradeQuoteIsNotUsedForEntryValidation();
   await testEntryValidationRejectsQuoteSourceSwitch();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   console.log('All TradeExecutionService broker lifecycle tests passed!');

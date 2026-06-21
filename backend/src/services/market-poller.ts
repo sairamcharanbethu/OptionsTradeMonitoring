@@ -497,9 +497,56 @@ export class MarketPoller {
       const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
       const alpacaKeyId = settings.alpaca_key_id?.trim();
       const alpacaSecretKey = settings.alpaca_secret_key?.trim();
+      const thetaData = new ThetaDataService(this.fastify);
+
+      try {
+        const quote = await thetaData.getOptionQuote(userId, {
+          symbol,
+          strike,
+          right: type === 'CALL' ? 'call' : 'put',
+          expiration
+        });
+
+        if (quote) {
+          return {
+            status: 'ok',
+            symbol: ticker,
+            price: quote.mark,
+            quote: this.normalizeQuoteContext(quote.mark, {
+              bid: quote.bid,
+              ask: quote.ask,
+              last: quote.last,
+              mid: quote.mid,
+              spreadPct: quote.spreadPct || undefined,
+              source: 'thetadata'
+            }),
+            iv: 0,
+            underlying_price: 0,
+            greeks: {
+              delta: 0,
+              gamma: 0,
+              theta: 0,
+              vega: 0,
+              rho: 0
+            },
+            metadata: {
+              symbol,
+              strike,
+              type,
+              expiration
+            }
+          };
+        }
+      } catch (err: any) {
+        this.fastify.log.warn(`[MarketPoller] ThetaData option quote unavailable for ${ticker}: ${err.message || String(err)}`);
+      }
+
+      if (settings.execution_broker !== 'alpaca_paper') {
+        return null;
+      }
 
       if (alpacaKeyId && alpacaSecretKey) {
-        this.fastify.log.info(`[MarketPoller] Fetching price for ${ticker} via Alpaca API...`);
+        this.fastify.log.info(`[MarketPoller] Fetching Alpaca paper fallback price for ${ticker} via Alpaca API...`);
 
         // 1. Fetch Option Snapshot
         const optUrl = `https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${ticker}`;
@@ -561,47 +608,7 @@ export class MarketPoller {
           }
         };
       }
-
-      const thetaData = new ThetaDataService(this.fastify);
-      const quote = await thetaData.getOptionQuote(userId, {
-        symbol,
-        strike,
-        right: type === 'CALL' ? 'call' : 'put',
-        expiration
-      });
-      if (!quote) return null;
-
-      const result = {
-        status: 'ok',
-        symbol: ticker,
-        price: quote.mark,
-        quote: this.normalizeQuoteContext(quote.mark, {
-          bid: quote.bid,
-          ask: quote.ask,
-          last: quote.last,
-          mid: quote.mid,
-          spreadPct: quote.spreadPct || undefined,
-          source: 'thetadata'
-        }),
-        iv: 0,
-        underlying_price: 0,
-        greeks: {
-          delta: 0,
-          gamma: 0,
-          theta: 0,
-          vega: 0,
-          rho: 0
-        },
-        metadata: {
-          symbol,
-          strike,
-          type,
-          expiration
-        }
-      };
-
-      // We no longer set PRICE cache in Redis as per user request
-      return result;
+      return null;
 
     } catch (err: any) {
       this.fastify.log.error(`[MarketPoller] Option fetch failed for ${ticker}:`, err.message);
