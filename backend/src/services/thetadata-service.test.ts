@@ -234,6 +234,24 @@ async function testBaseUrlNormalizesToIntegratedTerminal() {
   assert(normalize('http://127.0.0.1:25503', 'http://127.0.0.1:25503') === 'http://127.0.0.1:25503', 'Should keep integrated env URL');
 }
 
+async function testNaiveThetaDataQuoteTimestampsParseAsEasternTime() {
+  const service = createService(async () => ({}));
+  const normalize = (value: string) => (service as any).normalizeTimestamp(value);
+
+  assert(
+    normalize('2026-06-22T09:45:00.000') === '2026-06-22T13:45:00.000Z',
+    `Expected summer naive ThetaData quote timestamp to parse as ET, got ${normalize('2026-06-22T09:45:00.000')}`
+  );
+  assert(
+    normalize('2026-01-15T09:30:00.000') === '2026-01-15T14:30:00.000Z',
+    `Expected winter naive ThetaData quote timestamp to parse as ET, got ${normalize('2026-01-15T09:30:00.000')}`
+  );
+  assert(
+    normalize('2026-06-22T09:45:00.000Z') === '2026-06-22T09:45:00.000Z',
+    'Explicit UTC timestamps should remain unchanged'
+  );
+}
+
 async function runTests() {
   console.log('Running ThetaDataService v3 response tests...');
   await testNestedQuoteResponseParsesBidAsk();
@@ -241,6 +259,7 @@ async function runTests() {
   await testChainMergesScaledStrikeAndExpirationDateRows();
   await testNestedOhlcResponseFlattensBars();
   await testBaseUrlNormalizesToIntegratedTerminal();
+  await testNaiveThetaDataQuoteTimestampsParseAsEasternTime();
   console.log('All ThetaDataService v3 response tests passed!');
 }
 

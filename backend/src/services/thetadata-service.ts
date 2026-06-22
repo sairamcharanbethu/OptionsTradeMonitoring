@@ -429,8 +429,46 @@ export class ThetaDataService {
 
   private normalizeTimestamp(value: any): string | null {
     if (!value) return null;
+    if (value instanceof Date) {
+      return Number.isFinite(value.getTime()) ? value.toISOString() : null;
+    }
+    const raw = String(value).trim();
+    const hasExplicitTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    if (!hasExplicitTimezone) {
+      const dateTimeMatch = raw.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/);
+      if (dateTimeMatch) {
+        return this.dateAtEt(
+          dateTimeMatch[1],
+          Number(dateTimeMatch[2]),
+          Number(dateTimeMatch[3]),
+          Number(dateTimeMatch[4] || 0),
+          Number((dateTimeMatch[5] || '0').padEnd(3, '0'))
+        ).toISOString();
+      }
+    }
     const parsed = new Date(value);
     return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null;
+  }
+
+  private dateAtEt(dateKey: string, hour: number, minute: number, second = 0, millisecond = 0): Date {
+    const [year, month, day] = dateKey.split('-').map((part) => Number(part));
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      hourCycle: 'h23'
+    });
+    const parts = formatter.formatToParts(utcGuess);
+    const get = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0);
+    const representedEtAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'), millisecond);
+    const intendedEtAsUtc = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+    return new Date(utcGuess.getTime() + (intendedEtAsUtc - representedEtAsUtc));
   }
 
   private toThetaDate(date: Date): string {
