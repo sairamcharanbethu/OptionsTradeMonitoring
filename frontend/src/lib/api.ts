@@ -894,6 +894,16 @@ export const api = {
         reconnectAttempts: number;
       };
     };
+    marketData?: {
+      thetadata?: {
+        status: string;
+        connected: boolean;
+        provider: string;
+        baseUrl?: string;
+        latencyMs: number | null;
+        lastError: string | null;
+      };
+    };
     poller: { status: string; running: boolean };
     scanner: {
       status: string;

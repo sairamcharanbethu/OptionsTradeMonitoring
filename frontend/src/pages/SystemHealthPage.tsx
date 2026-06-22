@@ -89,6 +89,9 @@ const systemSummary = (
     if (isWatchedStream('stream:thetadata', 'thetadata', services.streams?.thetadata, services, ignoredComponents) && isBadStatus(services.streams?.thetadata?.status)) {
       issues.push(`ThetaData stream ${services.streams.thetadata.status}`);
     }
+    if (!ignoredComponents.has('market:thetadata') && isBadStatus(services.marketData?.thetadata?.status)) {
+      issues.push(`ThetaData terminal ${services.marketData?.thetadata?.status}`);
+    }
     if (!ignoredComponents.has('service:poller') && !services.poller?.running) degraded.push('poller stopped');
     if (!ignoredComponents.has('service:scanner') && isBadStatus(services.scanner?.status)) issues.push(`scanner ${services.scanner.status}`);
     if (!ignoredComponents.has('broker:snaptradePendingOrders') && services.snaptradePendingOrders?.lastError) issues.push('broker sync error');
@@ -335,6 +338,14 @@ export default function SystemHealthPage() {
               detail={services?.liveExitMonitor?.lastError || `Last quote ${formatRelativeTime(services?.liveExitMonitor?.lastQuoteAt)}`}
               status={services?.liveExitMonitor?.status}
               componentKey="service:liveExitMonitor"
+              ignoredComponents={ignoredComponents}
+              onToggleIgnored={toggleIgnoredComponent}
+            />
+            <HealthRow
+              title="ThetaData Terminal"
+              detail={services?.marketData?.thetadata?.lastError || `${services?.marketData?.thetadata?.baseUrl || '127.0.0.1:25503'}, ${services?.marketData?.thetadata?.latencyMs ?? 0}ms latency`}
+              status={services?.marketData?.thetadata?.status}
+              componentKey="market:thetadata"
               ignoredComponents={ignoredComponents}
               onToggleIgnored={toggleIgnoredComponent}
             />

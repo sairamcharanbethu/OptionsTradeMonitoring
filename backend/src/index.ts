@@ -613,9 +613,18 @@ const start = async () => {
     thetaDataStreamer.on('quote', handleStreamQuote);
     alpacaMarketDataStreamer.on('quote', handleStreamQuote);
 
-    fastify.get('/api/services/health', { preHandler: fastify.authenticate }, async () => {
+    fastify.get('/api/services/health', { preHandler: fastify.authenticate }, async (request) => {
+      const { id: userId } = (request as any).user;
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
       const thetaDataHealth = thetaDataStreamer.getHealth();
+      const thetaDataTerminalHealth = await thetaData.getHealth(userId).catch((err: any) => ({
+        status: 'DOWN',
+        connected: false,
+        provider: 'thetadata',
+        baseUrl: process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503',
+        latencyMs: null,
+        lastError: err.message || String(err)
+      }));
       const liveExitHealth = liveExitMonitor.getHealth();
       const scannerHealth = await scanner.getRuntimeStatus();
       const tradeRedisHealth = await TradeRedisService.getHealth();
@@ -625,6 +634,9 @@ const start = async () => {
         streams: {
           alpaca: alpacaHealth,
           thetadata: thetaDataHealth
+        },
+        marketData: {
+          thetadata: thetaDataTerminalHealth
         },
         poller: {
           status: poller.isRunning() ? 'UP' : 'DOWN',
