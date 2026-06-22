@@ -25,6 +25,20 @@ function createScanner() {
   return new SignalScannerService(createFastifyMock()) as any;
 }
 
+function macroSnapshot(overrides: Record<string, any>) {
+  return {
+    symbol: overrides.symbol || 'TEST',
+    label: overrides.label || 'Test',
+    value: overrides.value ?? null,
+    previousClose: overrides.previousClose ?? null,
+    changePct: overrides.changePct ?? null,
+    changeBps: overrides.changeBps ?? null,
+    source: 'test',
+    error: null,
+    ...overrides
+  };
+}
+
 async function testThetaDataMissingVolumeDoesNotRejectLiquidCandidate() {
   const scanner = createScanner();
 
@@ -106,11 +120,66 @@ async function testThetaDataKnownLowVolumeStillRejectsCandidate() {
   assert(result.ranked[0].reasons.includes('volume below 200'), 'Ranked candidate should explain low volume');
 }
 
+async function testMacroBlocksCallsWhenVixIsTooHighOrSpiking() {
+  const scanner = createScanner();
+
+  const result = scanner.assessMacroRegime({
+    winningSide: 'CALL',
+    currentMinutes: 10 * 60,
+    vix: macroSnapshot({ symbol: '^VIX', label: 'VIX', value: 31.5, previousClose: 26.8, changePct: 17.54 }),
+    tenYear: macroSnapshot({ symbol: '^TNX', label: 'US 10Y', value: 43.2, previousClose: 43.1, changePct: 0.23, changeBps: 1 }),
+    dxy: macroSnapshot({ symbol: 'DX-Y.NYB', label: 'DXY', value: 104.1, previousClose: 104.0, changePct: 0.1 }),
+    oil: macroSnapshot({ symbol: 'CL=F', label: 'Oil', value: 78, previousClose: 77.8, changePct: 0.26 }),
+    gold: macroSnapshot({ symbol: 'GC=F', label: 'Gold', value: 2340, previousClose: 2335, changePct: 0.21 })
+  });
+
+  assert(result.blockers.some((item: string) => item.includes('VIX')), 'High/spiking VIX should block bullish calls');
+  assert(result.confidenceAdjustment < 0, 'High/spiking VIX should reduce confidence');
+}
+
+async function testMacroBlocksCallsWhenDxyAndTenYearRiseTogether() {
+  const scanner = createScanner();
+
+  const result = scanner.assessMacroRegime({
+    winningSide: 'CALL',
+    currentMinutes: 10 * 60 + 30,
+    vix: macroSnapshot({ symbol: '^VIX', label: 'VIX', value: 18.2, previousClose: 18.1, changePct: 0.55 }),
+    tenYear: macroSnapshot({ symbol: '^TNX', label: 'US 10Y', value: 43.7, previousClose: 43.1, changePct: 1.39, changeBps: 6 }),
+    dxy: macroSnapshot({ symbol: 'DX-Y.NYB', label: 'DXY', value: 104.6, previousClose: 104.1, changePct: 0.48 }),
+    oil: macroSnapshot({ symbol: 'CL=F', label: 'Oil', value: 78, previousClose: 77.8, changePct: 0.26 }),
+    gold: macroSnapshot({ symbol: 'GC=F', label: 'Gold', value: 2340, previousClose: 2335, changePct: 0.21 })
+  });
+
+  assert(result.blockers.some((item: string) => item.includes('DXY') && item.includes('10Y')), 'DXY + 10Y risk-off combo should block bullish calls');
+  assert(result.thresholdAdjustment > 0, 'Risk-off macro should tighten the entry threshold');
+}
+
+async function testMacroRewardsRiskOnCallSetups() {
+  const scanner = createScanner();
+
+  const result = scanner.assessMacroRegime({
+    winningSide: 'CALL',
+    currentMinutes: 10 * 60,
+    vix: macroSnapshot({ symbol: '^VIX', label: 'VIX', value: 17.5, previousClose: 18.4, changePct: -4.89 }),
+    tenYear: macroSnapshot({ symbol: '^TNX', label: 'US 10Y', value: 42.8, previousClose: 43.2, changePct: -0.93, changeBps: -4 }),
+    dxy: macroSnapshot({ symbol: 'DX-Y.NYB', label: 'DXY', value: 103.7, previousClose: 104.1, changePct: -0.38 }),
+    oil: macroSnapshot({ symbol: 'CL=F', label: 'Oil', value: 77.6, previousClose: 77.8, changePct: -0.26 }),
+    gold: macroSnapshot({ symbol: 'GC=F', label: 'Gold', value: 2329, previousClose: 2335, changePct: -0.26 })
+  });
+
+  assert(result.blockers.length === 0, 'Supportive risk-on macro should not block calls');
+  assert(result.directionBias === 'CALL', `Expected CALL macro bias, got ${result.directionBias}`);
+  assert(result.confidenceAdjustment > 0, 'Supportive risk-on macro should improve confidence');
+}
+
 async function runTests() {
-  console.log('Running SignalScannerService ThetaData candidate tests...');
+  console.log('Running SignalScannerService candidate and macro tests...');
   await testThetaDataMissingVolumeDoesNotRejectLiquidCandidate();
   await testThetaDataKnownLowVolumeStillRejectsCandidate();
-  console.log('All SignalScannerService ThetaData candidate tests passed!');
+  await testMacroBlocksCallsWhenVixIsTooHighOrSpiking();
+  await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
+  await testMacroRewardsRiskOnCallSetups();
+  console.log('All SignalScannerService candidate and macro tests passed!');
 }
 
 runTests().catch((err) => {

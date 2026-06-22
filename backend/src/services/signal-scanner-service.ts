@@ -155,6 +155,35 @@ type OptionQuoteCandidate = OptionContractCandidate & {
   reasons: string[];
 };
 
+type MacroAssetSnapshot = {
+  symbol: string;
+  label: string;
+  value: number | null;
+  previousClose: number | null;
+  changePct: number | null;
+  changeBps?: number | null;
+  source: string;
+  error?: string | null;
+};
+
+type MacroRegimeAssessment = {
+  regime: 'RISK_ON' | 'NEUTRAL' | 'RISK_OFF';
+  score: number;
+  directionBias: 'CALL' | 'PUT' | 'MIXED';
+  confidenceAdjustment: number;
+  thresholdAdjustment: number;
+  blockers: string[];
+  warnings: string[];
+  contributors: string[];
+  assets: {
+    vix: MacroAssetSnapshot;
+    tenYear: MacroAssetSnapshot;
+    dxy: MacroAssetSnapshot;
+    oil: MacroAssetSnapshot;
+    gold: MacroAssetSnapshot;
+  };
+};
+
 export class SignalScannerService {
   private fastify: FastifyInstance;
   private aiService: AIService;
@@ -859,21 +888,14 @@ Rules:
     const sessionChangePct = ((currentPrice - previousClose) / previousClose) * 100;
     const candleChangePct = ((latest.close - previous.close) / previous.close) * 100;
 
-    // 4. Fetch VIX Quote
+    // 4. Fetch macro context used by 0DTE regime guards
     let vixPrice: number | null = null;
     let vixPreviousClose: number | null = null;
     let vixChangePct: number | null = null;
-
-    try {
-      const vixData = await (yahooFinance as any).quote('^VIX');
-      vixPrice = vixData.regularMarketPrice ?? null;
-      vixPreviousClose = vixData.regularMarketPreviousClose ?? null;
-      if (vixPrice && vixPreviousClose) {
-        vixChangePct = ((vixPrice - vixPreviousClose) / vixPreviousClose) * 100;
-      }
-    } catch (vixErr: any) {
-      this.fastify.log.warn(`[SignalScannerService] Failed to fetch VIX: ${vixErr.message}`);
-    }
+    const vixSnapshot = await this.fetchYahooMacroSnapshot('^VIX', 'VIX');
+    vixPrice = vixSnapshot.value;
+    vixPreviousClose = vixSnapshot.previousClose;
+    vixChangePct = vixSnapshot.changePct;
 
     if (vixPrice === null) {
       noTradeReasons.push('VIX data unavailable from Yahoo response');
@@ -882,16 +904,24 @@ Rules:
     let tenYearYield: number | null = null;
     let tenYearPreviousClose: number | null = null;
     let tenYearChangePct: number | null = null;
-    try {
-      const tenYearData = await (yahooFinance as any).quote('^TNX');
-      tenYearYield = tenYearData.regularMarketPrice ?? null;
-      tenYearPreviousClose = tenYearData.regularMarketPreviousClose ?? null;
-      if (tenYearYield && tenYearPreviousClose) {
-        tenYearChangePct = ((tenYearYield - tenYearPreviousClose) / tenYearPreviousClose) * 100;
-      }
-    } catch (yieldErr: any) {
-      this.fastify.log.warn(`[SignalScannerService] Failed to fetch US 10Y yield (^TNX): ${yieldErr.message}`);
+    let tenYearChangeBps: number | null = null;
+    const rawTenYearSnapshot = await this.fetchYahooMacroSnapshot('^TNX', 'US 10Y');
+    if (rawTenYearSnapshot.value !== null && rawTenYearSnapshot.previousClose !== null) {
+      tenYearChangeBps = Number(((rawTenYearSnapshot.value - rawTenYearSnapshot.previousClose) * 10).toFixed(1));
     }
+    const tenYearSnapshot = {
+      ...rawTenYearSnapshot,
+      changeBps: tenYearChangeBps
+    };
+    tenYearYield = tenYearSnapshot.value;
+    tenYearPreviousClose = tenYearSnapshot.previousClose;
+    tenYearChangePct = tenYearSnapshot.changePct;
+
+    const [dxySnapshot, oilSnapshot, goldSnapshot] = await Promise.all([
+      this.fetchYahooMacroSnapshot(['DX-Y.NYB', 'UUP'], 'DXY'),
+      this.fetchYahooMacroSnapshot('CL=F', 'Oil'),
+      this.fetchYahooMacroSnapshot('GC=F', 'Gold')
+    ]);
 
     // 5. Fetch Mega-Cap Internals
     let bullishInternals = 0;
@@ -1035,8 +1065,17 @@ Rules:
 
     const callScore = callScoreParts.reduce((sum, item) => sum + item.points, 0);
     const putScore = putScoreParts.reduce((sum, item) => sum + item.points, 0);
-    const winningSide = callScore >= putScore ? 'CALL' : 'PUT';
+    const winningSide: 'CALL' | 'PUT' = callScore >= putScore ? 'CALL' : 'PUT';
     const winningScore = winningSide === 'CALL' ? callScore : putScore;
+    const macroRegime = this.assessMacroRegime({
+      winningSide,
+      currentMinutes,
+      vix: vixSnapshot,
+      tenYear: tenYearSnapshot,
+      dxy: dxySnapshot,
+      oil: oilSnapshot,
+      gold: goldSnapshot
+    });
 
     // Afternoon threshold inflation
     let dynamicMinScore = Number(settings.min_signal_score);
@@ -1046,10 +1085,11 @@ Rules:
     if (currentMinutes >= 13 * 60 + 30) {
       dynamicMinScore += 15;
     }
+    dynamicMinScore += macroRegime.thresholdAdjustment;
 
     // 7. Check Volatility & Wall Blockers
     const volatilityBlockers = [];
-    const maxVixForCalls = 24;
+    const maxVixForCalls = 30;
     const minVixForPuts = 13;
 
     if (winningSide === 'CALL' && vixPrice !== null && vixPrice > maxVixForCalls) {
@@ -1064,6 +1104,10 @@ Rules:
     }
     if (winningSide === 'PUT' && hasBullishInternals) {
       volatilityBlockers.push(`Mega-Caps are bullish. Avoid shorting ${symbol}.`);
+    }
+
+    for (const blocker of macroRegime.blockers) {
+      volatilityBlockers.push(blocker);
     }
 
     // GEX proximity blockers
@@ -1331,11 +1375,11 @@ Rules:
       if (volume !== null && volume < minOptionVolume) pricingWarnings.push(`Volume ${volume} below minimum ${minOptionVolume}`);
       if (openInterest !== null && openInterest < minOpenInterest) pricingWarnings.push(`Open interest ${openInterest} below minimum ${minOpenInterest}`);
 
-      // Apply score adjustments for warnings
-      let finalConfidence = Math.max(0, Math.min(100, winningScore - pricingWarnings.length * 10));
+      // Apply score adjustments for macro regime and pricing warnings.
+      let finalConfidence = Math.max(0, Math.min(100, winningScore + macroRegime.confidenceAdjustment - pricingWarnings.length * 10));
 
       let setupGrade = '🎲 B / LOTTO';
-      if (finalConfidence === 100) {
+      if (finalConfidence >= 92 && macroRegime.score >= 70 && pricingWarnings.length === 0) {
         setupGrade = '🔥 A+ / FULL';
       } else if (finalConfidence >= 85) {
         setupGrade = '⚡ A / STANDARD';
@@ -1359,7 +1403,8 @@ Rules:
         candidateSelection,
         suggestedStopLoss: optionStopLoss,
         suggestedTakeProfit: optionTakeProfit,
-        usingTheoreticalPricing
+        usingTheoreticalPricing,
+        macroConfidenceAdjustment: macroRegime.confidenceAdjustment
       };
 
       const entryTrigger = winningSide === 'CALL' ? latest.high : latest.low;
@@ -1456,7 +1501,33 @@ Rules:
           vixQuote: vixPrice,
           vixChangePercent: vixChangePct,
           tenYearYield,
-          tenYearChangePercent: tenYearChangePct
+          tenYearChangePercent: tenYearChangePct,
+          tenYearChangeBps,
+          dxy: {
+            symbol: dxySnapshot.symbol,
+            value: dxySnapshot.value,
+            changePercent: dxySnapshot.changePct
+          },
+          oil: {
+            symbol: oilSnapshot.symbol,
+            value: oilSnapshot.value,
+            changePercent: oilSnapshot.changePct
+          },
+          gold: {
+            symbol: goldSnapshot.symbol,
+            value: goldSnapshot.value,
+            changePercent: goldSnapshot.changePct
+          },
+          macroRegime: {
+            regime: macroRegime.regime,
+            score: macroRegime.score,
+            directionBias: macroRegime.directionBias,
+            confidenceAdjustment: macroRegime.confidenceAdjustment,
+            thresholdAdjustment: macroRegime.thresholdAdjustment,
+            blockers: macroRegime.blockers,
+            warnings: macroRegime.warnings,
+            contributors: macroRegime.contributors
+          }
         }),
         noTradeReasons,
         chosenExpiry,
@@ -1525,6 +1596,7 @@ Rules:
               `Target premium: ${premTpStr}`,
               '',
               `**Score:** ${finalConfidence} / ${setupGrade}${mlProbability !== null ? ` | ML probability: ${Math.round(mlProbability * 100)}%` : ''}`,
+              `**Macro:** ${macroRegime.regime} (${macroRegime.score}/100, ${macroRegime.directionBias})`,
               '',
               `**News risk:** ${guardrail.status} (${guardrail.verdict}, ${guardrail.freshness})`,
               `**Why:** ${guardrail.rationale}`,
@@ -1589,7 +1661,12 @@ Rules:
               vix: vixPrice,
               vixChangePct,
               tenYearYield,
-              tenYearChangePct
+              tenYearChangePct,
+              tenYearChangeBps,
+              dxy: dxySnapshot,
+              oil: oilSnapshot,
+              gold: goldSnapshot,
+              macroRegime
             },
             internals: {
               aaplChangePct: applePct,
@@ -1608,7 +1685,7 @@ Rules:
                 : qqqFlowDirection === 'bearish',
               internalsAlignedWithSignal: winningSide === 'CALL' ? hasBullishInternals : hasBearishInternals,
               trendAlignedWithSignal: Boolean(trendAlignedNum),
-              macroSupportsSignal: null
+              macroSupportsSignal: macroRegime.directionBias === 'MIXED' || macroRegime.directionBias === winningSide
             }
           }).catch((err: any) => {
             this.fastify.log.error(`[SignalScannerService] enrichSignalAsync failed for #${signalId}: ${err.message}`);
@@ -1642,6 +1719,15 @@ Rules:
             AAPL: applePct,
             MSFT: microsoftPct,
             NVDA: nvidiaPct
+          },
+          macroRegime: {
+            regime: macroRegime.regime,
+            score: macroRegime.score,
+            directionBias: macroRegime.directionBias,
+            confidenceAdjustment: macroRegime.confidenceAdjustment,
+            thresholdAdjustment: macroRegime.thresholdAdjustment,
+            blockers: macroRegime.blockers,
+            warnings: macroRegime.warnings
           }
         }),
         'SIGNAL_GENERATED',
@@ -1674,6 +1760,15 @@ Rules:
             AAPL: applePct,
             MSFT: microsoftPct,
             NVDA: nvidiaPct
+          },
+          macroRegime: {
+            regime: macroRegime.regime,
+            score: macroRegime.score,
+            directionBias: macroRegime.directionBias,
+            confidenceAdjustment: macroRegime.confidenceAdjustment,
+            thresholdAdjustment: macroRegime.thresholdAdjustment,
+            blockers: macroRegime.blockers,
+            warnings: macroRegime.warnings
           }
         }),
         'BLOCKED',
@@ -1744,6 +1839,207 @@ Rules:
     if (numeric === null) return null;
     const multiplier = Math.pow(10, decimals);
     return Math.round(numeric * multiplier) / multiplier;
+  }
+
+  private buildMacroSnapshot(input: {
+    symbol: string;
+    label: string;
+    value: number | null;
+    previousClose: number | null;
+    source?: string;
+    changeBps?: number | null;
+    error?: string | null;
+  }): MacroAssetSnapshot {
+    const changePct = input.value !== null && input.previousClose !== null && input.previousClose !== 0
+      ? Number((((input.value - input.previousClose) / input.previousClose) * 100).toFixed(2))
+      : null;
+
+    return {
+      symbol: input.symbol,
+      label: input.label,
+      value: input.value,
+      previousClose: input.previousClose,
+      changePct,
+      changeBps: input.changeBps ?? null,
+      source: input.source || 'yahoo',
+      error: input.error || null
+    };
+  }
+
+  private async fetchYahooMacroSnapshot(symbols: string | string[], label: string): Promise<MacroAssetSnapshot> {
+    const candidates = Array.isArray(symbols) ? symbols : [symbols];
+    let lastError: string | null = null;
+
+    for (const symbol of candidates) {
+      try {
+        const quote = await (yahooFinance as any).quote(symbol);
+        const value = this.finiteNumber(quote?.regularMarketPrice);
+        const previousClose = this.finiteNumber(quote?.regularMarketPreviousClose);
+        if (value !== null && previousClose !== null) {
+          return this.buildMacroSnapshot({
+            symbol,
+            label,
+            value,
+            previousClose,
+            source: 'yahoo'
+          });
+        }
+        lastError = `Missing value or previous close for ${symbol}`;
+      } catch (err: any) {
+        lastError = err.message || String(err);
+        this.fastify.log.warn(`[SignalScannerService] Failed to fetch macro ${label} (${symbol}): ${lastError}`);
+      }
+    }
+
+    return this.buildMacroSnapshot({
+      symbol: candidates[0] || label,
+      label,
+      value: null,
+      previousClose: null,
+      source: 'yahoo',
+      error: lastError || 'No Yahoo macro candidate returned usable data'
+    });
+  }
+
+  private assessMacroRegime(input: {
+    winningSide: 'CALL' | 'PUT';
+    currentMinutes: number;
+    vix: MacroAssetSnapshot;
+    tenYear: MacroAssetSnapshot;
+    dxy: MacroAssetSnapshot;
+    oil: MacroAssetSnapshot;
+    gold: MacroAssetSnapshot;
+  }): MacroRegimeAssessment {
+    const { winningSide, currentMinutes, vix, tenYear, dxy, oil, gold } = input;
+    const blockers: string[] = [];
+    const warnings: string[] = [];
+    const contributors: string[] = [];
+    let score = 50;
+    let rawAdjustment = 0;
+
+    const add = (points: number, reason: string) => {
+      score += points;
+      rawAdjustment += points * 0.45;
+      contributors.push(`${points > 0 ? '+' : ''}${points}: ${reason}`);
+    };
+
+    const warn = (points: number, reason: string) => {
+      score += points;
+      rawAdjustment += points * 0.45;
+      warnings.push(reason);
+      contributors.push(`${points}: ${reason}`);
+    };
+
+    if (vix.value !== null) {
+      if (vix.value >= 15 && vix.value <= 22) {
+        add(8, `VIX ${vix.value.toFixed(2)} is in the normal 0DTE range`);
+      } else if (vix.value > 30) {
+        warn(-22, `VIX ${vix.value.toFixed(2)} is above the 30 panic threshold`);
+        if (winningSide === 'CALL') blockers.push(`Macro guard: VIX ${vix.value.toFixed(2)} is above 30, blocking bullish 0DTE calls`);
+      } else if (vix.value < 12) {
+        warn(-5, `VIX ${vix.value.toFixed(2)} is very compressed, reducing directional edge`);
+      } else if (vix.value > 24) {
+        warn(-10, `VIX ${vix.value.toFixed(2)} is elevated`);
+      }
+    } else {
+      warn(-6, 'VIX data unavailable');
+    }
+
+    if (vix.changePct !== null) {
+      if (vix.changePct <= -3) {
+        if (winningSide === 'CALL') add(10, `VIX falling ${vix.changePct.toFixed(2)}% supports risk-on calls`);
+        else warn(-4, `VIX falling ${vix.changePct.toFixed(2)}% works against bearish puts`);
+      } else if (vix.changePct >= 15) {
+        warn(-18, `VIX spiking ${vix.changePct.toFixed(2)}% intraday`);
+        if (winningSide === 'CALL') blockers.push(`Macro guard: VIX is spiking ${vix.changePct.toFixed(2)}%, blocking bullish 0DTE calls`);
+      } else if (vix.changePct >= 10) {
+        warn(-12, `VIX up ${vix.changePct.toFixed(2)}%, market is too unstable for easy quick-profit calls`);
+      }
+    }
+
+    const tenYearBps = tenYear.changeBps ?? null;
+    if (tenYearBps !== null && dxy.changePct !== null) {
+      if (tenYearBps >= 4 && dxy.changePct >= 0.25) {
+        const msg = `DXY +${dxy.changePct.toFixed(2)}% and 10Y +${tenYearBps.toFixed(1)} bps are rising together`;
+        if (winningSide === 'CALL') {
+          warn(-18, msg);
+          blockers.push(`Macro guard: ${msg}, blocking bullish 0DTE calls`);
+        } else {
+          add(8, `${msg}, supporting bearish puts`);
+        }
+      }
+    }
+
+    if (dxy.changePct !== null) {
+      if (dxy.changePct <= -0.20) {
+        if (winningSide === 'CALL') add(7, `DXY falling ${dxy.changePct.toFixed(2)}% supports Nasdaq calls`);
+        else warn(-3, `DXY falling ${dxy.changePct.toFixed(2)}% works against puts`);
+      } else if (dxy.changePct >= 0.30) {
+        if (winningSide === 'CALL') warn(-8, `DXY rising ${dxy.changePct.toFixed(2)}% pressures equities`);
+        else add(5, `DXY rising ${dxy.changePct.toFixed(2)}% supports risk-off puts`);
+      }
+    } else {
+      warnings.push('DXY data unavailable');
+    }
+
+    if (tenYearBps !== null) {
+      if (tenYearBps <= -3) {
+        if (winningSide === 'CALL') add(6, `10Y yield down ${tenYearBps.toFixed(1)} bps supports risk assets`);
+        else warn(-3, `10Y yield down ${tenYearBps.toFixed(1)} bps works against puts`);
+      } else if (tenYearBps >= 5) {
+        if (winningSide === 'CALL') warn(-7, `10Y yield up ${tenYearBps.toFixed(1)} bps pressures growth equities`);
+        else add(4, `10Y yield up ${tenYearBps.toFixed(1)} bps supports bearish pressure`);
+      }
+    } else {
+      warnings.push('10Y yield change unavailable');
+    }
+
+    if (oil.changePct !== null && gold.changePct !== null) {
+      if (oil.changePct >= 1.5 && gold.changePct >= 0.5) {
+        const reason = `Oil +${oil.changePct.toFixed(2)}% and gold +${gold.changePct.toFixed(2)}% indicate inflation/risk-off pressure`;
+        if (winningSide === 'CALL') warn(-6, reason);
+        else add(3, reason);
+      } else if (gold.changePct >= 1.0) {
+        if (winningSide === 'CALL') warn(-4, `Gold +${gold.changePct.toFixed(2)}% suggests defensive flows`);
+        else add(2, `Gold +${gold.changePct.toFixed(2)}% supports defensive/risk-off flows`);
+      }
+    }
+
+    const firstNinetyMinutes = currentMinutes >= 9 * 60 + 30 && currentMinutes < 11 * 60;
+    const nearClose = currentMinutes >= 13 * 60 + 30;
+    if (firstNinetyMinutes) {
+      rawAdjustment *= 1.15;
+      contributors.push('First 90 minutes: macro adjustment amplified');
+    }
+
+    score = Math.max(0, Math.min(100, Math.round(score)));
+    const regime = score >= 62 ? 'RISK_ON' : score <= 42 ? 'RISK_OFF' : 'NEUTRAL';
+    let directionBias: MacroRegimeAssessment['directionBias'] = 'MIXED';
+    if (score >= 62) directionBias = 'CALL';
+    if (score <= 42) directionBias = 'PUT';
+
+    let thresholdAdjustment = 0;
+    if ((winningSide === 'CALL' && directionBias === 'PUT') || (winningSide === 'PUT' && directionBias === 'CALL')) {
+      thresholdAdjustment += 10;
+    } else if (directionBias === 'MIXED') {
+      thresholdAdjustment += 3;
+    }
+    if (nearClose && directionBias !== winningSide) {
+      thresholdAdjustment += 5;
+      warnings.push('Near close with weak macro confirmation, tightening entry threshold');
+    }
+
+    return {
+      regime,
+      score,
+      directionBias,
+      confidenceAdjustment: Math.max(-25, Math.min(12, Math.round(rawAdjustment))),
+      thresholdAdjustment,
+      blockers,
+      warnings,
+      contributors,
+      assets: { vix, tenYear, dxy, oil, gold }
+    };
   }
 
   private optionBidEstimate(mark: number | null, target: number | null, progress: number): number | null {
@@ -2249,14 +2545,23 @@ Rules:
       });
 
       if (isASetup) {
-        const macroSupportsSignal = macroVerdict === 'NEUTRAL'
+        const macroNewsSupportsSignal = macroVerdict === 'NEUTRAL'
           ? null
           : winningSide === 'CALL'
             ? macroVerdict === 'RISK_ON'
             : macroVerdict === 'RISK_OFF';
+        const scannerMacroSupportsSignal = typeof riskFlags?.macroSupportsSignal === 'boolean'
+          ? riskFlags.macroSupportsSignal
+          : null;
         const enrichedRiskFlags = {
           ...(riskFlags || {}),
-          macroSupportsSignal
+          macroNewsSupportsSignal,
+          scannerMacroSupportsSignal,
+          macroSupportsSignal: scannerMacroSupportsSignal === false || macroNewsSupportsSignal === false
+            ? false
+            : scannerMacroSupportsSignal === true || macroNewsSupportsSignal === true
+              ? true
+              : null
         };
         const scannerData = {
           symbol,
@@ -2310,6 +2615,31 @@ Rules:
             vix_change_pct: this.roundTo(marketContext?.vixChangePct),
             us_10y_yield: this.roundTo(marketContext?.tenYearYield, 3),
             us_10y_change_pct: this.roundTo(marketContext?.tenYearChangePct),
+            us_10y_change_bps: this.roundTo(marketContext?.tenYearChangeBps, 1),
+            dxy: {
+              symbol: marketContext?.dxy?.symbol || null,
+              value: this.roundTo(marketContext?.dxy?.value),
+              change_pct: this.roundTo(marketContext?.dxy?.changePct)
+            },
+            oil: {
+              symbol: marketContext?.oil?.symbol || null,
+              value: this.roundTo(marketContext?.oil?.value),
+              change_pct: this.roundTo(marketContext?.oil?.changePct)
+            },
+            gold: {
+              symbol: marketContext?.gold?.symbol || null,
+              value: this.roundTo(marketContext?.gold?.value),
+              change_pct: this.roundTo(marketContext?.gold?.changePct)
+            },
+            macro_regime: marketContext?.macroRegime ? {
+              regime: marketContext.macroRegime.regime,
+              score: marketContext.macroRegime.score,
+              direction_bias: marketContext.macroRegime.directionBias,
+              confidence_adjustment: marketContext.macroRegime.confidenceAdjustment,
+              threshold_adjustment: marketContext.macroRegime.thresholdAdjustment,
+              warnings: marketContext.macroRegime.warnings || [],
+              contributors: marketContext.macroRegime.contributors || []
+            } : null,
             macro_news_verdict: macroVerdict,
             macro_news_rationale: macroRationale,
             economic_calendar: getEconomicCalendarContext(nyDateStr)
