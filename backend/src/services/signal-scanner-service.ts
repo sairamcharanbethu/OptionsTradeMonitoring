@@ -1193,6 +1193,7 @@ Rules:
       const minOptionVolume = 200;
       const minOpenInterest = 500;
       let candidateSelection: any = null;
+      let chainSelectionRejected = false;
 
       const defaultContractName = this.buildOsiTicker(symbol, targetExpiryDateStr, winningSide, Math.round(currentPrice));
       optionTicker = defaultContractName;
@@ -1293,13 +1294,17 @@ Rules:
             openInterest = selected.openInterest;
             usingTheoreticalPricing = false;
             this.fastify.log.info(`[SignalScannerService] Selected ${selected.ticker} from ${selection.ranked.length} ThetaData candidates: strike=${selected.strike}, mark=$${mark}, spread=${spreadPct}%, volume=${volume}, OI=${openInterest}, score=${selected.score}.`);
+          } else if (selection.ranked.length > 0) {
+            chainSelectionRejected = true;
+            const bestRejected = selection.ranked[0];
+            this.fastify.log.warn(`[SignalScannerService] No ThetaData ${symbol} contract passed liquidity filters. Best rejected ${bestRejected.ticker}: mark=${bestRejected.mark}, spread=${bestRejected.spreadPct}%, volume=${bestRejected.volume}, OI=${bestRejected.openInterest}, score=${bestRejected.score}, reasons=${bestRejected.reasons.join('; ')}.`);
           }
         }
       } catch (thetaErr: any) {
         this.fastify.log.warn(`[SignalScannerService] ThetaData option chain selection failed: ${thetaErr.message}`);
       }
 
-      if (usingTheoreticalPricing && chosenContract) {
+      if (usingTheoreticalPricing && chosenContract && !chainSelectionRejected) {
         try {
           const thetaData = new ThetaDataService(this.fastify);
           const quote = await thetaData.getOptionQuote(userId, {
@@ -1324,7 +1329,7 @@ Rules:
         }
       }
 
-      if (usingTheoreticalPricing) {
+      if (usingTheoreticalPricing && !chainSelectionRejected) {
         // Black-Scholes option pricing model fallback
         const S = currentPrice;
         const K = chosenStrike ?? Math.round(currentPrice);
@@ -1367,6 +1372,9 @@ Rules:
 
       // Check premium actionability constraints
       const pricingWarnings: string[] = [];
+      if (mark === null || bid === null || ask === null) pricingWarnings.push('No usable live option quote selected');
+      if (chainSelectionRejected) pricingWarnings.push('No ThetaData option candidate passed liquidity/spread filters');
+      if (usingTheoreticalPricing) pricingWarnings.push('Using theoretical option price fallback');
       if (mark !== null && mark < minOptionMark) pricingWarnings.push(`Option premium $${mark} below limit $${minOptionMark}`);
       if (spreadPct !== null && spreadPct > maxBidAskSpreadPct) pricingWarnings.push(`Spread ${spreadPct}% exceeds ceiling ${maxBidAskSpreadPct}%`);
       if (volume !== null && volume < minOptionVolume) pricingWarnings.push(`Volume ${volume} below minimum ${minOptionVolume}`);
@@ -2201,6 +2209,7 @@ Rules:
     const openInterest = candidate.openInterest === null ? null : Number(candidate.openInterest || 0);
     const bid = Number(candidate.bid || 0);
     const ask = Number(candidate.ask || 0);
+    const absDelta = candidate.delta === null || candidate.delta === undefined ? null : Math.abs(Number(candidate.delta));
 
     if (mark <= 0) {
       score -= 80;
@@ -2208,6 +2217,12 @@ Rules:
     } else if (mark < minOptionMark) {
       score -= 25;
       reasons.push(`premium below ${minOptionMark}`);
+    } else if (mark >= 0.75 && mark <= 2.5) {
+      score += 8;
+      reasons.push('premium in quick-profit band');
+    } else if (mark > 4) {
+      score -= Math.min(18, (mark - 4) * 3);
+      reasons.push(`premium above quick-profit band ${mark.toFixed(2)}`);
     }
 
     if (bid <= 0 || ask <= 0) {
@@ -2242,6 +2257,20 @@ Rules:
       reasons.push(`OI below ${minOpenInterest}`);
     } else {
       score += Math.min(10, Math.log10(openInterest + 1) * 2);
+    }
+
+    if (absDelta === null || !Number.isFinite(absDelta)) {
+      score -= 3;
+      reasons.push('delta unavailable');
+    } else if (absDelta < 0.25) {
+      score -= Math.min(25, (0.25 - absDelta) * 100);
+      reasons.push(`delta too low ${absDelta.toFixed(2)}`);
+    } else if (absDelta > 0.7) {
+      score -= Math.min(20, (absDelta - 0.7) * 80);
+      reasons.push(`delta too high ${absDelta.toFixed(2)}`);
+    } else {
+      score += Math.max(0, 12 - Math.abs(absDelta - 0.45) * 40);
+      if (absDelta >= 0.35 && absDelta <= 0.6) reasons.push('delta in quick-profit band');
     }
 
     score -= Math.abs(candidate.strike - preferredStrike) * 2;

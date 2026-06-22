@@ -120,6 +120,76 @@ async function testThetaDataKnownLowVolumeStillRejectsCandidate() {
   assert(result.ranked[0].reasons.includes('volume below 200'), 'Ranked candidate should explain low volume');
 }
 
+async function testThetaDataPrefersUsefulDeltaOverExactOffset() {
+  const scanner = createScanner();
+
+  const result = scanner.fetchBestThetaDataOptionCandidate({
+    chain: [
+      {
+        ticker: 'QQQ260622C00741000',
+        symbol: 'QQQ',
+        expiration: '2026-06-22',
+        right: 'CALL',
+        strike: 741,
+        bid: 1.18,
+        ask: 1.22,
+        mark: 1.20,
+        spread: 0.04,
+        spreadPct: 3.3,
+        volume: 1400,
+        openInterest: 2500,
+        last: null,
+        delta: 0.12,
+        gamma: null,
+        theta: -0.28,
+        impliedVolatility: 0.18,
+        timestamp: '2026-06-18T16:15:00.082Z'
+      },
+      {
+        ticker: 'QQQ260622C00742000',
+        symbol: 'QQQ',
+        expiration: '2026-06-22',
+        right: 'CALL',
+        strike: 742,
+        bid: 1.16,
+        ask: 1.20,
+        mark: 1.18,
+        spread: 0.04,
+        spreadPct: 3.4,
+        volume: 1300,
+        openInterest: 2400,
+        last: null,
+        delta: 0.45,
+        gamma: null,
+        theta: -0.31,
+        impliedVolatility: 0.18,
+        timestamp: '2026-06-18T16:15:00.082Z'
+      }
+    ],
+    candidates: [
+      {
+        ticker: 'QQQ260622C00741000',
+        strike: 741,
+        expiry: '2026-06-22'
+      },
+      {
+        ticker: 'QQQ260622C00742000',
+        strike: 742,
+        expiry: '2026-06-22'
+      }
+    ],
+    preferredStrike: 741,
+    minOptionMark: 0.5,
+    maxBidAskSpreadPct: 8,
+    minOptionVolume: 200,
+    minOpenInterest: 200
+  });
+
+  assert(result.selected?.ticker === 'QQQ260622C00742000', `Expected useful-delta contract, got ${result.selected?.ticker}`);
+  assert(result.ranked[0].reasons.includes('delta in quick-profit band'), 'Selected candidate should explain useful delta');
+  assert(result.ranked[1].reasons.includes('delta too low 0.12'), 'Rejected candidate should explain weak delta');
+}
+
 async function testMacroBlocksCallsWhenVixIsTooHighOrSpiking() {
   const scanner = createScanner();
 
@@ -176,6 +246,7 @@ async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
   await testThetaDataMissingVolumeDoesNotRejectLiquidCandidate();
   await testThetaDataKnownLowVolumeStillRejectsCandidate();
+  await testThetaDataPrefersUsefulDeltaOverExactOffset();
   await testMacroBlocksCallsWhenVixIsTooHighOrSpiking();
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
   await testMacroRewardsRiskOnCallSetups();
