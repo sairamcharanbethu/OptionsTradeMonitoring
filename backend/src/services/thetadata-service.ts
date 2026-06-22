@@ -108,9 +108,35 @@ export class ThetaDataService {
       format: 'json'
     });
 
-    const data = await this.fetchJson(config, `/v3/option/snapshot/greeks?${params.toString()}`);
-    return this.rows(data)
-      .map((row: any) => this.normalizeChainRow(symbol, expiration, right, row))
+    let data: any;
+    try {
+      data = await this.fetchJson(config, `/v3/option/snapshot/greeks/first_order?${params.toString()}`);
+    } catch (err: any) {
+      this.fastify.log.warn(`[ThetaData] First-order greeks snapshot unavailable for ${symbol} ${expiration}: ${err.message || String(err)}. Falling back to quote snapshot.`);
+      data = await this.fetchJson(config, `/v3/option/snapshot/quote?${params.toString()}`);
+    }
+
+    const rows = this.rows(data);
+    const openInterestByContract = await this.getOpenInterestByContract(config, symbol, expiration, right).catch((err: any) => {
+      this.fastify.log.warn(`[ThetaData] Open-interest snapshot unavailable for ${symbol} ${expiration}: ${err.message || String(err)}`);
+      return new Map<string, number>();
+    });
+    const ohlcByContract = await this.getOhlcByContract(config, symbol, expiration, right).catch((err: any) => {
+      this.fastify.log.warn(`[ThetaData] OHLC snapshot unavailable for ${symbol} ${expiration}: ${err.message || String(err)}`);
+      return new Map<string, any>();
+    });
+
+    return rows
+      .map((row: any) => {
+        const rowKey = this.contractRowKey(row);
+        const openInterest = openInterestByContract.get(rowKey);
+        const ohlc = ohlcByContract.get(rowKey);
+        return this.normalizeChainRow(symbol, expiration, right, {
+          ...row,
+          ...(ohlc || {}),
+          ...(openInterest === undefined ? {} : { open_interest: openInterest })
+        });
+      })
       .filter((row: ThetaDataOptionChainQuote | null): row is ThetaDataOptionChainQuote => Boolean(row));
   }
 
@@ -207,11 +233,11 @@ export class ThetaDataService {
     if (!cleaned) return 'http://127.0.0.1:25503';
     if (
       envBaseUrl.trim() &&
-      /^https?:\/\/(127\.0\.0\.1|localhost):255(03|10)$/i.test(cleaned)
+      /^https?:\/\/((127\.0\.0\.1|localhost):255(03|10)|thetadata:255(03|10))$/i.test(cleaned)
     ) {
       return this.normalizeBaseUrl(envBaseUrl, '');
     }
-    if (/^https?:\/\/thetadata:25510$/i.test(cleaned)) {
+    if (/^https?:\/\/thetadata:255(03|10)$/i.test(cleaned)) {
       return 'http://127.0.0.1:25503';
     }
     if (/^https?:\/\/(127\.0\.0\.1|localhost):25510$/i.test(cleaned)) {
@@ -239,11 +265,31 @@ export class ThetaDataService {
   }
 
   private rows(data: any): any[] {
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data?.response)) return data.response;
-    if (Array.isArray(data?.data)) return data.data;
-    if (Array.isArray(data?.rows)) return data.rows;
-    return [];
+    const sourceRows = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.response)
+        ? data.response
+        : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data?.rows)
+            ? data.rows
+            : [];
+
+    const flattened: any[] = [];
+    for (const row of sourceRows) {
+      if (row && typeof row === 'object' && row.contract && Array.isArray(row.data)) {
+        for (const dataRow of row.data) {
+          flattened.push({
+            ...row.contract,
+            ...dataRow,
+            contract: row.contract
+          });
+        }
+      } else {
+        flattened.push(row);
+      }
+    }
+    return flattened;
   }
 
   private normalizeChainRow(symbol: string, expiration: string, requestedRight: 'call' | 'put' | 'both', row: any): ThetaDataOptionChainQuote | null {
@@ -257,7 +303,7 @@ export class ThetaDataService {
 
     const bid = this.pickNumber(row, ['bid', 'bid_price', 'bidPrice']);
     const ask = this.pickNumber(row, ['ask', 'ask_price', 'askPrice']);
-    const last = this.pickNumber(row, ['last', 'last_price', 'lastPrice', 'price']);
+    const last = this.pickNumber(row, ['last', 'last_price', 'lastPrice', 'price', 'close']);
     const mid = bid !== null && ask !== null && bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : null;
     const mark = mid !== null ? mid : last !== null && last > 0 ? Number(last.toFixed(2)) : null;
     const spread = bid !== null && ask !== null && bid > 0 && ask > 0 ? Number((ask - bid).toFixed(2)) : null;
@@ -266,7 +312,7 @@ export class ThetaDataService {
 
     return {
       source: 'thetadata_chain',
-      ticker: String(row.ticker ?? row.osi ?? row.symbol ?? this.constructOSITicker(symbol, strike, right === 'call' ? 'CALL' : 'PUT', normalizedExpiration)),
+      ticker: String(row.ticker ?? row.osi ?? this.constructOSITicker(symbol, strike, right === 'call' ? 'CALL' : 'PUT', normalizedExpiration)),
       symbol: symbol.toUpperCase(),
       expiration: normalizedExpiration,
       right,
@@ -283,9 +329,62 @@ export class ThetaDataService {
       gamma: this.pickNumber(row, ['gamma']),
       theta: this.pickNumber(row, ['theta']),
       vega: this.pickNumber(row, ['vega']),
-      impliedVolatility: this.pickNumber(row, ['implied_volatility', 'impliedVolatility', 'iv', 'bid_iv', 'mid_iv', 'ask_iv']),
+      impliedVolatility: this.pickNumber(row, ['implied_vol', 'implied_volatility', 'impliedVolatility', 'iv', 'bid_iv', 'mid_iv', 'ask_iv']),
       raw: row
     };
+  }
+
+  private async getOpenInterestByContract(
+    config: { baseUrl: string },
+    symbol: string,
+    expiration: string,
+    right: 'call' | 'put' | 'both'
+  ): Promise<Map<string, number>> {
+    const params = new URLSearchParams({
+      symbol,
+      expiration: expiration.replace(/-/g, ''),
+      right,
+      strike: '*',
+      format: 'json'
+    });
+    const data = await this.fetchJson(config, `/v3/option/snapshot/open_interest?${params.toString()}`);
+    const result = new Map<string, number>();
+    for (const row of this.rows(data)) {
+      const openInterest = this.pickNumber(row, ['open_interest', 'openInterest', 'oi']);
+      if (openInterest !== null) result.set(this.contractRowKey(row), openInterest);
+    }
+    return result;
+  }
+
+  private async getOhlcByContract(
+    config: { baseUrl: string },
+    symbol: string,
+    expiration: string,
+    right: 'call' | 'put' | 'both'
+  ): Promise<Map<string, any>> {
+    const params = new URLSearchParams({
+      symbol,
+      expiration: expiration.replace(/-/g, ''),
+      right,
+      strike: '*',
+      format: 'json'
+    });
+    const data = await this.fetchJson(config, `/v3/option/snapshot/ohlc?${params.toString()}`);
+    const result = new Map<string, any>();
+    for (const row of this.rows(data)) {
+      result.set(this.contractRowKey(row), row);
+    }
+    return result;
+  }
+
+  private contractRowKey(row: any): string {
+    const contract = row?.contract || row || {};
+    const symbol = String(contract.symbol ?? row?.symbol ?? '').toUpperCase();
+    const expiration = String(contract.expiration ?? row?.expiration ?? '').replace(/-/g, '');
+    const rawRight = String(contract.right ?? row?.right ?? '').toUpperCase();
+    const right = rawRight.startsWith('P') ? 'P' : 'C';
+    const strike = Number(contract.strike ?? row?.strike ?? 0);
+    return `${symbol}:${expiration}:${right}:${strike.toFixed(3)}`;
   }
 
   private pickNumber(row: any, keys: string[]): number | null {
@@ -328,9 +427,9 @@ export class ThetaDataService {
   }
 
   private toThetaDate(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
     return `${year}${month}${day}`;
   }
 }

@@ -55,16 +55,21 @@ export class ThetaDataStreamService extends EventEmitter {
       return acc;
     }, {});
     const envStreamUrl = String(process.env.THETADATA_STREAM_URL || '');
-    this.baseWsUrl = this.normalizeStreamUrl(String(settings.thetadata_stream_url || envStreamUrl || this.baseWsUrl));
+    this.baseWsUrl = this.normalizeStreamUrl(String(settings.thetadata_stream_url || envStreamUrl || this.baseWsUrl), envStreamUrl);
   }
 
-  private normalizeStreamUrl(url: string): string {
+  private normalizeStreamUrl(url: string, envStreamUrl: string = ''): string {
     const cleaned = url.trim();
     if (!cleaned) return 'ws://127.0.0.1:25520/v1/events';
+    if (
+      envStreamUrl.trim() &&
+      /^ws:\/\/((127\.0\.0\.1|localhost):255(10|20)|thetadata:255(10|20))\/v1\/events$/i.test(cleaned)
+    ) {
+      return this.normalizeStreamUrl(envStreamUrl, '');
+    }
     return cleaned
       .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
-      .replace(/^ws:\/\/thetadata:25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
-      .replace(/^ws:\/\/thetadata:25520\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events');
+      .replace(/^ws:\/\/thetadata:255(10|20)\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events');
   }
 
   private async refreshActiveContracts() {

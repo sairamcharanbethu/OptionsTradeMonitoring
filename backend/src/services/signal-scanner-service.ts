@@ -1602,7 +1602,7 @@ Rules:
             riskFlags: {
               lateDayRisk: currentMinutes >= 13 * 60 + 30,
               optionSpreadAcceptable: spreadPct !== null ? spreadPct <= maxBidAskSpreadPct : false,
-              liquidityAcceptable: (volume ?? 0) >= minOptionVolume && (openInterest ?? 0) >= minOpenInterest,
+              liquidityAcceptable: (volume === null || volume >= minOptionVolume) && (openInterest ?? 0) >= minOpenInterest,
               flowAlignedWithSignal: winningSide === 'CALL'
                 ? qqqFlowDirection === 'bullish'
                 : qqqFlowDirection === 'bearish',
@@ -1904,8 +1904,8 @@ Rules:
 
     const mark = Number(candidate.mark || 0);
     const spreadPct = candidate.spreadPct === null ? null : Number(candidate.spreadPct);
-    const volume = Number(candidate.volume || 0);
-    const openInterest = Number(candidate.openInterest || 0);
+    const volume = candidate.volume === null ? null : Number(candidate.volume || 0);
+    const openInterest = candidate.openInterest === null ? null : Number(candidate.openInterest || 0);
     const bid = Number(candidate.bid || 0);
     const ask = Number(candidate.ask || 0);
 
@@ -1932,14 +1932,19 @@ Rules:
       score += Math.max(0, maxBidAskSpreadPct - spreadPct);
     }
 
-    if (volume < minOptionVolume) {
+    if (volume === null) {
+      reasons.push('volume unavailable');
+    } else if (volume < minOptionVolume) {
       score -= 15;
       reasons.push(`volume below ${minOptionVolume}`);
     } else {
       score += Math.min(12, Math.log10(volume + 1) * 3);
     }
 
-    if (openInterest < minOpenInterest) {
+    if (openInterest === null) {
+      score -= 10;
+      reasons.push('OI unavailable');
+    } else if (openInterest < minOpenInterest) {
       score -= 10;
       reasons.push(`OI below ${minOpenInterest}`);
     } else {
@@ -2005,8 +2010,9 @@ Rules:
       candidate.ask > 0 &&
       candidate.spreadPct !== null &&
       candidate.spreadPct <= input.maxBidAskSpreadPct &&
-      Number(candidate.volume || 0) >= input.minOptionVolume &&
-      Number(candidate.openInterest || 0) >= input.minOpenInterest
+      (candidate.volume === null || Number(candidate.volume) >= input.minOptionVolume) &&
+      candidate.openInterest !== null &&
+      Number(candidate.openInterest) >= input.minOpenInterest
     ) || null;
 
     return { selected, ranked };
