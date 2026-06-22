@@ -15,6 +15,7 @@ import { settingsRoutes } from './routes/settings';
 import { goalRoutes } from './routes/goals';
 import { signalRoutes } from './routes/signals';
 import { tradeRoutes } from './routes/trades';
+import { backtestRoutes } from './routes/backtests';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -466,6 +467,7 @@ const start = async () => {
     fastify.register(snaptradeRoutes, { prefix: '/api/snaptrade' });
     fastify.register(tradeRoutes, { prefix: '/api/trades' });
     fastify.register(signalRoutes, { prefix: '/api/signals' });
+    fastify.register(backtestRoutes, { prefix: '/api/backtests' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
