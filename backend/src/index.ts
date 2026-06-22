@@ -770,39 +770,49 @@ const start = async () => {
     const port = Number(process.env.PORT) || 3001;
     await fastify.listen({ port, host: '0.0.0.0' });
 
-    // Start background services
-    poller.start();
-    scanner.start();
-    setInterval(runQueuedBrokerSync, 3000);
-    setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000);
-    runSnaptradePendingOrderSync().catch((err: any) => {
-      fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);
-    });
-    let liveExitStreamStarted = false;
+    const startBackgroundServices = async () => {
+      fastify.log.info('[System] Starting background services...');
+      poller.start();
+      scanner.start();
+      setInterval(runQueuedBrokerSync, 3000);
+      setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000);
+      runSnaptradePendingOrderSync().catch((err: any) => {
+        fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);
+      });
+      let liveExitStreamStarted = false;
 
-    try {
-      const thetaDataStreamStarted = await thetaDataStreamer.start();
-      if (thetaDataStreamStarted) {
-        liveExitMonitor.start('thetadata');
-        fastify.log.info('[Stream] ThetaData option market data stream enabled for live exit monitoring.');
-        liveExitStreamStarted = true;
+      try {
+        const thetaDataStreamStarted = await thetaDataStreamer.start();
+        if (thetaDataStreamStarted) {
+          liveExitMonitor.start('thetadata');
+          fastify.log.info('[Stream] ThetaData option market data stream enabled for live exit monitoring.');
+          liveExitStreamStarted = true;
+        }
+      } catch (err: any) {
+        fastify.log.warn(`[Stream] ThetaData option market data stream failed to start: ${err.message}`);
       }
-    } catch (err: any) {
-      fastify.log.warn(`[Stream] ThetaData option market data stream failed to start: ${err.message}`);
-    }
 
-    if (!liveExitStreamStarted) {
-      const alpacaStreamStarted = await alpacaMarketDataStreamer.start();
-      if (alpacaStreamStarted) {
-        liveExitMonitor.start('alpaca');
-        fastify.log.info('[Stream] Alpaca option market data stream enabled for live exit monitoring.');
-        liveExitStreamStarted = true;
+      if (!liveExitStreamStarted) {
+        const alpacaStreamStarted = await alpacaMarketDataStreamer.start();
+        if (alpacaStreamStarted) {
+          liveExitMonitor.start('alpaca');
+          fastify.log.info('[Stream] Alpaca option market data stream enabled for live exit monitoring.');
+          liveExitStreamStarted = true;
+        }
       }
-    }
 
-    if (!liveExitStreamStarted) {
-      fastify.log.warn('[Stream] No option market data stream started for live exit monitoring.');
-    }
+      if (!liveExitStreamStarted) {
+        fastify.log.warn('[Stream] No option market data stream started for live exit monitoring.');
+      }
+    };
+
+    const backgroundStartDelayMs = Number(process.env.BACKGROUND_START_DELAY_MS || 15000);
+    fastify.log.info(`[System] Background services scheduled in ${backgroundStartDelayMs}ms`);
+    setTimeout(() => {
+      startBackgroundServices().catch((err: any) => {
+        fastify.log.error(`[System] Background services failed to start: ${err.message}`);
+      });
+    }, Math.max(0, backgroundStartDelayMs));
 
     fastify.log.info(`Server listening on http://localhost:${port}`);
   } catch (err) {

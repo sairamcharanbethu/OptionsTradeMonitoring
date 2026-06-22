@@ -74,10 +74,8 @@ while :; do
     exit $?
   fi
   if [ -n "${THETA_PID:-}" ] && ! kill -0 "$THETA_PID" 2>/dev/null; then
-    echo "[ThetaData] Terminal exited. Stopping backend container." >&2
-    kill "$NODE_PID" 2>/dev/null || true
-    wait "$NODE_PID" 2>/dev/null || true
-    exit 1
+    echo "[ThetaData] Terminal exited. Backend API will continue running without Theta Terminal." >&2
+    THETA_PID=""
   fi
   sleep 5
 done

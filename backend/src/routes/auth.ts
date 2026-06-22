@@ -44,6 +44,24 @@ const errorSchema = {
     }
 };
 
+const AUTH_QUERY_TIMEOUT_MS = Number(process.env.AUTH_QUERY_TIMEOUT_MS || 5000);
+
+async function authQuery(fastify: FastifyInstance, label: string, text: string, values: any[]) {
+    const startedAt = Date.now();
+    try {
+        const result = await fastify.pg.query({
+            text,
+            values,
+            query_timeout: AUTH_QUERY_TIMEOUT_MS
+        } as any);
+        fastify.log.info(`[Auth] ${label} completed in ${Date.now() - startedAt}ms`);
+        return result;
+    } catch (err: any) {
+        fastify.log.error({ err }, `[Auth] ${label} failed after ${Date.now() - startedAt}ms`);
+        throw err;
+    }
+}
+
 export default async function authRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
     fastify.post('/signup', {
         schema: {
@@ -53,35 +71,52 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
             body: authBodySchema,
             response: {
                 200: authResponseSchema,
-                400: errorSchema
+                400: errorSchema,
+                503: errorSchema
             }
         }
     }, async (request, reply) => {
-        let { username, password } = AuthSchema.parse(request.body);
-        username = username.toLowerCase();
+        const startedAt = Date.now();
+        try {
+            let { username, password } = AuthSchema.parse(request.body);
+            username = username.toLowerCase();
 
-        const { rows } = await fastify.pg.query(
-            'SELECT id FROM users WHERE LOWER(username) = LOWER($1)',
-            [username]
-        );
+            const { rows } = await authQuery(
+                fastify,
+                'signup user existence lookup',
+                'SELECT id FROM users WHERE LOWER(username) = LOWER($1)',
+                [username]
+            );
 
-        if (rows.length > 0) {
-            return reply.status(400).send({ error: 'Username already exists' });
+            if (rows.length > 0) {
+                return reply.status(400).send({ error: 'Username already exists' });
+            }
+
+            const hashStartedAt = Date.now();
+            const passwordHash = await bcrypt.hash(password, 10);
+            fastify.log.info(`[Auth] signup password hash completed in ${Date.now() - hashStartedAt}ms`);
+
+            const { rows: newUser } = await authQuery(
+                fastify,
+                'signup user insert',
+                'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, role',
+                [username, passwordHash]
+            );
+
+            const token = fastify.jwt.sign({
+                id: newUser[0].id,
+                username: newUser[0].username,
+                role: newUser[0].role
+            });
+            fastify.log.info(`[Auth] signup completed in ${Date.now() - startedAt}ms`);
+            return { token, user: newUser[0] };
+        } catch (err: any) {
+            if (err instanceof z.ZodError) {
+                return reply.code(400).send({ error: 'Username and password are required' });
+            }
+            fastify.log.error({ err }, `[Auth] signup failed after ${Date.now() - startedAt}ms`);
+            return reply.code(503).send({ error: 'Authentication service temporarily unavailable' });
         }
-
-        const passwordHash = await bcrypt.hash(password, 10);
-
-        const { rows: newUser } = await fastify.pg.query(
-            'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, role',
-            [username, passwordHash]
-        );
-
-        const token = fastify.jwt.sign({
-            id: newUser[0].id,
-            username: newUser[0].username,
-            role: newUser[0].role
-        });
-        return { token, user: newUser[0] };
     });
 
     fastify.post('/signin', {
@@ -92,35 +127,53 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
             body: authBodySchema,
             response: {
                 200: authResponseSchema,
-                401: errorSchema
+                400: errorSchema,
+                401: errorSchema,
+                503: errorSchema
             }
         }
     }, async (request, reply) => {
-        let { username, password } = AuthSchema.parse(request.body);
-        username = username.toLowerCase();
+        const startedAt = Date.now();
+        try {
+            let { username, password } = AuthSchema.parse(request.body);
+            username = username.toLowerCase();
 
-        const { rows } = await fastify.pg.query(
-            'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
-            [username]
-        );
+            const { rows } = await authQuery(
+                fastify,
+                'signin user lookup',
+                'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
+                [username]
+            );
 
-        if (rows.length === 0) {
-            return reply.status(401).send({ error: 'Invalid username or password' });
+            if (rows.length === 0) {
+                fastify.log.info(`[Auth] signin rejected unknown user in ${Date.now() - startedAt}ms`);
+                return reply.status(401).send({ error: 'Invalid username or password' });
+            }
+
+            const user = rows[0];
+            const compareStartedAt = Date.now();
+            const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+            fastify.log.info(`[Auth] signin bcrypt compare completed in ${Date.now() - compareStartedAt}ms`);
+
+            if (!isPasswordValid) {
+                fastify.log.info(`[Auth] signin rejected invalid password in ${Date.now() - startedAt}ms`);
+                return reply.status(401).send({ error: 'Invalid username or password' });
+            }
+
+            const token = fastify.jwt.sign({
+                id: user.id,
+                username: user.username,
+                role: user.role
+            });
+            fastify.log.info(`[Auth] signin completed in ${Date.now() - startedAt}ms`);
+            return { token, user: { id: user.id, username: user.username, role: user.role } };
+        } catch (err: any) {
+            if (err instanceof z.ZodError) {
+                return reply.code(400).send({ error: 'Username and password are required' });
+            }
+            fastify.log.error({ err }, `[Auth] signin failed after ${Date.now() - startedAt}ms`);
+            return reply.code(503).send({ error: 'Authentication service temporarily unavailable' });
         }
-
-        const user = rows[0];
-        const isPasswordValid = await bcrypt.compare(password, user.password_hash);
-
-        if (!isPasswordValid) {
-            return reply.status(401).send({ error: 'Invalid username or password' });
-        }
-
-        const token = fastify.jwt.sign({
-            id: user.id,
-            username: user.username,
-            role: user.role
-        });
-        return { token, user: { id: user.id, username: user.username, role: user.role } };
     });
 
     fastify.post('/change-password', {
@@ -281,4 +334,3 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
         return (request as any).user;
     });
 }
-

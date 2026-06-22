@@ -230,6 +230,24 @@ const API_BASE = '/api';
 
 const getToken = () => localStorage.getItem('token');
 
+const readApiJson = async (res: Response, fallbackMessage: string) => {
+  const contentType = res.headers.get('content-type') || '';
+  const text = await res.text();
+  if (!contentType.includes('application/json')) {
+    const looksLikeHtml = text.trimStart().startsWith('<');
+    throw new Error(
+      looksLikeHtml
+        ? 'API returned HTML instead of JSON. Check that the backend is running and /api is proxied correctly.'
+        : fallbackMessage
+    );
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(fallbackMessage);
+  }
+};
+
 const authFetch = async (url: string, options: any = {}) => {
   const token = getToken();
   const headers: any = {
@@ -289,10 +307,10 @@ export const api = {
       body: JSON.stringify(data)
     });
     if (!res.ok) {
-      const err = await res.json();
+      const err = await readApiJson(res, 'Signup failed');
       throw new Error(err.error || 'Signup failed');
     }
-    const result = await res.json();
+    const result = await readApiJson(res, 'Signup failed');
     localStorage.setItem('token', result.token);
     return result;
   },
@@ -304,10 +322,10 @@ export const api = {
       body: JSON.stringify(data)
     });
     if (!res.ok) {
-      const err = await res.json();
+      const err = await readApiJson(res, 'Signin failed');
       throw new Error(err.error || 'Signin failed');
     }
-    const result = await res.json();
+    const result = await readApiJson(res, 'Signin failed');
     localStorage.setItem('token', result.token);
     return result;
   },
