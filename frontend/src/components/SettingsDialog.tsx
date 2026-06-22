@@ -5,12 +5,12 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw } from 'lucide-react';
+import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw, Server, ShieldCheck } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { api } from '@/lib/api';
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { User } from '@/lib/api';
+import type { RuntimeConfigItem, RuntimeConfigResponse, User } from '@/lib/api';
 
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -52,8 +52,121 @@ function normalizeThetaDataBaseUrl(baseUrl: string) {
 function normalizeThetaDataStreamUrl(streamUrl: string) {
     const cleaned = streamUrl.trim();
     if (!cleaned) return '';
-    if (/^ws:\/\/((127\.0\.0\.1|localhost):255(10|20)|thetadata:255(10|20))\/v1\/events$/i.test(cleaned)) return '';
+    if (/^ws:\/\/(thetadata:255(10|20)|(127\.0\.0\.1|localhost):25510)\/v1\/events$/i.test(cleaned)) return '';
     return cleaned.replace(/^ws:\/\/thetadata:/i, 'ws://127.0.0.1:');
+}
+
+function runtimeStatusBadgeVariant(status: RuntimeConfigItem['status']) {
+    if (status === 'configured') return 'default';
+    if (status === 'missing' || status === 'attention') return 'destructive';
+    return 'secondary';
+}
+
+function runtimeStatusLabel(status: RuntimeConfigItem['status']) {
+    if (status === 'configured') return 'Configured';
+    if (status === 'missing') return 'Missing';
+    if (status === 'attention') return 'Needs attention';
+    return 'Using default';
+}
+
+function formatRuntimeConfigTime(timestamp?: string) {
+    if (!timestamp) return 'Not loaded';
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) return 'Invalid timestamp';
+    return parsed.toLocaleString();
+}
+
+function RuntimeConfigPanel({
+    runtimeConfig,
+    loading,
+    error,
+    onRefresh
+}: {
+    runtimeConfig: RuntimeConfigResponse | null;
+    loading: boolean;
+    error: string | null;
+    onRefresh: () => void;
+}) {
+    const groups: RuntimeConfigItem['group'][] = ['Market Data', 'AI Service', 'Broker Execution', 'Alerts', 'Deployment'];
+
+    return (
+        <div className="rounded-lg border bg-card p-6 space-y-4">
+            <div className="flex flex-col gap-3 border-b pb-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                    <div className="flex items-center gap-2">
+                        <Server className="h-4 w-4 text-muted-foreground" />
+                        <h4 className="font-semibold text-sm">Environment and runtime config</h4>
+                    </div>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                        Admin-only view of safe runtime config. Secrets are redacted and deployment env remains managed outside the app.
+                    </p>
+                </div>
+                <div className="flex gap-2">
+                    <Button type="button" variant="outline" size="sm" className="h-8 gap-2" onClick={onRefresh} disabled={loading}>
+                        <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                        Refresh
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" className="h-8 gap-2" onClick={() => window.location.assign('/system-health')}>
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                        Health
+                    </Button>
+                </div>
+            </div>
+
+            <div className="text-[10px] text-muted-foreground">
+                Updated {formatRuntimeConfigTime(runtimeConfig?.generatedAt)}
+            </div>
+
+            {error && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    {error}
+                </div>
+            )}
+
+            {!error && !runtimeConfig && (
+                <div className="rounded-md border bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
+                    {loading ? 'Loading runtime config...' : 'Runtime config has not been loaded yet.'}
+                </div>
+            )}
+
+            <div className="grid gap-3 xl:grid-cols-2">
+                {groups.map((group) => {
+                    const items = runtimeConfig?.items.filter((item) => item.group === group) || [];
+                    if (!items.length) return null;
+                    return (
+                        <div key={group} className="rounded-md border bg-muted/20 p-3">
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                                <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</h5>
+                                <Badge variant="outline" className="text-[9px]">{items.length} checks</Badge>
+                            </div>
+                            <div className="space-y-2">
+                                {items.map((item) => (
+                                    <div key={item.id} className="rounded border bg-background/80 p-3">
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <span className="text-sm font-medium">{item.label}</span>
+                                                    <Badge variant="outline" className="text-[9px] uppercase">{item.source}</Badge>
+                                                    {item.secret && <Badge variant="secondary" className="text-[9px]">Redacted</Badge>}
+                                                </div>
+                                                <p className="mt-1 text-[10px] leading-normal text-muted-foreground">{item.detail}</p>
+                                            </div>
+                                            <Badge variant={runtimeStatusBadgeVariant(item.status)} className="w-fit text-[10px]">
+                                                {runtimeStatusLabel(item.status)}
+                                            </Badge>
+                                        </div>
+                                        <div className="mt-2 rounded bg-muted/50 px-2 py-1.5 text-[11px] font-medium text-foreground break-all">
+                                            {item.value || 'Not set'}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
 }
 
 export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) {
@@ -121,6 +234,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [snaptradeResettingAccess, setSnaptradeResettingAccess] = useState(false);
     const selectedSnaptradeAccount = snaptradeAccounts.find((account: any) => account.id === snaptradeTradingAccountId);
 
+    // Admin runtime config state
+    const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigResponse | null>(null);
+    const [runtimeConfigLoading, setRuntimeConfigLoading] = useState(false);
+    const [runtimeConfigError, setRuntimeConfigError] = useState<string | null>(null);
 
     // Discord testing State
     const [testingDiscord, setTestingDiscord] = useState(false);
@@ -205,10 +322,30 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             } catch {
                 setSnaptradeConnectionStatus(null);
             }
+            if (isAdmin) {
+                await loadRuntimeConfig();
+            } else {
+                setRuntimeConfig(null);
+            }
         } catch (err) {
             console.error(err);
         } finally {
             setLoading(false);
+        }
+    }
+
+    async function loadRuntimeConfig() {
+        if (!isAdmin) return;
+        setRuntimeConfigLoading(true);
+        setRuntimeConfigError(null);
+        try {
+            setRuntimeConfig(await api.getRuntimeConfig());
+        } catch (err: any) {
+            console.error(err);
+            setRuntimeConfig(null);
+            setRuntimeConfigError(err.message || 'Failed to load runtime config');
+        } finally {
+            setRuntimeConfigLoading(false);
         }
     }
 
@@ -858,6 +995,15 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                             </div>
 
                             <div className="space-y-6">
+                                {isAdmin && (
+                                    <RuntimeConfigPanel
+                                        runtimeConfig={runtimeConfig}
+                                        loading={runtimeConfigLoading}
+                                        error={runtimeConfigError}
+                                        onRefresh={loadRuntimeConfig}
+                                    />
+                                )}
+
                                 {/* API Keys & Services */}
                                 <div className="border rounded-lg p-6 bg-card space-y-4">
                                     <h4 className="font-semibold text-sm border-b pb-2">Market data and AI keys</h4>
@@ -957,12 +1103,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                             id="thetadata-stream-url"
                                                             value={thetaDataStreamUrl}
                                                             onChange={(e) => setThetaDataStreamUrl(e.target.value)}
-                                                            placeholder="Optional verified v3 stream URL"
+                                                            placeholder="ws://127.0.0.1:25520/v1/events"
                                                         />
                                                     </div>
                                                 </div>
                                                 <p className="text-[10px] text-muted-foreground leading-normal">
-                                                    ThetaData Terminal v3 REST runs inside the backend container on 127.0.0.1:25503. Leave Stream URL blank unless a verified v3 stream endpoint is configured.
+                                                    ThetaData Terminal v3 REST runs on 127.0.0.1:25503 and the option quote stream runs on ws://127.0.0.1:25520/v1/events.
                                                 </p>
                                             </div>
                                         </div>

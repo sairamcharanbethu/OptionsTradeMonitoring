@@ -735,7 +735,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   size="sm"
                   onClick={handleGenerateBriefing}
                   disabled={isGeneratingBriefing}
-                  className="gap-2 shadow-sm transition-all hover:shadow-primary/25"
+                  className="gap-2 shadow-sm transition-premium hover:shadow-primary/25"
                 >
                   {isGeneratingBriefing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Zap className="h-4 w-4" />}
                   {portfolioBriefing ? 'Regenerate Briefing' : 'Generate Holistic Analysis'}
@@ -755,7 +755,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   </div>
                 </div>
               ) : portfolioBriefing ? (
-                <div className="p-6 space-y-4 animate-in fade-in slide-in-from-top-4 duration-700">
+                <div className="p-6 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
                   <div className="relative">
                     <div className="p-4 rounded-xl bg-background border shadow-inner text-sm leading-relaxed whitespace-pre-wrap font-sans italic text-slate-700 dark:text-slate-300">
                       {portfolioBriefing.briefing}

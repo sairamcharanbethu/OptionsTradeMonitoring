@@ -48,7 +48,7 @@ services:
       THETA_MIN_TERMINAL_HEAP: ${THETA_MIN_TERMINAL_HEAP:-2G}
       THETA_MAX_TERMINAL_HEAP: ${THETA_MAX_TERMINAL_HEAP:-6G}
       THETADATA_BASE_URL: http://127.0.0.1:25503
-      THETADATA_STREAM_URL: ${THETADATA_STREAM_URL:-}
+      THETADATA_STREAM_URL: ${THETADATA_STREAM_URL:-ws://127.0.0.1:25520/v1/events}
     depends_on:
       db:
         condition: service_healthy

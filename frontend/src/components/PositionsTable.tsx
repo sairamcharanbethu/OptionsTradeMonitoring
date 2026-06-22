@@ -152,7 +152,7 @@ export function PositionsTable({
                                         <div className="text-xs">
                                             <div className={cn("font-bold", getDte(pos.expiration_date) < 7 ? "text-red-500 animate-pulse" : "text-blue-600 dark:text-blue-400")}>{getDte(pos.expiration_date)}d</div>
                                             <div className="opacity-70">In: ${Number(pos.entry_price).toFixed(2)}</div>
-                                            <div className={cn("opacity-70 transition-colors duration-500 px-1 rounded", priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
+                                            <div className={cn("opacity-70 transition-colors duration-200 px-1 rounded", priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
                                                 Now: ${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}
                                             </div>
                                         </div>
@@ -276,7 +276,7 @@ export function PositionsTable({
                                 <div className="grid grid-cols-2 gap-2 py-2 border-y border-muted/50 text-xs">
                                     <div>
                                         <p className="text-[9px] text-muted-foreground uppercase">Current Price</p>
-                                        <p className={cn("font-mono font-medium transition-colors duration-500 px-1 rounded", priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
+                                        <p className={cn("font-mono font-medium transition-colors duration-200 px-1 rounded", priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
                                             ${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}
                                         </p>
                                     </div>

@@ -65,7 +65,7 @@ function App() {
     <ThemeProvider defaultTheme="system" storageKey="options-trade-ui-theme">
       <div className="min-h-screen bg-background text-foreground transition-colors duration-300">
         <div className="pt-4">
-          <header className="sticky top-4 z-50 mx-auto max-w-[1600px] w-[95%] bg-background/70 dark:bg-zinc-950/70 backdrop-blur-md rounded-full border border-black/[0.03] dark:border-white/[0.06] shadow-sm px-6 py-3.5 flex justify-between items-center transition-all duration-300">
+          <header className="sticky top-4 z-50 mx-auto max-w-[1600px] w-[95%] bg-background/70 dark:bg-zinc-950/70 backdrop-blur-md rounded-full border border-black/[0.03] dark:border-white/[0.06] shadow-sm px-6 py-3.5 flex justify-between items-center transition-premium">
             <div className="flex justify-between items-center w-full">
               <div className="flex items-center gap-2.5">
                 <div className="h-8 w-8 bg-gradient-to-tr from-emerald-500 to-indigo-600 rounded-full flex items-center justify-center">

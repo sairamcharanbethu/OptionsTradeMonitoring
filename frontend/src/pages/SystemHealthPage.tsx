@@ -116,6 +116,23 @@ const causeFromError = (fallback: string, error?: string | null) => {
   return fallback;
 };
 
+const isHealthyStatus = (status?: string | null) => {
+  const normalized = String(status || '').toUpperCase();
+  return ['UP', 'RUNNING', 'CONNECTED', 'OK'].includes(normalized);
+};
+
+const isInformationalStatus = (status?: string | null) => {
+  const normalized = String(status || '').toUpperCase();
+  return ['N/A', 'DISABLED', 'IDLE', 'MARKET_CLOSED'].includes(normalized);
+};
+
+const statusSummary = (status?: string | null, error?: string | null, fallback = 'Runtime status check.') => {
+  if (error) return causeFromError(fallback, error);
+  if (isHealthyStatus(status)) return 'Healthy. No active error reported.';
+  if (isInformationalStatus(status)) return 'Inactive or optional in the current runtime state.';
+  return fallback;
+};
+
 const apiLabel = (name: string) => {
   const labels: Record<string, string> = {
     yahooFinance: 'Yahoo Finance',
@@ -144,8 +161,12 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
         latencyMs: value?.latencyMs ?? null,
         lastSeen: value?.checkedAt || null,
         evidence: lastError,
-        cause: causeFromError('External dependency check failed.', lastError),
-        nextStep: status === 'N/A' ? 'Configure the service only if this dependency is required.' : 'Check credentials, entitlement, endpoint reachability, and upstream status.',
+        cause: statusSummary(status, lastError, 'External dependency check needs attention.'),
+        nextStep: isHealthyStatus(status)
+          ? 'No action needed.'
+          : status === 'N/A'
+            ? 'Configure the service only if this dependency is required.'
+            : 'Check credentials, entitlement, endpoint reachability, and upstream status.',
         actionCommand: name === 'thetaData'
           ? `node -e "fetch('${value?.endpoint || 'http://127.0.0.1:25503/v3/terminal/mdds/status'}').then(r=>r.text()).then(console.log).catch(e=>console.error(e.message))"`
           : name === 'openRouter'
@@ -211,8 +232,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       latencyMs: thetaTerminal?.latencyMs ?? null,
       lastSeen: services.generatedAt,
       evidence: thetaTerminal?.lastError || null,
-      cause: causeFromError('ThetaData terminal is not reachable or not connected.', thetaTerminal?.lastError),
-      nextStep: 'Verify the ThetaData v3 jar is running in the backend container and that credentials/subscription are valid.',
+      cause: statusSummary(thetaTerminal?.status, thetaTerminal?.lastError, 'ThetaData terminal is not reachable or not connected.'),
+      nextStep: isHealthyStatus(thetaTerminal?.status)
+        ? 'No action needed. Terminal is reachable.'
+        : 'Verify the ThetaData v3 jar is running in the backend container and that credentials/subscription are valid.',
       actionCommand: `node -e "fetch('${thetaTerminal?.baseUrl || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status').then(r=>r.text()).then(console.log).catch(e=>console.error(e.message))"`
     });
 
@@ -227,7 +250,7 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
         endpoint: name === 'thetadata' ? 'THETADATA_STREAM_URL / v1 events' : 'Alpaca market-data stream',
         lastSeen: stream?.lastMessageAt || services.generatedAt,
         evidence: stream?.lastError || `${stream?.activeSubscriptions ?? 0} active subscriptions, ${stream?.reconnectAttempts ?? 0} reconnect attempts`,
-        cause: stream?.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream.lastError) : 'Stream status and subscription state.',
+        cause: stream?.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream.lastError) : statusSummary(isActive ? stream?.status : 'DISABLED', null, 'Stream status and subscription state.'),
         nextStep: name === 'thetadata' ? 'Confirm ThetaData stream URL and subscribed option symbols.' : 'Alpaca stream is optional unless selected as active provider.',
         actionCommand: name === 'thetadata'
           ? 'Check THETADATA_STREAM_URL and open option positions subscribed by the live exit monitor.'
@@ -316,8 +339,16 @@ function MetricCard({ label, value, detail, icon: Icon }: { label: string; value
 function EvidenceBlock({ value }: { value?: unknown }) {
   const text = compactValue(value);
   return (
-    <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+    <pre className="max-h-32 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
       {text}
+    </pre>
+  );
+}
+
+function CommandBlock({ value }: { value: string }) {
+  return (
+    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground">
+      {value}
     </pre>
   );
 }
@@ -331,8 +362,11 @@ function DiagnosticRow({
   ignored: boolean;
   onToggleIgnored: (componentKey: string) => void;
 }) {
+  const hasEvidence = item.evidence !== null && item.evidence !== undefined && item.evidence !== '';
+  const detailLabel = item.severity === 'critical' || item.severity === 'warning' ? 'Likely Cause' : 'Current State';
+
   return (
-    <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.2fr)_minmax(240px,1.4fr)_auto] lg:items-start">
+    <div className="grid min-w-0 gap-3 px-4 py-3 lg:grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.2fr)_minmax(240px,1.4fr)_auto] lg:items-start">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <span className="break-words text-sm font-medium">{item.title}</span>
@@ -348,16 +382,18 @@ function DiagnosticRow({
         )}
       </div>
       <div className="min-w-0">
-        <div className="text-[10px] font-semibold uppercase text-muted-foreground">Likely Cause</div>
+        <div className="text-[10px] font-semibold uppercase text-muted-foreground">{detailLabel}</div>
         <div className="mt-1 text-xs">{item.cause}</div>
-        <div className="mt-2 text-[10px] font-semibold uppercase text-muted-foreground">Evidence</div>
-        <div className="mt-1"><EvidenceBlock value={item.evidence || 'No error evidence reported.'} /></div>
+        {hasEvidence && (
+          <>
+            <div className="mt-2 text-[10px] font-semibold uppercase text-muted-foreground">Evidence</div>
+            <div className="mt-1"><EvidenceBlock value={item.evidence} /></div>
+          </>
+        )}
         {item.actionCommand && (
           <>
             <div className="mt-2 text-[10px] font-semibold uppercase text-muted-foreground">Run or check</div>
-            <div className="mt-1 rounded-md border border-border bg-background/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground">
-              {item.actionCommand}
-            </div>
+            <div className="mt-1 min-w-0"><CommandBlock value={item.actionCommand} /></div>
           </>
         )}
       </div>
@@ -365,7 +401,7 @@ function DiagnosticRow({
         type="button"
         variant="outline"
         size="sm"
-        className="h-8 px-2 text-xs"
+        className="h-8 w-fit px-2 text-xs"
         onClick={() => onToggleIgnored(item.id)}
       >
         {ignored ? 'Unignore' : 'Ignore'}

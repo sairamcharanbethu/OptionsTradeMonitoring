@@ -2,6 +2,20 @@ import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
 import { getSettingsWithGlobalFallback, isGlobalSettingKey } from '../lib/settings-utils';
 
+type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
+type RuntimeConfigStatus = 'configured' | 'missing' | 'default' | 'attention';
+
+type RuntimeConfigItem = {
+    id: string;
+    group: 'Deployment' | 'Market Data' | 'AI Service' | 'Broker Execution' | 'Alerts';
+    label: string;
+    source: RuntimeConfigSource;
+    status: RuntimeConfigStatus;
+    secret: boolean;
+    value: string | null;
+    detail: string;
+};
+
 function redactGlobalSettingsForUser(settings: Record<string, string>, role?: string) {
     if (role === 'ADMIN') return settings;
 
@@ -21,6 +35,38 @@ function requireAdmin(request: any, reply: any) {
     }
 }
 
+function configured(value?: string | null) {
+    return Boolean(String(value || '').trim());
+}
+
+function safeValue(value?: string | null) {
+    const trimmed = String(value || '').trim();
+    return trimmed || null;
+}
+
+function secretStatus(value?: string | null) {
+    return configured(value) ? 'configured' as const : 'missing' as const;
+}
+
+function secretValue(value?: string | null) {
+    return configured(value) ? 'Configured' : 'Missing';
+}
+
+function sourceFor(settingValue?: string | null, envValue?: string | null, defaultValue?: string | null): RuntimeConfigSource {
+    if (configured(settingValue)) return 'settings';
+    if (configured(envValue)) return 'env';
+    if (configured(defaultValue)) return 'default';
+    return 'default';
+}
+
+function valueFor(settingValue?: string | null, envValue?: string | null, defaultValue?: string | null) {
+    return safeValue(settingValue) || safeValue(envValue) || safeValue(defaultValue);
+}
+
+function runtimeItem(item: RuntimeConfigItem) {
+    return item;
+}
+
 export async function settingsRoutes(fastify: FastifyInstance) {
     fastify.addHook('onRequest', fastify.authenticate);
 
@@ -34,6 +80,214 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         } catch (err) {
             fastify.log.error(err);
             return reply.code(500).send({ error: 'Failed to fetch settings' });
+        }
+    });
+
+    fastify.get('/runtime-config', async (request, reply) => {
+        const adminCheck = requireAdmin(request, reply);
+        if (adminCheck) return adminCheck;
+
+        const { id: userId } = (request as any).user;
+
+        try {
+            const settings = await getSettingsWithGlobalFallback((fastify as any).pg, userId);
+            const thetaBaseUrl = valueFor(settings.thetadata_base_url, process.env.THETADATA_BASE_URL, 'http://127.0.0.1:25503');
+            const thetaStreamUrl = valueFor(settings.thetadata_stream_url, process.env.THETADATA_STREAM_URL, 'ws://127.0.0.1:25520/v1/events');
+            const aiProvider = valueFor(settings.ai_provider, undefined, 'openrouter');
+            const aiModel = valueFor(settings.ai_model, process.env.AI_MODEL, 'deepseek/deepseek-chat');
+            const buildSha = process.env.BUILD_SHA || process.env.GITHUB_SHA || process.env.VITE_APP_BUILD_SHA || '';
+            const appVersion = process.env.APP_VERSION || process.env.npm_package_version || '1.4.1';
+
+            const items: RuntimeConfigItem[] = [
+                runtimeItem({
+                    id: 'deployment:node-env',
+                    group: 'Deployment',
+                    label: 'Node environment',
+                    source: process.env.NODE_ENV ? 'env' : 'default',
+                    status: process.env.NODE_ENV ? 'configured' : 'default',
+                    secret: false,
+                    value: process.env.NODE_ENV || 'development',
+                    detail: 'Backend runtime mode.'
+                }),
+                runtimeItem({
+                    id: 'deployment:version',
+                    group: 'Deployment',
+                    label: 'App version',
+                    source: 'runtime',
+                    status: 'configured',
+                    secret: false,
+                    value: appVersion,
+                    detail: 'Backend package/runtime version.'
+                }),
+                runtimeItem({
+                    id: 'deployment:build-sha',
+                    group: 'Deployment',
+                    label: 'Build SHA',
+                    source: buildSha ? 'env' : 'default',
+                    status: buildSha ? 'configured' : 'default',
+                    secret: false,
+                    value: buildSha ? buildSha.slice(0, 12) : null,
+                    detail: 'Optional deployment revision for tracing.'
+                }),
+                runtimeItem({
+                    id: 'market:thetadata-mode',
+                    group: 'Market Data',
+                    label: 'ThetaData mode',
+                    source: 'runtime',
+                    status: 'configured',
+                    secret: false,
+                    value: 'Integrated v3 terminal',
+                    detail: 'Backend talks to ThetaData on container-local 127.0.0.1.'
+                }),
+                runtimeItem({
+                    id: 'market:thetadata-base-url',
+                    group: 'Market Data',
+                    label: 'ThetaData REST URL',
+                    source: sourceFor(settings.thetadata_base_url, process.env.THETADATA_BASE_URL, 'http://127.0.0.1:25503'),
+                    status: thetaBaseUrl ? 'configured' : 'missing',
+                    secret: false,
+                    value: thetaBaseUrl,
+                    detail: 'Used for v3 option quotes, chain selection, backtesting, and service health.'
+                }),
+                runtimeItem({
+                    id: 'market:thetadata-stream-url',
+                    group: 'Market Data',
+                    label: 'ThetaData stream URL',
+                    source: sourceFor(settings.thetadata_stream_url, process.env.THETADATA_STREAM_URL, 'ws://127.0.0.1:25520/v1/events'),
+                    status: thetaStreamUrl ? 'configured' : 'missing',
+                    secret: false,
+                    value: thetaStreamUrl,
+                    detail: 'ThetaData v3 option quote stream used for live exits.'
+                }),
+                runtimeItem({
+                    id: 'market:thetadata-username',
+                    group: 'Market Data',
+                    label: 'ThetaData username',
+                    source: 'env',
+                    status: secretStatus(process.env.THETADATA_USERNAME),
+                    secret: true,
+                    value: secretValue(process.env.THETADATA_USERNAME),
+                    detail: 'Deployment secret loaded from env/Infisical.'
+                }),
+                runtimeItem({
+                    id: 'market:thetadata-password',
+                    group: 'Market Data',
+                    label: 'ThetaData password',
+                    source: 'env',
+                    status: secretStatus(process.env.THETADATA_PASSWORD),
+                    secret: true,
+                    value: secretValue(process.env.THETADATA_PASSWORD),
+                    detail: 'Deployment secret loaded from env/Infisical.'
+                }),
+                runtimeItem({
+                    id: 'ai:provider',
+                    group: 'AI Service',
+                    label: 'AI provider',
+                    source: sourceFor(settings.ai_provider, undefined, 'openrouter'),
+                    status: 'configured',
+                    secret: false,
+                    value: aiProvider,
+                    detail: 'Shared by scanner, coach, news classification, and analysis.'
+                }),
+                runtimeItem({
+                    id: 'ai:model',
+                    group: 'AI Service',
+                    label: 'AI model',
+                    source: sourceFor(settings.ai_model, process.env.AI_MODEL, 'deepseek/deepseek-chat'),
+                    status: 'configured',
+                    secret: false,
+                    value: aiModel,
+                    detail: 'Primary model slug used by the app AI service.'
+                }),
+                runtimeItem({
+                    id: 'ai:openrouter-key',
+                    group: 'AI Service',
+                    label: 'OpenRouter key',
+                    source: configured(settings.openrouter_key) ? 'settings' : 'default',
+                    status: aiProvider === 'openrouter' ? secretStatus(settings.openrouter_key) : 'default',
+                    secret: true,
+                    value: aiProvider === 'openrouter' ? secretValue(settings.openrouter_key) : 'Not required',
+                    detail: 'Required when OpenRouter is selected.'
+                }),
+                runtimeItem({
+                    id: 'ai:ollama-url',
+                    group: 'AI Service',
+                    label: 'Ollama URL',
+                    source: process.env.OLLAMA_URL ? 'env' : 'default',
+                    status: aiProvider === 'ollama' && !process.env.OLLAMA_URL ? 'attention' : 'configured',
+                    secret: false,
+                    value: process.env.OLLAMA_URL || 'http://host.docker.internal:11434',
+                    detail: 'Only used when local Ollama is selected.'
+                }),
+                runtimeItem({
+                    id: 'broker:snaptrade-client-id',
+                    group: 'Broker Execution',
+                    label: 'SnapTrade client ID',
+                    source: configured(settings.snaptrade_client_id) ? 'settings' : 'default',
+                    status: secretStatus(settings.snaptrade_client_id),
+                    secret: true,
+                    value: secretValue(settings.snaptrade_client_id),
+                    detail: 'Required to connect Wealthsimple through SnapTrade.'
+                }),
+                runtimeItem({
+                    id: 'broker:snaptrade-consumer-key',
+                    group: 'Broker Execution',
+                    label: 'SnapTrade consumer key',
+                    source: configured(settings.snaptrade_consumer_key) ? 'settings' : 'default',
+                    status: secretStatus(settings.snaptrade_consumer_key),
+                    secret: true,
+                    value: secretValue(settings.snaptrade_consumer_key),
+                    detail: 'Required to place and sync broker orders.'
+                }),
+                runtimeItem({
+                    id: 'broker:selected-account',
+                    group: 'Broker Execution',
+                    label: 'Trading account',
+                    source: configured(settings.snaptrade_trading_account_id) ? 'settings' : 'default',
+                    status: configured(settings.snaptrade_trading_account_id) ? 'configured' : 'missing',
+                    secret: false,
+                    value: configured(settings.snaptrade_trading_account_id) ? 'Selected' : 'Missing',
+                    detail: 'Selected account used for live Wealthsimple execution.'
+                }),
+                runtimeItem({
+                    id: 'broker:live-ack',
+                    group: 'Broker Execution',
+                    label: 'Live trading acknowledgement',
+                    source: configured(settings.live_trading_acknowledged) ? 'settings' : 'default',
+                    status: settings.live_trading_acknowledged === 'true' ? 'configured' : 'attention',
+                    secret: false,
+                    value: settings.live_trading_acknowledged === 'true' ? 'Accepted' : 'Missing',
+                    detail: 'Required before live broker execution is allowed.'
+                }),
+                runtimeItem({
+                    id: 'alerts:discord-webhook',
+                    group: 'Alerts',
+                    label: 'Discord webhook',
+                    source: configured(settings.discord_webhook_url) ? 'settings' : configured(process.env.DISCORD_ALERT_WEBHOOK_URL) ? 'env' : 'default',
+                    status: secretStatus(settings.discord_webhook_url || process.env.DISCORD_ALERT_WEBHOOK_URL),
+                    secret: true,
+                    value: secretValue(settings.discord_webhook_url || process.env.DISCORD_ALERT_WEBHOOK_URL),
+                    detail: 'Used for day-trading and fallback alert notifications.'
+                }),
+                runtimeItem({
+                    id: 'alerts:n8n-webhook',
+                    group: 'Alerts',
+                    label: 'N8N alert webhook',
+                    source: configured(process.env.N8N_ALERT_WEBHOOK_URL) ? 'env' : 'default',
+                    status: secretStatus(process.env.N8N_ALERT_WEBHOOK_URL),
+                    secret: true,
+                    value: secretValue(process.env.N8N_ALERT_WEBHOOK_URL),
+                    detail: 'Deployment-level automation webhook.'
+                })
+            ];
+
+            return {
+                generatedAt: new Date().toISOString(),
+                items
+            };
+        } catch (err) {
+            fastify.log.error(err);
+            return reply.code(500).send({ error: 'Failed to fetch runtime config' });
         }
     });
 

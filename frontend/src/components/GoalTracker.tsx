@@ -263,7 +263,7 @@ function AddEntryDialog({
                                 <button
                                     type="button"
                                     onClick={() => setCurrency('USD')}
-                                    className={`px-2.5 py-0.5 text-xs font-medium rounded transition-all ${
+                                    className={`px-2.5 py-0.5 text-xs font-medium rounded transition-colors ${
                                         currency === 'USD'
                                             ? 'bg-background shadow-sm text-foreground'
                                             : 'text-muted-foreground hover:text-foreground'
@@ -274,7 +274,7 @@ function AddEntryDialog({
                                 <button
                                     type="button"
                                     onClick={() => setCurrency('CAD')}
-                                    className={`px-2.5 py-0.5 text-xs font-medium rounded transition-all ${
+                                    className={`px-2.5 py-0.5 text-xs font-medium rounded transition-colors ${
                                         currency === 'CAD'
                                             ? 'bg-background shadow-sm text-foreground'
                                             : 'text-muted-foreground hover:text-foreground'
@@ -628,15 +628,15 @@ export default function GoalTracker() {
 
                                         {/* Progress Bar */}
                                         <div className="relative">
-                                            <div className="h-4 w-full bg-muted rounded-full relative">
+                                            <div className="h-4 w-full bg-muted rounded-full relative overflow-hidden">
                                                 <div
-                                                    className="h-full rounded-full transition-all duration-700 ease-out relative"
+                                                    className="h-full w-full origin-left rounded-full transition-transform duration-300 ease-out relative"
                                                     style={{
-                                                        width: `${Math.min(100, progressPercent)}%`,
+                                                        transform: `scaleX(${Math.min(100, progressPercent) / 100})`,
                                                         background: `linear-gradient(90deg, ${progressColor}cc, ${progressColor})`,
                                                     }}
                                                 >
-                                                    <div className="absolute inset-0 bg-white/20 animate-pulse rounded-full" />
+                                                    <div className="absolute inset-0 bg-white/15 rounded-full" />
                                                 </div>
 
                                                 {/* Milestone Markers */}
@@ -792,11 +792,11 @@ export default function GoalTracker() {
                                             {/* Win/Loss visual bar */}
                                             <div className="flex h-2 w-full rounded-full overflow-hidden mt-2 bg-muted">
                                                 <div
-                                                    className="h-full bg-green-500 rounded-l-full transition-all"
+                                                    className="h-full bg-green-500 rounded-l-full transition-[width] duration-200 ease-out"
                                                     style={{ width: `${insights.totalEntries > 0 ? (insights.wins / insights.totalEntries) * 100 : 0}%` }}
                                                 />
                                                 <div
-                                                    className="h-full bg-red-500 rounded-r-full transition-all"
+                                                    className="h-full bg-red-500 rounded-r-full transition-[width] duration-200 ease-out"
                                                     style={{ width: `${insights.totalEntries > 0 ? (insights.losses / insights.totalEntries) * 100 : 0}%` }}
                                                 />
                                             </div>
@@ -838,7 +838,7 @@ export default function GoalTracker() {
                                             <button
                                                 key={t}
                                                 onClick={() => setTimeframe(t)}
-                                                className={`px-3 py-1 text-xs font-medium rounded transition-all ${timeframe === t ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                                                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${timeframe === t ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                                             >
                                                 {t}
                                             </button>

@@ -168,7 +168,7 @@ export default function WealthsimplePortfolio() {
               size="sm" 
               onClick={handleGenerateBriefing} 
               disabled={isGeneratingBriefing || positions.length === 0}
-              className="gap-2 shadow-sm transition-all hover:shadow-primary/25"
+              className="gap-2 shadow-sm transition-premium hover:shadow-primary/25"
             >
               {isGeneratingBriefing ? <Loader2 className="h-4 w-4 animate-spin" /> : <BrainCircuit className="h-4 w-4" />}
               {briefing ? 'Regenerate Analysis' : 'Analyze Portfolio'}
@@ -188,7 +188,7 @@ export default function WealthsimplePortfolio() {
               </div>
             </div>
           ) : briefing ? (
-            <div className="p-6 space-y-6 animate-in fade-in slide-in-from-top-4 duration-700">
+            <div className="p-6 space-y-6 animate-in fade-in slide-in-from-top-2 duration-200">
               {/* Summary Banner */}
               {briefing.summary && (
                 <div className="p-4 rounded-xl bg-background border border-primary/20 shadow-inner text-sm leading-relaxed font-sans text-slate-700 dark:text-slate-300">

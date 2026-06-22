@@ -90,6 +90,22 @@ export interface TradeRuntimeResponse<T> {
   data: T;
 }
 
+export interface RuntimeConfigItem {
+  id: string;
+  group: 'Deployment' | 'Market Data' | 'AI Service' | 'Broker Execution' | 'Alerts';
+  label: string;
+  source: 'env' | 'settings' | 'default' | 'runtime';
+  status: 'configured' | 'missing' | 'default' | 'attention';
+  secret: boolean;
+  value: string | null;
+  detail: string;
+}
+
+export interface RuntimeConfigResponse {
+  generatedAt: string;
+  items: RuntimeConfigItem[];
+}
+
 export interface TradeEvent {
   id: number;
   user_id: number;
@@ -693,6 +709,12 @@ export const api = {
       body: JSON.stringify(settings)
     });
     if (!res.ok) throw new Error('Failed to update settings');
+  },
+
+  async getRuntimeConfig(): Promise<RuntimeConfigResponse> {
+    const res = await authFetch(`${API_BASE}/settings/runtime-config`);
+    if (!res.ok) throw new Error('Failed to fetch runtime config');
+    return res.json();
   },
 
   async testDiscordWebhook(webhookUrl: string): Promise<void> {

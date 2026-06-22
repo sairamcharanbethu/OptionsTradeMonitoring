@@ -68,11 +68,11 @@ export class ThetaDataStreamService extends EventEmitter {
     if (!cleaned) return '';
     if (
       envStreamUrl.trim() &&
-      /^ws:\/\/((127\.0\.0\.1|localhost):255(10|20)|thetadata:255(10|20))\/v1\/events$/i.test(cleaned)
+      /^ws:\/\/(thetadata:255(10|20)|(127\.0\.0\.1|localhost):25510)\/v1\/events$/i.test(cleaned)
     ) {
       return this.normalizeStreamUrl(envStreamUrl, '');
     }
-    if (/^ws:\/\/((127\.0\.0\.1|localhost):255(10|20)|thetadata:255(10|20))\/v1\/events$/i.test(cleaned)) {
+    if (/^ws:\/\/(thetadata:255(10|20)|(127\.0\.0\.1|localhost):25510)\/v1\/events$/i.test(cleaned)) {
       return '';
     }
     return cleaned

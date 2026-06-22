@@ -145,21 +145,12 @@
     transition-property: transform, opacity, box-shadow, border-color, background-color;
     transition-duration: 180ms;
     transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
-    will-change: transform;
-  }
-
-  .motion-panel:hover {
-    transform: translateY(-1px);
   }
 
   .motion-row {
     transition-property: transform, background-color, border-color, opacity;
     transition-duration: 150ms;
     transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
-  }
-
-  .motion-row:hover {
-    transform: translateX(2px);
   }
 
   .motion-press {
@@ -187,7 +178,6 @@
     background:
       linear-gradient(110deg, transparent 0%, rgba(16, 185, 129, 0.06) 44%, rgba(16, 185, 129, 0.14) 50%, rgba(16, 185, 129, 0.06) 56%, transparent 100%);
     background-size: 220% 100%;
-    animation: terminal-scanline 8s linear infinite;
   }
 
   .smooth-details[open] > summary + div {
@@ -217,9 +207,18 @@
     }
   }
 
-  @keyframes terminal-scanline {
-    from { background-position: 140% 0; }
-    to { background-position: -120% 0; }
+  @media (hover: hover) and (pointer: fine) {
+    .motion-panel {
+      will-change: transform;
+    }
+
+    .motion-panel:hover {
+      transform: translateY(-1px);
+    }
+
+    .motion-row:hover {
+      transform: translateX(2px);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

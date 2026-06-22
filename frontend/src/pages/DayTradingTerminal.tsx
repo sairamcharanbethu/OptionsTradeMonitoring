@@ -201,7 +201,7 @@ const renderTokenUsageBadge = (usage: any) => {
   const totalTokens = (usage.classifier?.total_tokens || 0) + (usage.coach?.total_tokens || 0);
   
   return (
-    <div className="flex flex-wrap gap-2.5 mt-2 items-center text-[9px] text-zinc-400 font-mono bg-zinc-950/60 p-2 px-2.5 rounded border border-emerald-500/10 w-full animate-in fade-in duration-300">
+    <div className="flex flex-wrap gap-2.5 mt-2 items-center text-[9px] text-zinc-400 font-mono bg-zinc-950/60 p-2 px-2.5 rounded border border-emerald-500/10 w-full animate-in fade-in duration-200">
       <div className="flex items-center gap-1">
         <Database className="h-3 w-3 text-emerald-400" />
         <span>TOTAL TOKENS: <strong className="text-zinc-200 font-bold">{totalTokens.toLocaleString()}</strong></span>
@@ -354,30 +354,30 @@ function SymbolLane({
     <button
       type="button"
       onClick={onSelect}
-      className={`motion-press text-left rounded border p-3 transition-all hover:border-emerald-400/40 hover:bg-zinc-900/60 ${getReadinessTone(tone)}`}
+      className={`motion-press min-w-0 text-left rounded border p-3 transition-colors hover:border-emerald-400/40 hover:bg-zinc-900/60 ${getReadinessTone(tone)}`}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <div className="min-w-0">
           <div className="text-sm font-semibold text-zinc-100">{symbol}</div>
-          <div className="mt-1 text-[11px] text-zinc-400">{regime.marketRegime} · GEX {regime.currentGexRegime}</div>
+          <div className="mt-1 break-words text-[11px] text-zinc-400">{regime.marketRegime} · GEX {regime.currentGexRegime}</div>
         </div>
-        <Badge variant="outline" className={`text-[10px] font-semibold ${getSignalSideTone(side)}`}>
+        <Badge variant="outline" className={`w-fit text-[10px] font-semibold ${getSignalSideTone(side)}`}>
           {side === 'NONE' ? 'NO SETUP' : side}
         </Badge>
       </div>
       {signal ? (
-        <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
-          <div>
+        <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-3">
+          <div className="min-w-0">
             <div className="text-zinc-500">Score</div>
-            <div className="font-mono font-semibold text-zinc-100">{signal.confidence_score}%</div>
+            <div className="break-words font-mono font-semibold text-zinc-100">{signal.confidence_score}%</div>
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="text-zinc-500">Grade</div>
-            <div className="font-mono font-semibold text-zinc-100">{signal.setup_grade || 'N/A'}</div>
+            <div className="break-words font-mono font-semibold text-zinc-100">{signal.setup_grade || 'N/A'}</div>
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="text-zinc-500">Entry</div>
-            <div className="font-mono font-semibold text-zinc-100">{signal.entry_trigger ? `$${signal.entry_trigger.toFixed(2)}` : 'N/A'}</div>
+            <div className="break-words font-mono font-semibold text-zinc-100">{signal.entry_trigger ? `$${signal.entry_trigger.toFixed(2)}` : 'N/A'}</div>
           </div>
         </div>
       ) : (
@@ -783,12 +783,12 @@ export default function DayTradingTerminal() {
   ];
 
   return (
-    <div className="terminal-scanline motion-enter flex flex-col gap-4 lg:gap-5 bg-zinc-950 text-emerald-400 p-3 sm:p-4 rounded-lg border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] max-w-full overflow-hidden">
+    <div className="terminal-scanline motion-enter flex max-w-full flex-col gap-4 overflow-x-hidden rounded-lg border border-emerald-500/20 bg-zinc-950 p-2 text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.05)] sm:p-4 lg:gap-5">
       
       {/* Top Banner & Timer Bar */}
       <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center border-b border-emerald-500/20 pb-4 gap-4">
-        <div className="flex items-start gap-3 min-w-0">
-          <div className="h-9 w-9 rounded border border-emerald-500/25 bg-emerald-950/35 flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
+        <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-emerald-500/25 bg-emerald-950/35 shadow-[0_0_18px_rgba(16,185,129,0.08)] sm:h-9 sm:w-9">
             <TerminalIcon className="h-[18px] w-[18px] text-emerald-300" />
           </div>
           <div className="flex flex-col min-w-0 gap-2">
@@ -801,16 +801,16 @@ export default function DayTradingTerminal() {
               </span>
             </div>
             <div className="flex flex-wrap gap-2 text-[10px]">
-              <span className={`px-2 py-1 rounded border font-bold ${scannerStatusTone}`}>
+              <span className={`break-words px-2 py-1 rounded border font-bold ${scannerStatusTone}`}>
                 {scannerStatusLabel}
               </span>
-              <span className="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/55 text-zinc-300">
+              <span className="break-words rounded border border-zinc-800 bg-zinc-950/55 px-2 py-1 text-zinc-300">
                 Next scan {isDayTradingEnabled && !isScannerMarketClosed ? formatMinSec(countdown) : scannerWindowLabel}
               </span>
-              <span className="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/55 text-zinc-300">
+              <span className="break-words rounded border border-zinc-800 bg-zinc-950/55 px-2 py-1 text-zinc-300">
                 Broker {brokerLabel}
               </span>
-              <span className="px-2 py-1 rounded border border-zinc-800 bg-zinc-950/55 text-zinc-400">
+              <span className="break-words rounded border border-zinc-800 bg-zinc-950/55 px-2 py-1 text-zinc-400">
                 Max {maxTradesPerDay}/day
               </span>
             </div>
@@ -818,11 +818,11 @@ export default function DayTradingTerminal() {
         </div>
 
         {/* Ticker switcher Tabs & Sync Timer */}
-        <div className="flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 w-full xl:w-auto justify-between xl:justify-end">
-          <div className="motion-panel grid grid-cols-3 bg-zinc-900 p-1 rounded border border-emerald-500/20 animate-in fade-in duration-200 min-w-[230px]">
+        <div className="flex w-full min-w-0 flex-col flex-wrap items-stretch justify-between gap-3 sm:flex-row sm:items-center xl:w-auto xl:justify-end">
+          <div className="motion-panel grid w-full min-w-0 grid-cols-3 rounded border border-emerald-500/20 bg-zinc-900 p-1 animate-in fade-in duration-200 sm:w-auto sm:min-w-[230px]">
             <button
               onClick={() => setSelectedSymbol('QQQ')}
-              className={`px-4 py-2 text-xs font-bold rounded transition-all ${
+              className={`rounded px-2 py-2 text-xs font-bold transition-colors sm:px-4 ${
                 selectedSymbol === 'QQQ' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -830,7 +830,7 @@ export default function DayTradingTerminal() {
             </button>
             <button
               onClick={() => setSelectedSymbol('SPY')}
-              className={`px-4 py-2 text-xs font-bold rounded transition-all ${
+              className={`rounded px-2 py-2 text-xs font-bold transition-colors sm:px-4 ${
                 selectedSymbol === 'SPY' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -838,7 +838,7 @@ export default function DayTradingTerminal() {
             </button>
             <button
               onClick={() => setSelectedSymbol('BOTH')}
-              className={`px-4 py-2 text-xs font-bold rounded transition-all ${
+              className={`rounded px-2 py-2 text-xs font-bold transition-colors sm:px-4 ${
                 selectedSymbol === 'BOTH' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -847,9 +847,9 @@ export default function DayTradingTerminal() {
           </div>
 
           {isDayTradingEnabled && !isScannerMarketClosed ? (
-            <div className="flex items-center justify-between sm:justify-start gap-2 text-xs bg-emerald-950/40 border border-emerald-500/30 px-3 py-2 rounded min-w-[178px]">
+            <div className="flex w-full min-w-0 items-center justify-between gap-2 rounded border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-xs sm:w-auto sm:min-w-[178px] sm:justify-start">
               <Clock className="h-4 w-4 text-emerald-400" />
-              <span className="font-bold">Rescan in {formatMinSec(countdown)}</span>
+              <span className="min-w-0 break-words font-bold">Rescan in {formatMinSec(countdown)}</span>
               <button
                 onClick={handleManualSync}
                 className="motion-press ml-1 text-emerald-500 hover:text-emerald-300"
@@ -859,9 +859,9 @@ export default function DayTradingTerminal() {
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 text-xs bg-zinc-900/60 border border-zinc-700 px-3 py-2 rounded text-zinc-500 min-w-[178px]">
+            <div className="flex w-full min-w-0 items-center gap-2 rounded border border-zinc-700 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-500 sm:w-auto sm:min-w-[178px]">
               <ShieldAlert className={`h-4 w-4 ${isScannerMarketClosed ? 'text-sky-400/80' : 'text-amber-500/70 animate-pulse'}`} />
-              <span className="font-bold tracking-wider">{isScannerMarketClosed ? 'Auto resumes at open' : 'Scanner paused'}</span>
+              <span className="min-w-0 break-words font-bold tracking-wider">{isScannerMarketClosed ? 'Auto resumes at open' : 'Scanner paused'}</span>
             </div>
           )}
         </div>
@@ -872,7 +872,7 @@ export default function DayTradingTerminal() {
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase text-zinc-400">Can I trade now?</div>
           <div className="mt-1 text-xl font-semibold text-zinc-100">{primaryDecision}</div>
-          <div className="mt-1 text-xs text-zinc-400">
+          <div className="mt-1 break-words text-xs text-zinc-400">
             {canTradeNow ? 'Execution checks are clear for the best pending setup.' : avoidMessage}
           </div>
         </div>
@@ -895,9 +895,9 @@ export default function DayTradingTerminal() {
         </div>
         <div className="min-w-0 border-t border-current/10 pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
           <div className="text-[10px] font-semibold uppercase text-zinc-400">What to avoid</div>
-          <div className="mt-2 text-sm text-zinc-100">{avoidMessage}</div>
+          <div className="mt-2 break-words text-sm text-zinc-100">{avoidMessage}</div>
           {activeBlockers.length > 1 && (
-            <div className="mt-1 text-xs text-zinc-400">{activeBlockers.slice(1, 3).join(' · ')}</div>
+            <div className="mt-1 break-words text-xs text-zinc-400">{activeBlockers.slice(1, 3).join(' · ')}</div>
           )}
         </div>
       </div>
@@ -931,11 +931,11 @@ export default function DayTradingTerminal() {
         
         {/* Widget 1: Glowing Market Regime Gauge */}
         {selectedSymbol === 'BOTH' ? (
-          <div className="motion-panel flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] border-zinc-800 shadow-[0_0_20px_rgba(16,185,129,0.02)]">
-            <div className="grid grid-cols-2 gap-3 w-full font-mono">
+          <div className="motion-panel flex min-h-[76px] flex-row items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 p-3 shadow-inner shadow-[0_0_20px_rgba(16,185,129,0.02)]">
+            <div className="grid w-full grid-cols-1 gap-3 font-mono sm:grid-cols-2">
               {/* QQQ Side */}
-              <div className="flex flex-col border-r border-zinc-800/80 pr-2">
-                <div className="flex items-center justify-between gap-1.5">
+              <div className="flex min-w-0 flex-col border-b border-zinc-800/80 pb-2 sm:border-b-0 sm:border-r sm:pb-0 sm:pr-2">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
                   <span className="text-[9px] text-emerald-500/70 uppercase font-semibold">QQQ REGIME</span>
                   <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase ${qqqDetails.badgeBg}`}>
                     {qqqDetails.marketRegime === 'EUPHORIA' ? '🔥 RISK-ON' : qqqDetails.marketRegime === 'BULLISH' ? '🟢 BUY' : qqqDetails.marketRegime === 'BEARISH' ? '🔴 FADE' : '🟡 RANGE'}
@@ -950,8 +950,8 @@ export default function DayTradingTerminal() {
               </div>
               
               {/* SPY Side */}
-              <div className="flex flex-col pl-1">
-                <div className="flex items-center justify-between gap-1.5">
+              <div className="flex min-w-0 flex-col sm:pl-1">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
                   <span className="text-[9px] text-emerald-500/70 uppercase font-semibold">SPY REGIME</span>
                   <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase ${spyDetails.badgeBg}`}>
                     {spyDetails.marketRegime === 'EUPHORIA' ? '🔥 RISK-ON' : spyDetails.marketRegime === 'BULLISH' ? '🟢 BUY' : spyDetails.marketRegime === 'BEARISH' ? '🔴 FADE' : '🟡 RANGE'}
@@ -967,23 +967,23 @@ export default function DayTradingTerminal() {
             </div>
           </div>
         ) : (
-          <div className={`motion-panel flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner transition-all duration-300 min-h-[76px] ${regimeGlowColor}`}>
-            <div className="flex flex-col justify-center">
-              <div className="flex items-center gap-2">
+          <div className={`motion-panel flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner min-h-[76px] ${regimeGlowColor}`}>
+            <div className="flex min-w-0 flex-col justify-center">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[9px] text-emerald-500/70 uppercase tracking-wider font-semibold">REGIME</span>
                 <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400 font-bold uppercase">
                   {selectedSymbol}
                 </Badge>
               </div>
-              <span className="text-xl font-extrabold tracking-widest block uppercase drop-shadow-[0_0_10px_rgba(16,185,129,0.2)] mt-0.5">
+              <span className="mt-0.5 block break-words text-xl font-extrabold uppercase tracking-widest drop-shadow-[0_0_10px_rgba(16,185,129,0.2)]">
                 {marketRegime}
               </span>
-              <span className="text-[9px] text-zinc-400 block">
+              <span className="block break-words text-[9px] text-zinc-400">
                 GEX: {currentGexRegime} · VIX: {vixValue.toFixed(1)}
               </span>
             </div>
-            <div className="flex items-center">
-              <span className={`px-2 py-1 rounded text-[9px] font-extrabold uppercase select-none ${regimeBadgeBg}`}>
+            <div className="flex shrink-0 items-center pl-2">
+              <span className={`rounded px-2 py-1 text-[9px] font-extrabold uppercase select-none ${regimeBadgeBg}`}>
                 {marketRegime === 'EUPHORIA' ? '🔥 ULTRA RISK-ON' : marketRegime === 'BULLISH' ? '🟢 BUY THE DIPS' : marketRegime === 'BEARISH' ? '🔴 FADE THE RIPS' : '🟡 RANGE'}
               </span>
             </div>
@@ -992,7 +992,7 @@ export default function DayTradingTerminal() {
 
         {/* Widget 2: Mega Caps Tracking Panel */}
         <div className="motion-panel p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
-          <div className="flex justify-between items-center mb-1.5">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
             <span className="text-[9px] text-emerald-500/70 block uppercase tracking-wider font-semibold">MEGA-CAPS CO-TREND</span>
             <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400">NASDAQ Heavy</Badge>
           </div>
@@ -1023,11 +1023,11 @@ export default function DayTradingTerminal() {
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <span className="text-[9px] block uppercase tracking-wider font-semibold opacity-80">SYSTEM HEALTH</span>
-              <div className="mt-1 flex items-center gap-2">
+              <div className="mt-1 flex min-w-0 items-center gap-2">
                 <span className={systemHealthSummary.dot}>●</span>
-                <span className="text-sm font-extrabold tracking-wide">{systemHealthSummary.label}</span>
+                <span className="min-w-0 break-words text-sm font-extrabold tracking-wide">{systemHealthSummary.label}</span>
               </div>
-              <div className="mt-1 truncate text-[10px] text-zinc-400">{systemHealthSummary.detail}</div>
+              <div className="mt-1 break-words text-[10px] text-zinc-400">{systemHealthSummary.detail}</div>
             </div>
             <Button asChild variant="outline" size="sm" className="h-8 shrink-0 border-current bg-zinc-950/30 px-2 text-[10px]">
               <Link to="/system-health">
@@ -1041,8 +1041,8 @@ export default function DayTradingTerminal() {
 
       {/* Execution Setup */}
       <div className="motion-panel border border-emerald-500/15 rounded bg-zinc-900/30 overflow-hidden">
-        <div className="p-2.5 px-3 bg-zinc-900/80 border-b border-emerald-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col justify-between gap-2 border-b border-emerald-500/10 bg-zinc-900/80 p-2.5 px-3 sm:flex-row sm:items-center">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <ShieldAlert className={`h-4 w-4 ${isLiveBroker ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`} />
             <span className="text-xs font-bold text-emerald-300">Execution setup</span>
             {remainingTrades <= 0 && (
@@ -1051,20 +1051,20 @@ export default function DayTradingTerminal() {
               </Badge>
             )}
             {missingLiveExecutionItems.map(item => (
-              <Badge key={item} variant="outline" className="text-[8px] border-amber-500/40 text-amber-300 bg-amber-950/20">
+              <Badge key={item} variant="outline" className="max-w-full whitespace-normal break-words text-[8px] border-amber-500/40 text-amber-300 bg-amber-950/20">
                 {item}
               </Badge>
             ))}
           </div>
-          <span className="text-[10px] text-zinc-500">
+          <span className="break-words text-[10px] text-zinc-500">
             {isExecutionBlocked ? `${activeBlockers.length} blocker${activeBlockers.length === 1 ? '' : 's'}` : 'Ready for pending signals.'}
           </span>
 	        </div>
-	        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-px bg-emerald-500/10">
+	        <div className="grid grid-cols-1 gap-px bg-emerald-500/10 sm:grid-cols-3 xl:grid-cols-6">
           {readinessItems.map(item => (
-            <div key={item.label} className="motion-panel bg-zinc-950/70 px-3 py-2 min-h-[54px] flex flex-col justify-center">
+            <div key={item.label} className="motion-panel flex min-h-[54px] min-w-0 flex-col justify-center bg-zinc-950/70 px-3 py-2">
               <span className="text-[9px] uppercase text-zinc-500 font-bold">{item.label}</span>
-              <span className={`text-xs font-bold truncate ${item.tone}`} title={item.value}>{item.value}</span>
+              <span className={`break-words text-xs font-bold ${item.tone}`} title={item.value}>{item.value}</span>
 	            </div>
 	          ))}
 	        </div>
@@ -1073,7 +1073,7 @@ export default function DayTradingTerminal() {
 	            <div className="mb-1 text-[10px] font-semibold uppercase text-red-300">Why not trading</div>
 	            <div className="flex flex-wrap gap-1.5">
 	              {activeBlockers.map((blocker) => (
-	                <span key={blocker} className="rounded border border-red-500/25 bg-red-950/20 px-2 py-1 text-[10px] text-red-200">
+	                <span key={blocker} className="max-w-full break-words rounded border border-red-500/25 bg-red-950/20 px-2 py-1 text-[10px] text-red-200">
 	                  {blocker}
 	                </span>
 	              ))}
@@ -1085,14 +1085,14 @@ export default function DayTradingTerminal() {
       {/* Row 2: Separated Prominent latest setup notification */}
       <div 
         onClick={() => latestActionableSignal && setSelectedSignalId(latestActionableSignal.id)}
-        className={`motion-panel border rounded-lg backdrop-blur-md overflow-hidden transition-all duration-500 ${
+        className={`motion-panel overflow-hidden rounded-lg border backdrop-blur-md ${
           latestActionableSignal 
             ? 'border-emerald-500/50 shadow-[0_0_25px_rgba(16,185,129,0.15)] bg-zinc-900/45 cursor-pointer hover:bg-zinc-900/60 hover:shadow-[0_0_35px_rgba(16,185,129,0.25)] hover:border-emerald-400' 
             : 'border-emerald-500/10 shadow-inner bg-zinc-900/15'
         }`}
       >
-        <div className="bg-emerald-950/20 border-b border-emerald-500/15 p-2.5 px-3 flex justify-between items-center">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col items-start justify-between gap-2 border-b border-emerald-500/15 bg-emerald-950/20 p-2.5 px-3 sm:flex-row sm:items-center">
+          <div className="flex min-w-0 items-center gap-2">
             <Sparkles className="h-4 w-4 text-emerald-400" />
             <h3 className="text-xs font-extrabold text-emerald-300">
               Latest trade setup
@@ -1131,7 +1131,7 @@ export default function DayTradingTerminal() {
               <span className="text-[10px] text-zinc-500 mt-1">Next scan in {formatMinSec(countdown)}.</span>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-xs">
+            <div className="grid grid-cols-1 gap-4 text-xs lg:grid-cols-3">
               <div className="lg:col-span-2 space-y-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className={`px-2 py-0.5 rounded text-[11px] font-extrabold uppercase ${
@@ -1142,7 +1142,7 @@ export default function DayTradingTerminal() {
                   <span className="text-xs font-bold text-emerald-200">
                     {latestActionableSignal.symbol} ${latestActionableSignal.current_price.toFixed(2)}
                   </span>
-                  <span className="text-[9px] text-emerald-400/70 ml-auto bg-zinc-950/60 p-1 border border-emerald-500/5 rounded">
+                  <span className="rounded border border-emerald-500/5 bg-zinc-950/60 p-1 text-[9px] text-emerald-400/70 sm:ml-auto">
                     Score: {latestActionableSignal.confidence_score}% ({latestActionableSignal.setup_grade || 'B'})
                   </span>
                   {latestActionableSignal.ml_probability !== undefined && latestActionableSignal.ml_probability !== null && (() => {
@@ -1161,42 +1161,42 @@ export default function DayTradingTerminal() {
                   })()}
                 </div>
 
-                <div className="grid grid-cols-3 gap-3 border-t border-emerald-500/10 pt-2.5 text-center">
-                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2 rounded">
+                <div className="grid grid-cols-1 gap-3 border-t border-emerald-500/10 pt-2.5 text-center sm:grid-cols-3">
+                  <div className="min-w-0 rounded border border-emerald-500/10 bg-zinc-950/40 p-2">
                     <span className="text-[9px] text-emerald-500/60 block uppercase font-semibold">ENTRY TRIGGER</span>
-                    <span className="text-xs font-bold font-mono text-emerald-200">
+                    <span className="break-words font-mono text-xs font-bold text-emerald-200">
                       &gt;${latestActionableSignal.entry_trigger?.toFixed(2)}
                     </span>
                   </div>
-                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2 rounded">
+                  <div className="min-w-0 rounded border border-emerald-500/10 bg-zinc-950/40 p-2">
                     <span className="text-[9px] text-emerald-500/60 block uppercase font-semibold">STOP LOSS</span>
-                    <span className="text-xs font-bold font-mono text-red-400">
+                    <span className="break-words font-mono text-xs font-bold text-red-400">
                       ${latestActionableSignal.stop_loss?.toFixed(2)}
                     </span>
                   </div>
-                  <div className="bg-zinc-950/40 border border-emerald-500/10 p-2 rounded">
+                  <div className="min-w-0 rounded border border-emerald-500/10 bg-zinc-950/40 p-2">
                     <span className="text-[9px] text-emerald-500/60 block uppercase font-semibold">TARGET LEVEL</span>
-                    <span className="text-xs font-bold font-mono text-green-400">
+                    <span className="break-words font-mono text-xs font-bold text-green-400">
                       ${latestActionableSignal.target_price?.toFixed(2)}
                     </span>
                   </div>
                 </div>
 
                 {latestActionableSignal.option_details && (
-                  <div className="grid grid-cols-3 gap-3 border-t border-emerald-500/10 pt-2.5 text-center text-[10px] font-mono text-sky-400 bg-zinc-950/20 p-2 rounded">
-                    <div>
+                  <div className="grid grid-cols-1 gap-3 rounded border-t border-emerald-500/10 bg-zinc-950/20 p-2 pt-2.5 text-center font-mono text-[10px] text-sky-400 sm:grid-cols-3">
+                    <div className="min-w-0">
                       <span className="text-[8px] text-zinc-500 block uppercase font-semibold">OPTION CONTRACT</span>
-                      <span className="font-bold text-zinc-300">{latestActionableSignal.option_details.ticker}</span>
+                      <span className="break-all font-bold text-zinc-300">{latestActionableSignal.option_details.ticker}</span>
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <span className="text-[8px] text-zinc-500 block uppercase font-semibold">SUGGESTED PREMIUM</span>
-                      <span className="font-bold text-sky-300">
+                      <span className="break-words font-bold text-sky-300">
                         ${latestActionableSignal.option_details.mark !== undefined ? Number(latestActionableSignal.option_details.mark).toFixed(2) : 'N/A'}
                       </span>
                     </div>
-                    <div>
+                    <div className="min-w-0">
                       <span className="text-[8px] text-zinc-500 block uppercase font-semibold">PREMIUM SL / TP</span>
-                      <span className="font-bold text-zinc-300">
+                      <span className="break-words font-bold text-zinc-300">
                         ${latestActionableSignal.option_details.suggestedStopLoss !== undefined ? Number(latestActionableSignal.option_details.suggestedStopLoss).toFixed(2) : 'N/A'} / ${latestActionableSignal.option_details.suggestedTakeProfit !== undefined ? Number(latestActionableSignal.option_details.suggestedTakeProfit).toFixed(2) : 'N/A'}
                       </span>
                     </div>
@@ -1205,31 +1205,31 @@ export default function DayTradingTerminal() {
 
                 {/* Option premium suggestion */}
                 {latestActionableSignal.gex && (
-                  <div className="bg-zinc-950/60 border border-emerald-500/10 p-2 rounded font-mono text-[10px] text-sky-400">
+                  <div className="break-words rounded border border-emerald-500/10 bg-zinc-950/60 p-2 font-mono text-[10px] text-sky-400">
                     Options plan: buy premium near ${latestActionableSignal.indicators?.vwap ? (Number(latestActionableSignal.indicators.vwap) * 0.003).toFixed(2) : '1.50'} | stop -20% | target +40%
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 border-t border-emerald-500/10 pt-2 text-[10px]">
-                  <div className="bg-zinc-950/50 border border-emerald-500/10 rounded p-2">
+                <div className="grid grid-cols-1 gap-2 border-t border-emerald-500/10 pt-2 text-[10px] sm:grid-cols-2 md:grid-cols-4">
+                  <div className="min-w-0 rounded border border-emerald-500/10 bg-zinc-950/50 p-2">
                     <span className="block text-zinc-500 uppercase font-bold">Execution</span>
-                    <span className={isLiveBroker ? 'text-amber-300 font-bold' : 'text-sky-300 font-bold'}>{brokerLabel}</span>
+                    <span className={`break-words ${isLiveBroker ? 'text-amber-300 font-bold' : 'text-sky-300 font-bold'}`}>{brokerLabel}</span>
                   </div>
-                  <div className="bg-zinc-950/50 border border-emerald-500/10 rounded p-2">
+                  <div className="min-w-0 rounded border border-emerald-500/10 bg-zinc-950/50 p-2">
                     <span className="block text-zinc-500 uppercase font-bold">Quantity</span>
-                    <span className="text-emerald-300 font-bold">{contractsPerTrade} contract{contractsPerTrade === 1 ? '' : 's'}</span>
+                    <span className="break-words font-bold text-emerald-300">{contractsPerTrade} contract{contractsPerTrade === 1 ? '' : 's'}</span>
                   </div>
-                  <div className="bg-zinc-950/50 border border-emerald-500/10 rounded p-2">
+                  <div className="min-w-0 rounded border border-emerald-500/10 bg-zinc-950/50 p-2">
                     <span className="block text-zinc-500 uppercase font-bold">Est. Max Debit</span>
-                    <span className="text-zinc-200 font-bold">
+                    <span className="break-words font-bold text-zinc-200">
                       {latestActionableSignal.option_details?.mark
                         ? `$${(Number(latestActionableSignal.option_details.mark) * contractsPerTrade * 100).toFixed(2)}`
                         : 'N/A'}
                     </span>
                   </div>
-                  <div className={`bg-zinc-950/50 border rounded p-2 ${getSignalExecutionTone(latestActionableSignal)}`}>
+                  <div className={`min-w-0 rounded border bg-zinc-950/50 p-2 ${getSignalExecutionTone(latestActionableSignal)}`}>
                     <span className="block uppercase font-bold opacity-80">Status</span>
-                    <span className="font-bold">{getSignalExecutionDisplayStatus(latestActionableSignal)}</span>
+                    <span className="break-words font-bold">{getSignalExecutionDisplayStatus(latestActionableSignal)}</span>
                   </div>
                 </div>
               </div>
@@ -1288,10 +1288,10 @@ export default function DayTradingTerminal() {
 
                   {renderTokenUsageBadge(latestActionableSignal.token_usage)}
                 </div>
-                <div className="flex justify-end gap-2 border-t border-emerald-500/10 pt-2">
+                <div className="flex flex-col gap-2 border-t border-emerald-500/10 pt-2 sm:flex-row sm:justify-end">
                   <Button
                     size="sm"
-                    className="h-6 bg-emerald-800 hover:bg-emerald-700 text-white font-bold text-[10px] shadow-[0_0_0_rgba(16,185,129,0)] hover:shadow-[0_0_18px_rgba(16,185,129,0.25)]"
+                    className="h-7 w-full bg-emerald-800 text-[10px] font-bold text-white shadow-[0_0_0_rgba(16,185,129,0)] hover:bg-emerald-700 hover:shadow-[0_0_18px_rgba(16,185,129,0.25)] sm:h-6 sm:w-auto"
                     disabled={isExecutionBlocked || !isExecutableSetupGrade(latestActionableSignal)}
                     onClick={() => handleQuickStatus(latestActionableSignal.id, 'EXECUTED')}
                   >
@@ -1300,7 +1300,7 @@ export default function DayTradingTerminal() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-6 text-red-400 hover:text-red-300 hover:bg-red-950/25 text-[10px]"
+                    className="h-7 w-full text-[10px] text-red-400 hover:bg-red-950/25 hover:text-red-300 sm:h-6 sm:w-auto"
                     onClick={() => handleQuickStatus(latestActionableSignal.id, 'CANCELLED')}
                   >
                     Dismiss
@@ -1322,7 +1322,7 @@ export default function DayTradingTerminal() {
           <div className="flex bg-zinc-950/80 border-b border-emerald-500/20 p-1">
             <button
               onClick={() => setActiveTab('signals')}
-              className={`flex-1 py-2 text-xs font-bold font-mono transition-all rounded ${
+              className={`flex-1 py-2 text-xs font-bold font-mono transition-colors rounded ${
                 activeTab === 'signals' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/50 hover:text-emerald-400'
               }`}
             >
@@ -1330,7 +1330,7 @@ export default function DayTradingTerminal() {
             </button>
             <button
               onClick={() => setActiveTab('logs')}
-              className={`flex-1 py-2 text-xs font-bold font-mono transition-all rounded ${
+              className={`flex-1 py-2 text-xs font-bold font-mono transition-colors rounded ${
                 activeTab === 'logs' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/50 hover:text-emerald-400'
               }`}
             >
@@ -1339,8 +1339,8 @@ export default function DayTradingTerminal() {
           </div>
 
           {/* Filter bar + action buttons */}
-          <div className="p-2.5 bg-zinc-900 border-b border-emerald-500/20 flex flex-col sm:flex-row flex-wrap gap-2 items-start sm:items-center justify-between">
-            <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex flex-col flex-wrap items-start justify-between gap-2 border-b border-emerald-500/20 bg-zinc-900 p-2.5 sm:flex-row sm:items-center">
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
               {activeTab === 'signals' && (
                 <>
                   <span className="text-[10px] font-bold text-emerald-500/70 uppercase">Filter:</span>
@@ -1370,28 +1370,28 @@ export default function DayTradingTerminal() {
                 </>
               )}
               {activeTab === 'logs' && (
-                <span className="text-[10px] text-emerald-500/70 font-bold uppercase">Chronological Scan Runs (5m intervals)</span>
+                <span className="break-words text-[10px] font-bold uppercase text-emerald-500/70">Chronological Scan Runs (5m intervals)</span>
               )}
             </div>
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
               {triggerMsg && (
-                <span className="text-[9px] text-amber-400 animate-pulse max-w-[180px] truncate">{triggerMsg}</span>
+                <span className="max-w-full break-words text-[9px] text-amber-400 animate-pulse sm:max-w-[220px]">{triggerMsg}</span>
               )}
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-[10px] font-bold border-amber-500/30 text-amber-400 hover:text-amber-300 hover:border-amber-400 hover:bg-amber-950/30 hover:shadow-[0_0_12px_rgba(245,158,11,0.2)] transition-all duration-300 gap-1 bg-zinc-950/40"
+                className="h-7 w-full gap-1 border-amber-500/30 bg-zinc-950/40 text-[10px] font-bold text-amber-400 transition-premium hover:border-amber-400 hover:bg-amber-950/30 hover:text-amber-300 hover:shadow-[0_0_12px_rgba(245,158,11,0.2)] sm:w-auto"
                 onClick={handleTriggerScan}
                 disabled={triggerLoading}
               >
                 {triggerLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
                 {triggerLoading ? 'SCANNING...' : 'TRIGGER SCAN'}
               </Button>
-              <details className="smooth-details relative">
-                <summary className="motion-press h-7 list-none cursor-pointer text-[10px] font-bold border border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 rounded px-2 py-1 bg-zinc-950/40">
+              <details className="smooth-details relative w-full sm:w-auto">
+                <summary className="motion-press h-7 w-full list-none cursor-pointer rounded border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-center text-[10px] font-bold text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 sm:w-auto">
                   DEV TOOLS
                 </summary>
-                <div className="absolute right-0 z-20 mt-2 w-40 rounded border border-zinc-700 bg-zinc-950 p-2 shadow-xl space-y-2">
+                <div className="absolute left-0 z-20 mt-2 w-44 max-w-[calc(100vw-2rem)] space-y-2 rounded border border-zinc-700 bg-zinc-950 p-2 shadow-xl sm:left-auto sm:right-0 sm:w-40">
                   <Button
                     variant="outline"
                     size="sm"
@@ -1489,21 +1489,21 @@ export default function DayTradingTerminal() {
                         <div className="text-[9px] text-zinc-500">confidence</div>
                       </div>
                     </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-[10px]">
-                      <div className="rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-[10px] sm:grid-cols-3">
+                      <div className="min-w-0 rounded border border-zinc-800 bg-zinc-900/60 p-2">
                         <div className="text-zinc-500">Price</div>
-                        <div className="font-mono text-emerald-300">${Number(sig.current_price).toFixed(2)}</div>
+                        <div className="break-words font-mono text-emerald-300">${Number(sig.current_price).toFixed(2)}</div>
                       </div>
-                      <div className="rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                      <div className="min-w-0 rounded border border-zinc-800 bg-zinc-900/60 p-2">
                         <div className="text-zinc-500">SL</div>
-                        <div className="font-mono text-red-300">{sig.stop_loss ? `$${Number(sig.stop_loss).toFixed(2)}` : '-'}</div>
+                        <div className="break-words font-mono text-red-300">{sig.stop_loss ? `$${Number(sig.stop_loss).toFixed(2)}` : '-'}</div>
                       </div>
-                      <div className="rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                      <div className="min-w-0 rounded border border-zinc-800 bg-zinc-900/60 p-2">
                         <div className="text-zinc-500">TP</div>
-                        <div className="font-mono text-green-300">{sig.target_price ? `$${Number(sig.target_price).toFixed(2)}` : '-'}</div>
+                        <div className="break-words font-mono text-green-300">{sig.target_price ? `$${Number(sig.target_price).toFixed(2)}` : '-'}</div>
                       </div>
                     </div>
-                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                       <div className="flex flex-wrap gap-1">
                         <span className="rounded-full border border-emerald-500/20 px-2 py-0.5 text-[9px] font-bold text-emerald-300">{sig.status}</span>
                         {(sig.execution_status || sig.execution_error) && (
@@ -1513,12 +1513,12 @@ export default function DayTradingTerminal() {
                         )}
                       </div>
                       {sig.status === 'PENDING' && (
-                        <div className="flex gap-1" onClick={(event) => event.stopPropagation()}>
+                        <div className="flex w-full gap-1 sm:w-auto" onClick={(event) => event.stopPropagation()}>
                           <Button
                             type="button"
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-[10px]"
+                            className="h-7 flex-1 px-2 text-[10px] sm:flex-none"
                             disabled={isExecutionBlocked || !isSignalExecutable}
                             onClick={() => handleQuickStatus(sig.id, 'EXECUTED')}
                           >
@@ -1528,7 +1528,7 @@ export default function DayTradingTerminal() {
                             type="button"
                             size="sm"
                             variant="outline"
-                            className="h-7 px-2 text-[10px] text-red-300"
+                            className="h-7 flex-1 px-2 text-[10px] text-red-300 sm:flex-none"
                             onClick={() => handleQuickStatus(sig.id, 'CANCELLED')}
                           >
                             Cancel
@@ -1602,7 +1602,7 @@ export default function DayTradingTerminal() {
                         <React.Fragment key={sig.id}>
                           <tr
                             onClick={() => { setSelectedSignalId(sig.id); }}
-                            className={`motion-row border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-all duration-300 ${
+                            className={`motion-row cursor-pointer border-b border-emerald-500/10 hover:bg-emerald-950/10 ${
                               isSelected ? 'bg-emerald-950/30 border-l-2 border-l-emerald-400 shadow-[inset_4px_0_12px_-4px_rgba(16,185,129,0.25)]' : ''
                             }`}
                           >
@@ -1701,7 +1701,121 @@ export default function DayTradingTerminal() {
             </div>
             </>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            <div className="space-y-2 md:hidden">
+              {logsLoading && logs.length === 0 ? (
+                <div className="rounded border border-emerald-500/10 bg-zinc-950/60 px-3 py-6 text-center text-xs text-emerald-500/70">
+                  <RefreshCw className="mx-auto mb-2 h-4 w-4 animate-spin text-emerald-400" />
+                  Loading scanner logs...
+                </div>
+              ) : filteredLogs.length === 0 ? (
+                <div className="rounded border border-zinc-800 bg-zinc-950/60 px-3 py-6 text-center text-xs text-zinc-400">
+                  No scanner run logs found. Trigger a scan to run a live evaluation cycle.
+                </div>
+              ) : (
+                filteredLogs.map((log) => {
+                  const isSelected = log.id === selectedLogId;
+                  const isExpanded = log.id === expandedLogId;
+                  const outcomeColor = log.outcome === 'SIGNAL_GENERATED' ? 'text-green-400' : 'text-red-300';
+
+                  return (
+                    <div
+                      key={`mobile-log-${log.id}`}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedLogId(log.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setSelectedLogId(log.id);
+                        }
+                      }}
+                      className={`w-full rounded border p-3 text-left transition-colors ${
+                        isSelected
+                          ? 'border-emerald-400/60 bg-emerald-950/30'
+                          : 'border-emerald-500/10 bg-zinc-950/60 hover:border-emerald-500/30'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-xs text-emerald-500">#{log.id}</span>
+                            <span className="font-bold text-emerald-100">{log.symbol}</span>
+                            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-zinc-300">
+                              {log.regime}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-[10px] text-zinc-400">
+                            {new Date(log.created_at).toLocaleTimeString('en-US')}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="motion-press shrink-0 text-emerald-500/60 hover:text-emerald-300"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setExpandedLogId(isExpanded ? null : log.id);
+                            setSelectedLogId(log.id);
+                          }}
+                          aria-label={isExpanded ? 'Hide log details' : 'Show log details'}
+                        >
+                          <ChevronRight className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                        </button>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-1 gap-2 text-[10px] sm:grid-cols-3">
+                        <div className="min-w-0 rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                          <div className="text-zinc-500">Spot</div>
+                          <div className="break-words font-mono text-emerald-300">${Number(log.spot_price).toFixed(2)}</div>
+                        </div>
+                        <div className="min-w-0 rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                          <div className="text-zinc-500">VIX</div>
+                          <div className="break-words font-mono text-zinc-300">{log.vix != null ? Number(log.vix).toFixed(2) : '-'}</div>
+                        </div>
+                        <div className="min-w-0 rounded border border-zinc-800 bg-zinc-900/60 p-2">
+                          <div className="text-zinc-500">GEX</div>
+                          <div className="break-words font-mono text-zinc-300">{log.gex_available ? 'YES' : 'NO'}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                        <span className={`break-words text-[10px] font-bold ${outcomeColor}`}>{log.outcome}</span>
+                        <span className="text-[10px] text-zinc-500">
+                          {log.no_trade_reasons && log.no_trade_reasons.length > 0 ? `${log.no_trade_reasons.length} blockers` : 'No blockers'}
+                        </span>
+                      </div>
+
+                      {isExpanded && (
+                        <div className="mt-3 space-y-2.5 border-t border-emerald-500/10 pt-3">
+                          <div className="text-[10px] font-bold uppercase text-emerald-400">Indicators at run</div>
+                          {log.indicators ? (
+                            <div className="grid grid-cols-1 gap-2 rounded border border-emerald-500/10 bg-zinc-950/80 p-2 text-[10px] sm:grid-cols-2">
+                              <div className="break-words"><span className="text-zinc-500">VWAP:</span> ${Number(log.indicators.vwap).toFixed(2)}</div>
+                              <div className="break-words"><span className="text-zinc-500">ATR14:</span> ${Number(log.indicators.atr14).toFixed(2)}</div>
+                              <div className="break-words"><span className="text-zinc-500">EMA9:</span> {log.indicators.ema9 ? `$${Number(log.indicators.ema9).toFixed(2)}` : '-'}</div>
+                              <div className="break-words"><span className="text-zinc-500">EMA21:</span> {log.indicators.ema21 ? `$${Number(log.indicators.ema21).toFixed(2)}` : '-'}</div>
+                            </div>
+                          ) : (
+                            <div className="text-[10px] italic text-zinc-600">No indicators saved for this log.</div>
+                          )}
+                          {log.no_trade_reasons && log.no_trade_reasons.length > 0 && (
+                            <div className="space-y-1">
+                              <div className="text-[10px] font-bold uppercase text-red-400">Blockers</div>
+                              <ul className="list-disc space-y-1 pl-4 text-[10px] text-red-300/95">
+                                {log.no_trade_reasons.map((reason, idx) => (
+                                  <li key={idx} className="break-words">{reason}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full text-xs text-left border-collapse">
                 <thead>
                   <tr className="bg-zinc-900/80 border-b border-emerald-500/10 text-emerald-500/80 font-bold font-mono">
@@ -1744,7 +1858,7 @@ export default function DayTradingTerminal() {
                         <React.Fragment key={log.id}>
                           <tr
                             onClick={() => { setSelectedLogId(log.id); }}
-                            className={`motion-row border-b border-emerald-500/10 hover:bg-emerald-950/10 cursor-pointer transition-all duration-300 ${
+                            className={`motion-row cursor-pointer border-b border-emerald-500/10 hover:bg-emerald-950/10 ${
                               isSelected ? 'bg-emerald-950/30 border-l-2 border-l-emerald-400 shadow-[inset_4px_0_12px_-4px_rgba(16,185,129,0.25)]' : ''
                             }`}
                           >
@@ -1802,24 +1916,25 @@ export default function DayTradingTerminal() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </div>
  
          {/* Detailed Inspector Panel */}
-         <div className="motion-panel border border-emerald-500/20 rounded bg-zinc-900/20 flex flex-col h-[440px] 2xl:h-auto overflow-hidden min-w-0">
-           <div className="p-3 bg-zinc-900 border-b border-emerald-500/20 flex justify-between items-center">
-             <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+         <div className="motion-panel flex min-w-0 flex-col overflow-hidden rounded border border-emerald-500/20 bg-zinc-900/20 max-h-[70vh] 2xl:max-h-none">
+           <div className="flex flex-col items-start justify-between gap-2 border-b border-emerald-500/20 bg-zinc-900 p-3 sm:flex-row sm:items-center">
+             <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
                <Info className="h-3.5 w-3.5 text-emerald-400" />
                OPTION DETAILS
              </span>
              {selectedSignal && (
-               <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-400">
+               <Badge variant="outline" className="max-w-full whitespace-normal break-words text-[10px] border-emerald-500/30 text-emerald-400">
                  {selectedSignal.symbol} #{selectedSignal.id}
                </Badge>
              )}
            </div>
  
-           <div className="p-4 flex-1 overflow-y-auto space-y-4 text-xs">
+           <div className="flex-1 space-y-4 overflow-y-auto p-3 text-xs sm:p-4">
              {!selectedSignal ? (
                <div className="h-full flex flex-col items-center justify-center text-center text-emerald-500/40">
                  <HelpCircle className="h-10 w-10 opacity-30 mb-2" />
@@ -1828,18 +1943,18 @@ export default function DayTradingTerminal() {
              ) : (
                <div className="space-y-4 motion-enter">
                  {/* Meta details */}
-                 <div className="grid grid-cols-3 gap-2 border-b border-emerald-500/10 pb-3">
-                   <div>
+                 <div className="grid grid-cols-1 gap-2 border-b border-emerald-500/10 pb-3 sm:grid-cols-3">
+                   <div className="min-w-0">
                      <span className="text-[10px] text-emerald-500/60 block">MARKET DATE</span>
-                     <span className="font-semibold text-emerald-300">{selectedSignal.market_date || '-'}</span>
+                     <span className="break-words font-semibold text-emerald-300">{selectedSignal.market_date || '-'}</span>
                    </div>
-                   <div>
+                   <div className="min-w-0">
                      <span className="text-[10px] text-emerald-500/60 block">TIME STAMP</span>
-                     <span className="font-semibold text-emerald-300">
+                     <span className="break-words font-semibold text-emerald-300">
                        {new Date(selectedSignal.created_at).toLocaleTimeString('en-US')}
                      </span>
                    </div>
-                   <div>
+                   <div className="min-w-0">
                       <span className="text-[10px] text-emerald-500/60 block">ML CONFIDENCE</span>
                       {selectedSignal.ml_probability !== undefined && selectedSignal.ml_probability !== null ? (() => {
                         const mlPct = Math.round(Number(selectedSignal.ml_probability) * 100);
@@ -1857,30 +1972,30 @@ export default function DayTradingTerminal() {
                  </div>
 
                  <div className={`rounded border p-2.5 text-[10px] ${getSignalExecutionTone(selectedSignal)}`}>
-                   <div className="flex items-center justify-between gap-2 mb-2">
+                   <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
                      <span className="font-bold uppercase">EXECUTION_STATUS</span>
-                     <span className="font-bold">{getSignalExecutionDisplayStatus(selectedSignal)}</span>
+                     <span className="break-words font-bold">{getSignalExecutionDisplayStatus(selectedSignal)}</span>
                    </div>
-                   <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono">
-                     <div className="flex justify-between gap-2">
+                   <div className="grid grid-cols-1 gap-x-4 gap-y-1 font-mono sm:grid-cols-2">
+                     <div className="flex min-w-0 justify-between gap-2">
                        <span className="opacity-70">Broker</span>
-                       <span className="font-semibold truncate">{getExecutionBrokerLabel(selectedSignal.execution_broker)}</span>
+                       <span className="break-words text-right font-semibold">{getExecutionBrokerLabel(selectedSignal.execution_broker)}</span>
                      </div>
-                     <div className="flex justify-between gap-2">
+                     <div className="flex min-w-0 justify-between gap-2">
                        <span className="opacity-70">Contracts</span>
                        <span className="font-semibold">{selectedSignal.contracts_requested ?? '-'}</span>
                      </div>
-                     <div className="flex justify-between gap-2 col-span-2">
+                     <div className="flex min-w-0 justify-between gap-2 sm:col-span-2">
                        <span className="opacity-70">Order ID</span>
-                       <span className="font-semibold truncate">{selectedSignal.broker_order_id || '-'}</span>
+                       <span className="break-all text-right font-semibold">{selectedSignal.broker_order_id || '-'}</span>
                      </div>
-                     <div className="flex justify-between gap-2 col-span-2">
+                     <div className="flex min-w-0 justify-between gap-2 sm:col-span-2">
                        <span className="opacity-70">Trade ID</span>
-                       <span className="font-semibold truncate">{selectedSignal.broker_trade_id || '-'}</span>
+                       <span className="break-all text-right font-semibold">{selectedSignal.broker_trade_id || '-'}</span>
                      </div>
                    </div>
                    {selectedSignal.execution_error && (
-                     <div className={`mt-2 rounded-md border px-2 py-2 leading-relaxed ${getSignalExecutionDetailTone(selectedSignal)}`}>
+                     <div className={`mt-2 break-words rounded-md border px-2 py-2 leading-relaxed ${getSignalExecutionDetailTone(selectedSignal)}`}>
                        {selectedSignal.execution_error}
                      </div>
                    )}
@@ -1892,64 +2007,64 @@ export default function DayTradingTerminal() {
                      <TrendingUp className="h-3 w-3 text-sky-400" /> OPTION_CONTRACT_DETAILS
                    </span>
                    {selectedSignal.option_details ? (
-                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 bg-zinc-950/60 p-2.5 rounded border border-sky-500/30 font-mono text-[11px] text-zinc-300">
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5 col-span-2">
+                     <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 rounded border border-sky-500/30 bg-zinc-950/60 p-2.5 font-mono text-[11px] text-zinc-300 sm:grid-cols-2">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5 sm:col-span-2">
                          <span className="text-emerald-500/70">TICKER</span>
-                         <span className="font-bold text-sky-300">{selectedSignal.option_details.ticker || 'N/A'}</span>
+                         <span className="break-all text-right font-bold text-sky-300">{selectedSignal.option_details.ticker || 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">OPTION TYPE</span>
                          <span className={`font-bold ${selectedSignal.option_details.side === 'CALL' ? 'text-green-400 animate-pulse' : 'text-red-400 animate-pulse'}`}>
                            {selectedSignal.option_details.side || 'N/A'}
                          </span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">STRIKE</span>
                          <span className="font-semibold text-emerald-300">
                            {selectedSignal.option_details.strike !== undefined ? `$${Number(selectedSignal.option_details.strike).toFixed(2)}` : 'N/A'}
                          </span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">PREMIUM (MARK)</span>
                          <span className="font-bold text-emerald-300">
                            {selectedSignal.option_details.mark !== undefined ? `$${Number(selectedSignal.option_details.mark).toFixed(2)}` : 'N/A'}
                          </span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">EXPIRATION</span>
-                         <span>{selectedSignal.option_details.expiry || 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.option_details.expiry || 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">BID / ASK</span>
-                         <span>
+                         <span className="break-words text-right">
                            {selectedSignal.option_details.bid !== undefined && selectedSignal.option_details.ask !== undefined
                              ? `$${Number(selectedSignal.option_details.bid).toFixed(2)} / $${Number(selectedSignal.option_details.ask).toFixed(2)}`
                              : 'N/A'}
                          </span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">SPREAD</span>
-                         <span>
+                         <span className="break-words text-right">
                            {selectedSignal.option_details.spread !== undefined && selectedSignal.option_details.spreadPct !== undefined
                              ? `$${Number(selectedSignal.option_details.spread).toFixed(2)} (${Number(selectedSignal.option_details.spreadPct).toFixed(1)}%)`
                              : 'N/A'}
                          </span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">VOLUME</span>
-                         <span>{selectedSignal.option_details.volume !== undefined ? Number(selectedSignal.option_details.volume).toLocaleString() : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.option_details.volume !== undefined ? Number(selectedSignal.option_details.volume).toLocaleString() : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">OPEN INTEREST</span>
-                         <span>{selectedSignal.option_details.openInterest !== undefined ? Number(selectedSignal.option_details.openInterest).toLocaleString() : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.option_details.openInterest !== undefined ? Number(selectedSignal.option_details.openInterest).toLocaleString() : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">SUGGESTED SL</span>
                          <span className="text-red-400 font-semibold">
                            {selectedSignal.option_details.suggestedStopLoss !== undefined ? `$${Number(selectedSignal.option_details.suggestedStopLoss).toFixed(2)}` : 'N/A'}
                          </span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">SUGGESTED TP</span>
                          <span className="text-green-400 font-semibold">
                            {selectedSignal.option_details.suggestedTakeProfit !== undefined ? `$${Number(selectedSignal.option_details.suggestedTakeProfit).toFixed(2)}` : 'N/A'}
@@ -1971,30 +2086,30 @@ export default function DayTradingTerminal() {
                      <Activity className="h-3 w-3" /> TECHNICAL_INDICATORS
                    </span>
                    {selectedSignal.indicators ? (
-                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 bg-zinc-950/60 p-2.5 rounded border border-emerald-500/10 font-mono text-[11px]">
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                     <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 rounded border border-emerald-500/10 bg-zinc-950/60 p-2.5 font-mono text-[11px] sm:grid-cols-2">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">VWAP</span>
-                         <span>{selectedSignal.indicators.vwap ? `$${Number(selectedSignal.indicators.vwap).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.indicators.vwap ? `$${Number(selectedSignal.indicators.vwap).toFixed(2)}` : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">ATR14</span>
-                         <span>{selectedSignal.indicators.atr14 ? `$${Number(selectedSignal.indicators.atr14).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.indicators.atr14 ? `$${Number(selectedSignal.indicators.atr14).toFixed(2)}` : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">EMA 9</span>
-                         <span>{selectedSignal.indicators.ema9 ? `$${Number(selectedSignal.indicators.ema9).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.indicators.ema9 ? `$${Number(selectedSignal.indicators.ema9).toFixed(2)}` : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">EMA 21</span>
-                         <span>{selectedSignal.indicators.ema21 ? `$${Number(selectedSignal.indicators.ema21).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.indicators.ema21 ? `$${Number(selectedSignal.indicators.ema21).toFixed(2)}` : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">ORH (15m)</span>
-                         <span>{selectedSignal.indicators.openingRangeHigh ? `$${Number(selectedSignal.indicators.openingRangeHigh).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.indicators.openingRangeHigh ? `$${Number(selectedSignal.indicators.openingRangeHigh).toFixed(2)}` : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">ORL (15m)</span>
-                         <span>{selectedSignal.indicators.openingRangeLow ? `$${Number(selectedSignal.indicators.openingRangeLow).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.indicators.openingRangeLow ? `$${Number(selectedSignal.indicators.openingRangeLow).toFixed(2)}` : 'N/A'}</span>
                        </div>
                      </div>
                    ) : (
@@ -2008,32 +2123,32 @@ export default function DayTradingTerminal() {
                      <TrendingUp className="h-3 w-3" /> GAMMA_EXPOSURE_PROFILE
                    </span>
                    {selectedSignal.gex ? (
-                     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 bg-zinc-950/60 p-2.5 rounded border border-emerald-500/10 font-mono text-[11px]">
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                     <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 rounded border border-emerald-500/10 bg-zinc-950/60 p-2.5 font-mono text-[11px] sm:grid-cols-2">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">Net GEX</span>
-                         <span className={Number(selectedSignal.gex.netGex) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                         <span className={`break-words text-right ${Number(selectedSignal.gex.netGex) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                            {selectedSignal.gex.netGex ? `${Number(selectedSignal.gex.netGex).toLocaleString()}` : 'N/A'}
                          </span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">GEX Regime</span>
-                         <span className="font-semibold text-emerald-300">{selectedSignal.gex.regime || 'N/A'}</span>
+                         <span className="break-words text-right font-semibold text-emerald-300">{selectedSignal.gex.regime || 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">Flip Strike</span>
-                         <span>{selectedSignal.gex.flipStrike ? `$${Number(selectedSignal.gex.flipStrike).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.gex.flipStrike ? `$${Number(selectedSignal.gex.flipStrike).toFixed(2)}` : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">Call Wall</span>
-                         <span>{selectedSignal.gex.callWall ? `$${Number(selectedSignal.gex.callWall).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.gex.callWall ? `$${Number(selectedSignal.gex.callWall).toFixed(2)}` : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">Put Wall</span>
-                         <span>{selectedSignal.gex.putWall ? `$${Number(selectedSignal.gex.putWall).toFixed(2)}` : 'N/A'}</span>
+                         <span className="break-words text-right">{selectedSignal.gex.putWall ? `$${Number(selectedSignal.gex.putWall).toFixed(2)}` : 'N/A'}</span>
                        </div>
-                       <div className="flex justify-between border-b border-emerald-500/5 pb-0.5">
+                       <div className="flex min-w-0 justify-between gap-2 border-b border-emerald-500/5 pb-0.5">
                          <span className="text-emerald-500/70">Flow Dir.</span>
-                         <span className="font-semibold text-sky-400 text-[10px]">{selectedSignal.gex.flowDirection || 'N/A'}</span>
+                         <span className="break-words text-right text-[10px] font-semibold text-sky-400">{selectedSignal.gex.flowDirection || 'N/A'}</span>
                        </div>
                      </div>
                    ) : (
@@ -2047,16 +2162,16 @@ export default function DayTradingTerminal() {
                      <Activity className="h-3 w-3" /> VOLATILITY
                    </span>
                    {selectedSignal.volatility ? (
-                     <div className="flex gap-4 justify-between bg-zinc-950/60 p-2.5 rounded border border-emerald-500/10 font-mono text-[11px]">
-                       <div className="flex items-center gap-2">
+                     <div className="flex flex-col gap-2 rounded border border-emerald-500/10 bg-zinc-950/60 p-2.5 font-mono text-[11px] sm:flex-row sm:justify-between sm:gap-4">
+                       <div className="flex min-w-0 items-center justify-between gap-2">
                          <span className="text-emerald-500/70">VIX:</span>
-                         <span className="font-semibold text-emerald-200">
+                         <span className="break-words text-right font-semibold text-emerald-200">
                            {selectedSignal.volatility.vixQuote ? Number(selectedSignal.volatility.vixQuote).toFixed(2) : 'N/A'}
                          </span>
                        </div>
-                       <div className="flex items-center gap-2">
+                       <div className="flex min-w-0 items-center justify-between gap-2">
                          <span className="text-emerald-500/70">VIX Daily Chg:</span>
-                         <span className={`font-semibold ${Number(selectedSignal.volatility.vixChangePercent) >= 0 ? 'text-red-400' : 'text-green-400'}`}>
+                         <span className={`break-words text-right font-semibold ${Number(selectedSignal.volatility.vixChangePercent) >= 0 ? 'text-red-400' : 'text-green-400'}`}>
                            {selectedSignal.volatility.vixChangePercent ? `${Number(selectedSignal.volatility.vixChangePercent).toFixed(2)}%` : 'N/A'}
                          </span>
                        </div>
@@ -2076,7 +2191,7 @@ export default function DayTradingTerminal() {
                        {selectedSignal.no_trade_reasons.map((reason, idx) => (
                          <li key={idx} className="flex gap-2 text-red-300">
                            <span className="text-red-500 font-bold select-none">[!]</span>
-                           <span>{reason}</span>
+                           <span className="min-w-0 break-words">{reason}</span>
                          </li>
                        ))}
                      </ul>
@@ -2094,7 +2209,7 @@ export default function DayTradingTerminal() {
                          const isPitfall = line.includes('⚠️') || line.toUpperCase().includes('PITFALL');
                          const isCatalyst = line.includes('✅') || line.toUpperCase().includes('CATALYST');
                          return (
-                           <p key={i} className={isPitfall ? 'text-amber-300' : isCatalyst ? 'text-green-300' : 'text-zinc-300 italic'}>
+                           <p key={i} className={`break-words ${isPitfall ? 'text-amber-300' : isCatalyst ? 'text-green-300' : 'text-zinc-300 italic'}`}>
                              {line}
                            </p>
                          );
@@ -2109,8 +2224,8 @@ export default function DayTradingTerminal() {
                      <span className="text-[10px] font-bold text-zinc-400 uppercase flex items-center gap-1">
                        📰 NEWS_CONTEXT_AT_SCAN
                      </span>
-                     <div className="bg-zinc-950/40 border border-zinc-700/30 p-2 rounded text-[9px] text-zinc-500 space-y-0.5 leading-relaxed">
-                       {selectedSignal.news_context.split('\n').map((line, i) => <div key={i}>{line}</div>)}
+                     <div className="space-y-0.5 rounded border border-zinc-700/30 bg-zinc-950/40 p-2 text-[9px] leading-relaxed text-zinc-500">
+                       {selectedSignal.news_context.split('\n').map((line, i) => <div key={i} className="break-words">{line}</div>)}
                      </div>
                    </div>
                  )}

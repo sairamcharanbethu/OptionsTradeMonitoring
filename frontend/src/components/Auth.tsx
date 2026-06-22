@@ -116,7 +116,7 @@ export default function Auth({ onLogin }: AuthProps) {
                             {isLogin ? "Don't have an account?" : "Already have an account?"}{' '}
                             <button
                                 type="button"
-                                className="text-primary font-medium hover:underline transition-all"
+                                className="text-primary font-medium hover:underline transition-colors"
                                 onClick={() => {
                                     setIsLogin(!isLogin);
                                     setError(null);
