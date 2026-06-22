@@ -9,7 +9,7 @@ import { execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { TradeExecutionService } from './trade-execution-service';
-import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { ThetaDataOptionChainQuote, ThetaDataService } from './thetadata-service';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
@@ -299,8 +299,8 @@ export class SignalScannerService {
 
   // ── News Pre-Warm Loop ────────────────────────────────────────────────────
   // Runs every 5 minutes, offset 2 min BEFORE the signal scanner.
-  // Fetches news + runs Llama classification and caches results in Redis.
-  // When enrichSignalAsync runs, it finds everything pre-cached → only needs Claude.
+  // Fetches news + runs configured AI classification and caches results in Redis.
+  // When enrichSignalAsync runs, it finds everything pre-cached and only needs trade coaching.
 
   private scheduleNextNewsWarm(delayMs: number = this.scanIntervalMs) {
     if (this.newsWarmTimerId) clearTimeout(this.newsWarmTimerId);
@@ -342,8 +342,8 @@ export class SignalScannerService {
       return;
     }
 
-    const key = await this.getAiApiKey(settings.day_trading_ai_provider);
-    if (!key) return;
+    const aiSettings = await this.aiService.getSettings(userId);
+    if (aiSettings.ai_provider === 'openrouter' && !aiSettings.openrouter_key) return;
 
     const symbols: string[] = settings.day_trading_symbols
       .split(',')
@@ -354,7 +354,7 @@ export class SignalScannerService {
     const nyDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
 
     for (const symbol of symbols) {
-      await this.preWarmSymbol(symbol, nyDate, key, settings).catch((e: any) =>
+      await this.preWarmSymbol(symbol, nyDate, userId).catch((e: any) =>
         this.fastify.log.warn(`[NewsPreWarm] Failed for ${symbol}: ${e.message}`)
       );
     }
@@ -363,15 +363,14 @@ export class SignalScannerService {
   /**
    * Pre-warms news cache for a single symbol:
    *   1. Fetches Yahoo Finance + FinancialJuice RSS
-   *   2. Computes fingerprint — skips Llama if headlines haven't changed
-   *   3. Runs Llama 3.1 70B classification → caches verdict in Redis
-   * Result: enrichSignalAsync skips steps 1–3 and only calls Claude Sonnet.
+   *   2. Computes fingerprint — skips AI classification if headlines haven't changed
+   *   3. Runs the configured AI model classification → caches verdict in Redis
+   * Result: enrichSignalAsync skips steps 1–3 and only calls the trade coach.
    */
   private async preWarmSymbol(
     symbol: string,
     nyDateStr: string,
-    apiKey: string,
-    settings: any
+    userId: number
   ): Promise<void> {
     const { headlines } = await this.fetchNewsContext(symbol);
 
@@ -398,7 +397,7 @@ export class SignalScannerService {
       }
     }
 
-    // Headlines changed — update fingerprint and re-run Llama
+    // Headlines changed — update fingerprint and re-run AI classification
     await redis.set(fpRedisKey, newFingerprint, 1800);
 
     if (headlines.length === 0) {
@@ -411,7 +410,6 @@ export class SignalScannerService {
       return;
     }
 
-    const classifierModel = settings.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct';
     const classifierPrompt = `You are a macro news classifier for equity options trading.
 
 SIGNAL CONTEXT: ${symbol} — classify whether the macro environment is bullish or bearish for equity markets.
@@ -428,7 +426,7 @@ Rules:
 - NEUTRAL = no material market-moving news`;
 
     try {
-      const res = await this.callModelDirect(classifierModel, apiKey, classifierPrompt, 150);
+      const res = await this.aiService.askTradingJSON(classifierPrompt, userId, 150);
         await redis.set(
           `NEWS_VERDICT:${symbol}:${nyDateStr}`,
           JSON.stringify({
@@ -441,7 +439,7 @@ Rules:
         );
         this.fastify.log.info(`[NewsPreWarm] ${symbol} pre-warmed: ${res.verdict} — ${res.rationale || ''} | Tokens: ${res.usage?.total_tokens || 0}`);
     } catch (e: any) {
-      this.fastify.log.warn(`[NewsPreWarm] Llama failed for ${symbol}: ${e.message}`);
+      this.fastify.log.warn(`[NewsPreWarm] AI classifier failed for ${symbol}: ${e.message}`);
     }
   }
 
@@ -623,8 +621,8 @@ Rules:
       min_signal_score: '70',
       day_trading_ai_enabled: 'true',
       day_trading_ai_provider: 'openrouter',
-      day_trading_ai_model: 'meta-llama/llama-3.1-70b-instruct',  // news classifier
-      day_trading_coach_model: 'anthropic/claude-sonnet-4-5',       // signal coach
+      day_trading_ai_model: 'deepseek/deepseek-chat',
+      day_trading_coach_model: 'deepseek/deepseek-chat',
       execution_broker: 'none',
       alpaca_key_id: '',
       alpaca_secret_key: '',
@@ -2327,12 +2325,12 @@ Rules:
   /**
    * Two-stage AI enrichment pipeline. Runs in the background after signal INSERT.
    *
-   * Stage 1 — Meta-Llama 3.1 70B (cheap, fast):
+   * Stage 1 — Configured AI model:
    *   Classifies macro news as RISK_ON / RISK_OFF / NEUTRAL relative to signal direction.
    *   Uses Redis fingerprint to skip if headlines haven't changed since last cycle.
    *
-   * Stage 2 — Claude Sonnet (signal understanding):
-   *   Writes the full coaching commentary combining signal technicals + Llama's macro verdict.
+   * Stage 2 — Configured AI model:
+   *   Writes the full coaching commentary combining signal technicals + macro verdict.
    *   Produces: action line, thesis, ⚠️ PITFALL / ✅ CATALYST tags, concise coaching.
    *
    * Final result is written back to the signals row via UPDATE and posted to Discord.
@@ -2384,15 +2382,15 @@ Rules:
       marketStructure, marketContext, internals, riskFlags
     } = ctx;
 
-    const key = await this.getAiApiKey(settings.day_trading_ai_provider);
-    if (!key) {
-      this.fastify.log.warn(`[SignalScannerService] No API key — skipping AI enrichment for signal #${signalId}`);
+    const aiSettings = await this.aiService.getSettings(userId);
+    if (aiSettings.ai_provider === 'openrouter' && !aiSettings.openrouter_key) {
+      this.fastify.log.warn(`[SignalScannerService] OpenRouter selected without API key — skipping AI enrichment for signal #${signalId}`);
       return;
     }
 
     // ── Check pre-warmed cache first (set by news pre-warm loop) ─────────────
-    // If the pre-warm job already fetched news + ran Llama, we skip both steps
-    // and go straight to Claude Sonnet — cutting latency from ~25s to ~4s.
+    // If the pre-warm job already fetched news + classified it, we skip both steps
+    // and go straight to trade coaching.
     const preWarmVerdictKey = `NEWS_VERDICT:${symbol}:${nyDateStr}`;
     const preWarmNewsKey = `NEWS_FP:${symbol}:${nyDateStr}`;
     const preWarmVerdict = await redis.get(preWarmVerdictKey);
@@ -2414,7 +2412,7 @@ Rules:
         macroRationale = parsed.rationale || macroRationale;
         llamaUsage = parsed.usage || null;
         newFingerprint = preWarmFp;
-        this.fastify.log.info(`[SignalScannerService] Using pre-warmed cache for ${symbol}: ${macroVerdict} — skipping fetch+Llama.`);
+        this.fastify.log.info(`[SignalScannerService] Using pre-warmed cache for ${symbol}: ${macroVerdict} — skipping fetch+AI classification.`);
       } catch { /* use defaults */ }
 
       // Fetch raw text for DB/display (lightweight, no AI call)
@@ -2422,7 +2420,7 @@ Rules:
       newsContextText = raw;
     } else {
       // ❌ Cache miss (first run or race): fall back to reactive fetch + classify
-      this.fastify.log.info(`[SignalScannerService] Pre-warm cache miss for ${symbol} — running reactive fetch+Llama.`);
+      this.fastify.log.info(`[SignalScannerService] Pre-warm cache miss for ${symbol} — running reactive fetch+AI classification.`);
       const { headlines: h, raw } = await this.fetchNewsContext(symbol);
       headlines = h;
       newsContextText = raw;
@@ -2435,7 +2433,6 @@ Rules:
       if (headlines.length > 0 && (headlinesChanged || !cachedFp)) {
         await redis.set(fpRedisKey, newFingerprint, 1800);
 
-        const classifierModel = settings.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct';
         const classifierPrompt = `You are a macro news classifier for equity options trading.
 
 SIGNAL: ${symbol} ${winningSide} — directional bias is ${winningSide === 'CALL' ? 'BULLISH' : 'BEARISH'}
@@ -2452,17 +2449,15 @@ Rules:
 - NEUTRAL = no material market-moving news`;
 
         try {
-          const llamaRes = await this.callModelDirect(
-            classifierModel, key, classifierPrompt, 150
-          );
+          const llamaRes = await this.aiService.askTradingJSON(classifierPrompt, userId, 150);
           if (llamaRes.verdict && ['RISK_ON', 'RISK_OFF', 'NEUTRAL'].includes(llamaRes.verdict)) {
             macroVerdict = llamaRes.verdict;
             macroRationale = llamaRes.rationale || llamaRes.analysis || macroRationale;
             llamaUsage = llamaRes.usage || null;
           }
-          this.fastify.log.info(`[SignalScannerService] Llama macro verdict for ${symbol}: ${macroVerdict} — ${macroRationale} | Tokens: ${llamaRes.usage?.total_tokens || 0}`);
+          this.fastify.log.info(`[SignalScannerService] AI macro verdict for ${symbol}: ${macroVerdict} — ${macroRationale} | Tokens: ${llamaRes.usage?.total_tokens || 0}`);
         } catch (llamaErr: any) {
-          this.fastify.log.warn(`[SignalScannerService] Llama classifier failed: ${llamaErr.message}`);
+          this.fastify.log.warn(`[SignalScannerService] AI classifier failed: ${llamaErr.message}`);
         }
       } else if (cachedFp) {
         // Headlines unchanged — reuse cached macro verdict
@@ -2485,7 +2480,7 @@ Rules:
       1800
     );
 
-    // ── Stage 2: Claude Sonnet — full signal coaching ─────────────────────────
+    // ── Stage 2: configured AI model — full signal coaching ───────────────────
     // Check if we have a cached coaching commentary and verdict for this exact setup.
     const isASetup = this.isASetupGrade(setupGrade);
     const setupCacheFingerprint = [
@@ -2517,9 +2512,7 @@ Rules:
     }
 
     if (!finalCommentary) {
-      const coachModel = settings.day_trading_coach_model || 'anthropic/claude-sonnet-4-5';
-
-      // Macro context badge for Sonnet
+      // Macro context badge for AI coach
       const macroBadge =
         macroVerdict === 'RISK_OFF' ? `⚠️ MACRO RISK-OFF: ${macroRationale}` :
         macroVerdict === 'RISK_ON'  ? `✅ MACRO RISK-ON: ${macroRationale}` :
@@ -2710,7 +2703,7 @@ Return exactly this JSON shape:
 }`;
 
         try {
-          const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 1000);
+          const sonnetRes = await this.aiService.askTradingJSON(coachPrompt, userId, 1000);
           const plan = this.normalizeTradePlan(sonnetRes, fallbackPlan);
           finalCommentary = this.formatTradePlanCommentary(plan);
           finalDiscordContent = this.formatDiscordTradePlan(symbol, signalId, plan, macroVerdict);
@@ -2721,9 +2714,9 @@ Return exactly this JSON shape:
             JSON.stringify({ verdict: finalVerdict, analysis: finalCommentary, discordContent: finalDiscordContent, plan }),
             1800
           );
-          this.fastify.log.info(`[SignalScannerService] Sonnet trade plan ready for signal #${signalId}: ${plan.mode} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
+          this.fastify.log.info(`[SignalScannerService] AI trade plan ready for signal #${signalId}: ${plan.mode} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
         } catch (sonnetErr: any) {
-          this.fastify.log.error(`[SignalScannerService] Sonnet trade-plan judge failed for #${signalId}: ${sonnetErr.message}`);
+          this.fastify.log.error(`[SignalScannerService] AI trade-plan judge failed for #${signalId}: ${sonnetErr.message}`);
           const plan = fallbackPlan;
           finalCommentary = this.formatTradePlanCommentary(plan);
           finalDiscordContent = this.formatDiscordTradePlan(symbol, signalId, plan, macroVerdict);
@@ -2742,7 +2735,7 @@ Score: ${finalConfidence}% | ${setupGrade}
 ECONOMIC CALENDAR:
 ${getEconomicCalendarContext(nyDateStr)}
 
-MACRO CONTEXT (classified by Llama 3.1):
+MACRO CONTEXT (classified by configured AI model):
 ${macroBadge}
 
 RECENT HEADLINES:
@@ -2753,7 +2746,7 @@ Write a single-sentence recommendation (maximum 25 words) advising whether the t
 Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recommendation here"}`;
 
         try {
-          const sonnetRes = await this.callModelDirect(coachModel, key, coachPrompt, 800);
+          const sonnetRes = await this.aiService.askTradingJSON(coachPrompt, userId, 800);
           finalCommentary = sonnetRes.analysis || sonnetRes.verdict || '';
           finalVerdict = sonnetRes.verdict || 'WAIT';
           claudeUsage = sonnetRes.usage || null;
@@ -2764,9 +2757,9 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
               1800
             );
           }
-          this.fastify.log.info(`[SignalScannerService] Sonnet coaching ready for signal #${signalId}: ${finalVerdict} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
+          this.fastify.log.info(`[SignalScannerService] AI coaching ready for signal #${signalId}: ${finalVerdict} | Tokens: ${sonnetRes.usage?.total_tokens || 0}`);
         } catch (sonnetErr: any) {
-          this.fastify.log.error(`[SignalScannerService] Sonnet coach failed for #${signalId}: ${sonnetErr.message}`);
+          this.fastify.log.error(`[SignalScannerService] AI coach failed for #${signalId}: ${sonnetErr.message}`);
         }
       }
     } else {
@@ -2825,57 +2818,6 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       } catch (discErr: any) {
         this.fastify.log.error(`[SignalScannerService] Discord coaching follow-up failed: ${discErr.message}`);
       }
-    }
-  }
-
-  /**
-   * Direct OpenRouter call with an explicit model — used for multi-model routing
-   * (Llama for classification, Claude for coaching) without going through AIService's
-   * settings-based routing which only reads a single model from the DB.
-   */
-  private async callModelDirect(
-    model: string,
-    apiKey: string,
-    prompt: string,
-    maxTokens: number
-  ): Promise<{ verdict: string; analysis: string; [key: string]: any }> {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'http://localhost:3000',
-        'X-Title': 'OptionsTradeMonitor',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
-          { role: 'user', content: prompt }
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0,
-        max_tokens: maxTokens
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`OpenRouter [${model}] error ${response.status}: ${err}`);
-    }
-
-    const data = await response.json() as any;
-    const text: string = data.choices?.[0]?.message?.content || '{}';
-    try {
-      const parsed = JSON.parse(text.trim());
-      return {
-        verdict: parsed.verdict || 'UNKNOWN',
-        analysis: parsed.analysis || parsed.rationale || parsed.summary || text,
-        usage: data.usage || null,
-        ...parsed
-      };
-    } catch {
-      return { verdict: 'Review', analysis: text, usage: data.usage || null };
     }
   }
 
@@ -3111,16 +3053,18 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     }, !!settings.thetadata_base_url || !!process.env.THETADATA_BASE_URL);
 
     const openrouterCheck = checkLatency(async () => {
-      const key = await this.getAiApiKey(settings.day_trading_ai_provider);
-      if (key) {
+      const aiSettings = await this.aiService.getSettings(targetUserId);
+      if (aiSettings.ai_provider === 'openrouter' && aiSettings.openrouter_key) {
         await axios.get('https://openrouter.ai/api/v1/models', {
-          headers: { Authorization: `Bearer ${key}` },
+          headers: { Authorization: `Bearer ${aiSettings.openrouter_key}` },
           timeout: 4000
         });
+      } else if (aiSettings.ai_provider === 'ollama') {
+        await this.aiService.checkHealth(targetUserId);
       } else {
-        throw new Error('No Key');
+        throw new Error('No AI provider key configured');
       }
-    }, settings.day_trading_ai_provider === 'openrouter');
+    }, settings.day_trading_ai_enabled === 'true');
 
     const discordCheck = checkLatency(async () => {
       await axios.get(settings.discord_webhook_url, { timeout: 4000 });
@@ -3161,12 +3105,6 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       discord: discord,
       alpaca: alpaca
     };
-  }
-
-  private async getAiApiKey(provider: string): Promise<string | null> {
-    if (provider !== 'openrouter') return null;
-    const settings = await getGlobalSettings(this.fastify.pg);
-    return settings.openrouter_key || null;
   }
 
   // --- Utility functions ---

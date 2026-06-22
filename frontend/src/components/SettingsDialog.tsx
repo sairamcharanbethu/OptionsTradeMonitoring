@@ -19,6 +19,9 @@ interface SettingsDialogProps {
     onUpdate: (user: User) => void;
 }
 
+const DEFAULT_AI_PROVIDER = 'openrouter';
+const DEFAULT_AI_MODEL = 'deepseek/deepseek-chat';
+
 function formatAccountBalance(account: any) {
     const fallbackBalance = Array.isArray(account?.balances)
         ? account.balances.find((balance: any) => balance?.cash !== null && balance?.cash !== undefined)
@@ -64,9 +67,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const isAdmin = user.role === 'ADMIN';
 
     // Config State
-    const [provider, setProvider] = useState('ollama');
+    const [provider, setProvider] = useState(DEFAULT_AI_PROVIDER);
     const [openRouterKey, setOpenRouterKey] = useState('');
-    const [model, setModel] = useState('mistral:7b-instruct-q4_K_M');
+    const [model, setModel] = useState(DEFAULT_AI_MODEL);
     const [briefingFrequency, setBriefingFrequency] = useState('disabled');
     const [pollInterval, setPollInterval] = useState('60'); // Market Poll (Global)
     const [pollingEnabled, setPollingEnabled] = useState(true); // Master polling toggle
@@ -83,9 +86,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
     const [sscgexPassword, setSscgexPassword] = useState('');
     const [dayTradingAiEnabled, setDayTradingAiEnabled] = useState(true);
-    const [dayTradingAiProvider, setDayTradingAiProvider] = useState('openrouter');
-    const [dayTradingAiModel, setDayTradingAiModel] = useState('meta-llama/llama-3.1-70b-instruct');
-    const [dayTradingCoachModel, setDayTradingCoachModel] = useState('anthropic/claude-sonnet-4-5');
     const [executionBroker, setExecutionBroker] = useState('none');
     const [maxTradesPerDay, setMaxTradesPerDay] = useState('2');
     const [contractsPerTrade, setContractsPerTrade] = useState('1');
@@ -165,9 +165,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
         setLoading(true);
         try {
             const data = await api.getSettings();
-            setProvider(data.ai_provider || 'ollama');
+            const appProvider = data.ai_provider || DEFAULT_AI_PROVIDER;
+            const appModel = data.ai_model || DEFAULT_AI_MODEL;
+            setProvider(appProvider);
             setOpenRouterKey(data.openrouter_key || '');
-            setModel(data.ai_model || 'mistral:7b-instruct-q4_K_M');
+            setModel(appModel);
             setBriefingFrequency(data.briefing_frequency || 'disabled');
             setPollInterval(data.market_poll_interval || '60');
             setPollingEnabled(data.polling_enabled !== 'false');
@@ -202,9 +204,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setDiscordWebhookUrl(data.discord_webhook_url || '');
             setSscgexPassword(data.sscgex_password || '');
             setDayTradingAiEnabled(data.day_trading_ai_enabled !== 'false');
-            setDayTradingAiProvider(data.day_trading_ai_provider || 'openrouter');
-            setDayTradingAiModel(data.day_trading_ai_model || 'meta-llama/llama-3.1-70b-instruct');
-            setDayTradingCoachModel(data.day_trading_coach_model || 'anthropic/claude-sonnet-4-5');
 
             try {
                 const portfolio = await api.getSnaptradePortfolio();
@@ -411,9 +410,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 discord_webhook_url: discordWebhookUrl,
                 sscgex_password: sscgexPassword,
                 day_trading_ai_enabled: dayTradingAiEnabled ? 'true' : 'false',
-                day_trading_ai_provider: dayTradingAiProvider,
-                day_trading_ai_model: dayTradingAiModel,
-                day_trading_coach_model: dayTradingCoachModel
+                day_trading_ai_provider: provider,
+                day_trading_ai_model: model,
+                day_trading_coach_model: model
             });
             queryClient.invalidateQueries({ queryKey: ['settings'] });
             onUpdate(user); // Force refresh of parent if needed
@@ -487,15 +486,14 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                          id="model"
                                          value={model}
                                          onChange={(e) => setModel(e.target.value)}
-                                         placeholder={provider === 'ollama' ? 'mistral:latest' : 'anthropic/claude-3.5-sonnet'}
+                                         placeholder={provider === 'ollama' ? 'mistral:latest' : DEFAULT_AI_MODEL}
                                      />
                                      {provider === 'openrouter' && (
                                          <p className="text-[10px] text-muted-foreground mt-1 leading-normal">
                                              Recommended OpenRouter slugs:<br/>
-                                             1. <strong>Claude 3.5 Sonnet</strong>: <code>anthropic/claude-3.5-sonnet</code><br/>
-                                             2. <strong>DeepSeek R1 / V3</strong>: <code>deepseek/deepseek-r1</code> or <code>deepseek/deepseek-chat</code><br/>
-                                             3. <strong>OpenAI GPT-4o</strong>: <code>openai/gpt-4o</code><br/>
-                                             4. <strong>Gemini 2.0 Flash / Pro 1.5</strong>: <code>google/gemini-2.0-flash-exp</code> or <code>google/gemini-pro-1.5</code>
+                                             1. <strong>DeepSeek Chat</strong>: <code>{DEFAULT_AI_MODEL}</code><br/>
+                                             2. <strong>DeepSeek R1</strong>: <code>deepseek/deepseek-r1</code><br/>
+                                             3. <strong>OpenAI GPT-4o</strong>: <code>openai/gpt-4o</code>
                                          </p>
                                      )}
                                  </div>
@@ -853,40 +851,18 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         />
                                     </div>
 
-                                {dayTradingAiEnabled && (
-                                    <div className="grid gap-4 animate-in fade-in slide-in-from-top-2 border-t pt-4">
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="dtAiProvider">AI Provider</Label>
-                                            <Select value={dayTradingAiProvider} onValueChange={setDayTradingAiProvider}>
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="Select Provider" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="ollama">Local Ollama</SelectItem>
-                                                    <SelectItem value="openrouter">OpenRouter (Cloud)</SelectItem>
-                                                </SelectContent>
-                                            </Select>
+                                    {dayTradingAiEnabled && (
+                                        <div className="grid gap-3 animate-in fade-in slide-in-from-top-2 border-t pt-4">
+                                            <div className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+                                                <div className="font-semibold text-foreground">Uses app AI service</div>
+                                                <div>Provider: {provider === 'openrouter' ? 'OpenRouter' : 'Local Ollama'}</div>
+                                                <div>Model: {model || DEFAULT_AI_MODEL}</div>
+                                                <p className="mt-2 text-[10px] leading-normal">
+                                                    News classification, macro verdicts, trade plans, and position analysis use this same model.
+                                                </p>
+                                            </div>
                                         </div>
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="dtAiModel">News Classifier Model</Label>
-                                            <Input
-                                                id="dtAiModel"
-                                                value={dayTradingAiModel}
-                                                onChange={(e) => setDayTradingAiModel(e.target.value)}
-                                                placeholder="meta-llama/llama-3.1-70b-instruct"
-                                            />
-                                        </div>
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="dtCoachModel">Signal Coach Model</Label>
-                                            <Input
-                                                id="dtCoachModel"
-                                                value={dayTradingCoachModel}
-                                                onChange={(e) => setDayTradingCoachModel(e.target.value)}
-                                                placeholder="anthropic/claude-sonnet-4-5"
-                                            />
-                                        </div>
-                                    </div>
-                                )}
+                                    )}
                                 </section>
                             </div>
                         </TabsContent>
@@ -1245,7 +1221,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     <p className="text-[10px] text-muted-foreground leading-normal mt-0.5">
                                                         {alpacaAutoTradeMode === 'instant' 
                                                             ? "⚡ Orders are placed instantly when technical scanner identifies a trade signal, ignoring AI wait." 
-                                                            : "🧠 Orders wait for news classifier and Claude Sonnet coaching verdict. Requires a GO verdict to execute."}
+                                                            : "🧠 Orders wait for the shared AI news and coaching verdict. Requires a GO verdict to execute."}
                                                     </p>
                                                 </div>
                                             )}

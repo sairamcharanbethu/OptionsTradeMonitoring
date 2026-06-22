@@ -4,6 +4,8 @@ import YahooFinance from 'yahoo-finance2';
 import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
+export const DEFAULT_AI_PROVIDER = 'openrouter';
+export const DEFAULT_AI_MODEL = 'deepseek/deepseek-chat';
 
 function toCavemanStyle(text: string): string {
     if (!text) return '';
@@ -41,7 +43,7 @@ export class AIService {
         this.fastify = fastify;
         // On Windows Docker, host.docker.internal resolves to the host machine
         this.ollamaUrl = process.env.OLLAMA_URL || 'http://host.docker.internal:11434';
-        this.model = process.env.AI_MODEL || 'mistral:7b-instruct-q4_K_M';
+        this.model = process.env.AI_MODEL || DEFAULT_AI_MODEL;
     }
 
     async generateAlertSummary(data: any, userId?: number): Promise<{ summary: string; discord_message: string }> {
@@ -239,28 +241,19 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
         };
     }
 
-    async askClaudeForTrading(prompt: string, userId?: number): Promise<{ verdict: string; analysis: string }> {
-        try {
-            const settings = await this.getSettings(userId);
-            if (settings.ai_provider === 'openrouter' && settings.openrouter_key) {
-                // Route trade decisions through the user's selected model (or default to Claude 3.5 Sonnet)
-                const model = settings.ai_model || 'anthropic/claude-3.5-sonnet';
-                const response = await this.callOpenRouter(model, settings.openrouter_key, prompt, 120);
-                return {
-                    verdict: response.verdict,
-                    analysis: response.analysis
-                };
-            }
-            // Fallback to standard selected provider if OpenRouter or key isn't active
-            return this.askAI(prompt, userId);
-        } catch (err) {
-            console.error("[AIService] Failed to invoke configured model for trading, falling back:", err);
-            return this.askAI(prompt, userId);
-        }
+    async askTradingJSON(prompt: string, userId?: number, maxTokens: number = 600): Promise<{ verdict: string; analysis: string; usage?: any; [key: string]: any }> {
+        const parsed = await this.generateJSONInternal(prompt, maxTokens, userId);
+        const analysis = parsed.analysis || parsed.rationale || parsed.reason || parsed.summary || '';
+        return {
+            verdict: parsed.verdict || parsed.mode || 'UNKNOWN',
+            analysis: typeof analysis === 'object' ? JSON.stringify(analysis) : String(analysis || ''),
+            usage: parsed.usage || null,
+            ...parsed
+        };
     }
 
     public async getSettings(userId?: number): Promise<{ ai_provider: string; openrouter_key: string; ai_model: string }> {
-        let currentProvider = 'ollama';
+        let currentProvider = process.env.AI_PROVIDER || DEFAULT_AI_PROVIDER;
         let openRouterKey = '';
         let currentModel = this.model;
 

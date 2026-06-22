@@ -261,10 +261,12 @@ export class OptionsBacktester {
                     `;
 
                     try {
-                        const aiRes = await this.aiService.askClaudeForTrading(prompt);
-                        const parsed = JSON.parse(aiRes.analysis || aiRes.verdict);
-                        verdict = parsed.verdict;
-                        reasoning = parsed.reasoning || '';
+                        const aiRes = await this.aiService.askTradingJSON(prompt, undefined, 160);
+                        const aiVerdict = aiRes.verdict;
+                        verdict = aiVerdict === 'BUY_CALL' || aiVerdict === 'BUY_PUT' || aiVerdict === 'WAIT'
+                            ? aiVerdict
+                            : 'WAIT';
+                        reasoning = aiRes.reasoning || aiRes.analysis || '';
                     } catch (e) {
                         verdict = 'WAIT';
                     }
