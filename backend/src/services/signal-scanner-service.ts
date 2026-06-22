@@ -626,7 +626,6 @@ Rules:
       execution_broker: 'none',
       alpaca_key_id: '',
       alpaca_secret_key: '',
-      alpaca_auto_trade: 'false',
       alpaca_auto_trade_mode: 'instant',
       snaptrade_auto_trade: 'false',
       snaptrade_trading_account_id: '',
@@ -3018,22 +3017,34 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       }
     }
 
-    const checkLatency = async (fn: () => Promise<void>, isConfigured = true): Promise<{ status: string; latencyMs: number }> => {
+    const checkLatency = async (
+      fn: () => Promise<void>,
+      isConfigured = true,
+      endpoint?: string
+    ): Promise<{ status: string; latencyMs: number; endpoint?: string; lastError: string | null; checkedAt: string }> => {
+      const checkedAt = new Date().toISOString();
       if (!isConfigured) {
-        return { status: 'N/A', latencyMs: 0 };
+        return { status: 'N/A', latencyMs: 0, endpoint, lastError: 'Not configured', checkedAt };
       }
       const start = Date.now();
       try {
         await fn();
-        return { status: 'UP', latencyMs: Date.now() - start };
+        return { status: 'UP', latencyMs: Date.now() - start, endpoint, lastError: null, checkedAt };
       } catch (e) {
-        return { status: 'DOWN', latencyMs: Date.now() - start };
+        const err: any = e;
+        return {
+          status: 'DOWN',
+          latencyMs: Date.now() - start,
+          endpoint,
+          lastError: err?.response?.data?.error || err?.response?.statusText || err?.message || String(e),
+          checkedAt
+        };
       }
     };
 
     const yahooCheck = checkLatency(async () => {
       await (yahooFinance as any).quote('QQQ');
-    });
+    }, true, 'yahooFinance.quote(QQQ)');
 
     const sscgexCheck = checkLatency(async () => {
       const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
@@ -3044,13 +3055,13 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
         headers: { Authorization: `Bearer ${token}` },
         timeout: 4000
       });
-    }, !!settings.sscgex_password);
+    }, !!settings.sscgex_password, 'https://sscgex.up.railway.app/api/gex/QQQ?strikes=10');
 
     const thetaDataCheck = checkLatency(async () => {
       const thetaData = new ThetaDataService(this.fastify);
       const health = await thetaData.getHealth(targetUserId);
       if (!health.connected) throw new Error(health.lastError || 'ThetaData unavailable');
-    }, !!settings.thetadata_base_url || !!process.env.THETADATA_BASE_URL);
+    }, !!settings.thetadata_base_url || !!process.env.THETADATA_BASE_URL, `${settings.thetadata_base_url || process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status`);
 
     const openrouterCheck = checkLatency(async () => {
       const aiSettings = await this.aiService.getSettings(targetUserId);
@@ -3064,37 +3075,18 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       } else {
         throw new Error('No AI provider key configured');
       }
-    }, settings.day_trading_ai_enabled === 'true');
+    }, settings.day_trading_ai_enabled === 'true', 'https://openrouter.ai/api/v1/models');
 
     const discordCheck = checkLatency(async () => {
       await axios.get(settings.discord_webhook_url, { timeout: 4000 });
-    }, !!settings.discord_webhook_url);
+    }, !!settings.discord_webhook_url, settings.discord_webhook_url ? 'configured Discord webhook URL' : undefined);
 
-    const alpacaCheck = checkLatency(async () => {
-      const keyId = settings.alpaca_key_id?.trim();
-      const secretKey = settings.alpaca_secret_key?.trim();
-      if (keyId && secretKey) {
-        const res = await fetch('https://paper-api.alpaca.markets/v2/account', {
-          headers: {
-            'APCA-API-KEY-ID': keyId,
-            'APCA-API-SECRET-KEY': secretKey
-          }
-        });
-        if (!res.ok) {
-          throw new Error(`Alpaca API returned status ${res.status}`);
-        }
-      } else {
-        throw new Error('Alpaca key/secret not set');
-      }
-    }, !!settings.alpaca_key_id && !!settings.alpaca_secret_key);
-
-    const [yahoo, sscgex, thetaData, openrouter, discord, alpaca] = await Promise.all([
+    const [yahoo, sscgex, thetaData, openrouter, discord] = await Promise.all([
       yahooCheck,
       sscgexCheck,
       thetaDataCheck,
       openrouterCheck,
-      discordCheck,
-      alpacaCheck
+      discordCheck
     ]);
 
     return {
@@ -3102,8 +3094,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       sscgexPortal: sscgex,
       thetaData,
       openRouter: openrouter,
-      discord: discord,
-      alpaca: alpaca
+      discord: discord
     };
   }
 
@@ -3259,9 +3250,8 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
 
   private isAutoExecutionEnabled(settings: any): boolean {
     const broker = settings.execution_broker || 'none';
-    if (broker === 'alpaca_paper') return settings.alpaca_auto_trade === 'true';
     if (broker === 'wealthsimple_snaptrade') return settings.snaptrade_auto_trade === 'true';
-    return settings.alpaca_auto_trade === 'true' || settings.snaptrade_auto_trade === 'true';
+    return settings.snaptrade_auto_trade === 'true';
   }
 
   private async getAutoExecutionTargets(primaryUserId: number, symbol: string, autoTradeMode: 'instant' | 'ai_confirmed') {

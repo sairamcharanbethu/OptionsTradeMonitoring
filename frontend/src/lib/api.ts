@@ -850,12 +850,11 @@ export const api = {
 
   // --- Day Trading Signals ---
   async getSignalsHealth(): Promise<{
-    yahooFinance: { status: string; latencyMs: number };
-    sscgexPortal: { status: string; latencyMs: number };
-    thetaData: { status: string; latencyMs: number };
-    openRouter: { status: string; latencyMs: number };
-    discord: { status: string; latencyMs: number };
-    alpaca: { status: string; latencyMs: number };
+    yahooFinance: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
+    sscgexPortal: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
+    thetaData: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
+    openRouter: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
+    discord: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
   }> {
     const res = await authFetch(`${API_BASE}/signals/health`);
     if (!res.ok) throw new Error('Failed to fetch day trading API health');
@@ -938,6 +937,7 @@ export const api = {
       connected: boolean;
       queueDepth: number | null;
       metrics: Record<string, number>;
+      generatedAt?: string | null;
     };
     generatedAt: string;
   }> {

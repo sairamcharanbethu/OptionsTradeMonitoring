@@ -121,11 +121,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [snaptradeResettingAccess, setSnaptradeResettingAccess] = useState(false);
     const selectedSnaptradeAccount = snaptradeAccounts.find((account: any) => account.id === snaptradeTradingAccountId);
 
-    // Alpaca State
-    const [alpacaKeyId, setAlpacaKeyId] = useState('');
-    const [alpacaSecretKey, setAlpacaSecretKey] = useState('');
-    const [alpacaAutoTrade, setAlpacaAutoTrade] = useState(false);
-    const [alpacaAutoTradeMode, setAlpacaAutoTradeMode] = useState('instant');
 
     // Discord testing State
     const [testingDiscord, setTestingDiscord] = useState(false);
@@ -174,13 +169,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setPositionPollInterval(data.position_poll_interval || '2');
             setSnaptradeClientId(data.snaptrade_client_id || '');
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
-            setAlpacaKeyId(data.alpaca_key_id || '');
-            setAlpacaSecretKey(data.alpaca_secret_key || '');
             setThetaDataBaseUrl(normalizeThetaDataBaseUrl(data.thetadata_base_url || 'http://127.0.0.1:25503'));
             setThetaDataStreamUrl(normalizeThetaDataStreamUrl(data.thetadata_stream_url || ''));
-            setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
-            setAlpacaAutoTradeMode(data.alpaca_auto_trade_mode || 'instant');
-            setExecutionBroker(data.execution_broker || 'none');
+            setExecutionBroker(data.execution_broker === 'alpaca_paper' ? 'none' : data.execution_broker || 'none');
             setSnaptradeAutoTrade(data.snaptrade_auto_trade === 'true');
             setSnaptradeTradingAccountId(data.snaptrade_trading_account_id || '');
             setMaxTradesPerDay(data.max_trades_per_day || '2');
@@ -231,9 +222,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
         setExecutionBroker(value);
         if (value === 'wealthsimple_snaptrade') {
             setSnaptradeAutoTrade(true);
-            setAlpacaAutoTrade(false);
-        } else if (value === 'alpaca_paper') {
-            setAlpacaAutoTrade(true);
+        } else {
             setSnaptradeAutoTrade(false);
         }
     }
@@ -384,13 +373,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 snaptrade_consumer_key: snaptradeConsumerKey,
                 snaptrade_auto_trade: snaptradeAutoTrade ? 'true' : 'false',
                 snaptrade_trading_account_id: snaptradeTradingAccountId,
-                alpaca_key_id: alpacaKeyId,
-                alpaca_secret_key: alpacaSecretKey,
                 thetadata_base_url: thetaDataBaseUrl,
                 thetadata_stream_url: thetaDataStreamUrl,
-                alpaca_auto_trade: alpacaAutoTrade ? 'true' : 'false',
-                alpaca_auto_trade_mode: alpacaAutoTradeMode,
-                execution_broker: executionBroker,
+                alpaca_auto_trade: 'false',
+                execution_broker: executionBroker === 'alpaca_paper' ? 'none' : executionBroker,
                 max_trades_per_day: maxTradesPerDay,
                 contracts_per_trade: contractsPerTrade,
                 order_type: orderType,
@@ -696,7 +682,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 </SelectTrigger>
                                                 <SelectContent>
                                                     <SelectItem value="none">No broker execution (Simulated)</SelectItem>
-                                                    <SelectItem value="alpaca_paper">Alpaca Paper Trading</SelectItem>
                                                     <SelectItem value="wealthsimple_snaptrade">Wealthsimple via SnapTrade (Live)</SelectItem>
                                                 </SelectContent>
                                             </Select>
@@ -1164,67 +1149,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </div>
                                     </div>
 
-                                    {/* Alpaca */}
-                                    <div className="space-y-3 pt-4 border-t">
-                                        <div className="flex items-center justify-between">
-                                            <h5 className="font-medium text-sm">Alpaca API (Paper Trading)</h5>
-                                            <Badge variant={alpacaKeyId && alpacaSecretKey ? "default" : "secondary"}>
-                                                {alpacaKeyId && alpacaSecretKey ? "Configured" : "Not Linked"}
-                                            </Badge>
-                                        </div>
-                                        <div className="grid gap-3 p-4 border rounded-md bg-muted/30">
-                                            <div className="grid gap-1">
-                                                <Label htmlFor="alpaca-key-id">Alpaca API Key ID</Label>
-                                                <Input
-                                                    id="alpaca-key-id"
-                                                    value={alpacaKeyId}
-                                                    onChange={(e) => setAlpacaKeyId(e.target.value)}
-                                                    placeholder="Enter Alpaca API Key ID"
-                                                    type="text"
-                                                />
-                                            </div>
-                                            <div className="grid gap-1">
-                                                <Label htmlFor="alpaca-secret-key">Alpaca API Secret Key</Label>
-                                                <Input
-                                                    id="alpaca-secret-key"
-                                                    value={alpacaSecretKey}
-                                                    onChange={(e) => setAlpacaSecretKey(e.target.value)}
-                                                    placeholder="Enter Alpaca API Secret Key"
-                                                    type="password"
-                                                />
-                                            </div>
-                                            <div className="flex items-center justify-between pt-2 border-t border-border/40">
-                                                <Label htmlFor="alpaca-auto-trade" className="flex flex-col gap-1 cursor-pointer">
-                                                    <span>Auto-Execute Paper Trades</span>
-                                                    <span className="text-[10px] font-normal text-muted-foreground">Automatically place 1-contract paper order on trade signal triggers</span>
-                                                </Label>
-                                                <Switch
-                                                    id="alpaca-auto-trade"
-                                                    checked={alpacaAutoTrade}
-                                                    onCheckedChange={setAlpacaAutoTrade}
-                                                />
-                                            </div>
-                                            {alpacaAutoTrade && (
-                                                <div className="grid gap-1.5 pt-2 border-t border-border/40">
-                                                    <Label htmlFor="alpaca-auto-trade-mode">Execution Timing</Label>
-                                                    <Select value={alpacaAutoTradeMode} onValueChange={setAlpacaAutoTradeMode}>
-                                                        <SelectTrigger id="alpaca-auto-trade-mode">
-                                                            <SelectValue placeholder="Select Execution Timing" />
-                                                        </SelectTrigger>
-                                                        <SelectContent>
-                                                            <SelectItem value="instant">Instant Entry (Pre-AI) — Minimal Latency</SelectItem>
-                                                            <SelectItem value="ai_confirmed">AI-Confirmed Entry (Post-AI) — Adds 2-4s Latency</SelectItem>
-                                                        </SelectContent>
-                                                    </Select>
-                                                    <p className="text-[10px] text-muted-foreground leading-normal mt-0.5">
-                                                        {alpacaAutoTradeMode === 'instant' 
-                                                            ? "⚡ Orders are placed instantly when technical scanner identifies a trade signal, ignoring AI wait." 
-                                                            : "🧠 Orders wait for the shared AI news and coaching verdict. Requires a GO verdict to execute."}
-                                                    </p>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
                                 </div>
                             </div>
                         </TabsContent>

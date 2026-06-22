@@ -7,7 +7,7 @@ import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { ThetaDataService } from './thetadata-service';
 
-type ExecutionBroker = 'none' | 'alpaca_paper' | 'wealthsimple_snaptrade' | 'simulated';
+type ExecutionBroker = 'none' | 'wealthsimple_snaptrade' | 'simulated';
 
 interface ExecuteSignalInput {
   userId: number;
@@ -23,7 +23,6 @@ interface ExecuteSignalInput {
 
 interface ExecutionSettings {
   execution_broker?: string;
-  alpaca_auto_trade?: string;
   snaptrade_auto_trade?: string;
   snaptrade_trading_account_id?: string;
   max_trades_per_day?: string;
@@ -33,13 +32,11 @@ interface ExecutionSettings {
   take_profit_pct?: string;
   stop_loss_engine_enabled?: string;
   live_trading_acknowledged?: string;
-  alpaca_key_id?: string;
-  alpaca_secret_key?: string;
   thetadata_base_url?: string;
 }
 
 type EntryQuoteSnapshot = {
-  source: 'alpaca' | 'thetadata';
+  source: 'thetadata';
   ticker: string;
   bid: number;
   ask: number;
@@ -76,7 +73,6 @@ export class TradeExecutionService {
 
     return {
       execution_broker: 'none',
-      alpaca_auto_trade: 'false',
       snaptrade_auto_trade: 'false',
       snaptrade_trading_account_id: '',
       max_trades_per_day: '2',
@@ -167,10 +163,6 @@ export class TradeExecutionService {
       return { success: false, skipped: true, broker, message };
     }
 
-    if (broker === 'alpaca_paper') {
-      return this.executeAlpacaPaperTrade(input, settings, quantity);
-    }
-
     if (broker === 'wealthsimple_snaptrade') {
       return this.executeSnapTradeOptionTrade(input, settings, quantity);
     }
@@ -195,11 +187,8 @@ export class TradeExecutionService {
 
   private resolveBroker(settings: ExecutionSettings): ExecutionBroker {
     const configured = settings.execution_broker as ExecutionBroker | undefined;
-    if (configured === 'alpaca_paper' && settings.alpaca_auto_trade === 'true') return 'alpaca_paper';
     if (configured === 'wealthsimple_snaptrade' && settings.snaptrade_auto_trade === 'true') return 'wealthsimple_snaptrade';
 
-    // Backward compatibility with the existing single Alpaca toggle.
-    if ((!configured || configured === 'none') && settings.alpaca_auto_trade === 'true') return 'alpaca_paper';
     if ((!configured || configured === 'none') && settings.snaptrade_auto_trade === 'true') return 'wealthsimple_snaptrade';
     return 'none';
   }
@@ -366,26 +355,6 @@ export class TradeExecutionService {
       throw new Error(`SnapTrade entry order for position #${position.id} is still pending and cannot be safely auto-cancelled by this app`);
     }
 
-    if (position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper') {
-      const keyId = settings.alpaca_key_id?.trim();
-      const secretKey = settings.alpaca_secret_key?.trim();
-      const orderId = String(position.broker_order_id || '').trim();
-      if (!keyId || !secretKey) throw new Error('Alpaca credentials are not configured for pending-order cancellation');
-      if (!orderId) throw new Error(`Alpaca pending position #${position.id} has no broker order id to cancel`);
-
-      const res = await fetch(`https://paper-api.alpaca.markets/v2/orders/${orderId}`, {
-        method: 'DELETE',
-        headers: {
-          'APCA-API-KEY-ID': keyId,
-          'APCA-API-SECRET-KEY': secretKey
-        }
-      });
-      if (!res.ok && res.status !== 404) {
-        const errorText = await res.text();
-        throw new Error(`Alpaca paper cancel failed: ${res.status} - ${errorText}`);
-      }
-    }
-
     await this.fastify.pg.query(
       `UPDATE positions
        SET status = 'CLOSED',
@@ -396,7 +365,7 @@ export class TradeExecutionService {
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $2
          AND status = 'PENDING_ORDER'`,
-      [` [Pending entry superseded by Signal #${signalId}${position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper' ? '; broker order cancel submitted' : ''}]`, position.id]
+      [` [Pending entry superseded by Signal #${signalId}]`, position.id]
     );
   }
 
@@ -471,53 +440,6 @@ export class TradeExecutionService {
       }
     }
 
-    if (position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper') {
-      const keyId = settings.alpaca_key_id?.trim();
-      const secretKey = settings.alpaca_secret_key?.trim();
-      if (!keyId || !secretKey) throw new Error('Alpaca credentials are not configured for superseded exit');
-
-      const osiTicker = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
-      const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
-        method: 'POST',
-        headers: {
-          'APCA-API-KEY-ID': keyId,
-          'APCA-API-SECRET-KEY': secretKey,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          symbol: osiTicker,
-          qty: Number(position.quantity || 1),
-          side: 'sell',
-          type: 'market',
-          time_in_force: 'day'
-        })
-      });
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`Alpaca paper superseded exit failed: ${res.status} - ${errorText}`);
-      }
-      const orderData: any = await res.json();
-      await this.fastify.pg.query(
-        `UPDATE positions
-         SET execution_status = 'PENDING_EXIT',
-             execution_error = NULL,
-             broker_exit_order_id = $1,
-             exit_reason = 'SUPERSEDED',
-             exit_order_type = 'MARKET',
-             exit_requested_at = CURRENT_TIMESTAMP,
-             notes = COALESCE(notes, '') || $2,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $3
-           AND status = 'OPEN'`,
-        [
-          orderData.id || null,
-          ` [Superseded by Signal #${signalId}; Alpaca paper MARKET exit submitted${orderData.id ? `: ${orderData.id}` : ''}]`,
-          position.id
-        ]
-      );
-      return true;
-    }
-
     const exitPrice = Number(position.current_price || position.entry_price || 0);
     const realizedPnl = (exitPrice - Number(position.entry_price || 0)) * Number(position.quantity || 1) * 100;
     await this.fastify.pg.query(
@@ -562,61 +484,6 @@ export class TradeExecutionService {
     return raw;
   }
 
-  private parseAlpacaTimestamp(value: any): number | null {
-    if (!value) return null;
-    const parsed = new Date(value).getTime();
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  private async fetchAlpacaOptionSnapshot(osiTicker: string, keyId?: string, secretKey?: string): Promise<EntryQuoteSnapshot | null> {
-    const alpacaKeyId = keyId?.trim();
-    const alpacaSecretKey = secretKey?.trim();
-    if (!alpacaKeyId || !alpacaSecretKey) return null;
-
-    const snapRes = await fetch(`https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${encodeURIComponent(osiTicker)}`, {
-      headers: {
-        'APCA-API-KEY-ID': alpacaKeyId,
-        'APCA-API-SECRET-KEY': alpacaSecretKey
-      }
-    });
-    if (!snapRes.ok) {
-      const detail = await snapRes.text().catch(() => '');
-      throw new Error(`Alpaca option quote check failed: ${snapRes.status}${detail ? ` - ${detail}` : ''}`);
-    }
-
-    const snapData: any = await snapRes.json();
-    const snap = snapData.snapshots?.[osiTicker];
-    if (!snap) return null;
-
-    const bid = Number(snap.latestQuote?.bp || 0);
-    const ask = Number(snap.latestQuote?.ap || 0);
-    const last = Number(snap.latestTrade?.p || 0);
-    const mid = bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : 0;
-    const mark = mid > 0 ? mid : last > 0 ? Number(last.toFixed(2)) : 0;
-    const spreadPct = bid > 0 && ask > 0 && mid > 0 ? Number((((ask - bid) / mid) * 100).toFixed(2)) : null;
-    const quoteTimeMs = this.parseAlpacaTimestamp(snap.latestQuote?.t);
-    const tradeTimeMs = this.parseAlpacaTimestamp(snap.latestTrade?.t);
-    const now = Date.now();
-    const quoteAgeMs = quoteTimeMs ? Math.max(0, now - quoteTimeMs) : null;
-    const tradeAgeMs = tradeTimeMs ? Math.max(0, now - tradeTimeMs) : null;
-    const timestampMs = quoteTimeMs || tradeTimeMs;
-
-    return {
-      source: 'alpaca',
-      ticker: osiTicker,
-      bid,
-      ask,
-      last,
-      mid,
-      mark,
-      spreadPct,
-      syntheticOnly: false,
-      quoteAgeMs,
-      tradeAgeMs,
-      timestamp: timestampMs ? new Date(timestampMs).toISOString() : null
-    };
-  }
-
   private async fetchThetaDataOptionQuote(userId: number, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
     const thetaData = new ThetaDataService(this.fastify);
     const quote = await thetaData.getOptionQuoteForOsi(userId, osiTicker);
@@ -649,15 +516,6 @@ export class TradeExecutionService {
       this.fastify.log.warn(`[TradeExecutionService] ThetaData entry quote unavailable for ${osiTicker}: ${err.message || String(err)}`);
     }
 
-    const canUseAlpacaMarketDataFallback = (settings.execution_broker || '') === 'alpaca_paper';
-    if (!canUseAlpacaMarketDataFallback) return null;
-
-    try {
-      const alpacaQuote = await this.fetchAlpacaOptionSnapshot(osiTicker, settings.alpaca_key_id, settings.alpaca_secret_key);
-      if (alpacaQuote) return alpacaQuote;
-    } catch (err: any) {
-      this.fastify.log.warn(`[TradeExecutionService] Alpaca entry quote fallback unavailable for ${osiTicker}: ${err.message || String(err)}`);
-    }
     return null;
   }
 
@@ -728,104 +586,6 @@ export class TradeExecutionService {
       movePct: baselineMark ? Number((((finalQuote.mark - baselineMark) / baselineMark) * 100).toFixed(2)) : null,
       stabilityMovePct
     };
-  }
-
-  private async executeAlpacaPaperTrade(input: ExecuteSignalInput, settings: ExecutionSettings, quantity: number) {
-    const keyId = settings.alpaca_key_id?.trim();
-    const secretKey = settings.alpaca_secret_key?.trim();
-    if (!keyId || !secretKey) {
-      const message = 'Alpaca credentials are not configured';
-      await this.markSignalExecutionFailure(input.userId, input.signalId, message);
-      return { success: false, broker: 'alpaca_paper', message };
-    }
-
-    const osiTicker = this.constructOSITicker(input.symbol, input.chosenStrike, input.winningSide, input.chosenExpiry);
-    const slippagePct = Math.max(0, Number(settings.entry_slippage_pct || 3));
-    const useLimitOrder = input.mark !== null && input.mark > 0 && (settings.order_type || 'LIMIT') === 'LIMIT';
-    let limitPrice = useLimitOrder ? Number((input.mark! * (1 + slippagePct / 100)).toFixed(2)) : undefined;
-    let entryQuoteValidation: EntryQuoteValidation | null = null;
-
-    try {
-      const validatedQuote = await this.validateEntryQuote(input, settings, osiTicker, limitPrice);
-      entryQuoteValidation = validatedQuote;
-      limitPrice = validatedQuote.protectedLimit;
-    } catch (err: any) {
-      const message = err.message || String(err);
-      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
-      this.fastify.log.info(`[TradeExecutionService] ${message}`);
-      return { success: false, skipped: true, broker: 'alpaca_paper', message };
-    }
-
-    const orderPayload: any = {
-      symbol: osiTicker,
-      qty: quantity,
-      side: 'buy',
-      type: 'limit',
-      time_in_force: 'day'
-    };
-    if (limitPrice) orderPayload.limit_price = limitPrice.toString();
-
-    try {
-      const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
-        method: 'POST',
-        headers: {
-          'APCA-API-KEY-ID': keyId,
-          'APCA-API-SECRET-KEY': secretKey,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(orderPayload)
-      });
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(`Alpaca paper order failed: ${res.status} - ${errorText}`);
-      }
-
-      const orderData: any = await res.json();
-      const entryPrice = entryQuoteValidation?.quote.mark || await this.resolveEntryPriceFromAlpaca(osiTicker, input.mark, keyId, secretKey);
-      const orderFilled = ['filled', 'partially_filled'].includes(String(orderData.status || '').toLowerCase());
-      const executionStatus = orderFilled ? 'EXECUTED' : 'PENDING';
-      const position = await this.insertExecutedPosition(input, {
-        quantity,
-        entryPrice,
-        isSimulated: true,
-        accountId: 'alpaca_paper',
-        executionBroker: 'alpaca_paper',
-        brokerOrderId: orderData.id || null,
-        brokerTradeId: null,
-        executionStatus,
-        positionStatus: orderFilled ? 'OPEN' : 'PENDING_ORDER',
-        takeProfitPct: settings.take_profit_pct,
-        notes: `[Alpaca paper trade ${orderData.id || 'submitted'} from Signal #${input.signalId}]`
-      });
-
-      await this.recordTradeEventBestEffort({
-        userId: input.userId,
-        positionId: position?.id || null,
-        eventType: orderFilled ? 'ENTRY_FILLED' : 'ENTRY_ORDER_SUBMITTED',
-        message: `Alpaca paper ${orderPayload.type} entry ${orderFilled ? 'filled' : 'submitted'} from Signal #${input.signalId}`,
-        metadata: {
-          signalId: input.signalId,
-          broker: 'alpaca_paper',
-          orderId: orderData.id || null,
-          quantity,
-          orderType: orderPayload.type,
-          protectedLimit: limitPrice,
-          entryQuoteValidation,
-          setupGrade: await this.getSignalSetupGrade(input.signalId),
-          contract: this.contractLabel(input),
-          entryPrice,
-          stopUnderlying: input.stopUnderlying,
-          targetUnderlying: input.targetUnderlying
-        }
-      });
-      await this.markSignalExecuted(input.userId, input.signalId, 'alpaca_paper', orderData.id || null, null, quantity, executionStatus);
-      await this.invalidateUserCaches(input.userId);
-      return { success: true, broker: 'alpaca_paper', orderId: orderData.id, quantity, executionStatus };
-    } catch (err: any) {
-      await this.markSignalExecutionFailure(input.userId, input.signalId, err.message);
-      throw err;
-    }
   }
 
   private async executeSnapTradeOptionTrade(input: ExecuteSignalInput, settings: ExecutionSettings, quantity: number) {
@@ -1041,31 +801,6 @@ export class TradeExecutionService {
     } catch (err: any) {
       this.fastify.log.warn(`[TradeExecutionService] Failed to record trade event ${event.eventType}: ${err.message}`);
     }
-  }
-
-  private async resolveEntryPriceFromAlpaca(osiTicker: string, mark: number | null, keyId: string, secretKey: string): Promise<number> {
-    if (mark && mark > 0) return mark;
-    try {
-      const snapRes = await fetch(`https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${osiTicker}`, {
-        headers: {
-          'APCA-API-KEY-ID': keyId,
-          'APCA-API-SECRET-KEY': secretKey
-        }
-      });
-      if (snapRes.ok) {
-        const snapData: any = await snapRes.json();
-        const snap = snapData.snapshots?.[osiTicker];
-        if (snap) {
-          const bid = snap.latestQuote?.bp || 0;
-          const ask = snap.latestQuote?.ap || 0;
-          if (bid > 0 && ask > 0) return Number(((bid + ask) / 2).toFixed(2));
-          if (snap.latestTrade?.p) return Number(snap.latestTrade.p);
-        }
-      }
-    } catch (err: any) {
-      this.fastify.log.warn(`[TradeExecutionService] Failed to resolve Alpaca entry price: ${err.message}`);
-    }
-    return 1;
   }
 
   private async markSignalExecuted(userId: number, signalId: number, broker: string, orderId: string | null, tradeId: string | null, quantity: number, executionStatus: string = 'EXECUTED') {

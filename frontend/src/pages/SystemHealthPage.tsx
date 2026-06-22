@@ -1,13 +1,44 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, ArrowLeft, Clock, Database, RefreshCw, Router, ShieldCheck, Siren, Zap } from 'lucide-react';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  Clock,
+  Database,
+  RadioTower,
+  RefreshCw,
+  Router,
+  Search,
+  ServerCrash,
+  ShieldCheck,
+  Siren,
+  Zap
+} from 'lucide-react';
 import { api } from '../lib/api';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 
 type ApiHealth = Awaited<ReturnType<typeof api.getSignalsHealth>>;
 type ServiceHealth = Awaited<ReturnType<typeof api.getServicesHealth>>;
+type HealthSeverity = 'critical' | 'warning' | 'ok' | 'info';
+
+type DiagnosticItem = {
+  id: string;
+  area: string;
+  title: string;
+  status?: string | null;
+  severity: HealthSeverity;
+  endpoint?: string | null;
+  latencyMs?: number | null;
+  lastSeen?: string | null;
+  evidence?: unknown;
+  cause: string;
+  nextStep: string;
+  actionCommand?: string | null;
+};
 
 const IGNORED_COMPONENTS_STORAGE_KEY = 'systemHealthIgnoredComponents';
 
@@ -25,84 +56,230 @@ const saveIgnoredComponents = (ignored: Set<string>) => {
   try {
     window.localStorage.setItem(IGNORED_COMPONENTS_STORAGE_KEY, JSON.stringify(Array.from(ignored).sort()));
   } catch {
-    // Ignore local browser storage failures; the live health payload is unchanged.
+    // Browser storage is optional; the live health payload remains unchanged.
   }
 };
 
 const formatRelativeTime = (timestamp?: string | null) => {
   if (!timestamp) return 'No recent data';
-  const diffSeconds = Math.max(0, Math.round((Date.now() - new Date(timestamp).getTime()) / 1000));
+  const parsed = new Date(timestamp).getTime();
+  if (!Number.isFinite(parsed)) return 'Invalid timestamp';
+  const diffSeconds = Math.max(0, Math.round((Date.now() - parsed) / 1000));
   if (diffSeconds < 60) return `${diffSeconds}s ago`;
   if (diffSeconds < 3600) return `${Math.round(diffSeconds / 60)}m ago`;
-  return `${Math.round(diffSeconds / 3600)}h ago`;
+  if (diffSeconds < 86400) return `${Math.round(diffSeconds / 3600)}h ago`;
+  return `${Math.round(diffSeconds / 86400)}d ago`;
 };
 
 const statusTone = (status?: string | null) => {
   const normalized = String(status || '').toUpperCase();
   if (['UP', 'RUNNING', 'CONNECTED', 'OK'].includes(normalized)) return 'text-emerald-500 border-emerald-500/30 bg-emerald-500/10';
-  if (['DEGRADED', 'MARKET_CLOSED', 'IDLE'].includes(normalized)) return 'text-amber-500 border-amber-500/30 bg-amber-500/10';
+  if (['DEGRADED', 'MARKET_CLOSED', 'IDLE', 'STOPPED'].includes(normalized)) return 'text-amber-500 border-amber-500/30 bg-amber-500/10';
   if (['N/A', 'DISABLED'].includes(normalized)) return 'text-muted-foreground border-border bg-muted/40';
   return 'text-red-500 border-red-500/30 bg-red-500/10';
 };
 
-const isBadStatus = (status?: string | null) => {
+const severityTone = (severity: HealthSeverity) => {
+  if (severity === 'critical') return 'border-red-500/30 bg-red-500/10 text-red-500';
+  if (severity === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-500';
+  if (severity === 'ok') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500';
+  return 'border-border bg-muted/40 text-muted-foreground';
+};
+
+const severityForStatus = (status?: string | null): HealthSeverity => {
   const normalized = String(status || '').toUpperCase();
-  return Boolean(normalized) && !['UP', 'RUNNING', 'CONNECTED', 'OK', 'N/A', 'MARKET_CLOSED', 'IDLE', 'DISABLED'].includes(normalized);
+  if (['UP', 'RUNNING', 'CONNECTED', 'OK'].includes(normalized)) return 'ok';
+  if (['N/A', 'DISABLED', 'IDLE', 'MARKET_CLOSED'].includes(normalized)) return 'info';
+  if (['DEGRADED', 'STOPPED'].includes(normalized)) return 'warning';
+  return 'critical';
 };
 
-const isWatchedStream = (
-  componentKey: string,
-  provider: string,
-  stream: NonNullable<ServiceHealth['streams']>['alpaca'] | NonNullable<ServiceHealth['streams']>['thetadata'] | undefined,
-  services: ServiceHealth,
-  ignoredComponents: Set<string>
-) => {
-  if (ignoredComponents.has(componentKey)) return false;
-  if (services.liveExitMonitor?.provider === provider) return true;
-  return Boolean(stream?.connected || (stream?.activeSubscriptions ?? 0) > 0 || stream?.lastMessageAt);
+const compactValue = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return 'None';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 };
 
-const systemSummary = (
-  apiHealth: ApiHealth | null,
-  services: ServiceHealth | null,
-  websocketConnected: boolean | null,
-  ignoredComponents: Set<string>
-) => {
-  const issues: string[] = [];
-  const degraded: string[] = [];
+const causeFromError = (fallback: string, error?: string | null) => {
+  const lower = String(error || '').toLowerCase();
+  if (!error) return fallback;
+  if (lower.includes('not configured') || lower.includes('key') || lower.includes('password')) return 'Missing or invalid credentials/configuration.';
+  if (lower.includes('timeout') || lower.includes('econn') || lower.includes('network')) return 'Network timeout or service unreachable.';
+  if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden')) return 'Authentication or entitlement failure.';
+  if (lower.includes('404')) return 'Endpoint path or upstream route mismatch.';
+  if (lower.includes('429') || lower.includes('rate')) return 'Rate limit or upstream throttling.';
+  if (lower.includes('subscription') || lower.includes('permission_denied')) return 'Data entitlement or subscription mismatch.';
+  return fallback;
+};
+
+const apiLabel = (name: string) => {
+  const labels: Record<string, string> = {
+    yahooFinance: 'Yahoo Finance',
+    sscgexPortal: 'SSCGEX Portal',
+    thetaData: 'ThetaData Terminal',
+    openRouter: 'OpenRouter AI',
+    discord: 'Discord Webhook'
+  };
+  return labels[name] || name;
+};
+
+const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth | null): DiagnosticItem[] => {
+  const items: DiagnosticItem[] = [];
 
   if (apiHealth) {
     Object.entries(apiHealth).forEach(([name, value]) => {
-      if (ignoredComponents.has(`api:${name}`)) return;
-      if (value?.status && value.status !== 'N/A' && value.status !== 'UP') issues.push(`${name} ${value.status}`);
+      const status = value?.status || 'N/A';
+      const lastError = value?.lastError || null;
+      items.push({
+        id: `api:${name}`,
+        area: 'External API',
+        title: apiLabel(name),
+        status,
+        severity: severityForStatus(status),
+        endpoint: value?.endpoint || null,
+        latencyMs: value?.latencyMs ?? null,
+        lastSeen: value?.checkedAt || null,
+        evidence: lastError,
+        cause: causeFromError('External dependency check failed.', lastError),
+        nextStep: status === 'N/A' ? 'Configure the service only if this dependency is required.' : 'Check credentials, entitlement, endpoint reachability, and upstream status.',
+        actionCommand: name === 'thetaData'
+          ? `node -e "fetch('${value?.endpoint || 'http://127.0.0.1:25503/v3/terminal/mdds/status'}').then(r=>r.text()).then(console.log).catch(e=>console.error(e.message))"`
+          : name === 'openRouter'
+            ? 'Check Settings -> AI model and OpenRouter key, then refresh this page.'
+            : name === 'sscgexPortal'
+              ? 'Check Settings -> SSCGEX password, then run a manual scan.'
+              : null
+      });
     });
   }
 
   if (services) {
-    if (!ignoredComponents.has('service:liveExitMonitor')) {
-      if (isBadStatus(services.liveExitMonitor?.status)) issues.push(`live exit ${services.liveExitMonitor.status}`);
-      if (services.liveExitMonitor?.lastError) issues.push('live exit error');
-    }
-    if (isWatchedStream('stream:alpaca', 'alpaca', services.streams?.alpaca, services, ignoredComponents) && isBadStatus(services.streams?.alpaca?.status)) {
-      issues.push(`Alpaca stream ${services.streams.alpaca.status}`);
-    }
-    if (isWatchedStream('stream:thetadata', 'thetadata', services.streams?.thetadata, services, ignoredComponents) && isBadStatus(services.streams?.thetadata?.status)) {
-      issues.push(`ThetaData stream ${services.streams.thetadata.status}`);
-    }
-    if (!ignoredComponents.has('market:thetadata') && isBadStatus(services.marketData?.thetadata?.status)) {
-      issues.push(`ThetaData terminal ${services.marketData?.thetadata?.status}`);
-    }
-    if (!ignoredComponents.has('service:poller') && !services.poller?.running) degraded.push('poller stopped');
-    if (!ignoredComponents.has('service:scanner') && isBadStatus(services.scanner?.status)) issues.push(`scanner ${services.scanner.status}`);
-    if (!ignoredComponents.has('broker:snaptradePendingOrders') && services.snaptradePendingOrders?.lastError) issues.push('broker sync error');
-    if (!ignoredComponents.has('runtime:tradeRedis') && services.tradeRedis?.status === 'DEGRADED') degraded.push('Redis degraded');
+    items.push({
+      id: 'service:scanner',
+      area: 'Runtime',
+      title: 'Signal Scanner',
+      status: services.scanner?.status || 'N/A',
+      severity: severityForStatus(services.scanner?.status),
+      endpoint: '/api/signals/trigger',
+      lastSeen: services.scanner?.lastScanAt || services.generatedAt,
+      evidence: services.scanner?.lastSkippedReason || null,
+      cause: services.scanner?.lastSkippedReason ? 'Scanner is intentionally skipping or gated by schedule/settings.' : 'Scanner runtime state.',
+      nextStep: 'Check market window, scanner enabled flag, eligible source user, and the latest scan log.',
+      actionCommand: 'Open Settings -> Day Trading, confirm scanner enabled and trading window.'
+    });
+
+    items.push({
+      id: 'service:poller',
+      area: 'Runtime',
+      title: 'Market Poller',
+      status: services.poller?.running ? 'RUNNING' : 'STOPPED',
+      severity: services.poller?.running ? 'ok' : 'warning',
+      endpoint: 'backend MarketPoller',
+      lastSeen: services.generatedAt,
+      evidence: services.poller?.running ? null : 'Poller reports stopped.',
+      cause: services.poller?.running ? 'Poller is running.' : 'Fallback market sync loop is not running.',
+      nextStep: 'Restart backend if the poller should be active.',
+      actionCommand: 'docker compose restart backend'
+    });
+
+    items.push({
+      id: 'service:liveExitMonitor',
+      area: 'Trading',
+      title: 'Live Exit Monitor',
+      status: services.liveExitMonitor?.status || 'N/A',
+      severity: services.liveExitMonitor?.lastError ? 'critical' : severityForStatus(services.liveExitMonitor?.status),
+      endpoint: `stream provider: ${services.liveExitMonitor?.provider || 'none'}`,
+      lastSeen: services.liveExitMonitor?.lastQuoteAt || services.generatedAt,
+      evidence: services.liveExitMonitor?.lastError || null,
+      cause: causeFromError('Live exit quote processing error.', services.liveExitMonitor?.lastError),
+      nextStep: 'Check the active stream, open option subscriptions, and ThetaData quote timestamps.',
+      actionCommand: 'Open /system-health and compare Live Exit Monitor with ThetaData stream last message time.'
+    });
+
+    const thetaTerminal = services.marketData?.thetadata;
+    items.push({
+      id: 'market:thetadata',
+      area: 'Market Data',
+      title: 'ThetaData Terminal',
+      status: thetaTerminal?.status || 'N/A',
+      severity: thetaTerminal?.lastError ? 'critical' : severityForStatus(thetaTerminal?.status),
+      endpoint: `${thetaTerminal?.baseUrl || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status`,
+      latencyMs: thetaTerminal?.latencyMs ?? null,
+      lastSeen: services.generatedAt,
+      evidence: thetaTerminal?.lastError || null,
+      cause: causeFromError('ThetaData terminal is not reachable or not connected.', thetaTerminal?.lastError),
+      nextStep: 'Verify the ThetaData v3 jar is running in the backend container and that credentials/subscription are valid.',
+      actionCommand: `node -e "fetch('${thetaTerminal?.baseUrl || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status').then(r=>r.text()).then(console.log).catch(e=>console.error(e.message))"`
+    });
+
+    Object.entries(services.streams || {}).forEach(([name, stream]) => {
+      const isActive = services.liveExitMonitor?.provider === name || Boolean(stream?.connected || (stream?.activeSubscriptions ?? 0) > 0 || stream?.lastMessageAt);
+      items.push({
+        id: `stream:${name}`,
+        area: 'Stream',
+        title: `${name === 'thetadata' ? 'ThetaData' : 'Alpaca'} Quote Stream`,
+        status: isActive ? stream?.status || 'N/A' : 'DISABLED',
+        severity: isActive && stream?.lastError ? 'critical' : severityForStatus(isActive ? stream?.status : 'DISABLED'),
+        endpoint: name === 'thetadata' ? 'THETADATA_STREAM_URL / v1 events' : 'Alpaca market-data stream',
+        lastSeen: stream?.lastMessageAt || services.generatedAt,
+        evidence: stream?.lastError || `${stream?.activeSubscriptions ?? 0} active subscriptions, ${stream?.reconnectAttempts ?? 0} reconnect attempts`,
+        cause: stream?.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream.lastError) : 'Stream status and subscription state.',
+        nextStep: name === 'thetadata' ? 'Confirm ThetaData stream URL and subscribed option symbols.' : 'Alpaca stream is optional unless selected as active provider.',
+        actionCommand: name === 'thetadata'
+          ? 'Check THETADATA_STREAM_URL and open option positions subscribed by the live exit monitor.'
+          : 'No action needed unless Alpaca is intentionally used as active provider.'
+      });
+    });
+
+    const broker = services.snaptradePendingOrders;
+    items.push({
+      id: 'broker:snaptradePendingOrders',
+      area: 'Broker',
+      title: 'SnapTrade Pending Orders',
+      status: broker?.status || 'N/A',
+      severity: broker?.lastError ? 'critical' : severityForStatus(broker?.status),
+      endpoint: 'SnapTrade order status sync',
+      lastSeen: broker?.lastRunAt || broker?.queuedSyncLastRunAt || services.generatedAt,
+      evidence: broker?.lastError || broker?.lastResult || null,
+      cause: causeFromError('Broker reconciliation is failing or stale.', broker?.lastError),
+      nextStep: 'Check SnapTrade connection status, selected trading account, and pending order IDs.',
+      actionCommand: 'Open Settings -> SnapTrade, refresh accounts, then use Command Center on stale trades.'
+    });
+
+    items.push({
+      id: 'broker:watchdog',
+      area: 'Broker',
+      title: 'Broker Watchdog',
+      status: (broker?.lastWatchdogResult?.entryStale || broker?.lastWatchdogResult?.exitStale) ? 'DEGRADED' : 'OK',
+      severity: (broker?.lastWatchdogResult?.entryStale || broker?.lastWatchdogResult?.exitStale) ? 'warning' : 'ok',
+      endpoint: 'backend order watchdog',
+      lastSeen: broker?.lastRunAt || services.generatedAt,
+      evidence: broker?.lastWatchdogResult || null,
+      cause: 'Detects stale pending broker entries/exits.',
+      nextStep: 'Use the command center to verify stale broker orders before retrying exits.',
+      actionCommand: 'Open the affected trade in Command Center and refresh broker proof.'
+    });
+
+    items.push({
+      id: 'runtime:tradeRedis',
+      area: 'Runtime',
+      title: 'Trade Redis',
+      status: services.tradeRedis?.status || 'N/A',
+      severity: services.tradeRedis?.status === 'DEGRADED' ? 'warning' : severityForStatus(services.tradeRedis?.status),
+      endpoint: 'redis://redis:6379',
+      lastSeen: services.tradeRedis?.generatedAt || services.generatedAt,
+      evidence: services.tradeRedis?.metrics || null,
+      cause: services.tradeRedis?.status === 'DEGRADED' ? 'Redis is reachable but queue/lock telemetry indicates degradation.' : 'Redis cache, locks, and broker sync queue.',
+      nextStep: 'Check Redis container health, queue depth, and lock denial spikes.',
+      actionCommand: 'docker compose ps redis && docker compose logs --tail=80 redis'
+    });
   }
 
-  if (websocketConnected === false) degraded.push('browser stream disconnected');
-
-  if (issues.length > 0) return { label: 'System Degraded', tone: 'destructive' as const, issues };
-  if (degraded.length > 0) return { label: 'System Warning', tone: 'warning' as const, issues: degraded };
-  return { label: 'All Systems Normal', tone: 'ok' as const, issues: [] };
+  return items;
 };
 
 function StatusPill({ status, ignored = false }: { status?: string | null; ignored?: boolean }) {
@@ -125,55 +302,107 @@ function MetricCard({ label, value, detail, icon: Icon }: { label: string; value
   return (
     <div className="rounded-md border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
-          <div className="mt-1 font-mono text-xl font-semibold">{value}</div>
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase text-muted-foreground">{label}</div>
+          <div className="mt-1 truncate font-mono text-xl font-semibold">{value}</div>
         </div>
-        <Icon className="h-5 w-5 text-muted-foreground" />
+        <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
       </div>
-      {detail && <div className="mt-2 text-xs text-muted-foreground">{detail}</div>}
+      {detail && <div className="mt-2 break-words text-xs text-muted-foreground">{detail}</div>}
     </div>
   );
 }
 
-function HealthRow({
-  title,
-  detail,
-  status,
-  componentKey,
-  ignoredComponents,
-  onToggleIgnored,
-  children
-}: {
-  title: string;
-  detail?: string;
-  status?: string | null;
-  componentKey: string;
-  ignoredComponents: Set<string>;
-  onToggleIgnored: (componentKey: string) => void;
-  children?: ReactNode;
-}) {
-  const ignored = ignoredComponents.has(componentKey);
-
+function EvidenceBlock({ value }: { value?: unknown }) {
+  const text = compactValue(value);
   return (
-    <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+    <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+      {text}
+    </pre>
+  );
+}
+
+function DiagnosticRow({
+  item,
+  ignored,
+  onToggleIgnored
+}: {
+  item: DiagnosticItem;
+  ignored: boolean;
+  onToggleIgnored: (componentKey: string) => void;
+}) {
+  return (
+    <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(180px,1.1fr)_minmax(220px,1.2fr)_minmax(240px,1.4fr)_auto] lg:items-start">
       <div className="min-w-0">
-        <div className="break-words text-sm font-medium">{title}</div>
-        {detail && <div className="mt-0.5 break-words text-xs text-muted-foreground">{detail}</div>}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="break-words text-sm font-medium">{item.title}</span>
+          <StatusPill status={item.status} ignored={ignored} />
+        </div>
+        <div className="mt-1 text-xs text-muted-foreground">{item.area} · {formatRelativeTime(item.lastSeen)}</div>
       </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        {ignored ? <StatusPill status={status} ignored /> : children ?? <StatusPill status={status} />}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-7 px-2 text-xs"
-          onClick={() => onToggleIgnored(componentKey)}
-        >
-          {ignored ? 'Unignore' : 'Ignore'}
-        </Button>
+      <div className="min-w-0">
+        <div className="text-[10px] font-semibold uppercase text-muted-foreground">Endpoint</div>
+        <div className="mt-1 break-all font-mono text-xs">{item.endpoint || 'Internal runtime check'}</div>
+        {item.latencyMs !== null && item.latencyMs !== undefined && (
+          <div className="mt-1 text-xs text-muted-foreground">{item.latencyMs}ms latency</div>
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="text-[10px] font-semibold uppercase text-muted-foreground">Likely Cause</div>
+        <div className="mt-1 text-xs">{item.cause}</div>
+        <div className="mt-2 text-[10px] font-semibold uppercase text-muted-foreground">Evidence</div>
+        <div className="mt-1"><EvidenceBlock value={item.evidence || 'No error evidence reported.'} /></div>
+        {item.actionCommand && (
+          <>
+            <div className="mt-2 text-[10px] font-semibold uppercase text-muted-foreground">Run or check</div>
+            <div className="mt-1 rounded-md border border-border bg-background/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground">
+              {item.actionCommand}
+            </div>
+          </>
+        )}
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-8 px-2 text-xs"
+        onClick={() => onToggleIgnored(item.id)}
+      >
+        {ignored ? 'Unignore' : 'Ignore'}
+      </Button>
+    </div>
+  );
+}
+
+function RootCauseCard({ item }: { item: DiagnosticItem }) {
+  const Icon = item.severity === 'critical' ? ServerCrash : item.severity === 'warning' ? AlertTriangle : CheckCircle2;
+  return (
+    <div className={`rounded-md border p-4 ${severityTone(item.severity)}`}>
+      <div className="flex items-start gap-3">
+        <Icon className="mt-0.5 h-5 w-5 shrink-0" />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="break-words text-sm font-semibold">{item.title}</div>
+            <StatusPill status={item.status} />
+          </div>
+          <div className="mt-2 break-words text-xs">{item.cause}</div>
+          <div className="mt-2 break-all font-mono text-[11px] opacity-90">{item.endpoint || item.area}</div>
+          <div className="mt-3 text-xs font-medium">Next: {item.nextStep}</div>
+        </div>
       </div>
     </div>
+  );
+}
+
+function Section({ title, icon: Icon, children }: { title: string; icon: any; children: ReactNode }) {
+  return (
+    <section className="rounded-md border border-border bg-card">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+        <Icon className="h-4 w-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold">{title}</h3>
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -210,11 +439,8 @@ export default function SystemHealthPage() {
   const toggleIgnoredComponent = (componentKey: string) => {
     setIgnoredComponents((current) => {
       const next = new Set(current);
-      if (next.has(componentKey)) {
-        next.delete(componentKey);
-      } else {
-        next.add(componentKey);
-      }
+      if (next.has(componentKey)) next.delete(componentKey);
+      else next.add(componentKey);
       saveIgnoredComponents(next);
       return next;
     });
@@ -226,12 +452,18 @@ export default function SystemHealthPage() {
     setIgnoredComponents(next);
   };
 
-  const summary = useMemo(() => systemSummary(apiHealth, services, null, ignoredComponents), [apiHealth, services, ignoredComponents]);
-  const apiEntries = apiHealth ? Object.entries(apiHealth).filter(([, value]) => value?.status !== 'N/A') : [];
+  const diagnostics = useMemo(() => buildDiagnostics(apiHealth, services), [apiHealth, services]);
+  const activeDiagnostics = diagnostics.filter((item) => !ignoredComponents.has(item.id));
+  const failures = activeDiagnostics.filter((item) => item.severity === 'critical');
+  const warnings = activeDiagnostics.filter((item) => item.severity === 'warning');
+  const problematicEndpoints = activeDiagnostics.filter((item) => ['critical', 'warning'].includes(item.severity));
+  const rootCauseItems = problematicEndpoints.slice(0, 4);
+  const statusLabel = failures.length > 0 ? 'Action Required' : warnings.length > 0 ? 'Watch Closely' : 'All Systems Normal';
+  const statusSeverity: HealthSeverity = failures.length > 0 ? 'critical' : warnings.length > 0 ? 'warning' : 'ok';
   const activeProvider = services?.liveExitMonitor?.provider === 'alpaca' ? services?.streams?.alpaca : services?.streams?.thetadata;
 
   return (
-    <div className="mx-auto w-full max-w-[1500px] px-3 py-4 sm:w-[95%] sm:px-0">
+    <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3 sm:items-center">
           <Button asChild variant="ghost" size="icon" className="shrink-0 rounded-full">
@@ -241,7 +473,7 @@ export default function SystemHealthPage() {
           </Button>
           <div className="min-w-0">
             <h2 className="text-xl font-semibold tracking-tight">System Health</h2>
-            <p className="text-sm text-muted-foreground">Runtime status for trading, data, broker sync, streams, and Redis.</p>
+            <p className="text-sm text-muted-foreground">Root cause, endpoint status, and runtime evidence for trading services.</p>
           </div>
         </div>
         <Button variant="outline" className="w-full gap-2 sm:w-auto" onClick={loadHealth} disabled={loading}>
@@ -256,157 +488,111 @@ export default function SystemHealthPage() {
         </div>
       )}
 
-      <div className={`mb-4 rounded-md border p-4 ${
-        summary.tone === 'ok'
-          ? 'border-emerald-500/30 bg-emerald-500/10'
-          : summary.tone === 'warning'
-            ? 'border-amber-500/30 bg-amber-500/10'
-            : 'border-red-500/30 bg-red-500/10'
-      }`}>
+      <div className={`mb-4 rounded-md border p-4 ${severityTone(statusSeverity)}`}>
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex min-w-0 items-start gap-3 sm:items-center">
-            {summary.tone === 'ok' ? <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500 sm:mt-0" /> : <Siren className="mt-0.5 h-5 w-5 shrink-0 text-amber-500 sm:mt-0" />}
+          <div className="flex min-w-0 items-start gap-3">
+            {statusSeverity === 'ok' ? <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0" /> : <Siren className="mt-0.5 h-5 w-5 shrink-0" />}
             <div className="min-w-0">
-              <div className="font-semibold">{summary.label}</div>
-              <div className="break-words text-sm text-muted-foreground">
-                {summary.issues.length > 0 ? summary.issues.slice(0, 4).join(', ') : 'No active component-level issues detected.'}
+              <div className="font-semibold">{statusLabel}</div>
+              <div className="break-words text-sm">
+                {failures.length} critical, {warnings.length} warning, {ignoredComponents.size} ignored. Updated {formatRelativeTime(services?.generatedAt)}.
               </div>
             </div>
           </div>
-          <div className="shrink-0 text-xs text-muted-foreground">Generated {formatRelativeTime(services?.generatedAt)}</div>
-        </div>
-        {ignoredComponents.size > 0 && (
-          <div className="mt-3 flex flex-col gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-            <span>Ignoring {ignoredComponents.size} component{ignoredComponents.size === 1 ? '' : 's'} in this browser. Ignored components do not affect the summary banner.</span>
-            <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={resetIgnoredComponents}>
+          {ignoredComponents.size > 0 && (
+            <Button type="button" variant="outline" size="sm" className="h-8 text-xs" onClick={resetIgnoredComponents}>
               Reset ignored
             </Button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Root Issues" value={`${failures.length}`} detail={`${warnings.length} warnings active`} icon={Search} />
         <MetricCard label="Live Exit" value={services?.liveExitMonitor?.status || 'N/A'} detail={`${services?.liveExitMonitor?.matchedUpdates ?? 0} matched updates`} icon={Activity} />
         <MetricCard label="Active Stream" value={activeProvider?.connected ? 'Connected' : 'Disconnected'} detail={`${activeProvider?.activeSubscriptions ?? 0} subscriptions`} icon={Router} />
         <MetricCard label="Broker Sync" value={services?.snaptradePendingOrders?.status || 'N/A'} detail={`Checked ${services?.snaptradePendingOrders?.lastResult?.checked ?? 0} pending orders`} icon={Zap} />
-        <MetricCard label="Redis Runtime" value={services?.tradeRedis?.status || 'N/A'} detail={`Queue depth ${services?.tradeRedis?.queueDepth ?? 0}`} icon={Database} />
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
-        <section className="rounded-md border border-border bg-card">
-          <div className="border-b border-border px-4 py-3">
-            <h3 className="text-sm font-semibold">External APIs</h3>
+      <div className="mb-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <Section title="Root Cause Suspects" icon={ServerCrash}>
+          <div className="grid gap-3 p-4 md:grid-cols-2">
+            {rootCauseItems.length > 0 ? rootCauseItems.map((item) => (
+              <RootCauseCard key={item.id} item={item} />
+            )) : (
+              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-500">
+                No critical or warning-level endpoint/runtime failures are active.
+              </div>
+            )}
           </div>
+        </Section>
+
+        <Section title="Recent Error Evidence" icon={AlertTriangle}>
+          <div className="space-y-3 p-4">
+            {problematicEndpoints.slice(0, 5).map((item) => (
+              <div key={item.id} className="rounded-md border border-border bg-muted/10 p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium">{item.title}</div>
+                  <Badge variant="outline" className={`text-[10px] ${severityTone(item.severity)}`}>{item.area}</Badge>
+                </div>
+                <EvidenceBlock value={item.evidence || item.cause} />
+              </div>
+            ))}
+            {problematicEndpoints.length === 0 && (
+              <div className="rounded-md border border-border bg-muted/10 p-4 text-sm text-muted-foreground">
+                No error evidence reported by health checks.
+              </div>
+            )}
+          </div>
+        </Section>
+      </div>
+
+      <div className="grid gap-4">
+        <Section title="Problematic Endpoints" icon={RadioTower}>
           <div className="divide-y divide-border">
-            {apiEntries.map(([name, value]) => (
-              <HealthRow
-                key={name}
-                title={name}
-                detail={`${value.latencyMs}ms latency`}
-                status={value.status}
-                componentKey={`api:${name}`}
-                ignoredComponents={ignoredComponents}
+            {problematicEndpoints.length > 0 ? problematicEndpoints.map((item) => (
+              <DiagnosticRow
+                key={item.id}
+                item={item}
+                ignored={ignoredComponents.has(item.id)}
+                onToggleIgnored={toggleIgnoredComponent}
+              />
+            )) : (
+              <div className="px-4 py-6 text-sm text-muted-foreground">No problematic endpoints detected.</div>
+            )}
+          </div>
+        </Section>
+
+        <Section title="All Component Diagnostics" icon={Database}>
+          <div className="divide-y divide-border">
+            {diagnostics.map((item) => (
+              <DiagnosticRow
+                key={item.id}
+                item={item}
+                ignored={ignoredComponents.has(item.id)}
                 onToggleIgnored={toggleIgnoredComponent}
               />
             ))}
           </div>
-        </section>
+        </Section>
 
-        <section className="rounded-md border border-border bg-card">
-          <div className="border-b border-border px-4 py-3">
-            <h3 className="text-sm font-semibold">Runtime Services</h3>
+        <Section title="Runtime Snapshot" icon={Clock}>
+          <div className="grid gap-3 p-4 lg:grid-cols-3">
+            <EvidenceBlock value={{
+              generatedAt: services?.generatedAt || null,
+              liveExitMonitor: services?.liveExitMonitor || null,
+              activeStream: activeProvider || null
+            }} />
+            <EvidenceBlock value={{
+              scanner: services?.scanner || null,
+              snaptradePendingOrders: services?.snaptradePendingOrders || null
+            }} />
+            <EvidenceBlock value={{
+              marketData: services?.marketData || null,
+              tradeRedis: services?.tradeRedis || null
+            }} />
           </div>
-          <div className="divide-y divide-border">
-            <HealthRow
-              title="Scanner"
-              detail={services?.scanner?.lastSkippedReason || `Window ${services?.scanner?.window?.start || '09:30'}-${services?.scanner?.window?.cutoff || '16:00'} ET`}
-              status={services?.scanner?.status}
-              componentKey="service:scanner"
-              ignoredComponents={ignoredComponents}
-              onToggleIgnored={toggleIgnoredComponent}
-            />
-            <HealthRow
-              title="Poller"
-              detail="Fallback market sync"
-              status={services?.poller?.running ? 'RUNNING' : 'STOPPED'}
-              componentKey="service:poller"
-              ignoredComponents={ignoredComponents}
-              onToggleIgnored={toggleIgnoredComponent}
-            />
-            <HealthRow
-              title="Live Exit Monitor"
-              detail={services?.liveExitMonitor?.lastError || `Last quote ${formatRelativeTime(services?.liveExitMonitor?.lastQuoteAt)}`}
-              status={services?.liveExitMonitor?.status}
-              componentKey="service:liveExitMonitor"
-              ignoredComponents={ignoredComponents}
-              onToggleIgnored={toggleIgnoredComponent}
-            />
-            <HealthRow
-              title="ThetaData Terminal"
-              detail={services?.marketData?.thetadata?.lastError || `${services?.marketData?.thetadata?.baseUrl || '127.0.0.1:25503'}, ${services?.marketData?.thetadata?.latencyMs ?? 0}ms latency`}
-              status={services?.marketData?.thetadata?.status}
-              componentKey="market:thetadata"
-              ignoredComponents={ignoredComponents}
-              onToggleIgnored={toggleIgnoredComponent}
-            />
-          </div>
-        </section>
-
-        <section className="rounded-md border border-border bg-card">
-          <div className="border-b border-border px-4 py-3">
-            <h3 className="text-sm font-semibold">Streams</h3>
-          </div>
-          <div className="divide-y divide-border">
-            {[
-              ['Alpaca', 'stream:alpaca', services?.streams?.alpaca],
-              ['ThetaData', 'stream:thetadata', services?.streams?.thetadata]
-            ].map(([name, componentKey, stream]: any) => (
-              <HealthRow
-                key={name}
-                title={name}
-                detail={`${stream?.activeSubscriptions ?? 0} subscriptions, last message ${formatRelativeTime(stream?.lastMessageAt)}`}
-                status={stream?.status}
-                componentKey={componentKey}
-                ignoredComponents={ignoredComponents}
-                onToggleIgnored={toggleIgnoredComponent}
-              />
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-md border border-border bg-card">
-          <div className="border-b border-border px-4 py-3">
-            <h3 className="text-sm font-semibold">Broker And Redis</h3>
-          </div>
-          <div className="divide-y divide-border">
-            <HealthRow
-              title="SnapTrade Pending Orders"
-              detail={`Last run ${formatRelativeTime(services?.snaptradePendingOrders?.lastRunAt)}, queued ${services?.snaptradePendingOrders?.queuedSyncProcessed ?? 0}`}
-              status={services?.snaptradePendingOrders?.status}
-              componentKey="broker:snaptradePendingOrders"
-              ignoredComponents={ignoredComponents}
-              onToggleIgnored={toggleIgnoredComponent}
-            />
-            <HealthRow
-              title="Trade Redis"
-              detail={`Queue ${services?.tradeRedis?.queueDepth ?? 0}, locks denied ${services?.tradeRedis?.metrics?.['locks.denied'] ?? 0}`}
-              status={services?.tradeRedis?.status}
-              componentKey="runtime:tradeRedis"
-              ignoredComponents={ignoredComponents}
-              onToggleIgnored={toggleIgnoredComponent}
-            />
-            <HealthRow
-              title="Broker Watchdog"
-              detail={`Stale entries ${services?.snaptradePendingOrders?.lastWatchdogResult?.entryStale ?? 0}, stale exits ${services?.snaptradePendingOrders?.lastWatchdogResult?.exitStale ?? 0}`}
-              status={null}
-              componentKey="broker:watchdog"
-              ignoredComponents={ignoredComponents}
-              onToggleIgnored={toggleIgnoredComponent}
-            >
-              <Clock className="h-4 w-4 text-muted-foreground" />
-            </HealthRow>
-          </div>
-        </section>
+        </Section>
       </div>
     </div>
   );

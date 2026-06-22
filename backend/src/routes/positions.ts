@@ -339,38 +339,21 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     const { q } = request.query as { q: string };
     if (!q) return [];
 
-    const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
-    if (!apiKey) {
-      fastify.log.warn('ALPHA_VANTAGE_API_KEY not set, using mock/limited search');
-      return [
-        { symbol: 'AAPL', name: 'Apple Inc.' },
-        { symbol: 'MSFT', name: 'Microsoft Corporation' },
-        { symbol: 'GOOGL', name: 'Alphabet Inc.' },
-        { symbol: 'AMZN', name: 'Amazon.com Inc.' },
-        { symbol: 'TSLA', name: 'Tesla Inc.' },
-        { symbol: 'NVDA', name: 'NVIDIA Corporation' },
-        { symbol: 'META', name: 'Meta Platforms Inc.' },
-      ].filter(s => s.symbol.toLowerCase().includes(q.toLowerCase()));
-    }
-
-    try {
-      const url = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${q}&apikey=${apiKey}`;
-      const res = await fetch(url);
-      const data = await res.json();
-
-      if (data.bestMatches) {
-        return data.bestMatches.map((m: any) => ({
-          symbol: m['1. symbol'],
-          name: m['2. name'],
-          type: m['3. type'],
-          region: m['4. region']
-        })).filter((m: any) => m.type === 'Equity' || m.type === 'ETF');
-      }
-      return [];
-    } catch (err: any) {
-      fastify.log.error(err);
-      return [];
-    }
+    const query = q.toLowerCase();
+    return [
+      { symbol: 'QQQ', name: 'Invesco QQQ Trust' },
+      { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust' },
+      { symbol: 'AAPL', name: 'Apple Inc.' },
+      { symbol: 'MSFT', name: 'Microsoft Corporation' },
+      { symbol: 'GOOGL', name: 'Alphabet Inc.' },
+      { symbol: 'AMZN', name: 'Amazon.com Inc.' },
+      { symbol: 'TSLA', name: 'Tesla Inc.' },
+      { symbol: 'NVDA', name: 'NVIDIA Corporation' },
+      { symbol: 'META', name: 'Meta Platforms Inc.' },
+    ].filter((s) => (
+      s.symbol.toLowerCase().includes(query) ||
+      s.name.toLowerCase().includes(query)
+    ));
   });
 
   // GET single position
@@ -601,7 +584,6 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
       const executionBroker = String(position.execution_broker || '');
       const isLiveSnapTrade = !position.is_simulated && executionBroker === 'wealthsimple_snaptrade';
-      const isAlpacaPaper = position.account_id === 'alpaca_paper' || executionBroker === 'alpaca_paper';
 
       if (isLiveSnapTrade) {
         const accountId = String(position.execution_account_id || position.account_id || '').trim();
@@ -655,72 +637,6 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
           await client.query('COMMIT');
           await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
           return reply.code(400).send({ error: err.message || 'Failed to submit SnapTrade close order' });
-        }
-      }
-
-      if (isAlpacaPaper) {
-        const settings = await getSettingsWithGlobalFallback(fastify.pg, userId);
-        const keyId = settings.alpaca_key_id?.trim();
-        const secretKey = settings.alpaca_secret_key?.trim();
-        if (!keyId || !secretKey) {
-          await client.query('ROLLBACK');
-          return reply.code(400).send({ error: 'Alpaca credentials are not configured' });
-        }
-
-        try {
-          const osiTicker = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
-          const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
-            method: 'POST',
-            headers: {
-              'APCA-API-KEY-ID': keyId,
-              'APCA-API-SECRET-KEY': secretKey,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              symbol: osiTicker,
-              qty: closeQty,
-              side: 'sell',
-              type: 'market',
-              time_in_force: 'day'
-            })
-          });
-          if (!res.ok) {
-            const errorText = await res.text();
-            throw new Error(`Alpaca paper close failed: ${res.status} - ${errorText}`);
-          }
-          const orderData: any = await res.json();
-          const updatedPosition = await TradeLifecycleService.markExitSubmitted(
-            client,
-            id,
-            { orderId: orderData.id || null, tradeId: null },
-            {
-              reason: 'MANUAL',
-              orderType: 'MARKET',
-              note: ` [Manual Alpaca paper MARKET exit submitted for ${closeQty} contract(s)${orderData.id ? `: ${orderData.id}` : ''}]`
-            }
-          );
-          await TradeRedisService.recordEvent(client, {
-            userId,
-            positionId: id,
-            eventType: 'EXIT_REQUESTED',
-            message: 'Manual Alpaca paper close submitted',
-            metadata: { orderId: orderData.id || null, quantity: closeQty, orderType: 'MARKET' }
-          });
-          await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
-          return updatedPosition;
-        } catch (err: any) {
-          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Alpaca paper exit failed');
-          await TradeRedisService.recordEvent(client, {
-            userId,
-            positionId: id,
-            eventType: 'EXIT_SUBMISSION_FAILED',
-            message: err.message || String(err),
-            metadata: { source: 'positions-close-alpaca-paper' }
-          });
-          await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
-          return reply.code(400).send({ error: err.message || 'Failed to submit Alpaca paper close order' });
         }
       }
 

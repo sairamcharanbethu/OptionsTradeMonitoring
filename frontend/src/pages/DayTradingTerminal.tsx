@@ -225,7 +225,7 @@ const renderTokenUsageBadge = (usage: any) => {
 const getExecutionBrokerLabel = (broker?: string | null) => {
   switch (broker) {
     case 'alpaca_paper':
-      return 'Alpaca Paper';
+      return 'Alpaca Paper (removed)';
     case 'wealthsimple_snaptrade':
       return 'Wealthsimple Live';
     case 'simulated':
@@ -283,6 +283,37 @@ const isExecutableSetupGrade = (signal?: Signal | null) => {
   return grade === 'A+' || grade === 'A';
 };
 
+const getSetupRank = (signal?: Signal | null) => {
+  const grade = getSetupGradeKey(signal?.setup_grade);
+  if (grade === 'A+') return 4;
+  if (grade === 'A') return 3;
+  if (grade === 'B') return 2;
+  if (grade === 'C') return 1;
+  return 0;
+};
+
+const getBestSignal = (items: Signal[]) => {
+  return [...items]
+    .filter((signal) => signal.signal_type !== 'NONE' && signal.status === 'PENDING')
+    .sort((a, b) => {
+      const gradeDelta = getSetupRank(b) - getSetupRank(a);
+      if (gradeDelta !== 0) return gradeDelta;
+      return Number(b.confidence_score || 0) - Number(a.confidence_score || 0);
+    })[0] || null;
+};
+
+const getSignalSideTone = (side?: string | null) => {
+  if (side === 'CALL') return 'border-emerald-500/35 bg-emerald-950/25 text-emerald-200';
+  if (side === 'PUT') return 'border-red-500/35 bg-red-950/25 text-red-200';
+  return 'border-zinc-700 bg-zinc-950/40 text-zinc-400';
+};
+
+const getReadinessTone = (severity: 'ok' | 'warning' | 'blocked') => {
+  if (severity === 'ok') return 'border-emerald-500/30 bg-emerald-950/20 text-emerald-200';
+  if (severity === 'warning') return 'border-amber-500/30 bg-amber-950/20 text-amber-200';
+  return 'border-red-500/30 bg-red-950/20 text-red-200';
+};
+
 const formatAccountBalance = (account: any) => {
   const fallbackBalance = Array.isArray(account?.balances)
     ? account.balances.find((balance: any) => balance?.cash !== null && balance?.cash !== undefined)
@@ -301,6 +332,69 @@ const formatAccountBalance = (account: any) => {
     maximumFractionDigits: 2
   }).format(numericBalance);
 };
+
+function SymbolLane({
+  symbol,
+  signal,
+  regime,
+  blockers,
+  onSelect
+}: {
+  symbol: 'QQQ' | 'SPY';
+  signal: Signal | null;
+  regime: any;
+  blockers: string[];
+  onSelect: () => void;
+}) {
+  const side = signal?.signal_type || 'NONE';
+  const isTradeable = Boolean(signal && isExecutableSetupGrade(signal) && blockers.length === 0);
+  const tone = isTradeable ? 'ok' : signal ? 'warning' : 'blocked';
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`motion-press text-left rounded border p-3 transition-all hover:border-emerald-400/40 hover:bg-zinc-900/60 ${getReadinessTone(tone)}`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-zinc-100">{symbol}</div>
+          <div className="mt-1 text-[11px] text-zinc-400">{regime.marketRegime} · GEX {regime.currentGexRegime}</div>
+        </div>
+        <Badge variant="outline" className={`text-[10px] font-semibold ${getSignalSideTone(side)}`}>
+          {side === 'NONE' ? 'NO SETUP' : side}
+        </Badge>
+      </div>
+      {signal ? (
+        <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+          <div>
+            <div className="text-zinc-500">Score</div>
+            <div className="font-mono font-semibold text-zinc-100">{signal.confidence_score}%</div>
+          </div>
+          <div>
+            <div className="text-zinc-500">Grade</div>
+            <div className="font-mono font-semibold text-zinc-100">{signal.setup_grade || 'N/A'}</div>
+          </div>
+          <div>
+            <div className="text-zinc-500">Entry</div>
+            <div className="font-mono font-semibold text-zinc-100">{signal.entry_trigger ? `$${signal.entry_trigger.toFixed(2)}` : 'N/A'}</div>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 text-xs text-zinc-500">Waiting for the scanner to produce a pending directional setup.</div>
+      )}
+      <div className="mt-3 border-t border-current/10 pt-2 text-[11px]">
+        {isTradeable ? (
+          <span className="font-medium text-emerald-200">Ready to review.</span>
+        ) : (
+          <span className={signal ? 'text-amber-200' : 'text-red-200'}>
+            {blockers[0] || (signal ? 'Needs review before execution.' : 'No executable setup.')}
+          </span>
+        )}
+      </div>
+    </button>
+  );
+}
 
 export default function DayTradingTerminal() {
   const queryClient = useQueryClient();
@@ -334,7 +428,7 @@ export default function DayTradingTerminal() {
 
   // States
   const [activeTab, setActiveTab] = useState<'signals' | 'logs'>('signals');
-  const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY' | 'BOTH'>('QQQ');
+  const [selectedSymbol, setSelectedSymbol] = useState<'QQQ' | 'SPY' | 'BOTH'>('BOTH');
   const [selectedSignalId, setSelectedSignalId] = useState<number | null>(null);
   const [selectedLogId, setSelectedLogId] = useState<number | null>(null);
   const [expandedRowId, setExpandedRowId] = useState<number | null>(null);
@@ -606,6 +700,8 @@ export default function DayTradingTerminal() {
 
   const latestQQQSignal = signals.find(s => s.symbol === 'QQQ') || null;
   const latestSPYSignal = signals.find(s => s.symbol === 'SPY') || null;
+  const bestQQQSignal = getBestSignal(signals.filter(s => s.symbol === 'QQQ'));
+  const bestSPYSignal = getBestSignal(signals.filter(s => s.symbol === 'SPY'));
   const latestQQQLog = logs.find(l => l.symbol === 'QQQ') || null;
   const latestSPYLog = logs.find(l => l.symbol === 'SPY') || null;
 
@@ -638,7 +734,7 @@ export default function DayTradingTerminal() {
   };
 
   const configuredBroker = settings.execution_broker
-    || (settings.alpaca_auto_trade === 'true' ? 'alpaca_paper' : settings.snaptrade_auto_trade === 'true' ? 'wealthsimple_snaptrade' : 'none');
+    || (settings.snaptrade_auto_trade === 'true' ? 'wealthsimple_snaptrade' : 'none');
   const brokerLabel = getExecutionBrokerLabel(configuredBroker);
   const isLiveBroker = configuredBroker === 'wealthsimple_snaptrade';
   const maxTradesPerDay = Number(settings.max_trades_per_day || 2);
@@ -658,18 +754,36 @@ export default function DayTradingTerminal() {
     settings.snaptrade_trading_account_id ? null : 'No account',
     settings.live_trading_acknowledged === 'true' ? null : 'Live ack missing'
   ].filter(Boolean) as string[] : [];
-  const isExecutionBlocked = remainingTrades <= 0 || missingLiveExecutionItems.length > 0;
+  const buildBlockers = (signal?: Signal | null) => [
+    !isDayTradingEnabled ? 'Scanner disabled' : null,
+    isScannerMarketClosed ? `Outside ${scannerWindowLabel}` : null,
+    remainingTrades <= 0 ? 'Daily trade limit reached' : null,
+    ...missingLiveExecutionItems,
+    signal && !isExecutableSetupGrade(signal) ? `Setup grade ${signal.setup_grade || 'N/A'} is below A/A+` : null,
+    signal?.execution_error ? signal.execution_error : null,
+    ...((signal?.no_trade_reasons || []).slice(0, 3)),
+    !signal ? 'No pending setup' : null
+  ].filter(Boolean) as string[];
+  const activeBlockers = buildBlockers(latestActionableSignal);
+  const qqqBlockers = buildBlockers(bestQQQSignal);
+  const spyBlockers = buildBlockers(bestSPYSignal);
+  const isExecutionBlocked = activeBlockers.length > 0;
+  const bestScopedSignal = selectedSymbol === 'SPY' ? bestSPYSignal : selectedSymbol === 'QQQ' ? bestQQQSignal : (getBestSignal([bestQQQSignal, bestSPYSignal].filter(Boolean) as Signal[]) || latestActionableSignal);
+  const canTradeNow = Boolean(bestScopedSignal && buildBlockers(bestScopedSignal).length === 0);
+  const primaryDecision = canTradeNow ? 'Ready to review' : bestScopedSignal ? 'Blocked' : 'Wait';
+  const primaryDecisionTone = canTradeNow ? 'ok' : bestScopedSignal ? 'warning' : 'blocked';
+  const avoidMessage = activeBlockers[0] || (!bestScopedSignal ? 'No A/A+ pending setup in the selected view.' : 'Review setup quality before sending.');
   const readinessItems = [
-    { label: 'Broker', value: brokerLabel, tone: isLiveBroker ? 'text-amber-300' : configuredBroker === 'alpaca_paper' ? 'text-sky-300' : 'text-zinc-400' },
+    { label: 'Broker', value: brokerLabel, tone: isLiveBroker ? 'text-amber-300' : 'text-zinc-400' },
     { label: 'Size', value: `${contractsPerTrade} contract${contractsPerTrade === 1 ? '' : 's'}`, tone: 'text-emerald-300' },
     { label: 'Daily', value: `${tradesToday}/${dailyLimit} used`, tone: remainingTrades > 0 ? 'text-emerald-300' : 'text-red-300' },
     { label: 'Order', value: `${settings.order_type || 'LIMIT'} ${settings.entry_slippage_pct || 3}%`, tone: 'text-zinc-300' },
-    { label: 'Account', value: isLiveBroker ? selectedAccountLabel : 'Paper/sim', tone: isLiveBroker && !settings.snaptrade_trading_account_id ? 'text-red-300' : 'text-zinc-300' },
+    { label: 'Account', value: isLiveBroker ? selectedAccountLabel : 'Local sim', tone: isLiveBroker && !settings.snaptrade_trading_account_id ? 'text-red-300' : 'text-zinc-300' },
     ...(isLiveBroker ? [{ label: 'Balance', value: selectedAccountBalance, tone: selectedSnaptradeAccount ? 'text-emerald-300' : 'text-amber-300' }] : [])
   ];
 
   return (
-    <div className="terminal-scanline motion-enter flex flex-col gap-4 lg:gap-5 font-mono bg-zinc-950 text-emerald-400 p-3 sm:p-4 rounded-lg border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] max-w-full overflow-hidden">
+    <div className="terminal-scanline motion-enter flex flex-col gap-4 lg:gap-5 bg-zinc-950 text-emerald-400 p-3 sm:p-4 rounded-lg border border-emerald-500/20 shadow-[0_0_30px_rgba(16,185,129,0.05)] max-w-full overflow-hidden">
       
       {/* Top Banner & Timer Bar */}
       <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center border-b border-emerald-500/20 pb-4 gap-4">
@@ -679,7 +793,6 @@ export default function DayTradingTerminal() {
           </div>
           <div className="flex flex-col min-w-0 gap-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <h2 className="text-lg sm:text-2xl font-extrabold text-emerald-100 leading-none break-words">0DTE command center</h2>
               <Badge variant="outline" className="text-[9px] bg-zinc-950/70 border-emerald-500/25 text-emerald-300 font-mono">
                 {selectedSymbol === 'BOTH' ? 'QQQ + SPY' : selectedSymbol}
               </Badge>
@@ -752,6 +865,65 @@ export default function DayTradingTerminal() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Decision-first status */}
+      <div className={`motion-panel grid gap-4 rounded border p-3 lg:grid-cols-[0.9fr_1.4fr_1fr] ${getReadinessTone(primaryDecisionTone)}`}>
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase text-zinc-400">Can I trade now?</div>
+          <div className="mt-1 text-xl font-semibold text-zinc-100">{primaryDecision}</div>
+          <div className="mt-1 text-xs text-zinc-400">
+            {canTradeNow ? 'Execution checks are clear for the best pending setup.' : avoidMessage}
+          </div>
+        </div>
+        <div className="min-w-0 border-t border-current/10 pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
+          <div className="text-[10px] font-semibold uppercase text-zinc-400">Best setup</div>
+          {bestScopedSignal ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className={`text-[10px] font-semibold ${getSignalSideTone(bestScopedSignal.signal_type)}`}>
+                {bestScopedSignal.symbol} {bestScopedSignal.signal_type}
+              </Badge>
+              <span className="font-mono text-sm font-semibold text-zinc-100">{bestScopedSignal.confidence_score}%</span>
+              <span className="text-xs text-zinc-300">{bestScopedSignal.setup_grade || 'ungraded'}</span>
+              <span className="font-mono text-xs text-zinc-400">
+                entry {bestScopedSignal.entry_trigger ? `$${bestScopedSignal.entry_trigger.toFixed(2)}` : 'N/A'}
+              </span>
+            </div>
+          ) : (
+            <div className="mt-2 text-sm text-zinc-500">No pending directional setup in this view.</div>
+          )}
+        </div>
+        <div className="min-w-0 border-t border-current/10 pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
+          <div className="text-[10px] font-semibold uppercase text-zinc-400">What to avoid</div>
+          <div className="mt-2 text-sm text-zinc-100">{avoidMessage}</div>
+          {activeBlockers.length > 1 && (
+            <div className="mt-1 text-xs text-zinc-400">{activeBlockers.slice(1, 3).join(' · ')}</div>
+          )}
+        </div>
+      </div>
+
+      {/* QQQ/SPY lanes */}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <SymbolLane
+          symbol="QQQ"
+          signal={bestQQQSignal}
+          regime={qqqDetails}
+          blockers={qqqBlockers}
+          onSelect={() => {
+            setSelectedSymbol('QQQ');
+            if (bestQQQSignal) setSelectedSignalId(bestQQQSignal.id);
+          }}
+        />
+        <SymbolLane
+          symbol="SPY"
+          signal={bestSPYSignal}
+          regime={spyDetails}
+          blockers={spyBlockers}
+          onSelect={() => {
+            setSelectedSymbol('SPY');
+            if (bestSPYSignal) setSelectedSignalId(bestSPYSignal.id);
+          }}
+        />
       </div>
 
       {/* Row 1: Dashboard Gauges / Widgets */}
@@ -885,18 +1057,30 @@ export default function DayTradingTerminal() {
             ))}
           </div>
           <span className="text-[10px] text-zinc-500">
-            {isExecutionBlocked ? 'Resolve blockers before sending an order.' : 'Ready for pending signals.'}
+            {isExecutionBlocked ? `${activeBlockers.length} blocker${activeBlockers.length === 1 ? '' : 's'}` : 'Ready for pending signals.'}
           </span>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-px bg-emerald-500/10">
+	        </div>
+	        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-px bg-emerald-500/10">
           {readinessItems.map(item => (
             <div key={item.label} className="motion-panel bg-zinc-950/70 px-3 py-2 min-h-[54px] flex flex-col justify-center">
               <span className="text-[9px] uppercase text-zinc-500 font-bold">{item.label}</span>
               <span className={`text-xs font-bold truncate ${item.tone}`} title={item.value}>{item.value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
+	            </div>
+	          ))}
+	        </div>
+	        {isExecutionBlocked && (
+	          <div className="border-t border-red-500/10 bg-red-950/10 px-3 py-2">
+	            <div className="mb-1 text-[10px] font-semibold uppercase text-red-300">Why not trading</div>
+	            <div className="flex flex-wrap gap-1.5">
+	              {activeBlockers.map((blocker) => (
+	                <span key={blocker} className="rounded border border-red-500/25 bg-red-950/20 px-2 py-1 text-[10px] text-red-200">
+	                  {blocker}
+	                </span>
+	              ))}
+	            </div>
+	          </div>
+	        )}
+	      </div>
 
       {/* Row 2: Separated Prominent latest setup notification */}
       <div 
