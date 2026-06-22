@@ -73,7 +73,7 @@ const formatRelativeTime = (timestamp?: string | null) => {
 
 const statusTone = (status?: string | null) => {
   const normalized = String(status || '').toUpperCase();
-  if (['UP', 'RUNNING', 'CONNECTED', 'OK'].includes(normalized)) return 'text-emerald-500 border-emerald-500/30 bg-emerald-500/10';
+  if (['UP', 'RUNNING', 'SCANNING', 'CONNECTED', 'OK'].includes(normalized)) return 'text-emerald-500 border-emerald-500/30 bg-emerald-500/10';
   if (['DEGRADED', 'MARKET_CLOSED', 'IDLE', 'STOPPED'].includes(normalized)) return 'text-amber-500 border-amber-500/30 bg-amber-500/10';
   if (['N/A', 'DISABLED'].includes(normalized)) return 'text-muted-foreground border-border bg-muted/40';
   return 'text-red-500 border-red-500/30 bg-red-500/10';
@@ -88,7 +88,7 @@ const severityTone = (severity: HealthSeverity) => {
 
 const severityForStatus = (status?: string | null): HealthSeverity => {
   const normalized = String(status || '').toUpperCase();
-  if (['UP', 'RUNNING', 'CONNECTED', 'OK'].includes(normalized)) return 'ok';
+  if (['UP', 'RUNNING', 'SCANNING', 'CONNECTED', 'OK'].includes(normalized)) return 'ok';
   if (['N/A', 'DISABLED', 'IDLE', 'MARKET_CLOSED'].includes(normalized)) return 'info';
   if (['DEGRADED', 'STOPPED'].includes(normalized)) return 'warning';
   return 'critical';
@@ -118,7 +118,7 @@ const causeFromError = (fallback: string, error?: string | null) => {
 
 const isHealthyStatus = (status?: string | null) => {
   const normalized = String(status || '').toUpperCase();
-  return ['UP', 'RUNNING', 'CONNECTED', 'OK'].includes(normalized);
+  return ['UP', 'RUNNING', 'SCANNING', 'CONNECTED', 'OK'].includes(normalized);
 };
 
 const isInformationalStatus = (status?: string | null) => {
@@ -179,17 +179,39 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
   }
 
   if (services) {
+    const scannerStatus = services.scanner?.status || 'N/A';
+    const scannerWindow = services.scanner?.window;
+    const scannerWindowLabel = scannerWindow
+      ? `${scannerWindow.start}-${scannerWindow.cutoff} ${scannerWindow.timezone}`
+      : 'configured trading window';
+    const scannerCause = services.scanner?.lastSkippedReason
+      ? 'Scanner is intentionally skipping or gated by schedule/settings.'
+      : scannerStatus === 'SCANNING'
+        ? `Scanner is enabled and inside ${scannerWindowLabel}. It is waiting for the next scheduled or manual scan cycle.`
+        : scannerStatus === 'RUNNING'
+          ? 'Scanner is actively processing a scan cycle right now.'
+          : scannerStatus === 'MARKET_CLOSED'
+            ? `Scanner is healthy but outside ${scannerWindowLabel}.`
+            : scannerStatus === 'DISABLED'
+              ? 'Scanner is disabled in Day Trading settings.'
+              : 'Scanner runtime state.';
+    const scannerNextStep = scannerStatus === 'SCANNING' || scannerStatus === 'RUNNING'
+      ? 'No action needed unless the latest scan log stops updating during market hours.'
+      : scannerStatus === 'MARKET_CLOSED'
+        ? 'No action needed. It will resume when the trading window opens.'
+        : 'Check market window, scanner enabled flag, eligible source user, and the latest scan log.';
+
     items.push({
       id: 'service:scanner',
       area: 'Runtime',
       title: 'Signal Scanner',
-      status: services.scanner?.status || 'N/A',
-      severity: severityForStatus(services.scanner?.status),
+      status: scannerStatus,
+      severity: severityForStatus(scannerStatus),
       endpoint: '/api/signals/trigger',
       lastSeen: services.scanner?.lastScanAt || services.generatedAt,
       evidence: services.scanner?.lastSkippedReason || null,
-      cause: services.scanner?.lastSkippedReason ? 'Scanner is intentionally skipping or gated by schedule/settings.' : 'Scanner runtime state.',
-      nextStep: 'Check market window, scanner enabled flag, eligible source user, and the latest scan log.',
+      cause: scannerCause,
+      nextStep: scannerNextStep,
       actionCommand: 'Open Settings -> Day Trading, confirm scanner enabled and trading window.'
     });
 
