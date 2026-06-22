@@ -111,11 +111,30 @@ async function testMacroStrictSkipsWeakMacroScore() {
   assert(backtester.getScenarioSkipReason('macro_strict', signal) === 'macro_score_below_62', 'Strict macro should require score >= 62');
 }
 
+async function testNaiveThetaDataBarsParseAsEasternTime() {
+  const backtester = createBacktester();
+
+  const parsed = backtester.parseBarTime('2026-06-22T09:45:00.000', '2026-06-22');
+
+  assert(parsed !== null, 'Naive ThetaData timestamp should parse');
+  assert(parsed.toISOString() === '2026-06-22T13:45:00.000Z', `Expected 09:45 ET -> 13:45Z, got ${parsed.toISOString()}`);
+}
+
+async function testEasternDateHelperHandlesStandardTime() {
+  const backtester = createBacktester();
+
+  const parsed = backtester.dateAtEt('2026-01-15', 9, 30);
+
+  assert(parsed.toISOString() === '2026-01-15T14:30:00.000Z', `Expected 09:30 ET winter -> 14:30Z, got ${parsed.toISOString()}`);
+}
+
 async function runTests() {
   console.log('Running SignalReplayBacktester tests...');
   await testTakeProfitUsesOptionOhlcTarget();
   await testAmbiguousBarUsesStopFirst();
   await testMacroStrictSkipsWeakMacroScore();
+  await testNaiveThetaDataBarsParseAsEasternTime();
+  await testEasternDateHelperHandlesStandardTime();
   console.log('All SignalReplayBacktester tests passed!');
 }
 

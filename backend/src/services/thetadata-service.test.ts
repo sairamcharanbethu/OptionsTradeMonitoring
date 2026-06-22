@@ -137,6 +137,59 @@ async function testChainUsesFirstOrderGreeksAndMergesOpenInterest() {
   assert(chain[0].openInterest === 842, `Expected OI 842, got ${chain[0].openInterest}`);
 }
 
+async function testChainMergesScaledStrikeAndExpirationDateRows() {
+  const service = createService(async (_config, path) => {
+    if (path.startsWith('/v3/option/snapshot/greeks/first_order?')) {
+      return {
+        response: [{
+          contract: {
+            symbol: 'QQQ',
+            expiration: '2026-06-22',
+            strike: 741,
+            right: 'CALL'
+          },
+          data: [{
+            bid: 3.6,
+            ask: 3.68,
+            delta: 0.4674,
+            timestamp: '2026-06-18T16:15:00.082'
+          }]
+        }]
+      };
+    }
+    if (path.startsWith('/v3/option/snapshot/open_interest?')) {
+      return {
+        data: [{
+          root: 'QQQ',
+          expiration_date: '2026-06-22',
+          strike_price: 741000,
+          option_type: 'CALL',
+          open_interest: 842
+        }]
+      };
+    }
+    if (path.startsWith('/v3/option/snapshot/ohlc?')) {
+      return {
+        data: [{
+          root: 'QQQ',
+          expiration_date: '2026-06-22',
+          strike_price: 741000,
+          option_type: 'CALL',
+          close: 3.64,
+          volume: 1182
+        }]
+      };
+    }
+    throw new Error(`Unexpected path ${path}`);
+  });
+
+  const chain = await service.getOptionChainSnapshot(null, 'QQQ', '20260622', 'call');
+
+  assert(chain.length === 1, `Expected one chain row, got ${chain.length}`);
+  assert(chain[0].openInterest === 842, `Expected scaled-strike OI merge, got ${chain[0].openInterest}`);
+  assert(chain[0].volume === 1182, `Expected scaled-strike OHLC merge, got ${chain[0].volume}`);
+}
+
 async function testNestedOhlcResponseFlattensBars() {
   const service = createService(async (_config, path) => {
     assert(path.startsWith('/v3/option/history/ohlc?'), 'Should call the v3 option OHLC endpoint');
@@ -185,6 +238,7 @@ async function runTests() {
   console.log('Running ThetaDataService v3 response tests...');
   await testNestedQuoteResponseParsesBidAsk();
   await testChainUsesFirstOrderGreeksAndMergesOpenInterest();
+  await testChainMergesScaledStrikeAndExpirationDateRows();
   await testNestedOhlcResponseFlattensBars();
   await testBaseUrlNormalizesToIntegratedTerminal();
   console.log('All ThetaDataService v3 response tests passed!');

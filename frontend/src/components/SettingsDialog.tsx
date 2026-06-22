@@ -51,11 +51,9 @@ function normalizeThetaDataBaseUrl(baseUrl: string) {
 
 function normalizeThetaDataStreamUrl(streamUrl: string) {
     const cleaned = streamUrl.trim();
-    if (!cleaned) return 'ws://127.0.0.1:25520/v1/events';
-    return cleaned
-        .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
-        .replace(/^ws:\/\/thetadata:25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
-        .replace(/^ws:\/\/thetadata:25520\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events');
+    if (!cleaned) return '';
+    if (/^ws:\/\/((127\.0\.0\.1|localhost):255(10|20)|thetadata:255(10|20))\/v1\/events$/i.test(cleaned)) return '';
+    return cleaned.replace(/^ws:\/\/thetadata:/i, 'ws://127.0.0.1:');
 }
 
 export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) {
@@ -108,7 +106,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
     // ThetaData State
     const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://127.0.0.1:25503');
-    const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('ws://127.0.0.1:25520/v1/events');
+    const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('');
 
     // SnapTrade State
     const [snaptradeClientId, setSnaptradeClientId] = useState('');
@@ -179,7 +177,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setAlpacaKeyId(data.alpaca_key_id || '');
             setAlpacaSecretKey(data.alpaca_secret_key || '');
             setThetaDataBaseUrl(normalizeThetaDataBaseUrl(data.thetadata_base_url || 'http://127.0.0.1:25503'));
-            setThetaDataStreamUrl(normalizeThetaDataStreamUrl(data.thetadata_stream_url || 'ws://127.0.0.1:25520/v1/events'));
+            setThetaDataStreamUrl(normalizeThetaDataStreamUrl(data.thetadata_stream_url || ''));
             setAlpacaAutoTrade(data.alpaca_auto_trade === 'true');
             setAlpacaAutoTradeMode(data.alpaca_auto_trade_mode || 'instant');
             setExecutionBroker(data.execution_broker || 'none');
@@ -974,12 +972,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                             id="thetadata-stream-url"
                                                             value={thetaDataStreamUrl}
                                                             onChange={(e) => setThetaDataStreamUrl(e.target.value)}
-                                                            placeholder="ws://127.0.0.1:25520/v1/events"
+                                                            placeholder="Optional verified v3 stream URL"
                                                         />
                                                     </div>
                                                 </div>
                                                 <p className="text-[10px] text-muted-foreground leading-normal">
-                                                    ThetaData Terminal v3 runs inside the backend container; credentials come from Infisical environment variables.
+                                                    ThetaData Terminal v3 REST runs inside the backend container on 127.0.0.1:25503. Leave Stream URL blank unless a verified v3 stream endpoint is configured.
                                                 </p>
                                             </div>
                                         </div>

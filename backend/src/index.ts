@@ -778,18 +778,17 @@ const start = async () => {
     runSnaptradePendingOrderSync().catch((err: any) => {
       fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);
     });
-    const thetaDataConfigured = Boolean(process.env.THETADATA_BASE_URL || process.env.THETADATA_STREAM_URL);
     let liveExitStreamStarted = false;
 
-    if (thetaDataConfigured) {
-      try {
-        await thetaDataStreamer.start();
+    try {
+      const thetaDataStreamStarted = await thetaDataStreamer.start();
+      if (thetaDataStreamStarted) {
         liveExitMonitor.start('thetadata');
         fastify.log.info('[Stream] ThetaData option market data stream enabled for live exit monitoring.');
         liveExitStreamStarted = true;
-      } catch (err: any) {
-        fastify.log.warn(`[Stream] ThetaData option market data stream failed to start: ${err.message}`);
       }
+    } catch (err: any) {
+      fastify.log.warn(`[Stream] ThetaData option market data stream failed to start: ${err.message}`);
     }
 
     if (!liveExitStreamStarted) {

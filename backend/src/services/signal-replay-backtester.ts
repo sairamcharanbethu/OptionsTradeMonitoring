@@ -431,19 +431,51 @@ export class SignalReplayBacktester {
   private parseBarTime(value: string, dateKey: string): Date | null {
     const raw = String(value || '').trim();
     if (!raw) return null;
-    const parsed = new Date(raw);
-    if (!/^\d+(\.\d+)?$/.test(raw) && Number.isFinite(parsed.getTime())) return parsed;
+    if (!/^\d+(\.\d+)?$/.test(raw)) {
+      const hasExplicitTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+      if (hasExplicitTimezone) {
+        const parsed = new Date(raw);
+        return Number.isFinite(parsed.getTime()) ? parsed : null;
+      }
+
+      const match = raw.match(/^(?:\d{4}-\d{2}-\d{2}T)?(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/);
+      if (match) {
+        return this.dateAtEt(dateKey, Number(match[1]), Number(match[2]), Number(match[3] || 0), Number((match[4] || '0').padEnd(3, '0')));
+      }
+
+      const dateTimeMatch = raw.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/);
+      if (dateTimeMatch) {
+        return this.dateAtEt(dateTimeMatch[1], Number(dateTimeMatch[2]), Number(dateTimeMatch[3]), Number(dateTimeMatch[4] || 0), Number((dateTimeMatch[5] || '0').padEnd(3, '0')));
+      }
+    }
     const numeric = Number(raw);
     if (Number.isFinite(numeric)) {
       if (numeric > 1_000_000_000_000) return new Date(numeric);
       const msOfDay = numeric > 100_000 ? numeric : numeric * 1000;
-      return this.addMs(new Date(`${dateKey}T00:00:00-04:00`), msOfDay);
+      return this.addMs(this.dateAtEt(dateKey, 0, 0), msOfDay);
     }
     return null;
   }
 
-  private dateAtEt(dateKey: string, hour: number, minute: number): Date {
-    return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00-04:00`);
+  private dateAtEt(dateKey: string, hour: number, minute: number, second = 0, millisecond = 0): Date {
+    const [year, month, day] = dateKey.split('-').map((part) => Number(part));
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      hourCycle: 'h23'
+    });
+    const parts = formatter.formatToParts(utcGuess);
+    const get = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0);
+    const representedEtAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'), millisecond);
+    const intendedEtAsUtc = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+    return new Date(utcGuess.getTime() + (intendedEtAsUtc - representedEtAsUtc));
   }
 
   private getSignalDate(signal: ReplaySignal): string {

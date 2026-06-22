@@ -11,7 +11,7 @@ type ThetaContract = {
 
 export class ThetaDataStreamService extends EventEmitter {
   private ws: WebSocket | null = null;
-  private baseWsUrl = process.env.THETADATA_STREAM_URL || 'ws://127.0.0.1:25520/v1/events';
+  private baseWsUrl = process.env.THETADATA_STREAM_URL || '';
   private activeContracts: Map<string, ThetaContract> = new Map();
   private isConnected = false;
   private lastMessageAt: string | null = null;
@@ -26,7 +26,11 @@ export class ThetaDataStreamService extends EventEmitter {
   }
 
   public async start(): Promise<boolean> {
-    await this.loadConfig();
+    const configured = await this.loadConfig();
+    if (!configured) {
+      this.fastify.log.info('[ThetaDataStream] Stream URL is not configured. REST polling remains available for ThetaData prices.');
+      return false;
+    }
     await this.refreshActiveContracts();
     this.connect();
     return true;
@@ -41,7 +45,7 @@ export class ThetaDataStreamService extends EventEmitter {
     this.subscribeAll();
   }
 
-  private async loadConfig() {
+  private async loadConfig(): Promise<boolean> {
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT DISTINCT ON (key) key, value
        FROM settings
@@ -56,20 +60,23 @@ export class ThetaDataStreamService extends EventEmitter {
     }, {});
     const envStreamUrl = String(process.env.THETADATA_STREAM_URL || '');
     this.baseWsUrl = this.normalizeStreamUrl(String(settings.thetadata_stream_url || envStreamUrl || this.baseWsUrl), envStreamUrl);
+    return Boolean(this.baseWsUrl);
   }
 
   private normalizeStreamUrl(url: string, envStreamUrl: string = ''): string {
     const cleaned = url.trim();
-    if (!cleaned) return 'ws://127.0.0.1:25520/v1/events';
+    if (!cleaned) return '';
     if (
       envStreamUrl.trim() &&
       /^ws:\/\/((127\.0\.0\.1|localhost):255(10|20)|thetadata:255(10|20))\/v1\/events$/i.test(cleaned)
     ) {
       return this.normalizeStreamUrl(envStreamUrl, '');
     }
+    if (/^ws:\/\/((127\.0\.0\.1|localhost):255(10|20)|thetadata:255(10|20))\/v1\/events$/i.test(cleaned)) {
+      return '';
+    }
     return cleaned
-      .replace(/^ws:\/\/(127\.0\.0\.1|localhost):25510\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events')
-      .replace(/^ws:\/\/thetadata:255(10|20)\/v1\/events$/i, 'ws://127.0.0.1:25520/v1/events');
+      .replace(/^ws:\/\/thetadata:/i, 'ws://127.0.0.1:');
   }
 
   private async refreshActiveContracts() {
@@ -181,9 +188,10 @@ export class ThetaDataStreamService extends EventEmitter {
 
   public getHealth() {
     return {
-      status: this.isConnected ? 'UP' : 'DEGRADED',
+      status: this.baseWsUrl ? (this.isConnected ? 'UP' : 'DEGRADED') : 'DISABLED',
       connected: this.isConnected,
       provider: 'thetadata',
+      streamUrl: this.baseWsUrl || null,
       activeSubscriptions: this.activeContracts.size,
       lastMessageAt: this.lastMessageAt,
       lastError: this.lastError,

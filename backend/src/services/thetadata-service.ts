@@ -379,11 +379,18 @@ export class ThetaDataService {
 
   private contractRowKey(row: any): string {
     const contract = row?.contract || row || {};
-    const symbol = String(contract.symbol ?? row?.symbol ?? '').toUpperCase();
-    const expiration = String(contract.expiration ?? row?.expiration ?? '').replace(/-/g, '');
-    const rawRight = String(contract.right ?? row?.right ?? '').toUpperCase();
+    const symbol = String(contract.symbol ?? contract.root ?? row?.symbol ?? row?.root ?? '').toUpperCase();
+    const expiration = String(
+      contract.expiration ?? contract.expiration_date ?? contract.expirationDate ??
+      row?.expiration ?? row?.expiration_date ?? row?.expirationDate ?? ''
+    ).replace(/-/g, '');
+    const rawRight = String(
+      contract.right ?? contract.option_type ?? contract.optionType ??
+      row?.right ?? row?.option_type ?? row?.optionType ?? ''
+    ).toUpperCase();
     const right = rawRight.startsWith('P') ? 'P' : 'C';
-    const strike = Number(contract.strike ?? row?.strike ?? 0);
+    const rawStrike = Number(contract.strike ?? contract.strike_price ?? contract.strikePrice ?? row?.strike ?? row?.strike_price ?? row?.strikePrice ?? 0);
+    const strike = rawStrike > 10000 ? rawStrike / 1000 : rawStrike;
     return `${symbol}:${expiration}:${right}:${strike.toFixed(3)}`;
   }
 

@@ -47,7 +47,7 @@ const statusTone = (status?: string | null) => {
 
 const isBadStatus = (status?: string | null) => {
   const normalized = String(status || '').toUpperCase();
-  return Boolean(normalized) && !['UP', 'RUNNING', 'CONNECTED', 'OK', 'N/A', 'MARKET_CLOSED', 'IDLE'].includes(normalized);
+  return Boolean(normalized) && !['UP', 'RUNNING', 'CONNECTED', 'OK', 'N/A', 'MARKET_CLOSED', 'IDLE', 'DISABLED'].includes(normalized);
 };
 
 const isWatchedStream = (
