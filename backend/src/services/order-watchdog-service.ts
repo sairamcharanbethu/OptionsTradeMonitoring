@@ -40,16 +40,26 @@ export class OrderWatchdogService {
         if (row.status === 'PENDING_ORDER') {
           const createdAtMs = new Date(row.created_at).getTime();
           if (Number.isFinite(createdAtMs) && Date.now() - createdAtMs > this.entryStaleMs) {
+            const isProtectedLimitPending = row.execution_status === 'PENDING_RECONCILE';
+            const nextExecutionStatus = isProtectedLimitPending ? 'ENTRY_RECONCILE_REQUIRED' : 'ENTRY_STALE';
+            const executionError = isProtectedLimitPending
+              ? 'Protected limit entry is still pending after watchdog timeout; broker reconciliation is required before another entry.'
+              : 'Entry order is still pending after watchdog timeout; broker reconciliation is required before another entry.';
             const staleUpdate = await this.fastify.pg.query(
               `UPDATE positions
-               SET execution_status = 'ENTRY_STALE',
-                   execution_error = 'Entry order is still pending after watchdog timeout; broker reconciliation is required before another entry.',
-                   notes = COALESCE(notes, '') || $1,
+               SET execution_status = $1,
+                   execution_error = $2,
+                   notes = COALESCE(notes, '') || $3,
                    updated_at = CURRENT_TIMESTAMP
-               WHERE id = $2
+               WHERE id = $4
                  AND status = 'PENDING_ORDER'
-                 AND COALESCE(execution_status, '') NOT IN ('EXECUTED', 'FILLED', 'FILLED_FULLY', 'ENTRY_STALE')`,
-              [` [Watchdog marked entry stale after ${Math.round(this.entryStaleMs / 1000)}s]`, row.id]
+                 AND COALESCE(execution_status, '') NOT IN ('EXECUTED', 'FILLED', 'FILLED_FULLY', 'ENTRY_STALE', 'ENTRY_RECONCILE_REQUIRED')`,
+              [
+                nextExecutionStatus,
+                executionError,
+                ` [Watchdog marked ${isProtectedLimitPending ? 'protected limit entry reconcile-required' : 'entry stale'} after ${Math.round(this.entryStaleMs / 1000)}s]`,
+                row.id
+              ]
             );
             if (staleUpdate.rowCount === 0) {
               summary.stillPending += 1;
