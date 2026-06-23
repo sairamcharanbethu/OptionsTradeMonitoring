@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, useTradeUsage, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, useTradeUsage, useLiveMacroMetrics, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { api, Signal, ScannerLog } from '@/lib/api';
+import { api, Signal, ScannerLog, LiveMacroMetrics } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Terminal as TerminalIcon,
@@ -530,37 +530,57 @@ function SymbolLane({
 
 function MacroMetricsStrip({
   signal,
-  fallbackVix
+  liveMacro,
+  fallbackVix,
+  assessmentSide
 }: {
   signal: Signal | null;
+  liveMacro?: LiveMacroMetrics | null;
   fallbackVix: number;
+  assessmentSide?: 'CALL' | 'PUT' | null;
 }) {
   const volatility = signal?.volatility;
-  const macroRegime = volatility?.macroRegime;
+  const macroRegime = (assessmentSide ? liveMacro?.assessments?.[assessmentSide] : null)
+    || volatility?.macroRegime;
   const metrics = [
     {
       key: 'vix',
       label: 'VIX',
-      value: formatNumber(volatility?.vixQuote ?? fallbackVix, 1),
-      move: formatSignedPercent(volatility?.vixChangePercent, 2),
-      impact: getMacroImpact(volatility?.vixChangePercent, true, 0.05)
+      value: formatNumber(liveMacro?.vixQuote ?? volatility?.vixQuote ?? fallbackVix, 1),
+      move: formatSignedPercent(liveMacro?.vixChangePercent ?? volatility?.vixChangePercent, 2),
+      impact: getMacroImpact(liveMacro?.vixChangePercent ?? volatility?.vixChangePercent, true, 0.05)
     },
     {
       key: 'ten-year',
       label: '10Y',
-      value: formatTenYearYield(volatility?.tenYearYield),
-      move: formatSignedBps(volatility?.tenYearChangeBps, 1),
-      impact: getMacroImpact(volatility?.tenYearChangeBps, true, 0.3)
+      value: formatTenYearYield(liveMacro?.tenYearYield ?? volatility?.tenYearYield),
+      move: formatSignedBps(liveMacro?.tenYearChangeBps ?? volatility?.tenYearChangeBps, 1),
+      impact: getMacroImpact(liveMacro?.tenYearChangeBps ?? volatility?.tenYearChangeBps, true, 0.3)
     },
     {
       key: 'dxy',
       label: 'DXY',
-      value: formatNumber(volatility?.dxy?.value, 2),
-      move: formatSignedPercent(volatility?.dxy?.changePercent, 2),
-      impact: getMacroImpact(volatility?.dxy?.changePercent, true, 0.05)
+      value: formatNumber(liveMacro?.dxy?.value ?? volatility?.dxy?.value, 2),
+      move: formatSignedPercent(liveMacro?.dxy?.changePercent ?? volatility?.dxy?.changePercent, 2),
+      impact: getMacroImpact(liveMacro?.dxy?.changePercent ?? volatility?.dxy?.changePercent, true, 0.05)
+    },
+    {
+      key: 'oil',
+      label: 'Oil',
+      value: formatNumber(liveMacro?.oil?.value ?? volatility?.oil?.value, 2),
+      move: formatSignedPercent(liveMacro?.oil?.changePercent ?? volatility?.oil?.changePercent, 2),
+      impact: getMacroImpact(liveMacro?.oil?.changePercent ?? volatility?.oil?.changePercent, true, 0.15)
+    },
+    {
+      key: 'gold',
+      label: 'Gold',
+      value: formatNumber(liveMacro?.gold?.value ?? volatility?.gold?.value, 2),
+      move: formatSignedPercent(liveMacro?.gold?.changePercent ?? volatility?.gold?.changePercent, 2),
+      impact: getMacroImpact(liveMacro?.gold?.changePercent ?? volatility?.gold?.changePercent, true, 0.10)
     }
   ];
   const hasMacroData = metrics.some(metric => metric.value !== 'N/A' || metric.move !== 'N/A');
+  const updatedAt = liveMacro?.generatedAt || signal?.created_at || null;
 
   return (
     <div className="motion-panel rounded border border-emerald-500/15 bg-zinc-900/30 p-3">
@@ -568,8 +588,8 @@ function MacroMetricsStrip({
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70">Current macro metrics</div>
           <div className="mt-1 break-words text-xs text-zinc-400">
-            {hasMacroData && signal
-              ? `${signal.symbol} snapshot ${formatTime(signal.created_at)}`
+            {hasMacroData && updatedAt
+              ? `${liveMacro ? 'Live refresh' : 'Scanner snapshot'} ${formatTime(updatedAt)}`
               : 'Waiting for the latest scanner macro snapshot.'}
           </div>
         </div>
@@ -579,12 +599,12 @@ function MacroMetricsStrip({
               {macroRegime.regime || 'MACRO'}
             </Badge>
             <span className="font-mono text-zinc-400">
-              Score {formatNumber(macroRegime.score, 0)} · Bias {macroRegime.directionBias || 'MIXED'}
+              Score {formatNumber(macroRegime.score, 0)} · Bias {macroRegime.directionBias || 'MIXED'}{assessmentSide ? ` · ${assessmentSide}` : ''}
             </span>
           </div>
         )}
       </div>
-      <div className="mt-3 grid gap-2 md:grid-cols-3">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
         {metrics.map(metric => (
           <div key={metric.key} className={`rounded border p-2.5 ${getMacroToneClass(metric.impact)}`}>
             <div className="flex items-center justify-between gap-2">
@@ -745,6 +765,7 @@ export default function DayTradingTerminal() {
   const pollInterval = Date.now() < fastPollUntil ? 3000 : 10000;
   const { data: signals = [], isLoading, isFetching, refetch } = useSignals(pollInterval);
   const { data: logs = [], isLoading: logsLoading, isFetching: logsFetching, refetch: refetchLogs } = useScannerLogs(pollInterval);
+  const { data: liveMacroMetrics, refetch: refetchLiveMacroMetrics } = useLiveMacroMetrics(Math.max(10000, pollInterval));
   const { data: settings = {} } = useSettings();
   const { data: snaptradePortfolio } = useSnaptradePortfolio();
   const { data: tradeUsage, refetch: refetchTradeUsage } = useTradeUsage();
@@ -841,6 +862,7 @@ export default function DayTradingTerminal() {
           // Trigger refresh when timer reaches 0
           refetch();
           refetchLogs();
+          refetchLiveMacroMetrics();
           fetchHealth();
           return 300;
         }
@@ -848,12 +870,13 @@ export default function DayTradingTerminal() {
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [refetch, refetchLogs, isDayTradingEnabled, isScannerMarketClosed]);
+  }, [refetch, refetchLogs, refetchLiveMacroMetrics, isDayTradingEnabled, isScannerMarketClosed]);
 
   // Sync manually
   const handleManualSync = () => {
     refetch();
     refetchLogs();
+    refetchLiveMacroMetrics();
     refetchTradeUsage();
     fetchHealth();
     setCountdown(300);
@@ -1274,7 +1297,16 @@ export default function DayTradingTerminal() {
         />
       </div>
 
-      <MacroMetricsStrip signal={latestMacroSignal} fallbackVix={vixValue} />
+      <MacroMetricsStrip
+        signal={latestMacroSignal}
+        liveMacro={liveMacroMetrics}
+        fallbackVix={vixValue}
+        assessmentSide={bestScopedSignal?.signal_type === 'CALL' || bestScopedSignal?.signal_type === 'PUT'
+          ? bestScopedSignal.signal_type
+          : latestMacroSignal?.signal_type === 'CALL' || latestMacroSignal?.signal_type === 'PUT'
+            ? latestMacroSignal.signal_type
+            : null}
+      />
 
       <EngineFlowPanel
         selectedSymbol={selectedSymbol}

@@ -202,6 +202,44 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     }
   });
 
+  fastify.get('/macro', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Get live macro metrics',
+      description: 'Fetch the current macro snapshot used by the scanner scoring guards.',
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            generatedAt: { type: 'string', format: 'date-time' },
+            vixQuote: { type: 'number', nullable: true },
+            vixChangePercent: { type: 'number', nullable: true },
+            tenYearYield: { type: 'number', nullable: true },
+            tenYearChangePercent: { type: 'number', nullable: true },
+            tenYearChangeBps: { type: 'number', nullable: true },
+            dxy: { type: 'object', nullable: true, additionalProperties: true },
+            oil: { type: 'object', nullable: true, additionalProperties: true },
+            gold: { type: 'object', nullable: true, additionalProperties: true },
+            assessments: { type: 'object', nullable: true, additionalProperties: true }
+          }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    try {
+      const scanner = (fastify as any).scanner;
+      if (!scanner?.getCurrentMacroSnapshot) {
+        return (reply as any).code(503).send({ error: 'Scanner service not initialized' });
+      }
+      return scanner.getCurrentMacroSnapshot();
+    } catch (err: any) {
+      fastify.log.error(err);
+      return (reply as any).code(500).send({ error: err.message || 'Failed to fetch live macro metrics' });
+    }
+  });
+
   // PUT /api/signals/:id/status - Update signal status
   fastify.put('/:id/status', {
     schema: {

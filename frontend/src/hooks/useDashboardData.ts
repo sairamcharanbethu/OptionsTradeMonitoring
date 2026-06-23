@@ -10,6 +10,7 @@ export const QUERY_KEYS = {
     briefing: ['briefing'],
     signals: ['signals'],
     scannerLogs: ['scannerLogs'],
+    liveMacroMetrics: ['liveMacroMetrics'],
     tradeUsage: ['tradeUsage'],
     history: (page: number, limit: number) => ['positionHistory', page, limit],
 };
@@ -38,6 +39,15 @@ export function useScannerLogs(refreshInterval = 10000) {
         queryFn: () => api.getScannerLogs(),
         refetchInterval: refreshInterval,
         staleTime: 5000,
+    });
+}
+
+export function useLiveMacroMetrics(refreshInterval = 15000) {
+    return useQuery({
+        queryKey: QUERY_KEYS.liveMacroMetrics,
+        queryFn: () => api.getLiveMacroMetrics(),
+        refetchInterval: refreshInterval,
+        staleTime: 10000,
     });
 }
 

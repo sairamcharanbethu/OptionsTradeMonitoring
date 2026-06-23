@@ -1014,6 +1014,11 @@ export const api = {
     return res.json();
   },
 
+  async getLiveMacroMetrics(): Promise<LiveMacroMetrics> {
+    const res = await authFetch(`${API_BASE}/signals/macro?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch live macro metrics');
+    return res.json();
+  },
 
   async getSignals(): Promise<Signal[]> {
     const res = await authFetch(`${API_BASE}/signals?t=${Date.now()}`);
@@ -1131,6 +1136,21 @@ export interface VolatilityJSON {
     contributors?: string[];
   };
   [key: string]: any;
+}
+
+export interface LiveMacroMetrics extends VolatilityJSON {
+  generatedAt: string;
+  assets?: {
+    vix?: any;
+    tenYear?: any;
+    dxy?: any;
+    oil?: any;
+    gold?: any;
+  };
+  assessments?: {
+    CALL?: VolatilityJSON['macroRegime'];
+    PUT?: VolatilityJSON['macroRegime'];
+  };
 }
 
 export interface OptionDetailsJSON {

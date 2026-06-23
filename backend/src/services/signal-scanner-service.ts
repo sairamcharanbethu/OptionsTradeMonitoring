@@ -188,6 +188,29 @@ type MacroRegimeAssessment = {
   };
 };
 
+export type LiveMacroSnapshot = {
+  generatedAt: string;
+  vixQuote: number | null;
+  vixChangePercent: number | null;
+  tenYearYield: number | null;
+  tenYearChangePercent: number | null;
+  tenYearChangeBps: number | null;
+  dxy: MacroAssetSnapshot;
+  oil: MacroAssetSnapshot;
+  gold: MacroAssetSnapshot;
+  assets: {
+    vix: MacroAssetSnapshot;
+    tenYear: MacroAssetSnapshot;
+    dxy: MacroAssetSnapshot;
+    oil: MacroAssetSnapshot;
+    gold: MacroAssetSnapshot;
+  };
+  assessments: {
+    CALL: MacroRegimeAssessment;
+    PUT: MacroRegimeAssessment;
+  };
+};
+
 export class SignalScannerService {
   private fastify: FastifyInstance;
   private aiService: AIService;
@@ -197,6 +220,8 @@ export class SignalScannerService {
   private scanIntervalMs: number = 5 * 60 * 1000; // 5 minutes
   private lastScanSkippedReason: string | null = null;
   private lastScanAt: string | null = null;
+  private liveMacroSnapshot: LiveMacroSnapshot | null = null;
+  private liveMacroSnapshotFetchedAt = 0;
 
   constructor(fastify: FastifyInstance) {
     this.fastify = fastify;
@@ -895,40 +920,22 @@ Rules:
     const sessionChangePct = ((currentPrice - previousClose) / previousClose) * 100;
     const candleChangePct = ((latest.close - previous.close) / previous.close) * 100;
 
-    // 4. Fetch macro context used by 0DTE regime guards
-    let vixPrice: number | null = null;
-    let vixPreviousClose: number | null = null;
-    let vixChangePct: number | null = null;
-    const vixSnapshot = await this.fetchYahooMacroSnapshot('^VIX', 'VIX');
-    vixPrice = vixSnapshot.value;
-    vixPreviousClose = vixSnapshot.previousClose;
-    vixChangePct = vixSnapshot.changePct;
+    // 4. Fetch live macro context used by 0DTE regime guards
+    const macroSnapshot = await this.getCurrentMacroSnapshot({ forceRefresh: true, currentMinutes });
+    const vixSnapshot = macroSnapshot.assets.vix;
+    const tenYearSnapshot = macroSnapshot.assets.tenYear;
+    const dxySnapshot = macroSnapshot.assets.dxy;
+    const oilSnapshot = macroSnapshot.assets.oil;
+    const goldSnapshot = macroSnapshot.assets.gold;
+    const vixPrice = macroSnapshot.vixQuote;
+    const vixChangePct = macroSnapshot.vixChangePercent;
+    const tenYearYield = macroSnapshot.tenYearYield;
+    const tenYearChangePct = macroSnapshot.tenYearChangePercent;
+    const tenYearChangeBps = macroSnapshot.tenYearChangeBps;
 
     if (vixPrice === null) {
       noTradeReasons.push('VIX data unavailable from Yahoo response');
     }
-
-    let tenYearYield: number | null = null;
-    let tenYearPreviousClose: number | null = null;
-    let tenYearChangePct: number | null = null;
-    let tenYearChangeBps: number | null = null;
-    const rawTenYearSnapshot = await this.fetchYahooMacroSnapshot('^TNX', 'US 10Y');
-    if (rawTenYearSnapshot.value !== null && rawTenYearSnapshot.previousClose !== null) {
-      tenYearChangeBps = Number(((rawTenYearSnapshot.value - rawTenYearSnapshot.previousClose) * 10).toFixed(1));
-    }
-    const tenYearSnapshot = {
-      ...rawTenYearSnapshot,
-      changeBps: tenYearChangeBps
-    };
-    tenYearYield = tenYearSnapshot.value;
-    tenYearPreviousClose = tenYearSnapshot.previousClose;
-    tenYearChangePct = tenYearSnapshot.changePct;
-
-    const [dxySnapshot, oilSnapshot, goldSnapshot] = await Promise.all([
-      this.fetchYahooMacroSnapshot(['DX-Y.NYB', 'UUP'], 'DXY'),
-      this.fetchYahooMacroSnapshot('CL=F', 'Oil'),
-      this.fetchYahooMacroSnapshot('GC=F', 'Gold')
-    ]);
 
     // 5. Fetch Mega-Cap Internals
     let bullishInternals = 0;
@@ -2199,6 +2206,60 @@ Rules:
       source: 'yahoo',
       error: lastError || 'No Yahoo macro candidate returned usable data'
     });
+  }
+
+  public async getCurrentMacroSnapshot(options: {
+    forceRefresh?: boolean;
+    currentMinutes?: number;
+  } = {}): Promise<LiveMacroSnapshot> {
+    const cacheTtlMs = 15_000;
+    const now = Date.now();
+    if (!options.forceRefresh && this.liveMacroSnapshot && now - this.liveMacroSnapshotFetchedAt < cacheTtlMs) {
+      return this.liveMacroSnapshot;
+    }
+
+    const [vixSnapshot, rawTenYearSnapshot, dxySnapshot, oilSnapshot, goldSnapshot] = await Promise.all([
+      this.fetchYahooMacroSnapshot('^VIX', 'VIX'),
+      this.fetchYahooMacroSnapshot('^TNX', 'US 10Y'),
+      this.fetchYahooMacroSnapshot(['DX-Y.NYB', 'UUP'], 'DXY'),
+      this.fetchYahooMacroSnapshot('CL=F', 'Oil'),
+      this.fetchYahooMacroSnapshot('GC=F', 'Gold')
+    ]);
+    const tenYearChangeBps = rawTenYearSnapshot.value !== null && rawTenYearSnapshot.previousClose !== null
+      ? Number(((rawTenYearSnapshot.value - rawTenYearSnapshot.previousClose) * 10).toFixed(1))
+      : null;
+    const tenYearSnapshot = {
+      ...rawTenYearSnapshot,
+      changeBps: tenYearChangeBps
+    };
+    const currentMinutes = options.currentMinutes ?? this.getNyDateParts(new Date()).minutes;
+    const assets = {
+      vix: vixSnapshot,
+      tenYear: tenYearSnapshot,
+      dxy: dxySnapshot,
+      oil: oilSnapshot,
+      gold: goldSnapshot
+    };
+    const snapshot: LiveMacroSnapshot = {
+      generatedAt: new Date().toISOString(),
+      vixQuote: vixSnapshot.value,
+      vixChangePercent: vixSnapshot.changePct,
+      tenYearYield: tenYearSnapshot.value,
+      tenYearChangePercent: tenYearSnapshot.changePct,
+      tenYearChangeBps,
+      dxy: dxySnapshot,
+      oil: oilSnapshot,
+      gold: goldSnapshot,
+      assets,
+      assessments: {
+        CALL: this.assessMacroRegime({ winningSide: 'CALL', currentMinutes, ...assets }),
+        PUT: this.assessMacroRegime({ winningSide: 'PUT', currentMinutes, ...assets })
+      }
+    };
+
+    this.liveMacroSnapshot = snapshot;
+    this.liveMacroSnapshotFetchedAt = now;
+    return snapshot;
   }
 
   private assessMacroRegime(input: {
