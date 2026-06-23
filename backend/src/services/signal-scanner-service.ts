@@ -166,6 +166,7 @@ type ScannerCycleContext = {
   nyParts: ScannerNyDateParts;
   marketPhase: ScannerMarketPhase;
   force: boolean;
+  phaseTimingsMs: Record<string, number>;
 };
 
 type OptionQuoteCandidate = OptionContractCandidate & {
@@ -638,11 +639,22 @@ Rules:
         now: startedAtDate,
         nyParts
       }),
-      force: Boolean(input.force)
+      force: Boolean(input.force),
+      phaseTimingsMs: {}
     };
   }
 
-  private getCycleSnapshot(cycle: ScannerCycleContext) {
+  private getPhaseTimingsForSymbol(cycle: ScannerCycleContext, symbol?: string): Record<string, number> {
+    if (!symbol) return { ...cycle.phaseTimingsMs };
+    const prefix = `${symbol}.`;
+    return Object.fromEntries(
+      Object.entries(cycle.phaseTimingsMs)
+        .filter(([phase]) => phase.startsWith(prefix))
+        .map(([phase, durationMs]) => [phase.slice(prefix.length), durationMs])
+    );
+  }
+
+  private getCycleSnapshot(cycle: ScannerCycleContext, symbol?: string) {
     return {
       cycleId: cycle.cycleId,
       startedAt: cycle.startedAt,
@@ -650,6 +662,7 @@ Rules:
       symbols: cycle.symbols,
       marketPhase: cycle.marketPhase,
       force: cycle.force,
+      phaseTimingsMs: this.getPhaseTimingsForSymbol(cycle, symbol),
       ny: {
         dateStr: cycle.nyParts.dateStr,
         marketDate: cycle.nyParts.marketDate,
@@ -658,6 +671,15 @@ Rules:
         minutes: cycle.nyParts.minutes
       }
     };
+  }
+
+  private async timeScannerPhase<T>(cycle: ScannerCycleContext, phase: string, operation: () => Promise<T>): Promise<T> {
+    const startedAtMs = Date.now();
+    try {
+      return await operation();
+    } finally {
+      cycle.phaseTimingsMs[phase] = Date.now() - startedAtMs;
+    }
   }
 
   public async getRuntimeStatus() {
@@ -814,109 +836,114 @@ Rules:
     // 2. Fetch GEX regime token and details
     let gexData: any = null;
     let gexAvailable = false;
-    if (settings.sscgex_password) {
-      try {
-        const tokenCacheKey = `CACHE:GEX_AUTH_TOKEN:${settings.sscgex_password}`;
-        let token = await redis.get(tokenCacheKey);
+    const gexPromise = this.timeScannerPhase(cycle, `${symbol}.gex`, async () => {
+      if (settings.sscgex_password) {
+        try {
+          const tokenCacheKey = `CACHE:GEX_AUTH_TOKEN:${settings.sscgex_password}`;
+          let token = await redis.get(tokenCacheKey);
 
-        if (!token) {
-          this.fastify.log.info('[SignalScannerService] Fetching fresh GEX auth token...');
-          const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
-            password: settings.sscgex_password
-          }, { timeout: 8000 });
-          token = (tokenRes.data as any).token;
-          if (token) {
-            await redis.set(tokenCacheKey, token, 600); // cache for 10 minutes
-          }
-        }
-
-        if (token) {
-          const gexCacheKey = `CACHE:GEX_DATA:${symbol}`;
-          const cachedGexStr = await redis.get(gexCacheKey);
-          let fetchSucceeded = false;
-
-          try {
-            const gexRes = await axios.get(`https://sscgex.up.railway.app/api/gex/${symbol}?strikes=50`, {
-              headers: { Authorization: `Bearer ${token}` },
-              timeout: 8000
-            });
-            gexData = gexRes.data;
-            gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
-            if (gexAvailable) {
-              fetchSucceeded = true;
-              await redis.set(gexCacheKey, JSON.stringify(gexData), 60); // cache for 60 seconds
+          if (!token) {
+            this.fastify.log.info('[SignalScannerService] Fetching fresh GEX auth token...');
+            const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
+              password: settings.sscgex_password
+            }, { timeout: 8000 });
+            token = (tokenRes.data as any).token;
+            if (token) {
+              await redis.set(tokenCacheKey, token, 600); // cache for 10 minutes
             }
-          } catch (fetchErr: any) {
-            this.fastify.log.warn(`[SignalScannerService] Live GEX fetch failed for ${symbol}: ${fetchErr.message}. Checking fallback cache.`);
           }
 
-          if (!fetchSucceeded && cachedGexStr) {
+          if (token) {
+            const gexCacheKey = `CACHE:GEX_DATA:${symbol}`;
+            const cachedGexStr = await redis.get(gexCacheKey);
+            let fetchSucceeded = false;
+
             try {
-              gexData = JSON.parse(cachedGexStr);
+              const gexRes = await axios.get(`https://sscgex.up.railway.app/api/gex/${symbol}?strikes=50`, {
+                headers: { Authorization: `Bearer ${token}` },
+                timeout: 8000
+              });
+              gexData = gexRes.data;
               gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
               if (gexAvailable) {
-                this.fastify.log.info(`[SignalScannerService] Successfully recovered GEX data from fallback cache for ${symbol}`);
+                fetchSucceeded = true;
+                await redis.set(gexCacheKey, JSON.stringify(gexData), 60); // cache for 60 seconds
               }
-            } catch (err: any) {
-              this.fastify.log.error(`[SignalScannerService] Failed to parse cached GEX data: ${err.message}`);
+            } catch (fetchErr: any) {
+              this.fastify.log.warn(`[SignalScannerService] Live GEX fetch failed for ${symbol}: ${fetchErr.message}. Checking fallback cache.`);
+            }
+
+            if (!fetchSucceeded && cachedGexStr) {
+              try {
+                gexData = JSON.parse(cachedGexStr);
+                gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
+                if (gexAvailable) {
+                  this.fastify.log.info(`[SignalScannerService] Successfully recovered GEX data from fallback cache for ${symbol}`);
+                }
+              } catch (err: any) {
+                this.fastify.log.error(`[SignalScannerService] Failed to parse cached GEX data: ${err.message}`);
+              }
             }
           }
+        } catch (err: any) {
+          this.fastify.log.warn(`[SignalScannerService] GEX Portal fetch failed for ${symbol}: ${err.message}`);
         }
-      } catch (err: any) {
-        this.fastify.log.warn(`[SignalScannerService] GEX Portal fetch failed for ${symbol}: ${err.message}`);
       }
-    }
-
-    if (!gexAvailable) {
-      noTradeReasons.push('GEX data unavailable — regime unknown, skipping to prevent silent strategy flip');
-    }
+    });
 
     // 3. Fetch Yahoo Finance Price Candles (5-minute for 5 days)
     let sortedCandles: Candle[] = [];
     try {
-      const fiveDaysAgo = new Date(now);
-      fiveDaysAgo.setDate(now.getDate() - 5);
+      await this.timeScannerPhase(cycle, `${symbol}.candles`, async () => {
+        const fiveDaysAgo = new Date(now);
+        fiveDaysAgo.setDate(now.getDate() - 5);
 
-      const chartData = await (yahooFinance as any).chart(symbol, {
-        interval: '5m',
-        period1: fiveDaysAgo,
-        period2: now,
-        includePrePost: true
-      });
+        const chartData = await (yahooFinance as any).chart(symbol, {
+          interval: '5m',
+          period1: fiveDaysAgo,
+          period2: now,
+          includePrePost: true
+        });
 
-      const result = chartData?.quotes || [];
+        const result = chartData?.quotes || [];
 
-      for (let i = 0; i < result.length; i++) {
-        const quote = result[i];
-        const open = this.toNumber(quote.open);
-        const high = this.toNumber(quote.high);
-        const low = this.toNumber(quote.low);
-        const close = this.toNumber(quote.close);
-        const volume = this.toNumber(quote.volume ?? 0) ?? 0;
+        for (let i = 0; i < result.length; i++) {
+          const quote = result[i];
+          const open = this.toNumber(quote.open);
+          const high = this.toNumber(quote.high);
+          const low = this.toNumber(quote.low);
+          const close = this.toNumber(quote.close);
+          const volume = this.toNumber(quote.volume ?? 0) ?? 0;
 
-        if (quote.date && open !== null && high !== null && low !== null && close !== null) {
-          const dateObj = quote.date instanceof Date ? quote.date : new Date(quote.date);
-          const datetime = dateObj.toISOString();
-          const nyCandleParts = this.getNyDateParts(dateObj);
-          const isRTH = nyCandleParts.minutes >= (9 * 60 + 30) && nyCandleParts.minutes < (16 * 60);
-          const timestamp = Math.floor(dateObj.getTime() / 1000);
+          if (quote.date && open !== null && high !== null && low !== null && close !== null) {
+            const dateObj = quote.date instanceof Date ? quote.date : new Date(quote.date);
+            const datetime = dateObj.toISOString();
+            const nyCandleParts = this.getNyDateParts(dateObj);
+            const isRTH = nyCandleParts.minutes >= (9 * 60 + 30) && nyCandleParts.minutes < (16 * 60);
+            const timestamp = Math.floor(dateObj.getTime() / 1000);
 
-          sortedCandles.push({
-            datetime,
-            nyDateStr: nyCandleParts.dateStr,
-            isRTH,
-            open,
-            high,
-            low,
-            close,
-            volume,
-            timestamp
-          });
+            sortedCandles.push({
+              datetime,
+              nyDateStr: nyCandleParts.dateStr,
+              isRTH,
+              open,
+              high,
+              low,
+              close,
+              volume,
+              timestamp
+            });
+          }
         }
-      }
+      });
     } catch (err: any) {
       this.fastify.log.error(`[SignalScannerService] Yahoo Finance fetch failed for ${symbol}: ${err.message}`);
       return;
+    }
+
+    await gexPromise;
+    if (!gexAvailable) {
+      noTradeReasons.push('GEX data unavailable — regime unknown, skipping to prevent silent strategy flip');
     }
 
     const rawCandleCount = sortedCandles.length;
@@ -1022,8 +1049,87 @@ Rules:
     const sessionChangePct = ((currentPrice - previousClose) / previousClose) * 100;
     const candleChangePct = ((latest.close - previous.close) / previous.close) * 100;
 
-    // 4. Fetch live macro context used by 0DTE regime guards
-    const macroSnapshot = await this.getCurrentMacroSnapshot({ forceRefresh: true, currentMinutes, now });
+    // 4. Start live macro context fetch early; await after independent internals fetch.
+    const macroSnapshotPromise = this.timeScannerPhase(
+      cycle,
+      `${symbol}.macro`,
+      () => this.getCurrentMacroSnapshot({ forceRefresh: true, currentMinutes, now })
+    );
+
+    // 5. Fetch Mega-Cap Internals
+    let bullishInternals = 0;
+    let bearishInternals = 0;
+    let applePct: number | null = null;
+    let microsoftPct: number | null = null;
+    let nvidiaPct: number | null = null;
+
+    let fetchedFromAlpaca = false;
+    const alpacaKeyId = settings.alpaca_key_id?.trim();
+    const alpacaSecretKey = settings.alpaca_secret_key?.trim();
+
+    await this.timeScannerPhase(cycle, `${symbol}.internals`, async () => {
+      if (alpacaKeyId && alpacaSecretKey) {
+        try {
+          this.fastify.log.info('[SignalScannerService] Fetching mega-caps snapshots from Alpaca...');
+          const stockUrl = 'https://data.alpaca.markets/v2/stocks/snapshots?symbols=AAPL,MSFT,NVDA';
+          const stockRes = await axios.get(stockUrl, {
+            headers: {
+              'APCA-API-KEY-ID': alpacaKeyId,
+              'APCA-API-SECRET-KEY': alpacaSecretKey
+            },
+            timeout: 5000
+          });
+
+          const stockData = stockRes.data as any;
+          const processAlpacaStock = (sym: string) => {
+            const snap = stockData[sym];
+            if (!snap) return null;
+            const current = snap.latestTrade?.p || snap.latestQuote?.ap || 0;
+            const prev = snap.prevDailyBar?.c || 0;
+            if (current > 0 && prev > 0) {
+              return Number((((current - prev) / prev) * 100).toFixed(2));
+            }
+            return null;
+          };
+
+          applePct = processAlpacaStock('AAPL');
+          microsoftPct = processAlpacaStock('MSFT');
+          nvidiaPct = processAlpacaStock('NVDA');
+
+          if (applePct !== null && microsoftPct !== null && nvidiaPct !== null) {
+            fetchedFromAlpaca = true;
+            this.fastify.log.info(`[SignalScannerService] Mega-caps fetched from Alpaca: AAPL=${applePct}%, MSFT=${microsoftPct}%, NVDA=${nvidiaPct}%`);
+
+            if (applePct > 0) bullishInternals++; else if (applePct < 0) bearishInternals++;
+            if (microsoftPct > 0) bullishInternals++; else if (microsoftPct < 0) bearishInternals++;
+            if (nvidiaPct > 0) bullishInternals++; else if (nvidiaPct < 0) bearishInternals++;
+          }
+        } catch (err: any) {
+          this.fastify.log.warn(`[SignalScannerService] Failed to fetch mega-caps from Alpaca: ${err.message}`);
+        }
+      }
+
+      if (!fetchedFromAlpaca) {
+        try {
+          const internals = await (yahooFinance as any).quote(['AAPL', 'MSFT', 'NVDA']);
+          const internalsList = Array.isArray(internals) ? internals : [internals];
+
+          for (const stock of internalsList) {
+            const change = stock.regularMarketChangePercent ?? 0;
+            if (stock.symbol === 'AAPL') applePct = change;
+            if (stock.symbol === 'MSFT') microsoftPct = change;
+            if (stock.symbol === 'NVDA') nvidiaPct = change;
+
+            if (change > 0) bullishInternals++;
+            if (change < 0) bearishInternals++;
+          }
+        } catch (internalErr: any) {
+          this.fastify.log.warn(`[SignalScannerService] Yahoo mega-caps check failed: ${internalErr.message}`);
+        }
+      }
+    });
+
+    const macroSnapshot = await macroSnapshotPromise;
     const vixSnapshot = macroSnapshot.assets.vix;
     const tenYearSnapshot = macroSnapshot.assets.tenYear;
     const dxySnapshot = macroSnapshot.assets.dxy;
@@ -1037,77 +1143,6 @@ Rules:
 
     if (vixPrice === null) {
       noTradeReasons.push('VIX data unavailable from Yahoo response');
-    }
-
-    // 5. Fetch Mega-Cap Internals
-    let bullishInternals = 0;
-    let bearishInternals = 0;
-    let applePct: number | null = null;
-    let microsoftPct: number | null = null;
-    let nvidiaPct: number | null = null;
-
-    let fetchedFromAlpaca = false;
-    const alpacaKeyId = settings.alpaca_key_id?.trim();
-    const alpacaSecretKey = settings.alpaca_secret_key?.trim();
-
-    if (alpacaKeyId && alpacaSecretKey) {
-      try {
-        this.fastify.log.info('[SignalScannerService] Fetching mega-caps snapshots from Alpaca...');
-        const stockUrl = 'https://data.alpaca.markets/v2/stocks/snapshots?symbols=AAPL,MSFT,NVDA';
-        const stockRes = await axios.get(stockUrl, {
-          headers: {
-            'APCA-API-KEY-ID': alpacaKeyId,
-            'APCA-API-SECRET-KEY': alpacaSecretKey
-          },
-          timeout: 5000
-        });
-
-        const stockData = stockRes.data as any;
-        const processAlpacaStock = (sym: string) => {
-          const snap = stockData[sym];
-          if (!snap) return null;
-          const current = snap.latestTrade?.p || snap.latestQuote?.ap || 0;
-          const prev = snap.prevDailyBar?.c || 0;
-          if (current > 0 && prev > 0) {
-            return Number((((current - prev) / prev) * 100).toFixed(2));
-          }
-          return null;
-        };
-
-        applePct = processAlpacaStock('AAPL');
-        microsoftPct = processAlpacaStock('MSFT');
-        nvidiaPct = processAlpacaStock('NVDA');
-
-        if (applePct !== null && microsoftPct !== null && nvidiaPct !== null) {
-          fetchedFromAlpaca = true;
-          this.fastify.log.info(`[SignalScannerService] Mega-caps fetched from Alpaca: AAPL=${applePct}%, MSFT=${microsoftPct}%, NVDA=${nvidiaPct}%`);
-          
-          if (applePct > 0) bullishInternals++; else if (applePct < 0) bearishInternals++;
-          if (microsoftPct > 0) bullishInternals++; else if (microsoftPct < 0) bearishInternals++;
-          if (nvidiaPct > 0) bullishInternals++; else if (nvidiaPct < 0) bearishInternals++;
-        }
-      } catch (err: any) {
-        this.fastify.log.warn(`[SignalScannerService] Failed to fetch mega-caps from Alpaca: ${err.message}`);
-      }
-    }
-
-    if (!fetchedFromAlpaca) {
-      try {
-        const internals = await (yahooFinance as any).quote(['AAPL', 'MSFT', 'NVDA']);
-        const internalsList = Array.isArray(internals) ? internals : [internals];
-
-        for (const stock of internalsList) {
-          const change = stock.regularMarketChangePercent ?? 0;
-          if (stock.symbol === 'AAPL') applePct = change;
-          if (stock.symbol === 'MSFT') microsoftPct = change;
-          if (stock.symbol === 'NVDA') nvidiaPct = change;
-
-          if (change > 0) bullishInternals++;
-          if (change < 0) bearishInternals++;
-        }
-      } catch (internalErr: any) {
-        this.fastify.log.warn(`[SignalScannerService] Yahoo mega-caps check failed: ${internalErr.message}`);
-      }
     }
 
     const hasBullishInternals = bullishInternals >= 2;
@@ -1341,7 +1376,6 @@ Rules:
     };
     const decisionSnapshotBase = {
       capturedAt: cycle.startedAt,
-      cycle: this.getCycleSnapshot(cycle),
       symbol,
       marketDate: nyParts.marketDate,
       candle: {
@@ -1419,13 +1453,17 @@ Rules:
       chosenExpiry = targetExpiryDateStr;
 
       try {
-        const chainSnapshot = await this.getCachedOptionChainSnapshot({
-          userId,
-          symbol,
-          expiration: targetExpiryDateStr,
-          side: winningSide,
-          windowKey: `${nyParts.marketDate}:${Math.floor(nyParts.minutes / 5) * 5}`
-        });
+        const chainSnapshot = await this.timeScannerPhase(
+          cycle,
+          `${symbol}.optionChain`,
+          () => this.getCachedOptionChainSnapshot({
+            userId,
+            symbol,
+            expiration: targetExpiryDateStr,
+            side: winningSide,
+            windowKey: `${nyParts.marketDate}:${Math.floor(nyParts.minutes / 5) * 5}`
+          })
+        );
         const chain = chainSnapshot.chain;
         const parsed = chain
           .map((quote) => ({
@@ -1687,6 +1725,7 @@ Rules:
       };
       pricingData.decisionSnapshot = this.buildDecisionSnapshot({
         ...decisionSnapshotBase,
+        cycle: this.getCycleSnapshot(cycle, symbol),
         status: 'SIGNAL_GENERATED',
         optionSelection: {
           candidateSelection,
@@ -1975,6 +2014,7 @@ Rules:
     } else {
       const blockedDecisionSnapshot = this.buildDecisionSnapshot({
         ...decisionSnapshotBase,
+        cycle: this.getCycleSnapshot(cycle, symbol),
         status: 'BLOCKED',
         optionSelection: null,
         finalDecision: null,

@@ -4,6 +4,8 @@ These tasks adapt useful NautilusTrader patterns into this app without importing
 
 Execution rule: finish one task at a time. Each task must include a bug check, the narrowest relevant tests/builds, `git diff --check`, generated artifact cleanup, and a commit before starting the next task.
 
+Status: all hardening tasks in this queue are completed.
+
 ## Completed Task 1: Durable Event Journal And Replay Audit
 
 Goal: make scanner and execution lifecycle decisions queryable in order, including events before a position exists.
@@ -202,7 +204,7 @@ Bug check:
 
 Status: completed in current work.
 
-## Task 11: Performance Pass For Scanner I/O
+## Completed Task 11: Performance Pass For Scanner I/O
 
 Goal: reduce scanner latency and duplicate network calls without changing strategy behavior.
 
@@ -221,7 +223,9 @@ Bug check:
 - Restore generated `backend/dist` before commit.
 - Commit message: `Add scanner phase timing and IO cleanup`.
 
-## Working Order
+Status: completed in current work.
+
+## Completed Working Order
 
 1. Task 5: Decision Snapshot V1.
 2. Task 6: Snapshot-Based Replay And Drift Report.

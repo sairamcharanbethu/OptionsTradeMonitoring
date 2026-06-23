@@ -577,6 +577,72 @@ async function testFixedClockMacroAssessmentIsDeterministic() {
   assert(first.warnings.some((item: string) => item.includes('Near close')), 'Near-close weak macro warning should be deterministic');
 }
 
+async function testScannerPhaseTimingEvidenceIsCapturedInDecisionSnapshot() {
+  const scanner = createScanner();
+  const cycle = scanner.buildScannerCycleContext({
+    userId: 1,
+    symbols: ['QQQ'],
+    settings: {
+      trading_start_time: '09:30',
+      trading_cutoff_time: '16:00'
+    },
+    now: new Date('2026-06-22T14:15:00.000Z')
+  });
+
+  const result = await scanner.timeScannerPhase(cycle, 'QQQ.macro', async () => 'macro-ok');
+  const snapshot = scanner.buildDecisionSnapshot({
+    capturedAt: cycle.startedAt,
+    cycle: scanner.getCycleSnapshot(cycle, 'QQQ'),
+    symbol: 'QQQ',
+    status: 'BLOCKED',
+    marketDate: cycle.nyParts.marketDate,
+    candle: { timestamp: '2026-06-22T14:10:00.000Z', close: 741.2 },
+    configSnapshot: { version: 1, scanner: { minSignalScore: 70 } },
+    macroSnapshot: { vixQuote: 17.5 },
+    gexSnapshot: { regime: 'POSITIVE' },
+    internals: { bullishCount: 2, bearishCount: 1 },
+    scoring: { winningSide: 'CALL', winningScore: 71, dynamicMinScore: 80 },
+    optionSelection: null,
+    finalDecision: null,
+    blockers: ['Best setup score 71 is below dynamic minimum 80']
+  });
+
+  assert(result === 'macro-ok', `Expected timed operation result, got ${result}`);
+  assert(snapshot.cycle.phaseTimingsMs.macro >= 0, 'Decision snapshot should include macro phase timing evidence');
+}
+
+async function testScoringDiagnosticsStableForSameNormalizedInputs() {
+  const scanner = createScanner();
+  const macroRegime = scanner.assessMacroRegime({
+    winningSide: 'CALL',
+    currentMinutes: 10 * 60,
+    vix: macroSnapshot({ symbol: '^VIX', label: 'VIX', value: 17.5, previousClose: 18.4, changePct: -4.89 }),
+    tenYear: macroSnapshot({ symbol: '^TNX', label: 'US 10Y', value: 42.8, previousClose: 43.2, changePct: -0.93, changeBps: -4 }),
+    dxy: macroSnapshot({ symbol: 'DX-Y.NYB', label: 'DXY', value: 103.7, previousClose: 104.1, changePct: -0.38 }),
+    oil: macroSnapshot({ symbol: 'CL=F', label: 'Oil', value: 77.6, previousClose: 77.8, changePct: -0.26 }),
+    gold: macroSnapshot({ symbol: 'GC=F', label: 'Gold', value: 2329, previousClose: 2335, changePct: -0.26 })
+  });
+  const input = {
+    baseScore: 92,
+    macroRegime,
+    pricingWarnings: [],
+    executionRealism: {
+      score: 94,
+      executable: true,
+      threshold: 70,
+      reasons: ['Live quote, spread, and liquidity passed execution realism checks']
+    },
+    finalConfidence: 100,
+    setupGrade: '🔥 A+ / FULL'
+  };
+
+  const first = scanner.buildSignalGradeDiagnostics(input);
+  const second = scanner.buildSignalGradeDiagnostics(input);
+
+  assert(JSON.stringify(first) === JSON.stringify(second), 'Scoring diagnostics should not change for the same normalized inputs');
+  assert(first.gradeKey === 'A+', `Expected stable A+ grade key, got ${first.gradeKey}`);
+}
+
 async function testMacroBlocksCallsWhenVixIsTooHighOrSpiking() {
   const scanner = createScanner();
 
@@ -834,6 +900,8 @@ async function runTests() {
   await testScannerCycleContextUsesFixedClock();
   await testFixedClockDrivesExpiryAndAfternoonThreshold();
   await testFixedClockMacroAssessmentIsDeterministic();
+  await testScannerPhaseTimingEvidenceIsCapturedInDecisionSnapshot();
+  await testScoringDiagnosticsStableForSameNormalizedInputs();
   await testMacroBlocksCallsWhenVixIsTooHighOrSpiking();
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
   await testMacroRewardsRiskOnCallSetups();
