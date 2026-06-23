@@ -64,9 +64,18 @@ type ReplayTradeDecision = {
   gradeKey: string | null;
   executable: boolean | null;
   usingTheoreticalPricing: boolean;
+  spreadPct: number | null;
+  quoteQuality: ReplayQuoteQualityBucket;
   pricingWarnings: string[];
   blockers: string[];
 };
+
+type ReplayQuoteQualityBucket =
+  | 'clean'
+  | 'acceptable_spread'
+  | 'wide_spread'
+  | 'theoretical_pricing'
+  | 'missing_quote';
 
 type ReplayParityGapType =
   | 'missing_signal_decision'
@@ -103,6 +112,42 @@ type ReplayScenario = {
   summary: ReplaySummary;
 };
 
+type ReplayCalibrationThreshold = {
+  minConfidence: number;
+  trades: number;
+  wins: number;
+  winRate: number;
+  totalPnl: number;
+  averageRoiPct: number;
+  profitFactor: number;
+};
+
+type ReplayCalibrationBucket = {
+  key: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+  averagePnl: number;
+  averageRoiPct: number;
+  averageConfidence: number;
+  profitFactor: number;
+  gradeMix: Record<string, number>;
+  thresholds: ReplayCalibrationThreshold[];
+};
+
+type ReplayCalibrationReport = {
+  scenario: 'baseline';
+  totalTrades: number;
+  dimensions: {
+    symbol: ReplayCalibrationBucket[];
+    regime: ReplayCalibrationBucket[];
+    timeWindow: ReplayCalibrationBucket[];
+    quoteQuality: ReplayCalibrationBucket[];
+  };
+};
+
 type ReplaySummary = {
   trades: number;
   wins: number;
@@ -133,6 +178,7 @@ export class SignalReplayBacktester {
     signalsUsable: number;
     missingOptionData: number;
     parity: ReplayParitySummary;
+    calibration: ReplayCalibrationReport;
     scenarios: ReplayScenario[];
   }> {
     const config = this.normalizeConfig(input);
@@ -218,6 +264,8 @@ export class SignalReplayBacktester {
       }
       scenario.summary = this.summarize(scenario.trades, state.dailyPnl, config);
     }
+    const baseline = scenarios.find((scenario) => scenario.name === 'baseline') as ReplayScenario;
+    const calibration = this.buildCalibrationReport(baseline.trades);
 
     return {
       config,
@@ -225,6 +273,7 @@ export class SignalReplayBacktester {
       signalsUsable: usableSignals.length,
       missingOptionData,
       parity,
+      calibration,
       scenarios
     };
   }
@@ -467,9 +516,137 @@ export class SignalReplayBacktester {
       gradeKey: decision.grade?.gradeKey || null,
       executable: typeof decision.grade?.executable === 'boolean' ? decision.grade.executable : null,
       usingTheoreticalPricing: Boolean(decision.quote?.usingTheoreticalPricing),
+      spreadPct: this.finiteNumber(decision.quote?.spreadPct),
+      quoteQuality: this.getQuoteQualityBucket(decision),
       pricingWarnings: Array.isArray(decision.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [],
       blockers: Array.isArray(decision.grade?.blockers) ? decision.grade.blockers : []
     };
+  }
+
+  private buildCalibrationReport(trades: ReplayTrade[]): ReplayCalibrationReport {
+    return {
+      scenario: 'baseline',
+      totalTrades: trades.length,
+      dimensions: {
+        symbol: this.buildCalibrationBuckets(trades, (trade) => trade.symbol),
+        regime: this.buildCalibrationBuckets(trades, (trade) => this.getCalibrationRegimeKey(trade)),
+        timeWindow: this.buildCalibrationBuckets(trades, (trade) => this.getTimeWindowKey(trade.entryTime)),
+        quoteQuality: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.quoteQuality || 'missing_quote')
+      }
+    };
+  }
+
+  private buildCalibrationBuckets(trades: ReplayTrade[], getKey: (trade: ReplayTrade) => string): ReplayCalibrationBucket[] {
+    const groups = new Map<string, ReplayTrade[]>();
+    for (const trade of trades) {
+      const key = getKey(trade) || 'unknown';
+      const group = groups.get(key) || [];
+      group.push(trade);
+      groups.set(key, group);
+    }
+    return [...groups.entries()]
+      .map(([key, groupTrades]) => this.summarizeCalibrationBucket(key, groupTrades))
+      .sort((a, b) => b.trades - a.trades || a.key.localeCompare(b.key));
+  }
+
+  private summarizeCalibrationBucket(key: string, trades: ReplayTrade[]): ReplayCalibrationBucket {
+    const wins = trades.filter((trade) => trade.pnl > 0);
+    const losses = trades.filter((trade) => trade.pnl <= 0);
+    const totalPnl = Number(trades.reduce((sum, trade) => sum + trade.pnl, 0).toFixed(2));
+    const gradeMix: Record<string, number> = {};
+    for (const trade of trades) {
+      const grade = this.getGradeKey(trade);
+      gradeMix[grade] = (gradeMix[grade] || 0) + 1;
+    }
+
+    return {
+      key,
+      trades: trades.length,
+      wins: wins.length,
+      losses: losses.length,
+      winRate: this.percent(wins.length, trades.length),
+      totalPnl,
+      averagePnl: trades.length > 0 ? Number((totalPnl / trades.length).toFixed(2)) : 0,
+      averageRoiPct: this.average(trades.map((trade) => trade.roiPct)),
+      averageConfidence: this.average(trades.map((trade) => trade.confidenceScore)),
+      profitFactor: this.profitFactor(trades),
+      gradeMix,
+      thresholds: this.buildThresholdCalibration(trades)
+    };
+  }
+
+  private buildThresholdCalibration(trades: ReplayTrade[]): ReplayCalibrationThreshold[] {
+    return [70, 80, 85, 90, 92].map((minConfidence) => {
+      const thresholdTrades = trades.filter((trade) => trade.confidenceScore >= minConfidence);
+      const wins = thresholdTrades.filter((trade) => trade.pnl > 0);
+      return {
+        minConfidence,
+        trades: thresholdTrades.length,
+        wins: wins.length,
+        winRate: this.percent(wins.length, thresholdTrades.length),
+        totalPnl: Number(thresholdTrades.reduce((sum, trade) => sum + trade.pnl, 0).toFixed(2)),
+        averageRoiPct: this.average(thresholdTrades.map((trade) => trade.roiPct)),
+        profitFactor: this.profitFactor(thresholdTrades)
+      };
+    });
+  }
+
+  private getCalibrationRegimeKey(trade: ReplayTrade): string {
+    const macro = trade.macroRegime || {};
+    return String(macro.regime || macro.directionBias || 'unknown').toLowerCase();
+  }
+
+  private getTimeWindowKey(value: string): string {
+    const parsed = new Date(value);
+    if (!Number.isFinite(parsed.getTime())) return 'unknown';
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      hourCycle: 'h23'
+    });
+    const parts = formatter.formatToParts(parsed);
+    const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+    const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+    const minutes = hour * 60 + minute;
+    if (minutes < 570 || minutes >= 960) return 'outside_regular_hours';
+    if (minutes < 630) return 'open_0930_1030';
+    if (minutes < 720) return 'morning_1030_1200';
+    if (minutes < 840) return 'midday_1200_1400';
+    if (minutes < 930) return 'afternoon_1400_1530';
+    return 'power_hour_1530_1600';
+  }
+
+  private getQuoteQualityBucket(decision: SignalDecision): ReplayQuoteQualityBucket {
+    if (decision.quote?.usingTheoreticalPricing) return 'theoretical_pricing';
+    const mark = this.finiteNumber(decision.quote?.mark);
+    if (mark === null || mark <= 0) return 'missing_quote';
+    const spreadPct = this.finiteNumber(decision.quote?.spreadPct);
+    const pricingWarnings = Array.isArray(decision.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [];
+    if ((spreadPct !== null && spreadPct > 15) || pricingWarnings.length > 0) return 'wide_spread';
+    if (spreadPct !== null && spreadPct > 8) return 'acceptable_spread';
+    return 'clean';
+  }
+
+  private getGradeKey(trade: ReplayTrade): string {
+    return trade.signalDecision?.gradeKey || String(trade.setupGrade || 'unknown').toUpperCase();
+  }
+
+  private profitFactor(trades: ReplayTrade[]): number {
+    const totalGains = trades.filter((trade) => trade.pnl > 0).reduce((sum, trade) => sum + trade.pnl, 0);
+    const totalLosses = Math.abs(trades.filter((trade) => trade.pnl <= 0).reduce((sum, trade) => sum + trade.pnl, 0));
+    return totalLosses > 0 ? Number((totalGains / totalLosses).toFixed(2)) : totalGains > 0 ? 99.99 : 0;
+  }
+
+  private average(values: number[]): number {
+    const finiteValues = values.filter((value) => Number.isFinite(value));
+    if (finiteValues.length === 0) return 0;
+    return Number((finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length).toFixed(2));
+  }
+
+  private percent(part: number, total: number): number {
+    return total > 0 ? Number(((part / total) * 100).toFixed(2)) : 0;
   }
 
   private parityGap(signal: ReplaySignal, type: ReplayParityGapType, message: string, metadata?: Record<string, any>): ReplayParityGap {
@@ -502,6 +679,11 @@ export class SignalReplayBacktester {
   private normalizeTicker(value: any): string | null {
     const ticker = String(value || '').replace(/\s+/g, '').toUpperCase();
     return ticker || null;
+  }
+
+  private finiteNumber(value: any): number | null {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
   }
 
   private getScenarioSkipReason(scenario: ReplayScenario['name'], signal: ReplaySignal): string | null {

@@ -107,6 +107,41 @@ function createConfig(overrides: Record<string, any> = {}) {
   };
 }
 
+function createReplayTrade(overrides: Record<string, any> = {}) {
+  return {
+    signalId: 301,
+    date: '2026-06-22',
+    symbol: 'QQQ',
+    optionTicker: 'QQQ260622C00741000',
+    side: 'CALL',
+    setupGrade: 'A',
+    confidenceScore: 91,
+    macroRegime: {
+      regime: 'RISK_ON',
+      directionBias: 'CALL'
+    },
+    entryTime: '2026-06-22T13:45:00.000Z',
+    exitTime: '2026-06-22T13:55:00.000Z',
+    entryPrice: 1,
+    exitPrice: 1.12,
+    quantity: 5,
+    pnl: 60,
+    roiPct: 12,
+    exitReason: 'TAKE_PROFIT',
+    skippedBy: [],
+    signalDecision: {
+      gradeKey: 'A',
+      executable: true,
+      usingTheoreticalPricing: false,
+      spreadPct: 2,
+      quoteQuality: 'clean',
+      pricingWarnings: [],
+      blockers: []
+    },
+    ...overrides
+  };
+}
+
 async function testTakeProfitUsesOptionOhlcTarget() {
   const backtester = createBacktester();
   const signal = createSignal();
@@ -249,6 +284,83 @@ async function testParitySummaryReportsDecisionGaps() {
   assert(summary.gaps.pricing_warning === 1, 'Expected pricing warning gap');
 }
 
+async function testCalibrationReportGroupsReplayOutcomes() {
+  const backtester = createBacktester();
+  const report = backtester.buildCalibrationReport([
+    createReplayTrade(),
+    createReplayTrade({
+      signalId: 302,
+      symbol: 'SPY',
+      confidenceScore: 78,
+      macroRegime: {
+        regime: 'RISK_OFF',
+        directionBias: 'PUT'
+      },
+      entryTime: '2026-06-22T17:15:00.000Z',
+      pnl: -100,
+      roiPct: -20,
+      setupGrade: 'B',
+      signalDecision: {
+        gradeKey: 'B',
+        executable: true,
+        usingTheoreticalPricing: true,
+        spreadPct: 30,
+        quoteQuality: 'theoretical_pricing',
+        pricingWarnings: ['theoretical price'],
+        blockers: []
+      }
+    }),
+    createReplayTrade({
+      signalId: 303,
+      symbol: 'QQQ',
+      confidenceScore: 86,
+      macroRegime: {
+        regime: 'RISK_ON',
+        directionBias: 'CALL'
+      },
+      entryTime: '2026-06-22T19:45:00.000Z',
+      pnl: 30,
+      roiPct: 6,
+      signalDecision: {
+        gradeKey: 'A',
+        executable: true,
+        usingTheoreticalPricing: false,
+        spreadPct: 11,
+        quoteQuality: 'acceptable_spread',
+        pricingWarnings: [],
+        blockers: []
+      }
+    })
+  ]);
+
+  const qqq = report.dimensions.symbol.find((bucket: any) => bucket.key === 'QQQ');
+  const riskOn = report.dimensions.regime.find((bucket: any) => bucket.key === 'risk_on');
+  const openWindow = report.dimensions.timeWindow.find((bucket: any) => bucket.key === 'open_0930_1030');
+  const middayWindow = report.dimensions.timeWindow.find((bucket: any) => bucket.key === 'midday_1200_1400');
+  const theoretical = report.dimensions.quoteQuality.find((bucket: any) => bucket.key === 'theoretical_pricing');
+
+  assert(report.totalTrades === 3, `Expected 3 calibration trades, got ${report.totalTrades}`);
+  assert(qqq?.trades === 2, `Expected 2 QQQ trades, got ${qqq?.trades}`);
+  assert(qqq?.winRate === 100, `Expected QQQ 100% win rate, got ${qqq?.winRate}`);
+  assert(qqq?.totalPnl === 90, `Expected QQQ total PnL 90, got ${qqq?.totalPnl}`);
+  assert(riskOn?.trades === 2, `Expected 2 risk_on trades, got ${riskOn?.trades}`);
+  assert(openWindow?.trades === 1, `Expected 1 open window trade, got ${openWindow?.trades}`);
+  assert(middayWindow?.trades === 1, `Expected 1 midday trade, got ${middayWindow?.trades}`);
+  assert(theoretical?.trades === 1, `Expected 1 theoretical pricing trade, got ${theoretical?.trades}`);
+  assert(theoretical?.thresholds.find((threshold: any) => threshold.minConfidence === 80)?.trades === 0, 'Expected theoretical trade below 80 threshold');
+  assert(qqq?.thresholds.find((threshold: any) => threshold.minConfidence === 85)?.trades === 2, 'Expected both QQQ trades at confidence >= 85');
+}
+
+async function testQuoteQualityBuckets() {
+  const backtester = createBacktester();
+
+  assert(backtester.getQuoteQualityBucket(createDecision()) === 'clean', 'Expected clean quote bucket');
+  assert(backtester.getQuoteQualityBucket(createDecision({ quote: { ...createDecision().quote, spreadPct: 10 } })) === 'acceptable_spread', 'Expected acceptable spread bucket');
+  assert(backtester.getQuoteQualityBucket(createDecision({ quote: { ...createDecision().quote, spreadPct: 20 } })) === 'wide_spread', 'Expected wide spread bucket');
+  assert(backtester.getQuoteQualityBucket(createDecision({ quote: { ...createDecision().quote, usingTheoreticalPricing: true } })) === 'theoretical_pricing', 'Expected theoretical pricing bucket');
+  assert(backtester.getQuoteQualityBucket(createDecision({ quote: { ...createDecision().quote, mark: null } })) === 'missing_quote', 'Expected missing quote bucket');
+}
+
 async function testNaiveThetaDataBarsParseAsEasternTime() {
   const backtester = createBacktester();
 
@@ -273,6 +385,8 @@ async function runTests() {
   await testMacroStrictSkipsWeakMacroScore();
   await testStoredSignalDecisionDrivesReplayMetadata();
   await testParitySummaryReportsDecisionGaps();
+  await testCalibrationReportGroupsReplayOutcomes();
+  await testQuoteQualityBuckets();
   await testNaiveThetaDataBarsParseAsEasternTime();
   await testEasternDateHelperHandlesStandardTime();
   console.log('All SignalReplayBacktester tests passed!');
