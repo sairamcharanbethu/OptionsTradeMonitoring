@@ -626,6 +626,13 @@ export class TradeExecutionService {
       return { success: false, skipped: theoreticalPricingDecision.skipped, broker: 'wealthsimple_snaptrade', message: theoreticalPricingDecision.message };
     }
 
+    const executionRealismDecision = RiskDecisionService.forExecutionRealism(optionDetails);
+    if (!executionRealismDecision.allowed) {
+      await this.markSignalExecutionFailure(input.userId, input.signalId, executionRealismDecision.message, executionRealismDecision.skipped);
+      this.fastify.log.info(`[TradeExecutionService] ${executionRealismDecision.message}`);
+      return { success: false, skipped: executionRealismDecision.skipped, broker: 'wealthsimple_snaptrade', message: executionRealismDecision.message };
+    }
+
     const slippagePct = Math.max(0, Number(settings.entry_slippage_pct || 3));
     const useLimitOrder = input.mark !== null && input.mark > 0 && (settings.order_type || 'LIMIT') === 'LIMIT';
     let limitPrice = useLimitOrder ? (input.mark! * (1 + slippagePct / 100)).toFixed(2) : undefined;

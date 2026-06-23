@@ -4,6 +4,7 @@ export type RiskDecisionCode =
   | 'SETUP_GRADE_NOT_EXECUTABLE'
   | 'DUPLICATE_OPEN_ENTRY'
   | 'DAILY_TRADE_LIMIT'
+  | 'EXECUTION_REALISM_TOO_LOW'
   | 'THEORETICAL_PRICING';
 
 export type RiskDecision = {
@@ -69,6 +70,25 @@ export class RiskDecisionService {
       skipped: true,
       code: 'THEORETICAL_PRICING',
       message: 'Entry skipped: signal used theoretical option pricing fallback'
+    };
+  }
+
+  static forExecutionRealism(optionDetails: any): RiskDecision {
+    const realism = optionDetails?.decision?.grade?.executionRealism || optionDetails?.gradeDiagnostics?.executionRealism;
+    if (!realism || typeof realism !== 'object') return this.allow();
+    if (realism.executable !== false) return this.allow();
+    const score = Number(realism.score);
+    const threshold = Number(realism.threshold);
+    return {
+      allowed: false,
+      skipped: true,
+      code: 'EXECUTION_REALISM_TOO_LOW',
+      message: `Entry skipped: execution realism score ${Number.isFinite(score) ? score : 'N/A'} is below ${Number.isFinite(threshold) ? threshold : 'required'} for live trading`,
+      metadata: {
+        score: Number.isFinite(score) ? score : null,
+        threshold: Number.isFinite(threshold) ? threshold : null,
+        reasons: Array.isArray(realism.reasons) ? realism.reasons.slice(0, 5) : []
+      }
     };
   }
 

@@ -43,7 +43,13 @@ async function testPublishWritesCacheBeforeHandlers() {
       reasons: ['A+ because confidence, macro score, and pricing quality all passed full-size thresholds'],
       warnings: [],
       blockers: [],
-      pricingWarnings: []
+      pricingWarnings: [],
+      executionRealism: {
+        score: 100,
+        executable: true,
+        threshold: 70,
+        reasons: ['Live quote, spread, and liquidity passed execution realism checks']
+      }
     }
   };
 

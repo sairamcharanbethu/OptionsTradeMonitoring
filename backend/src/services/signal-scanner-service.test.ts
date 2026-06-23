@@ -461,6 +461,14 @@ async function testLottoDiagnosticsExplainScoreAndPricingPenalty() {
     baseScore: 82,
     macroRegime,
     pricingWarnings: ['Spread 14% exceeds ceiling 8%'],
+    executionRealism: scanner.buildExecutionRealismDiagnostics({
+      mark: 1.1,
+      spreadPct: 14,
+      volume: 90,
+      openInterest: 200,
+      usingTheoreticalPricing: false,
+      pricingWarnings: ['Spread 14% exceeds ceiling 8%']
+    }),
     finalConfidence: 68,
     setupGrade: 'B / LOTTO'
   });
@@ -470,6 +478,25 @@ async function testLottoDiagnosticsExplainScoreAndPricingPenalty() {
   assert(diagnostics.pricingPenalty === -10, `Expected one pricing warning to subtract 10, got ${diagnostics.pricingPenalty}`);
   assert(diagnostics.reasons.some((reason: string) => reason.includes('Lotto because confidence 68')), 'Should explain lotto confidence threshold');
   assert(diagnostics.pricingWarnings[0].includes('Spread'), 'Should preserve pricing warning detail');
+  assert(diagnostics.executionRealism.score < diagnostics.executionRealism.threshold, 'Poor spread/liquidity should lower execution realism below threshold');
+  assert(diagnostics.executionRealism.executable === false, 'Poor execution realism should be non-executable for live entry');
+}
+
+async function testExecutionRealismScoresCleanQuoteAsExecutable() {
+  const scanner = createScanner();
+
+  const diagnostics = scanner.buildExecutionRealismDiagnostics({
+    mark: 1.25,
+    spreadPct: 3,
+    volume: 2500,
+    openInterest: 4500,
+    usingTheoreticalPricing: false,
+    pricingWarnings: []
+  });
+
+  assert(diagnostics.score === 100, `Expected clean quote realism score 100, got ${diagnostics.score}`);
+  assert(diagnostics.executable === true, 'Clean quote should pass execution realism');
+  assert(diagnostics.reasons[0].includes('passed'), 'Clean quote should explain passed execution checks');
 }
 
 async function runTests() {
@@ -486,6 +513,7 @@ async function runTests() {
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
   await testMacroRewardsRiskOnCallSetups();
   await testLottoDiagnosticsExplainScoreAndPricingPenalty();
+  await testExecutionRealismScoresCleanQuoteAsExecutable();
   console.log('All SignalScannerService candidate and macro tests passed!');
 }
 

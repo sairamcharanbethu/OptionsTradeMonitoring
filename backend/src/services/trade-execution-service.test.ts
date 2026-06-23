@@ -176,6 +176,48 @@ async function testLiveExecutionSkipsTheoreticalPricingSignal() {
   assert(quoteValidated === false, 'Should skip before live quote validation or order placement');
 }
 
+async function testLiveExecutionSkipsLowExecutionRealismSignal() {
+  const service = new TradeExecutionService(createFastifyMock());
+  const input = createSignalInput();
+  let failureMarked = false;
+  let quoteValidated = false;
+
+  (service as any).getSignalOptionDetails = async () => ({
+    decision: {
+      quote: {
+        usingTheoreticalPricing: false
+      },
+      grade: {
+        pricingWarnings: ['Spread 18% exceeds ceiling 12%'],
+        executionRealism: {
+          score: 55,
+          executable: false,
+          threshold: 70,
+          reasons: ['Bid/ask spread 18% is very wide']
+        }
+      }
+    }
+  });
+  (service as any).markSignalExecutionFailure = async (_userId: number, _signalId: number, message: string, skipped: boolean) => {
+    failureMarked = skipped && message.includes('execution realism score 55');
+  };
+  (service as any).validateEntryQuote = async () => {
+    quoteValidated = true;
+    return {};
+  };
+
+  const result = await (service as any).executeSnapTradeOptionTrade(input, {
+    live_trading_acknowledged: 'true',
+    snaptrade_trading_account_id: '7:wealthsimple-account',
+    order_type: 'LIMIT',
+    entry_slippage_pct: '3'
+  }, 1);
+
+  assert(result.skipped === true, 'Low execution realism signal should be skipped');
+  assert(failureMarked, 'Should mark low execution realism entry as skipped failure');
+  assert(quoteValidated === false, 'Should skip before live quote validation or order placement');
+}
+
 async function testTheoreticalPricingDetectionCoversStoredShapes() {
   const service = new TradeExecutionService(createFastifyMock());
 
@@ -200,6 +242,18 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
     execution_status: 'PENDING'
   });
   const dailyLimit = RiskDecisionService.forDailyTradeLimit(3, 3);
+  const executionRealism = RiskDecisionService.forExecutionRealism({
+    decision: {
+      grade: {
+        executionRealism: {
+          score: 55,
+          executable: false,
+          threshold: 70,
+          reasons: ['Bid/ask spread 18% is very wide']
+        }
+      }
+    }
+  });
   const theoretical = RiskDecisionService.forTheoreticalPricing({
     decision: {
       quote: { usingTheoreticalPricing: true },
@@ -211,9 +265,11 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(grade.allowed === false && grade.code === 'SETUP_GRADE_NOT_EXECUTABLE', 'Should block non-executable setup grade');
   assert(duplicate.allowed === false && duplicate.metadata?.duplicatePositionId === 679, 'Should block duplicate open entry with metadata');
   assert(dailyLimit.allowed === false && dailyLimit.code === 'DAILY_TRADE_LIMIT', 'Should block daily trade limit');
+  assert(executionRealism.allowed === false && executionRealism.code === 'EXECUTION_REALISM_TOO_LOW', 'Should block low execution realism');
   assert(theoretical.allowed === false && theoretical.code === 'THEORETICAL_PRICING', 'Should block theoretical pricing');
   assert(RiskDecisionService.forSetupGrade(42, 'A+ / FULL').allowed === true, 'Should allow A+ setup grade');
   assert(RiskDecisionService.forDailyTradeLimit(2, 3).allowed === true, 'Should allow under daily trade limit');
+  assert(RiskDecisionService.forExecutionRealism({ decision: { grade: { executionRealism: { score: 80, executable: true, threshold: 70 } } } }).allowed === true, 'Should allow sufficient execution realism');
 }
 
 async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
@@ -276,6 +332,7 @@ async function runTests() {
   await testSnapTradeQuoteIsNotUsedForEntryValidation();
   await testEntryValidationRejectsQuoteSourceSwitch();
   await testLiveExecutionSkipsTheoreticalPricingSignal();
+  await testLiveExecutionSkipsLowExecutionRealismSignal();
   await testTheoreticalPricingDetectionCoversStoredShapes();
   await testRiskDecisionServiceCentralizesPreTradeBlocks();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();

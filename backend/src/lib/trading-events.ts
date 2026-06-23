@@ -18,6 +18,12 @@ export type SignalGradeDiagnostics = {
   warnings: string[];
   blockers: string[];
   pricingWarnings: string[];
+  executionRealism: {
+    score: number;
+    executable: boolean;
+    threshold: number;
+    reasons: string[];
+  };
 };
 
 export type SignalDecision = {

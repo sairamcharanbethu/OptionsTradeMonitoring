@@ -1403,6 +1403,14 @@ Rules:
         baseScore: winningScore,
         macroRegime,
         pricingWarnings,
+        executionRealism: this.buildExecutionRealismDiagnostics({
+          mark,
+          spreadPct,
+          volume,
+          openInterest,
+          usingTheoreticalPricing,
+          pricingWarnings
+        }),
         finalConfidence,
         setupGrade
       });
@@ -1904,6 +1912,7 @@ Rules:
     baseScore: number;
     macroRegime: MacroRegimeAssessment;
     pricingWarnings: string[];
+    executionRealism: SignalGradeDiagnostics['executionRealism'];
     finalConfidence: number;
     setupGrade: string;
   }): SignalGradeDiagnostics {
@@ -1944,7 +1953,81 @@ Rules:
       reasons,
       warnings: input.macroRegime.warnings,
       blockers: input.macroRegime.blockers,
-      pricingWarnings: input.pricingWarnings
+      pricingWarnings: input.pricingWarnings,
+      executionRealism: input.executionRealism
+    };
+  }
+
+  private buildExecutionRealismDiagnostics(input: {
+    mark: number | null;
+    spreadPct: number | null;
+    volume: number | null;
+    openInterest: number | null;
+    usingTheoreticalPricing: boolean;
+    pricingWarnings: string[];
+  }): SignalGradeDiagnostics['executionRealism'] {
+    const threshold = 70;
+    const reasons: string[] = [];
+    let score = 100;
+
+    if (input.usingTheoreticalPricing) {
+      score -= 45;
+      reasons.push('Theoretical option pricing cannot be used for live execution');
+    }
+    if (input.mark === null || input.mark <= 0) {
+      score -= 35;
+      reasons.push('No live option mark is available');
+    } else if (input.mark < 0.2) {
+      score -= 15;
+      reasons.push(`Option premium $${input.mark} is thin`);
+    }
+
+    if (input.spreadPct === null) {
+      score -= 20;
+      reasons.push('Bid/ask spread is unavailable');
+    } else if (input.spreadPct > 20) {
+      score -= 35;
+      reasons.push(`Bid/ask spread ${input.spreadPct}% is extreme`);
+    } else if (input.spreadPct > 12) {
+      score -= 25;
+      reasons.push(`Bid/ask spread ${input.spreadPct}% is very wide`);
+    } else if (input.spreadPct > 8) {
+      score -= 12;
+      reasons.push(`Bid/ask spread ${input.spreadPct}% is above the preferred range`);
+    }
+
+    if (input.volume === null) {
+      score -= 10;
+      reasons.push('Option volume is unavailable');
+    } else if (input.volume < 100) {
+      score -= 20;
+      reasons.push(`Option volume ${input.volume} is too light`);
+    } else if (input.volume < 500) {
+      score -= 10;
+      reasons.push(`Option volume ${input.volume} is below preferred liquidity`);
+    }
+
+    if (input.openInterest === null) {
+      score -= 10;
+      reasons.push('Open interest is unavailable');
+    } else if (input.openInterest < 250) {
+      score -= 15;
+      reasons.push(`Open interest ${input.openInterest} is thin`);
+    } else if (input.openInterest < 1000) {
+      score -= 5;
+      reasons.push(`Open interest ${input.openInterest} is below preferred depth`);
+    }
+
+    if (input.pricingWarnings.length > 0) {
+      score -= Math.min(20, input.pricingWarnings.length * 5);
+    }
+
+    const boundedScore = Math.max(0, Math.min(100, score));
+    return {
+      score: boundedScore,
+      executable: boundedScore >= threshold,
+      threshold,
+      reasons: reasons.length > 0 ? reasons : ['Live quote, spread, and liquidity passed execution realism checks']
     };
   }
 
