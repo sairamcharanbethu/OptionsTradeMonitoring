@@ -9,6 +9,7 @@ import { execFile } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { TradeExecutionService } from './trade-execution-service';
+import { TradeRedisService } from './trade-redis-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { ThetaDataOptionChainQuote, ThetaDataService } from './thetadata-service';
 import { SignalDecision, SignalGradeDiagnostics, tradingEventBus } from '../lib/trading-events';
@@ -1595,6 +1596,24 @@ Rules:
         [`signal:${signalId}:decision`]: signalDecision,
         [`symbol:${symbol}:latestDecision`]: signalDecision
       });
+      try {
+        await TradeRedisService.recordEvent(this.fastify.pg, {
+          userId,
+          signalId,
+          eventType: 'SIGNAL_GENERATED',
+          message: `${symbol} ${winningSide} signal generated`,
+          metadata: {
+            symbol,
+            side: winningSide,
+            setupGrade,
+            confidenceScore: finalConfidence,
+            optionTicker,
+            executionRealism: gradeDiagnostics.executionRealism
+          }
+        });
+      } catch (err: any) {
+        this.fastify.log.warn(`[SignalScannerService] Failed to record signal audit event for #${signalId}: ${err.message || String(err)}`);
+      }
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} saved instantly for ${symbol} ${winningSide} with ML Probability: ${mlProbability}.`);
 
       const cancelledResult = await this.retireOlderPendingSignals(symbol, signalId, winningSide as 'CALL' | 'PUT');

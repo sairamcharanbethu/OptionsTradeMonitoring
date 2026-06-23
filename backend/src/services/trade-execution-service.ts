@@ -827,6 +827,7 @@ export class TradeExecutionService {
 
   private async recordTradeEventBestEffort(event: {
     userId: number;
+    signalId?: number | string | null;
     positionId?: number | string | null;
     eventType: string;
     message?: string | null;
@@ -875,6 +876,17 @@ export class TradeExecutionService {
            updated_at = CURRENT_TIMESTAMP`,
       [signalId, userId, status, executionStatus, error]
     );
+
+    await this.recordTradeEventBestEffort({
+      userId,
+      signalId,
+      eventType: skipped ? 'EXECUTION_SKIPPED' : 'EXECUTION_FAILED',
+      message: error,
+      metadata: {
+        executionStatus,
+        skipped
+      }
+    });
 
     const severity = skipped
       ? String(error || '').includes('Daily trade limit reached') ? 'info' : 'warning'

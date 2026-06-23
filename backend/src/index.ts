@@ -179,6 +179,7 @@ const ensureSchema = async (instance: any) => {
       CREATE TABLE IF NOT EXISTS trade_events (
         id SERIAL PRIMARY KEY,
         user_id INTEGER,
+        signal_id INTEGER,
         position_id INTEGER,
         event_type VARCHAR(80) NOT NULL,
         message TEXT,
@@ -235,6 +236,10 @@ const ensureSchema = async (instance: any) => {
     }
 
     await instance.pg.query(`
+      ALTER TABLE trade_events ADD COLUMN IF NOT EXISTS signal_id INTEGER;
+    `);
+
+    await instance.pg.query(`
       CREATE INDEX IF NOT EXISTS idx_positions_broker_pending
         ON positions (user_id, execution_broker, status, execution_status, updated_at DESC);
     `);
@@ -245,6 +250,10 @@ const ensureSchema = async (instance: any) => {
     await instance.pg.query(`
       CREATE INDEX IF NOT EXISTS idx_trade_events_user_created
         ON trade_events (user_id, created_at DESC);
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_trade_events_signal_created
+        ON trade_events (signal_id, created_at DESC);
     `);
     try {
       await instance.pg.query(`

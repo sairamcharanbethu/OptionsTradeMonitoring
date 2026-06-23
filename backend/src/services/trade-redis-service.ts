@@ -24,6 +24,7 @@ export type RedisLock = {
 
 type TradeEventInput = {
   userId: number;
+  signalId?: number | string | null;
   positionId?: number | string | null;
   eventType: string;
   message?: string | null;
@@ -168,9 +169,9 @@ export class TradeRedisService {
   static async recordEvent(db: Queryable, event: TradeEventInput) {
     const metadata = event.metadata || {};
     await db.query(
-      `INSERT INTO trade_events (user_id, position_id, event_type, message, metadata, created_at)
-       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
-      [event.userId, event.positionId || null, event.eventType, event.message || null, metadata]
+      `INSERT INTO trade_events (user_id, signal_id, position_id, event_type, message, metadata, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)`,
+      [event.userId, event.signalId || null, event.positionId || null, event.eventType, event.message || null, metadata]
     );
 
     if (event.positionId) {

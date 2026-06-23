@@ -4,6 +4,7 @@ import { TradeExecutionService } from '../services/trade-execution-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
 import { DiscordAlertService } from '../services/discord-alert-service';
+import { buildCommandReplayEventsQuery } from '../lib/trade-command-events';
 
 const tradeResponseSchema = {
   type: 'object',
@@ -509,7 +510,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     if (!owned.rows[0]) return reply.code(404).send({ error: 'Wealthsimple trade not found' });
 
     const { rows } = await fastify.pg.query(
-      `SELECT id, user_id, position_id, event_type, message, metadata, created_at
+      `SELECT id, user_id, signal_id, position_id, event_type, message, metadata, created_at
        FROM trade_events
        WHERE user_id = $1
          AND position_id = $2
@@ -538,15 +539,6 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     );
     const trade = rows[0];
     if (!trade) return reply.code(404).send({ error: 'Wealthsimple trade not found' });
-
-    const { rows: eventRows } = await fastify.pg.query(
-      `SELECT id, user_id, position_id, event_type, message, metadata, created_at
-       FROM trade_events
-       WHERE user_id = $1
-         AND position_id = $2
-       ORDER BY created_at ASC, id ASC`,
-      [userId, id]
-    );
 
     const { rows: signalRows } = await fastify.pg.query(
       `SELECT
@@ -584,6 +576,10 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
        LIMIT 1`,
       [userId, trade.broker_order_id || '', trade.broker_trade_id || '']
     );
+    const signalId = signalRows[0]?.id || null;
+
+    const eventQuery = buildCommandReplayEventsQuery(userId, id, signalId);
+    const { rows: eventRows } = await fastify.pg.query(eventQuery.text, eventQuery.values);
 
     return {
       trade,
