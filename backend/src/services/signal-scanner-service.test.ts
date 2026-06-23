@@ -350,6 +350,41 @@ async function testThetaDataRejectsHighThetaDragCandidate() {
   assert(result.ranked[0].reasons.some((reason: string) => reason.includes('theta drag')), 'Ranked candidate should explain theta drag');
 }
 
+async function testScannerUsesOnlyCompletedCandles() {
+  const scanner = createScanner();
+  const candles = [
+    {
+      datetime: '2026-06-22T13:40:00.000Z',
+      nyDateStr: '2026-06-22',
+      isRTH: true,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100.5,
+      volume: 1000,
+      timestamp: Date.parse('2026-06-22T13:40:00.000Z') / 1000
+    },
+    {
+      datetime: '2026-06-22T13:45:00.000Z',
+      nyDateStr: '2026-06-22',
+      isRTH: true,
+      open: 100.5,
+      high: 102,
+      low: 100,
+      close: 101.5,
+      volume: 1200,
+      timestamp: Date.parse('2026-06-22T13:45:00.000Z') / 1000
+    }
+  ];
+
+  const beforeClose = scanner.getCompletedCandles(candles, new Date('2026-06-22T13:49:00.000Z'), 5);
+  const afterClose = scanner.getCompletedCandles(candles, new Date('2026-06-22T13:50:00.000Z'), 5);
+
+  assert(beforeClose.length === 1, `Expected 1 completed candle before 13:45 bar close, got ${beforeClose.length}`);
+  assert(beforeClose[0].datetime === '2026-06-22T13:40:00.000Z', 'Should keep the last fully closed candle');
+  assert(afterClose.length === 2, `Expected 2 completed candles after 13:45 bar close, got ${afterClose.length}`);
+}
+
 async function testMacroBlocksCallsWhenVixIsTooHighOrSpiking() {
   const scanner = createScanner();
 
@@ -446,6 +481,7 @@ async function runTests() {
   await testThetaDataRejectsUnstableMarkLastCandidate();
   await testThetaDataRejectsHighSpreadCostCandidate();
   await testThetaDataRejectsHighThetaDragCandidate();
+  await testScannerUsesOnlyCompletedCandles();
   await testMacroBlocksCallsWhenVixIsTooHighOrSpiking();
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
   await testMacroRewardsRiskOnCallSetups();

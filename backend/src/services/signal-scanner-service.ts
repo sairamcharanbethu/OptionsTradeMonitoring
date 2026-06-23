@@ -791,6 +791,12 @@ Rules:
       return;
     }
 
+    const rawCandleCount = sortedCandles.length;
+    sortedCandles = this.getCompletedCandles(sortedCandles, new Date(), 5);
+    if (sortedCandles.length < rawCandleCount) {
+      this.fastify.log.info(`[SignalScannerService] Ignoring ${rawCandleCount - sortedCandles.length} incomplete ${symbol} candle(s) before signal evaluation.`);
+    }
+
     if (sortedCandles.length < 30) {
       this.fastify.log.warn(`[SignalScannerService] Not enough candles (${sortedCandles.length}) for ${symbol}. Skipping.`);
       return;
@@ -2471,6 +2477,11 @@ Rules:
   private getMarkLastDivergencePct(mark: number | null, last: number | null): number | null {
     if (mark === null || last === null || mark <= 0 || last <= 0) return null;
     return Number((Math.abs(mark - last) / mark * 100).toFixed(2));
+  }
+
+  private getCompletedCandles(candles: Candle[], now = new Date(), intervalMinutes = 5): Candle[] {
+    const cutoffSeconds = Math.floor((now.getTime() - intervalMinutes * 60 * 1000) / 1000);
+    return candles.filter((candle) => candle.timestamp <= cutoffSeconds);
   }
 
   private fetchBestThetaDataOptionCandidate(input: {
