@@ -493,6 +493,90 @@ async function testScannerUsesOnlyCompletedCandles() {
   assert(afterClose.length === 2, `Expected 2 completed candles after 13:45 bar close, got ${afterClose.length}`);
 }
 
+async function testScannerCycleContextUsesFixedClock() {
+  const scanner = createScanner();
+  const cycle = scanner.buildScannerCycleContext({
+    userId: 7,
+    symbols: ['QQQ', 'SPY'],
+    settings: {
+      trading_start_time: '09:30',
+      trading_cutoff_time: '16:00'
+    },
+    force: true,
+    now: new Date('2026-06-22T17:45:00.000Z')
+  });
+
+  assert(cycle.startedAt === '2026-06-22T17:45:00.000Z', `Expected fixed cycle start, got ${cycle.startedAt}`);
+  assert(cycle.nyParts.dateStr === '2026-06-22', `Expected NY date 2026-06-22, got ${cycle.nyParts.dateStr}`);
+  assert(cycle.nyParts.minutes === 13 * 60 + 45, `Expected 13:45 ET, got ${cycle.nyParts.minutes}`);
+  assert(cycle.marketPhase === 'OPEN', `Expected OPEN market phase, got ${cycle.marketPhase}`);
+  assert(cycle.symbols.join(',') === 'QQQ,SPY', 'Cycle should freeze the selected symbol list');
+  assert(Boolean(cycle.cycleId), 'Cycle should include an audit id');
+}
+
+async function testFixedClockDrivesExpiryAndAfternoonThreshold() {
+  const scanner = createScanner();
+  const morningCycle = scanner.buildScannerCycleContext({
+    userId: 1,
+    symbols: ['QQQ'],
+    settings: {
+      trading_start_time: '09:30',
+      trading_cutoff_time: '16:00'
+    },
+    now: new Date('2026-06-22T14:15:00.000Z')
+  });
+  const afternoonCycle = scanner.buildScannerCycleContext({
+    userId: 1,
+    symbols: ['QQQ'],
+    settings: {
+      trading_start_time: '09:30',
+      trading_cutoff_time: '16:00'
+    },
+    now: new Date('2026-06-22T17:45:00.000Z')
+  });
+  const settings = { min_signal_score: '70' };
+  const macroRegime = { thresholdAdjustment: 0 };
+
+  const morningExpiry = scanner.getTargetDayTradeExpiry(morningCycle.nyParts.dateStr, morningCycle.nyParts.minutes);
+  const afternoonExpiry = scanner.getTargetDayTradeExpiry(afternoonCycle.nyParts.dateStr, afternoonCycle.nyParts.minutes);
+  const morningThreshold = scanner.getDynamicMinimumScore(settings, morningCycle.nyParts.minutes, macroRegime);
+  const afternoonThreshold = scanner.getDynamicMinimumScore(settings, afternoonCycle.nyParts.minutes, macroRegime);
+
+  assert(morningExpiry === '2026-06-22', `Expected morning 0DTE expiry, got ${morningExpiry}`);
+  assert(afternoonExpiry === '2026-06-23', `Expected afternoon 1DTE expiry, got ${afternoonExpiry}`);
+  assert(morningThreshold === 70, `Expected morning threshold 70, got ${morningThreshold}`);
+  assert(afternoonThreshold === 85, `Expected afternoon threshold 85, got ${afternoonThreshold}`);
+}
+
+async function testFixedClockMacroAssessmentIsDeterministic() {
+  const scanner = createScanner();
+  const cycle = scanner.buildScannerCycleContext({
+    userId: 1,
+    symbols: ['QQQ'],
+    settings: {
+      trading_start_time: '09:30',
+      trading_cutoff_time: '16:00'
+    },
+    now: new Date('2026-06-22T17:45:00.000Z')
+  });
+  const input = {
+    winningSide: 'PUT',
+    currentMinutes: cycle.nyParts.minutes,
+    vix: macroSnapshot({ symbol: '^VIX', label: 'VIX', value: 17.5, previousClose: 18.4, changePct: -4.89 }),
+    tenYear: macroSnapshot({ symbol: '^TNX', label: 'US 10Y', value: 42.8, previousClose: 43.2, changePct: -0.93, changeBps: -4 }),
+    dxy: macroSnapshot({ symbol: 'DX-Y.NYB', label: 'DXY', value: 103.7, previousClose: 104.1, changePct: -0.38 }),
+    oil: macroSnapshot({ symbol: 'CL=F', label: 'Oil', value: 77.6, previousClose: 77.8, changePct: -0.26 }),
+    gold: macroSnapshot({ symbol: 'GC=F', label: 'Gold', value: 2329, previousClose: 2335, changePct: -0.26 })
+  };
+
+  const first = scanner.assessMacroRegime(input);
+  const second = scanner.assessMacroRegime(input);
+
+  assert(JSON.stringify(first) === JSON.stringify(second), 'Macro assessment should be deterministic for the same fixed clock inputs');
+  assert(first.thresholdAdjustment === 8, `Expected mixed near-close macro threshold adjustment 8, got ${first.thresholdAdjustment}`);
+  assert(first.warnings.some((item: string) => item.includes('Near close')), 'Near-close weak macro warning should be deterministic');
+}
+
 async function testMacroBlocksCallsWhenVixIsTooHighOrSpiking() {
   const scanner = createScanner();
 
@@ -747,6 +831,9 @@ async function runTests() {
   await testOptionChainCacheReusesSnapshotWithinWindow();
   await testOptionChainCacheIgnoresStaleSnapshotAfterTtl();
   await testScannerUsesOnlyCompletedCandles();
+  await testScannerCycleContextUsesFixedClock();
+  await testFixedClockDrivesExpiryAndAfternoonThreshold();
+  await testFixedClockMacroAssessmentIsDeterministic();
   await testMacroBlocksCallsWhenVixIsTooHighOrSpiking();
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
   await testMacroRewardsRiskOnCallSetups();

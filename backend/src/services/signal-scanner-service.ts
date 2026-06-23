@@ -144,6 +144,30 @@ type OptionChainCacheEntry = {
   chain: ThetaDataOptionChainQuote[];
 };
 
+type ScannerNyDateParts = {
+  year: string;
+  month: string;
+  day: string;
+  hour: number;
+  minute: number;
+  minutes: number;
+  dateStr: string;
+  marketDate: string;
+};
+
+type ScannerMarketPhase = 'PRE_MARKET' | 'OPEN' | 'AFTER_CUTOFF' | 'CLOSED';
+
+type ScannerCycleContext = {
+  cycleId: string;
+  userId: number;
+  symbols: string[];
+  startedAt: string;
+  startedAtDate: Date;
+  nyParts: ScannerNyDateParts;
+  marketPhase: ScannerMarketPhase;
+  force: boolean;
+};
+
 type OptionQuoteCandidate = OptionContractCandidate & {
   alpacaTicker: string;
   source?: string;
@@ -576,6 +600,66 @@ Rules:
     };
   }
 
+  private getScannerMarketPhase(input: {
+    settings: any;
+    now: Date;
+    nyParts: ScannerNyDateParts;
+  }): ScannerMarketPhase {
+    const startMinutes = this.parseTimeToMinutes(input.settings.trading_start_time, '09:30');
+    const cutoffMinutes = this.parseTimeToMinutes(input.settings.trading_cutoff_time, '16:00');
+    const weekday = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      weekday: 'short'
+    }).format(input.now);
+    if (weekday === 'Sat' || weekday === 'Sun') return 'CLOSED';
+    if (input.nyParts.minutes < startMinutes) return 'PRE_MARKET';
+    if (input.nyParts.minutes >= cutoffMinutes) return 'AFTER_CUTOFF';
+    return 'OPEN';
+  }
+
+  private buildScannerCycleContext(input: {
+    userId: number;
+    symbols: string[];
+    settings: any;
+    force?: boolean;
+    now?: Date;
+  }): ScannerCycleContext {
+    const startedAtDate = input.now || new Date();
+    const nyParts = this.getNyDateParts(startedAtDate);
+    return {
+      cycleId: crypto.randomUUID(),
+      userId: input.userId,
+      symbols: [...input.symbols],
+      startedAt: startedAtDate.toISOString(),
+      startedAtDate,
+      nyParts,
+      marketPhase: this.getScannerMarketPhase({
+        settings: input.settings,
+        now: startedAtDate,
+        nyParts
+      }),
+      force: Boolean(input.force)
+    };
+  }
+
+  private getCycleSnapshot(cycle: ScannerCycleContext) {
+    return {
+      cycleId: cycle.cycleId,
+      startedAt: cycle.startedAt,
+      userId: cycle.userId,
+      symbols: cycle.symbols,
+      marketPhase: cycle.marketPhase,
+      force: cycle.force,
+      ny: {
+        dateStr: cycle.nyParts.dateStr,
+        marketDate: cycle.nyParts.marketDate,
+        hour: cycle.nyParts.hour,
+        minute: cycle.nyParts.minute,
+        minutes: cycle.nyParts.minutes
+      }
+    };
+  }
+
   public async getRuntimeStatus() {
     try {
       const primaryUserId = await this.getPrimaryUserId();
@@ -622,7 +706,8 @@ Rules:
         return;
       }
 
-      const windowState = this.getTradingWindowState(settings);
+      const scanStartedAt = new Date();
+      const windowState = this.getTradingWindowState(settings, scanStartedAt);
       if (!force && !windowState.isOpen) {
         this.lastScanSkippedReason = 'MARKET_CLOSED';
         this.fastify.log.info(`[SignalScannerService] Market-hours gate is closed (${windowState.nowLabel} ET, ${windowState.startTime}-${windowState.cutoffTime}). Skipping background scan.`);
@@ -630,8 +715,8 @@ Rules:
       }
 
       try {
-        await this.scanForUser(primaryUserId);
-        this.lastScanAt = new Date().toISOString();
+        const cycle = await this.scanForUser(primaryUserId, { force, now: scanStartedAt });
+        this.lastScanAt = cycle?.startedAt || scanStartedAt.toISOString();
         this.lastScanSkippedReason = null;
       } catch (userErr: any) {
         this.fastify.log.error(`[SignalScannerService] Universal scan failed for user ${primaryUserId}: ${userErr.message}`);
@@ -678,29 +763,39 @@ Rules:
     return { ...defaults, ...dbSettings };
   }
 
-  private async scanForUser(userId: number) {
+  private async scanForUser(userId: number, options: { force?: boolean; now?: Date } = {}): Promise<ScannerCycleContext | null> {
     const settings = await this.getSettingsForUser(userId);
-    if (settings.day_trading_enabled !== 'true') return;
+    if (settings.day_trading_enabled !== 'true') return null;
 
     const symbols = settings.day_trading_symbols
       .split(',')
       .map((s: string) => s.trim().toUpperCase())
       .filter(Boolean);
 
-    this.fastify.log.info(`[SignalScannerService] Scanning symbols: ${symbols.join(', ')} for user ${userId}`);
+    const cycle = this.buildScannerCycleContext({
+      userId,
+      symbols,
+      settings,
+      force: options.force,
+      now: options.now
+    });
+
+    this.fastify.log.info(`[SignalScannerService] Scanning symbols: ${symbols.join(', ')} for user ${userId} cycle=${cycle.cycleId} phase=${cycle.marketPhase}`);
 
     for (const symbol of symbols) {
       try {
-        await this.evaluateSymbol(symbol, userId, settings);
+        await this.evaluateSymbol(symbol, userId, settings, cycle);
       } catch (err: any) {
         this.fastify.log.error(`[SignalScannerService] Failed to scan ${symbol} for user ${userId}: ${err.message}`);
       }
     }
+
+    return cycle;
   }
 
-  private async evaluateSymbol(symbol: string, userId: number, settings: any) {
-    const now = new Date();
-    const nyParts = this.getNyDateParts(now);
+  private async evaluateSymbol(symbol: string, userId: number, settings: any, cycle: ScannerCycleContext) {
+    const now = cycle.startedAtDate;
+    const nyParts = cycle.nyParts;
 
     // 1. Check Trading Window Blocker
     const startMinutes = this.parseTimeToMinutes(settings.trading_start_time, '09:30');
@@ -779,8 +874,7 @@ Rules:
     // 3. Fetch Yahoo Finance Price Candles (5-minute for 5 days)
     let sortedCandles: Candle[] = [];
     try {
-      const now = new Date();
-      const fiveDaysAgo = new Date();
+      const fiveDaysAgo = new Date(now);
       fiveDaysAgo.setDate(now.getDate() - 5);
 
       const chartData = await (yahooFinance as any).chart(symbol, {
@@ -826,7 +920,7 @@ Rules:
     }
 
     const rawCandleCount = sortedCandles.length;
-    sortedCandles = this.getCompletedCandles(sortedCandles, new Date(), 5);
+    sortedCandles = this.getCompletedCandles(sortedCandles, now, 5);
     if (sortedCandles.length < rawCandleCount) {
       this.fastify.log.info(`[SignalScannerService] Ignoring ${rawCandleCount - sortedCandles.length} incomplete ${symbol} candle(s) before signal evaluation.`);
     }
@@ -929,7 +1023,7 @@ Rules:
     const candleChangePct = ((latest.close - previous.close) / previous.close) * 100;
 
     // 4. Fetch live macro context used by 0DTE regime guards
-    const macroSnapshot = await this.getCurrentMacroSnapshot({ forceRefresh: true, currentMinutes });
+    const macroSnapshot = await this.getCurrentMacroSnapshot({ forceRefresh: true, currentMinutes, now });
     const vixSnapshot = macroSnapshot.assets.vix;
     const tenYearSnapshot = macroSnapshot.assets.tenYear;
     const dxySnapshot = macroSnapshot.assets.dxy;
@@ -1100,14 +1194,7 @@ Rules:
     });
 
     // Afternoon threshold inflation
-    let dynamicMinScore = Number(settings.min_signal_score);
-    if (!Number.isFinite(dynamicMinScore) || dynamicMinScore <= 0) {
-      dynamicMinScore = 70;
-    }
-    if (currentMinutes >= 13 * 60 + 30) {
-      dynamicMinScore += 15;
-    }
-    dynamicMinScore += macroRegime.thresholdAdjustment;
+    const dynamicMinScore = this.getDynamicMinimumScore(settings, currentMinutes, macroRegime);
 
     // 7. Check Volatility & Wall Blockers
     const volatilityBlockers = [];
@@ -1190,7 +1277,7 @@ Rules:
       maxBidAskSpreadPct,
       minOptionVolume,
       minOpenInterest
-    });
+    }, cycle.startedAt);
     const indicatorSnapshot = {
       vwap: Number(vwap.toFixed(2)),
       openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
@@ -1253,6 +1340,8 @@ Rules:
       }
     };
     const decisionSnapshotBase = {
+      capturedAt: cycle.startedAt,
+      cycle: this.getCycleSnapshot(cycle),
       symbol,
       marketDate: nyParts.marketDate,
       candle: {
@@ -1549,7 +1638,8 @@ Rules:
         volume,
         openInterest,
         usingTheoreticalPricing,
-        grade: gradeDiagnostics
+        grade: gradeDiagnostics,
+        createdAt: cycle.startedAt
       });
 
       const optionStopLoss = mark !== null ? Number((mark * 0.8).toFixed(2)) : null;
@@ -1672,7 +1762,7 @@ Rules:
       signalDecision.signalId = signalId;
       tradingEventBus.publish({
         type: 'SIGNAL_GENERATED',
-        createdAt: new Date().toISOString(),
+        createdAt: cycle.startedAt,
         signalId,
         symbol,
         data: signalDecision
@@ -2057,6 +2147,18 @@ Rules:
     };
   }
 
+  private getDynamicMinimumScore(settings: any, currentMinutes: number, macroRegime: Pick<MacroRegimeAssessment, 'thresholdAdjustment'>): number {
+    let dynamicMinScore = Number(settings.min_signal_score);
+    if (!Number.isFinite(dynamicMinScore) || dynamicMinScore <= 0) {
+      dynamicMinScore = 70;
+    }
+    if (currentMinutes >= 13 * 60 + 30) {
+      dynamicMinScore += 15;
+    }
+    dynamicMinScore += macroRegime.thresholdAdjustment;
+    return dynamicMinScore;
+  }
+
   private buildExecutionRealismDiagnostics(input: {
     mark: number | null;
     spreadPct: number | null;
@@ -2135,10 +2237,10 @@ Rules:
     maxBidAskSpreadPct: number;
     minOptionVolume: number;
     minOpenInterest: number;
-  }) {
+  }, capturedAt: string = new Date().toISOString()) {
     return {
       version: 1,
-      capturedAt: new Date().toISOString(),
+      capturedAt,
       scanner: {
         tradingStartTime: settings.trading_start_time || '09:30',
         tradingCutoffTime: settings.trading_cutoff_time || '16:00',
@@ -2181,11 +2283,12 @@ Rules:
     openInterest: number | null;
     usingTheoreticalPricing: boolean;
     grade: SignalGradeDiagnostics;
+    createdAt?: string;
   }): SignalDecision {
     return {
       symbol: input.symbol,
       side: input.winningSide,
-      createdAt: new Date().toISOString(),
+      createdAt: input.createdAt || new Date().toISOString(),
       contract: {
         ticker: input.optionTicker,
         strike: input.chosenStrike,
@@ -2214,16 +2317,19 @@ Rules:
     gexSnapshot: Record<string, any>;
     internals: Record<string, any>;
     scoring: Record<string, any>;
+    capturedAt?: string;
+    cycle?: Record<string, any>;
     optionSelection?: Record<string, any> | null;
     finalDecision?: Record<string, any> | null;
     blockers: string[];
   }) {
     return this.cloneSnapshot({
       version: 1,
-      capturedAt: new Date().toISOString(),
+      capturedAt: input.capturedAt || new Date().toISOString(),
       symbol: input.symbol,
       status: input.status,
       marketDate: input.marketDate,
+      cycle: input.cycle || null,
       candle: input.candle,
       configSnapshot: input.configSnapshot,
       macroSnapshot: input.macroSnapshot,
@@ -2299,10 +2405,11 @@ Rules:
   public async getCurrentMacroSnapshot(options: {
     forceRefresh?: boolean;
     currentMinutes?: number;
+    now?: Date;
   } = {}): Promise<LiveMacroSnapshot> {
     const cacheTtlMs = 15_000;
-    const now = Date.now();
-    if (!options.forceRefresh && this.liveMacroSnapshot && now - this.liveMacroSnapshotFetchedAt < cacheTtlMs) {
+    const nowMs = options.now?.getTime() ?? Date.now();
+    if (!options.forceRefresh && this.liveMacroSnapshot && nowMs - this.liveMacroSnapshotFetchedAt < cacheTtlMs) {
       return this.liveMacroSnapshot;
     }
 
@@ -2320,7 +2427,7 @@ Rules:
       ...rawTenYearSnapshot,
       changeBps: tenYearChangeBps
     };
-    const currentMinutes = options.currentMinutes ?? this.getNyDateParts(new Date()).minutes;
+    const currentMinutes = options.currentMinutes ?? this.getNyDateParts(options.now || new Date()).minutes;
     const assets = {
       vix: vixSnapshot,
       tenYear: tenYearSnapshot,
@@ -2329,7 +2436,7 @@ Rules:
       gold: goldSnapshot
     };
     const snapshot: LiveMacroSnapshot = {
-      generatedAt: new Date().toISOString(),
+      generatedAt: (options.now || new Date()).toISOString(),
       vixQuote: vixSnapshot.value,
       vixChangePercent: vixSnapshot.changePct,
       tenYearYield: tenYearSnapshot.value,
@@ -2346,7 +2453,7 @@ Rules:
     };
 
     this.liveMacroSnapshot = snapshot;
-    this.liveMacroSnapshotFetchedAt = now;
+    this.liveMacroSnapshotFetchedAt = nowMs;
     return snapshot;
   }
 

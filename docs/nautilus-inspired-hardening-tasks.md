@@ -182,7 +182,7 @@ Bug check:
 
 Status: completed in current work.
 
-## Task 10: Deterministic Scanner Clock And Phase Split
+## Completed Task 10: Deterministic Scanner Clock And Phase Split
 
 Goal: make scanner behavior reproducible by passing one clock/context object through fetch, normalize, score, persist, and execute phases.
 
@@ -199,6 +199,8 @@ Bug check:
 - Run `git diff --check`.
 - Restore generated `backend/dist` before commit.
 - Commit message: `Add deterministic scanner cycle context`.
+
+Status: completed in current work.
 
 ## Task 11: Performance Pass For Scanner I/O
 
