@@ -530,6 +530,103 @@ async function testSignalConfigSnapshotCapturesReplayAndExecutionSettings() {
   assert(snapshot.execution.snaptradeAutoTrade === true, 'Expected SnapTrade auto trade snapshot');
 }
 
+async function testGeneratedDecisionSnapshotCapturesInputsImmutably() {
+  const scanner = createScanner();
+  const configSnapshot = scanner.buildSignalConfigSnapshot({
+    min_signal_score: '82',
+    strike_offset: '1',
+    contracts_per_trade: '3',
+    execution_broker: 'wealthsimple_snaptrade'
+  }, {
+    minOptionMark: 0.3,
+    maxBidAskSpreadPct: 12,
+    minOptionVolume: 200,
+    minOpenInterest: 500
+  });
+  const macroSnapshot = {
+    vixQuote: 17.5,
+    macroRegime: {
+      regime: 'RISK_ON',
+      score: 74,
+      directionBias: 'CALL',
+      confidenceAdjustment: 8,
+      thresholdAdjustment: 0,
+      blockers: [],
+      warnings: [],
+      contributors: ['+10: VIX falling supports risk-on calls']
+    }
+  };
+  const candidateSelection = {
+    selectedScore: 122,
+    candidates: [{ ticker: 'QQQ260622C00741000', strike: 741, score: 122 }]
+  };
+
+  const snapshot = scanner.buildDecisionSnapshot({
+    symbol: 'QQQ',
+    status: 'SIGNAL_GENERATED',
+    marketDate: '06/22/2026',
+    candle: { timestamp: '2026-06-22T14:30:00.000Z', close: 741.2 },
+    configSnapshot,
+    macroSnapshot,
+    gexSnapshot: { regime: 'POSITIVE', flipStrike: 740, callWall: 745 },
+    internals: { bullishCount: 2, bearishCount: 1, megaCaps: { AAPL: 0.2, MSFT: 0.4, NVDA: -0.1 } },
+    scoring: {
+      regime: 'MEAN_REVERSION',
+      callScore: 91,
+      putScore: 42,
+      winningSide: 'CALL',
+      winningScore: 91,
+      dynamicMinScore: 82
+    },
+    optionSelection: { candidateSelection, pricingWarnings: [] },
+    finalDecision: { finalConfidence: 99, setupGrade: 'A+ / FULL', tradeBias: 'BUY_CALL_ON_DIP' },
+    blockers: []
+  });
+
+  configSnapshot.scanner.minSignalScore = 10;
+  macroSnapshot.macroRegime.score = 1;
+  candidateSelection.candidates[0].score = 1;
+
+  assert(snapshot.version === 1, `Expected decision snapshot version 1, got ${snapshot.version}`);
+  assert(snapshot.status === 'SIGNAL_GENERATED', `Expected generated status, got ${snapshot.status}`);
+  assert(snapshot.configSnapshot.scanner.minSignalScore === 82, 'Decision snapshot should freeze config inputs');
+  assert(snapshot.macroSnapshot.macroRegime.score === 74, 'Decision snapshot should freeze macro inputs');
+  assert(snapshot.optionSelection.candidateSelection.candidates[0].score === 122, 'Decision snapshot should freeze option selection evidence');
+  assert(snapshot.scoring.winningSide === 'CALL', 'Decision snapshot should capture scoring winner');
+}
+
+async function testBlockedDecisionSnapshotCapturesBlockersAndNoOptionSelection() {
+  const scanner = createScanner();
+
+  const snapshot = scanner.buildDecisionSnapshot({
+    symbol: 'SPY',
+    status: 'BLOCKED',
+    marketDate: '06/22/2026',
+    candle: { timestamp: '2026-06-22T14:35:00.000Z', close: 544.1 },
+    configSnapshot: { version: 1, scanner: { minSignalScore: 90 } },
+    macroSnapshot: { vixQuote: 31.4, macroRegime: { score: 20, directionBias: 'PUT' } },
+    gexSnapshot: { regime: 'NEGATIVE' },
+    internals: { bullishCount: 0, bearishCount: 3 },
+    scoring: {
+      regime: 'BREAKOUT',
+      callScore: 78,
+      putScore: 81,
+      winningSide: 'PUT',
+      winningScore: 81,
+      dynamicMinScore: 95
+    },
+    optionSelection: null,
+    finalDecision: null,
+    blockers: ['Best setup score 81 is below dynamic minimum 95']
+  });
+
+  assert(snapshot.status === 'BLOCKED', `Expected blocked status, got ${snapshot.status}`);
+  assert(snapshot.optionSelection === null, 'Blocked snapshot should not claim option selection evidence');
+  assert(snapshot.finalDecision === null, 'Blocked snapshot should not claim final executable decision');
+  assert(snapshot.blockers[0].includes('dynamic minimum'), 'Blocked snapshot should capture blockers');
+  assert(snapshot.scoring.dynamicMinScore === 95, 'Blocked snapshot should capture dynamic threshold');
+}
+
 async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
   await testThetaDataMissingVolumeDoesNotRejectLiquidCandidate();
@@ -546,6 +643,8 @@ async function runTests() {
   await testLottoDiagnosticsExplainScoreAndPricingPenalty();
   await testExecutionRealismScoresCleanQuoteAsExecutable();
   await testSignalConfigSnapshotCapturesReplayAndExecutionSettings();
+  await testGeneratedDecisionSnapshotCapturesInputsImmutably();
+  await testBlockedDecisionSnapshotCapturesBlockersAndNoOptionSelection();
   console.log('All SignalScannerService candidate and macro tests passed!');
 }
 

@@ -1173,6 +1173,114 @@ Rules:
     let chosenExpiry: string | null = null;
     let pricingData: any = null;
     let planData: any = null;
+    const minOptionMark = 0.30;
+    const maxBidAskSpreadPct = 12;
+    const minOptionVolume = 200;
+    const minOpenInterest = 500;
+    const configSnapshot = this.buildSignalConfigSnapshot(settings, {
+      minOptionMark,
+      maxBidAskSpreadPct,
+      minOptionVolume,
+      minOpenInterest
+    });
+    const indicatorSnapshot = {
+      vwap: Number(vwap.toFixed(2)),
+      openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
+      openingRangeLow: Number(openingRangeLow.toFixed(2)),
+      atr14: Number(atr14.toFixed(2)),
+      ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
+      ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null,
+      rsi5: Number(rsi5.toFixed(2)),
+      rsi14: Number(rsi14.toFixed(2)),
+      internalsBullish: hasBullishInternals,
+      internalsBearish: hasBearishInternals,
+      megaCaps: {
+        AAPL: applePct,
+        MSFT: microsoftPct,
+        NVDA: nvidiaPct
+      }
+    };
+    const gexSnapshotPayload = {
+      netGex: qqqNetGex,
+      netChex: qqqNetChex,
+      regime: qqqGexRegime,
+      flipStrike: qqqGexFlip,
+      callWall: qqqCallWall,
+      putWall: qqqPutWall,
+      kingNode: qqqKingNode,
+      flowDirection: qqqFlowDirection,
+      ceiling: qqqCeiling,
+      floor: qqqFloor
+    };
+    const macroSnapshotPayload = {
+      vixQuote: vixPrice,
+      vixChangePercent: vixChangePct,
+      tenYearYield,
+      tenYearChangePercent: tenYearChangePct,
+      tenYearChangeBps,
+      dxy: {
+        symbol: dxySnapshot.symbol,
+        value: dxySnapshot.value,
+        changePercent: dxySnapshot.changePct
+      },
+      oil: {
+        symbol: oilSnapshot.symbol,
+        value: oilSnapshot.value,
+        changePercent: oilSnapshot.changePct
+      },
+      gold: {
+        symbol: goldSnapshot.symbol,
+        value: goldSnapshot.value,
+        changePercent: goldSnapshot.changePct
+      },
+      macroRegime: {
+        regime: macroRegime.regime,
+        score: macroRegime.score,
+        directionBias: macroRegime.directionBias,
+        confidenceAdjustment: macroRegime.confidenceAdjustment,
+        thresholdAdjustment: macroRegime.thresholdAdjustment,
+        blockers: macroRegime.blockers,
+        warnings: macroRegime.warnings,
+        contributors: macroRegime.contributors
+      }
+    };
+    const decisionSnapshotBase = {
+      symbol,
+      marketDate: nyParts.marketDate,
+      candle: {
+        timestamp: latest.datetime,
+        open: latest.open,
+        high: latest.high,
+        low: latest.low,
+        close: latest.close,
+        volume: latest.volume,
+        previousClose,
+        sessionChangePct: Number(sessionChangePct.toFixed(4)),
+        candleChangePct: Number(candleChangePct.toFixed(4))
+      },
+      configSnapshot,
+      macroSnapshot: macroSnapshotPayload,
+      gexSnapshot: gexSnapshotPayload,
+      internals: {
+        bullishCount: bullishInternals,
+        bearishCount: bearishInternals,
+        hasBullishInternals,
+        hasBearishInternals,
+        megaCaps: indicatorSnapshot.megaCaps
+      },
+      scoring: {
+        regime,
+        weights,
+        callScoreParts,
+        putScoreParts,
+        callScore,
+        putScore,
+        winningSide,
+        winningScore,
+        dynamicMinScore,
+        macroThresholdAdjustment: macroRegime.thresholdAdjustment
+      }
+    };
 
     const isActionable = noTradeReasons.length === 0;
 
@@ -1205,10 +1313,6 @@ Rules:
       let volume: number | null = null;
       let openInterest: number | null = null;
       let usingTheoreticalPricing = true;
-      const minOptionMark = 0.30;
-      const maxBidAskSpreadPct = 12;
-      const minOptionVolume = 200;
-      const minOpenInterest = 500;
       let candidateSelection: any = null;
       let chainSelectionRejected = false;
 
@@ -1440,12 +1544,6 @@ Rules:
 
       const optionStopLoss = mark !== null ? Number((mark * 0.8).toFixed(2)) : null;
       const optionTakeProfit = mark !== null ? Number((mark * 1.4).toFixed(2)) : null;
-      const configSnapshot = this.buildSignalConfigSnapshot(settings, {
-        minOptionMark,
-        maxBidAskSpreadPct,
-        minOptionVolume,
-        minOpenInterest
-      });
 
       pricingData = {
         ticker: optionTicker,
@@ -1487,6 +1585,25 @@ Rules:
           ? `Use only if ${symbol} reclaims the latest 5-minute high and holds above VWAP.`
           : `Use only if ${symbol} breaks the latest 5-minute low and stays below VWAP.`
       };
+      pricingData.decisionSnapshot = this.buildDecisionSnapshot({
+        ...decisionSnapshotBase,
+        status: 'SIGNAL_GENERATED',
+        optionSelection: {
+          candidateSelection,
+          chainSelectionRejected,
+          pricingWarnings
+        },
+        finalDecision: {
+          signalDecision,
+          finalConfidence,
+          setupGrade,
+          tradeBias,
+          entryTriggerUnderlying: Number(entryTrigger.toFixed(2)),
+          stopUnderlying,
+          targetUnderlying
+        },
+        blockers: []
+      });
 
       // Extract features for ML predictor
       const flowDirNum = qqqFlowDirection === 'bullish' ? 1.0 : (qqqFlowDirection === 'bearish' ? -1.0 : 0.0);
@@ -1531,66 +1648,9 @@ Rules:
         finalConfidence,
         setupGrade,
         'PENDING',
-        JSON.stringify({
-          vwap: Number(vwap.toFixed(2)),
-          openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
-          openingRangeLow: Number(openingRangeLow.toFixed(2)),
-          atr14: Number(atr14.toFixed(2)),
-          ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
-          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null,
-          rsi5: Number(rsi5.toFixed(2)),
-          rsi14: Number(rsi14.toFixed(2)),
-          internalsBullish: hasBullishInternals,
-          internalsBearish: hasBearishInternals,
-          megaCaps: {
-            AAPL: applePct,
-            MSFT: microsoftPct,
-            NVDA: nvidiaPct
-          }
-        }),
-        JSON.stringify({
-          netGex: qqqNetGex,
-          regime: qqqGexRegime,
-          flipStrike: qqqGexFlip,
-          callWall: qqqCallWall,
-          putWall: qqqPutWall,
-          kingNode: qqqKingNode,
-          flowDirection: qqqFlowDirection,
-          ceiling: qqqCeiling,
-          floor: qqqFloor
-        }),
-        JSON.stringify({
-          vixQuote: vixPrice,
-          vixChangePercent: vixChangePct,
-          tenYearYield,
-          tenYearChangePercent: tenYearChangePct,
-          tenYearChangeBps,
-          dxy: {
-            symbol: dxySnapshot.symbol,
-            value: dxySnapshot.value,
-            changePercent: dxySnapshot.changePct
-          },
-          oil: {
-            symbol: oilSnapshot.symbol,
-            value: oilSnapshot.value,
-            changePercent: oilSnapshot.changePct
-          },
-          gold: {
-            symbol: goldSnapshot.symbol,
-            value: goldSnapshot.value,
-            changePercent: goldSnapshot.changePct
-          },
-          macroRegime: {
-            regime: macroRegime.regime,
-            score: macroRegime.score,
-            directionBias: macroRegime.directionBias,
-            confidenceAdjustment: macroRegime.confidenceAdjustment,
-            thresholdAdjustment: macroRegime.thresholdAdjustment,
-            blockers: macroRegime.blockers,
-            warnings: macroRegime.warnings,
-            contributors: macroRegime.contributors
-          }
-        }),
+        JSON.stringify(indicatorSnapshot),
+        JSON.stringify(gexSnapshotPayload),
+        JSON.stringify(macroSnapshotPayload),
         noTradeReasons,
         chosenExpiry,
         nyParts.marketDate,
@@ -1796,21 +1856,7 @@ Rules:
         vixPrice,
         gexAvailable,
         JSON.stringify({
-          vwap: Number(vwap.toFixed(2)),
-          openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
-          openingRangeLow: Number(openingRangeLow.toFixed(2)),
-          atr14: Number(atr14.toFixed(2)),
-          ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
-          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null,
-          rsi5: Number(rsi5.toFixed(2)),
-          rsi14: Number(rsi14.toFixed(2)),
-          internalsBullish: hasBullishInternals,
-          internalsBearish: hasBearishInternals,
-          megaCaps: {
-            AAPL: applePct,
-            MSFT: microsoftPct,
-            NVDA: nvidiaPct
-          },
+          ...indicatorSnapshot,
           macroRegime: {
             regime: macroRegime.regime,
             score: macroRegime.score,
@@ -1820,12 +1866,21 @@ Rules:
             blockers: macroRegime.blockers,
             warnings: macroRegime.warnings
           },
-          signalDecision
+          signalDecision,
+          decisionSnapshot: pricingData?.decisionSnapshot || null
         }),
         'SIGNAL_GENERATED',
         []
       ]);
     } else {
+      const blockedDecisionSnapshot = this.buildDecisionSnapshot({
+        ...decisionSnapshotBase,
+        status: 'BLOCKED',
+        optionSelection: null,
+        finalDecision: null,
+        blockers: noTradeReasons
+      });
+
       // Save to scanner_logs table
       await this.fastify.pg.query(`
         INSERT INTO scanner_logs (
@@ -1838,21 +1893,7 @@ Rules:
         vixPrice,
         gexAvailable,
         JSON.stringify({
-          vwap: Number(vwap.toFixed(2)),
-          openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
-          openingRangeLow: Number(openingRangeLow.toFixed(2)),
-          atr14: Number(atr14.toFixed(2)),
-          ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
-          ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null,
-          rsi5: Number(rsi5.toFixed(2)),
-          rsi14: Number(rsi14.toFixed(2)),
-          internalsBullish: hasBullishInternals,
-          internalsBearish: hasBearishInternals,
-          megaCaps: {
-            AAPL: applePct,
-            MSFT: microsoftPct,
-            NVDA: nvidiaPct
-          },
+          ...indicatorSnapshot,
           macroRegime: {
             regime: macroRegime.regime,
             score: macroRegime.score,
@@ -1861,7 +1902,8 @@ Rules:
             thresholdAdjustment: macroRegime.thresholdAdjustment,
             blockers: macroRegime.blockers,
             warnings: macroRegime.warnings
-          }
+          },
+          decisionSnapshot: blockedDecisionSnapshot
         }),
         'BLOCKED',
         noTradeReasons
@@ -1941,6 +1983,10 @@ Rules:
   private positiveIntSetting(value: any, fallback: number): number {
     const numeric = Math.floor(Number(value));
     return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+  }
+
+  private cloneSnapshot<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value));
   }
 
   private getSetupGradeKey(setupGrade: string): SignalGradeDiagnostics['gradeKey'] {
@@ -2146,6 +2192,38 @@ Rules:
       },
       grade: input.grade
     };
+  }
+
+  private buildDecisionSnapshot(input: {
+    symbol: string;
+    status: 'SIGNAL_GENERATED' | 'BLOCKED';
+    marketDate: string;
+    candle: Record<string, any>;
+    configSnapshot: Record<string, any>;
+    macroSnapshot: Record<string, any>;
+    gexSnapshot: Record<string, any>;
+    internals: Record<string, any>;
+    scoring: Record<string, any>;
+    optionSelection?: Record<string, any> | null;
+    finalDecision?: Record<string, any> | null;
+    blockers: string[];
+  }) {
+    return this.cloneSnapshot({
+      version: 1,
+      capturedAt: new Date().toISOString(),
+      symbol: input.symbol,
+      status: input.status,
+      marketDate: input.marketDate,
+      candle: input.candle,
+      configSnapshot: input.configSnapshot,
+      macroSnapshot: input.macroSnapshot,
+      gexSnapshot: input.gexSnapshot,
+      internals: input.internals,
+      scoring: input.scoring,
+      optionSelection: input.optionSelection || null,
+      finalDecision: input.finalDecision || null,
+      blockers: input.blockers
+    });
   }
 
   private buildMacroSnapshot(input: {
