@@ -5,7 +5,7 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Button } from './components/ui/button';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Activity, BadgeDollarSign, BarChart3, FlaskConical, Info, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
+import { Activity, BarChart3, FlaskConical, Info, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const PositionDetailsPage = lazy(() => import('./pages/PositionDetailsPage'));
@@ -76,6 +76,22 @@ function App() {
               </div>
 
               <div className="flex items-center gap-2">
+                <nav className="hidden items-center gap-1 rounded-full border border-black/[0.03] bg-black/[0.02] p-1 dark:border-white/[0.05] dark:bg-white/[0.03] md:flex">
+                  <Button
+                    variant="ghost"
+                    className="h-7 rounded-full px-3 text-xs font-semibold hover:bg-black/5 dark:hover:bg-white/5"
+                    onClick={() => { window.location.href = '/?tab=day-trading'; }}
+                  >
+                    Day Trading
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="h-7 rounded-full px-3 text-xs font-semibold hover:bg-black/5 dark:hover:bg-white/5"
+                    onClick={() => { window.location.href = '/covered-calls'; }}
+                  >
+                    Covered Calls
+                  </Button>
+                </nav>
                 {devTradeTestsEnabled && (
                   <Button
                     variant="ghost"
@@ -104,15 +120,6 @@ function App() {
                   title="System Health"
                 >
                   <Activity className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
-                  onClick={() => { window.location.href = '/covered-calls'; }}
-                  title="Covered Calls"
-                >
-                  <BadgeDollarSign className="h-3.5 w-3.5" />
                 </Button>
                 <Button
                   variant="ghost"

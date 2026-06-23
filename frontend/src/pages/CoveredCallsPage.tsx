@@ -25,6 +25,11 @@ const compactNumber = (value?: number | null) => {
 
 const compactDate = (value?: string | null) => {
   if (!value) return '-';
+  const dateOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) {
+    return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]))
+      .toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
   return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' });
 };
 
@@ -131,6 +136,11 @@ export default function CoveredCallsPage() {
       setSuggestions([]);
       return;
     }
+    if (selected?.symbol === value) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
+    }
 
     let cancelled = false;
     const handle = window.setTimeout(async () => {
@@ -149,7 +159,7 @@ export default function CoveredCallsPage() {
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [query]);
+  }, [query, selected]);
 
   const runAnalysis = async () => {
     const symbol = (selected?.symbol || query.trim()).toUpperCase();
