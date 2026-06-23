@@ -21,6 +21,7 @@ import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
 import { snaptradeRoutes } from './routes/snaptrade';
 import { FastifyRequest, FastifyReply } from 'fastify';
+import { normalizeAdapterHealth } from './lib/adapter-health';
 
 function loadEnvFile(filePath: string) {
   if (!fs.existsSync(filePath)) return;
@@ -626,6 +627,7 @@ const start = async () => {
 
     fastify.get('/api/services/health', { preHandler: fastify.authenticate }, async (request) => {
       const { id: userId } = (request as any).user;
+      const generatedAt = new Date().toISOString();
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
       const thetaDataHealth = thetaDataStreamer.getHealth();
       const thetaDataTerminalHealth = await thetaData.getHealth(userId).catch((err: any) => ({
@@ -639,24 +641,37 @@ const start = async () => {
       const liveExitHealth = liveExitMonitor.getHealth();
       const scannerHealth = await scanner.getRuntimeStatus();
       const tradeRedisHealth = await TradeRedisService.getHealth();
+      const postgresStartedAt = Date.now();
+      const postgresHealth = await fastify.pg.query('SELECT 1')
+        .then(() => normalizeAdapterHealth('postgres', {
+          status: 'UP',
+          latencyMs: Date.now() - postgresStartedAt,
+          lastError: null
+        }, generatedAt))
+        .catch((err: any) => normalizeAdapterHealth('postgres', {
+          status: 'DOWN',
+          latencyMs: Date.now() - postgresStartedAt,
+          lastError: err.message || String(err)
+        }, generatedAt));
 
       return {
-        liveExitMonitor: liveExitHealth,
+        liveExitMonitor: normalizeAdapterHealth('liveExitMonitor', liveExitHealth, generatedAt),
         streams: {
-          alpaca: alpacaHealth,
-          thetadata: thetaDataHealth
+          alpaca: normalizeAdapterHealth('alpaca', alpacaHealth, generatedAt),
+          thetadata: normalizeAdapterHealth('thetadataStream', thetaDataHealth, generatedAt)
         },
         marketData: {
-          thetadata: thetaDataTerminalHealth
+          thetadata: normalizeAdapterHealth('thetadata', thetaDataTerminalHealth, generatedAt)
         },
-        poller: {
+        poller: normalizeAdapterHealth('marketPoller', {
           status: poller.isRunning() ? 'UP' : 'DOWN',
           running: poller.isRunning()
-        },
-        scanner: scannerHealth,
-        snaptradePendingOrders: snaptradePendingOrderSyncHealth,
-        tradeRedis: tradeRedisHealth,
-        generatedAt: new Date().toISOString()
+        }, generatedAt),
+        scanner: normalizeAdapterHealth('signalScanner', scannerHealth, generatedAt),
+        snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
+        tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),
+        postgres: postgresHealth,
+        generatedAt
       };
     });
 

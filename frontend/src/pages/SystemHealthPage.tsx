@@ -33,6 +33,7 @@ type DiagnosticItem = {
   severity: HealthSeverity;
   endpoint?: string | null;
   latencyMs?: number | null;
+  freshnessMs?: number | null;
   lastSeen?: string | null;
   evidence?: unknown;
   cause: string;
@@ -69,6 +70,16 @@ const formatRelativeTime = (timestamp?: string | null) => {
   if (diffSeconds < 3600) return `${Math.round(diffSeconds / 60)}m ago`;
   if (diffSeconds < 86400) return `${Math.round(diffSeconds / 3600)}h ago`;
   return `${Math.round(diffSeconds / 86400)}d ago`;
+};
+
+const formatDurationMs = (value?: number | null) => {
+  if (value === null || value === undefined || !Number.isFinite(value)) return null;
+  if (value < 1000) return `${Math.round(value)}ms`;
+  const seconds = Math.round(value / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.round(minutes / 60)}h`;
 };
 
 const statusTone = (status?: string | null) => {
@@ -133,6 +144,9 @@ const statusSummary = (status?: string | null, error?: string | null, fallback =
   return fallback;
 };
 
+const adapterReason = (value: any, fallback: string) => value?.degradedReason || value?.lastError || fallback;
+const adapterLastSeen = (value: any, fallback?: string | null) => value?.lastGoodAt || fallback || null;
+
 const apiLabel = (name: string) => {
   const labels: Record<string, string> = {
     yahooFinance: 'Yahoo Finance',
@@ -159,9 +173,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
         severity: severityForStatus(status),
         endpoint: value?.endpoint || null,
         latencyMs: value?.latencyMs ?? null,
-        lastSeen: value?.checkedAt || null,
-        evidence: lastError,
-        cause: statusSummary(status, lastError, 'External dependency check needs attention.'),
+        freshnessMs: value?.freshnessMs ?? null,
+        lastSeen: adapterLastSeen(value, value?.checkedAt || null),
+        evidence: value?.degradedReason || lastError,
+        cause: statusSummary(status, adapterReason(value, lastError || ''), 'External dependency check needs attention.'),
         nextStep: isHealthyStatus(status)
           ? 'No action needed.'
           : status === 'N/A'
@@ -208,8 +223,9 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       status: scannerStatus,
       severity: severityForStatus(scannerStatus),
       endpoint: '/api/signals/trigger',
-      lastSeen: services.scanner?.lastScanAt || services.generatedAt,
-      evidence: services.scanner?.lastSkippedReason || null,
+      freshnessMs: services.scanner?.freshnessMs ?? null,
+      lastSeen: adapterLastSeen(services.scanner, services.scanner?.lastScanAt || services.generatedAt),
+      evidence: services.scanner?.degradedReason || services.scanner?.lastSkippedReason || null,
       cause: scannerCause,
       nextStep: scannerNextStep,
       actionCommand: 'Open Settings -> Day Trading, confirm scanner enabled and trading window.'
@@ -222,9 +238,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       status: services.poller?.running ? 'RUNNING' : 'STOPPED',
       severity: services.poller?.running ? 'ok' : 'warning',
       endpoint: 'backend MarketPoller',
-      lastSeen: services.generatedAt,
-      evidence: services.poller?.running ? null : 'Poller reports stopped.',
-      cause: services.poller?.running ? 'Poller is running.' : 'Fallback market sync loop is not running.',
+      freshnessMs: services.poller?.freshnessMs ?? null,
+      lastSeen: adapterLastSeen(services.poller, services.generatedAt),
+      evidence: services.poller?.degradedReason || (services.poller?.running ? null : 'Poller reports stopped.'),
+      cause: services.poller?.degradedReason || (services.poller?.running ? 'Poller is running.' : 'Fallback market sync loop is not running.'),
       nextStep: 'Restart backend if the poller should be active.',
       actionCommand: 'docker compose restart backend'
     });
@@ -236,9 +253,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       status: services.liveExitMonitor?.status || 'N/A',
       severity: services.liveExitMonitor?.lastError ? 'critical' : severityForStatus(services.liveExitMonitor?.status),
       endpoint: `stream provider: ${services.liveExitMonitor?.provider || 'none'}`,
-      lastSeen: services.liveExitMonitor?.lastQuoteAt || services.generatedAt,
-      evidence: services.liveExitMonitor?.lastError || null,
-      cause: causeFromError('Live exit quote processing error.', services.liveExitMonitor?.lastError),
+      freshnessMs: services.liveExitMonitor?.freshnessMs ?? null,
+      lastSeen: adapterLastSeen(services.liveExitMonitor, services.liveExitMonitor?.lastQuoteAt || services.generatedAt),
+      evidence: services.liveExitMonitor?.degradedReason || services.liveExitMonitor?.lastError || null,
+      cause: causeFromError('Live exit quote processing error.', services.liveExitMonitor?.degradedReason || services.liveExitMonitor?.lastError),
       nextStep: 'Check the active stream, open option subscriptions, and ThetaData quote timestamps.',
       actionCommand: 'Open /system-health and compare Live Exit Monitor with ThetaData stream last message time.'
     });
@@ -252,9 +270,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       severity: thetaTerminal?.lastError ? 'critical' : severityForStatus(thetaTerminal?.status),
       endpoint: `${thetaTerminal?.baseUrl || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status`,
       latencyMs: thetaTerminal?.latencyMs ?? null,
-      lastSeen: services.generatedAt,
-      evidence: thetaTerminal?.lastError || null,
-      cause: statusSummary(thetaTerminal?.status, thetaTerminal?.lastError, 'ThetaData terminal is not reachable or not connected.'),
+      freshnessMs: thetaTerminal?.freshnessMs ?? null,
+      lastSeen: adapterLastSeen(thetaTerminal, services.generatedAt),
+      evidence: thetaTerminal?.degradedReason || thetaTerminal?.lastError || null,
+      cause: statusSummary(thetaTerminal?.status, thetaTerminal?.degradedReason || thetaTerminal?.lastError, 'ThetaData terminal is not reachable or not connected.'),
       nextStep: isHealthyStatus(thetaTerminal?.status)
         ? 'No action needed. Terminal is reachable.'
         : 'Verify the ThetaData v3 jar is running in the backend container and that credentials/subscription are valid.',
@@ -270,9 +289,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
         status: isActive ? stream?.status || 'N/A' : 'DISABLED',
         severity: isActive && stream?.lastError ? 'critical' : severityForStatus(isActive ? stream?.status : 'DISABLED'),
         endpoint: name === 'thetadata' ? 'THETADATA_STREAM_URL / v1 events' : 'Alpaca market-data stream',
-        lastSeen: stream?.lastMessageAt || services.generatedAt,
-        evidence: stream?.lastError || `${stream?.activeSubscriptions ?? 0} active subscriptions, ${stream?.reconnectAttempts ?? 0} reconnect attempts`,
-        cause: stream?.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream.lastError) : statusSummary(isActive ? stream?.status : 'DISABLED', null, 'Stream status and subscription state.'),
+        freshnessMs: stream?.freshnessMs ?? null,
+        lastSeen: adapterLastSeen(stream, stream?.lastMessageAt || services.generatedAt),
+        evidence: stream?.degradedReason || stream?.lastError || `${stream?.activeSubscriptions ?? 0} active subscriptions, ${stream?.reconnectAttempts ?? 0} reconnect attempts`,
+        cause: stream?.degradedReason || stream?.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream?.degradedReason || stream?.lastError) : statusSummary(isActive ? stream?.status : 'DISABLED', null, 'Stream status and subscription state.'),
         nextStep: name === 'thetadata' ? 'Confirm ThetaData stream URL and subscribed option symbols.' : 'Alpaca stream is optional unless selected as active provider.',
         actionCommand: name === 'thetadata'
           ? 'Check THETADATA_STREAM_URL and open option positions subscribed by the live exit monitor.'
@@ -288,9 +308,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       status: broker?.status || 'N/A',
       severity: broker?.lastError ? 'critical' : severityForStatus(broker?.status),
       endpoint: 'SnapTrade order status sync',
-      lastSeen: broker?.lastRunAt || broker?.queuedSyncLastRunAt || services.generatedAt,
-      evidence: broker?.lastError || broker?.lastResult || null,
-      cause: causeFromError('Broker reconciliation is failing or stale.', broker?.lastError),
+      freshnessMs: broker?.freshnessMs ?? null,
+      lastSeen: adapterLastSeen(broker, broker?.lastRunAt || broker?.queuedSyncLastRunAt || services.generatedAt),
+      evidence: broker?.degradedReason || broker?.lastError || broker?.lastResult || null,
+      cause: causeFromError('Broker reconciliation is failing or stale.', broker?.degradedReason || broker?.lastError),
       nextStep: 'Check SnapTrade connection status, selected trading account, and pending order IDs.',
       actionCommand: 'Open Settings -> SnapTrade, refresh accounts, then use Command Center on stale trades.'
     });
@@ -316,12 +337,31 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       status: services.tradeRedis?.status || 'N/A',
       severity: services.tradeRedis?.status === 'DEGRADED' ? 'warning' : severityForStatus(services.tradeRedis?.status),
       endpoint: 'redis://redis:6379',
-      lastSeen: services.tradeRedis?.generatedAt || services.generatedAt,
-      evidence: services.tradeRedis?.metrics || null,
-      cause: services.tradeRedis?.status === 'DEGRADED' ? 'Redis is reachable but queue/lock telemetry indicates degradation.' : 'Redis cache, locks, and broker sync queue.',
+      freshnessMs: services.tradeRedis?.freshnessMs ?? null,
+      lastSeen: adapterLastSeen(services.tradeRedis, services.tradeRedis?.generatedAt || services.generatedAt),
+      evidence: services.tradeRedis?.degradedReason || services.tradeRedis?.metrics || null,
+      cause: services.tradeRedis?.degradedReason || (services.tradeRedis?.status === 'DEGRADED' ? 'Redis is reachable but queue/lock telemetry indicates degradation.' : 'Redis cache, locks, and broker sync queue.'),
       nextStep: 'Check Redis container health, queue depth, and lock denial spikes.',
       actionCommand: 'docker compose ps redis && docker compose logs --tail=80 redis'
     });
+
+    if (services.postgres) {
+      items.push({
+        id: 'runtime:postgres',
+        area: 'Runtime',
+        title: 'Postgres',
+        status: services.postgres.status || 'N/A',
+        severity: services.postgres.lastError ? 'critical' : severityForStatus(services.postgres.status),
+        endpoint: 'Primary database connection',
+        latencyMs: services.postgres.latencyMs ?? null,
+        freshnessMs: services.postgres.freshnessMs ?? null,
+        lastSeen: adapterLastSeen(services.postgres, services.generatedAt),
+        evidence: services.postgres.degradedReason || services.postgres.lastError || null,
+        cause: statusSummary(services.postgres.status, services.postgres.degradedReason || services.postgres.lastError, 'Database connectivity check needs attention.'),
+        nextStep: 'Check database network path, credentials, and primary host reachability.',
+        actionCommand: 'docker compose logs --tail=80 backend'
+      });
+    }
   }
 
   return items;
@@ -401,6 +441,9 @@ function DiagnosticRow({
         <div className="mt-1 break-all font-mono text-xs">{item.endpoint || 'Internal runtime check'}</div>
         {item.latencyMs !== null && item.latencyMs !== undefined && (
           <div className="mt-1 text-xs text-muted-foreground">{item.latencyMs}ms latency</div>
+        )}
+        {item.freshnessMs !== null && item.freshnessMs !== undefined && (
+          <div className="mt-1 text-xs text-muted-foreground">{formatDurationMs(item.freshnessMs)} freshness</div>
         )}
       </div>
       <div className="min-w-0">

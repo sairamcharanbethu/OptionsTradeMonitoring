@@ -90,6 +90,16 @@ export interface TradeRuntimeResponse<T> {
   data: T;
 }
 
+export interface AdapterHealth {
+  status: string;
+  latencyMs: number | null;
+  lastGoodAt: string | null;
+  lastError: string | null;
+  freshnessMs: number | null;
+  degradedReason: string | null;
+  source: string;
+}
+
 export interface RuntimeConfigItem {
   id: string;
   group: 'Deployment' | 'Market Data' | 'AI Service' | 'Broker Execution' | 'Alerts';
@@ -890,11 +900,11 @@ export const api = {
 
   // --- Day Trading Signals ---
   async getSignalsHealth(): Promise<{
-    yahooFinance: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
-    sscgexPortal: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
-    thetaData: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
-    openRouter: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
-    discord: { status: string; latencyMs: number; endpoint?: string; lastError?: string | null; checkedAt?: string };
+    yahooFinance: AdapterHealth & { endpoint?: string; checkedAt?: string };
+    sscgexPortal: AdapterHealth & { endpoint?: string; checkedAt?: string };
+    thetaData: AdapterHealth & { endpoint?: string; checkedAt?: string };
+    openRouter: AdapterHealth & { endpoint?: string; checkedAt?: string };
+    discord: AdapterHealth & { endpoint?: string; checkedAt?: string };
   }> {
     const res = await authFetch(`${API_BASE}/signals/health`);
     if (!res.ok) throw new Error('Failed to fetch day trading API health');
@@ -902,7 +912,7 @@ export const api = {
   },
 
   async getServicesHealth(): Promise<{
-    liveExitMonitor: {
+    liveExitMonitor: AdapterHealth & {
       status: string;
       active: boolean;
       provider: string;
@@ -913,7 +923,7 @@ export const api = {
       lastError: string | null;
     };
     streams: {
-      alpaca: {
+      alpaca: AdapterHealth & {
         status: string;
         connected: boolean;
         provider: string;
@@ -923,7 +933,7 @@ export const api = {
         lastError: string | null;
         reconnectAttempts: number;
       };
-      thetadata: {
+      thetadata: AdapterHealth & {
         status: string;
         connected: boolean;
         provider: string;
@@ -934,7 +944,7 @@ export const api = {
       };
     };
     marketData?: {
-      thetadata?: {
+      thetadata?: AdapterHealth & {
         status: string;
         connected: boolean;
         provider: string;
@@ -943,8 +953,8 @@ export const api = {
         lastError: string | null;
       };
     };
-    poller: { status: string; running: boolean };
-    scanner: {
+    poller: AdapterHealth & { status: string; running: boolean };
+    scanner: AdapterHealth & {
       status: string;
       enabled?: boolean;
       marketOpen?: boolean;
@@ -959,7 +969,7 @@ export const api = {
       intervalSeconds?: number;
       signalSourceUserId?: number;
     };
-    snaptradePendingOrders?: {
+    snaptradePendingOrders?: AdapterHealth & {
       status: string;
       running: boolean;
       lastRunAt: string | null;
@@ -972,13 +982,14 @@ export const api = {
       queuedSyncLastRunAt?: string | null;
       queuedSyncProcessed?: number;
     };
-    tradeRedis?: {
+    tradeRedis?: AdapterHealth & {
       status: string;
       connected: boolean;
       queueDepth: number | null;
       metrics: Record<string, number>;
       generatedAt?: string | null;
     };
+    postgres?: AdapterHealth;
     generatedAt: string;
   }> {
     const res = await authFetch(`${API_BASE}/services/health`);

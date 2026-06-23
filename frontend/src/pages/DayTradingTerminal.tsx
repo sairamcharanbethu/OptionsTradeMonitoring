@@ -37,12 +37,12 @@ import {
 } from '@/components/ui/dialog';
 
 interface ApiHealthState {
-  yahooFinance: { status: string; latencyMs: number };
-  sscgexPortal: { status: string; latencyMs: number };
-  thetaData: { status: string; latencyMs: number };
-  openRouter: { status: string; latencyMs: number };
-  discord: { status: string; latencyMs: number };
-  alpaca?: { status: string; latencyMs: number };
+  yahooFinance: { status: string; latencyMs: number | null };
+  sscgexPortal: { status: string; latencyMs: number | null };
+  thetaData: { status: string; latencyMs: number | null };
+  openRouter: { status: string; latencyMs: number | null };
+  discord: { status: string; latencyMs: number | null };
+  alpaca?: { status: string; latencyMs: number | null };
 }
 
 interface ServiceHealthState {

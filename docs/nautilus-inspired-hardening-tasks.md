@@ -138,7 +138,7 @@ Bug check:
 
 Status: completed in current work.
 
-## Task 8: Adapter Health Contracts And Freshness
+## Completed Task 8: Adapter Health Contracts And Freshness
 
 Goal: normalize health and freshness for Yahoo, ThetaData, Alpaca, SnapTrade, GEX, OpenRouter, Discord, Redis, and Postgres.
 
@@ -156,6 +156,8 @@ Bug check:
 - Run `git diff --check`.
 - Restore generated `backend/dist` before commit.
 - Commit message: `Normalize adapter health contracts`.
+
+Status: completed in current work.
 
 ## Task 9: Option Instrument Cache And Selection Stability
 

@@ -13,6 +13,7 @@ import { TradeRedisService } from './trade-redis-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { ThetaDataOptionChainQuote, ThetaDataService } from './thetadata-service';
 import { SignalDecision, SignalGradeDiagnostics, tradingEventBus } from '../lib/trading-events';
+import { normalizeAdapterHealth } from '../lib/adapter-health';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -3556,31 +3557,32 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     const checkLatency = async (
       fn: () => Promise<void>,
       isConfigured = true,
-      endpoint?: string
-    ): Promise<{ status: string; latencyMs: number; endpoint?: string; lastError: string | null; checkedAt: string }> => {
+      endpoint?: string,
+      source = 'unknown'
+    ): Promise<any> => {
       const checkedAt = new Date().toISOString();
       if (!isConfigured) {
-        return { status: 'N/A', latencyMs: 0, endpoint, lastError: 'Not configured', checkedAt };
+        return normalizeAdapterHealth(source, { status: 'N/A', latencyMs: 0, endpoint, lastError: 'Not configured', checkedAt }, checkedAt);
       }
       const start = Date.now();
       try {
         await fn();
-        return { status: 'UP', latencyMs: Date.now() - start, endpoint, lastError: null, checkedAt };
+        return normalizeAdapterHealth(source, { status: 'UP', latencyMs: Date.now() - start, endpoint, lastError: null, checkedAt }, checkedAt);
       } catch (e) {
         const err: any = e;
-        return {
+        return normalizeAdapterHealth(source, {
           status: 'DOWN',
           latencyMs: Date.now() - start,
           endpoint,
           lastError: err?.response?.data?.error || err?.response?.statusText || err?.message || String(e),
           checkedAt
-        };
+        }, checkedAt);
       }
     };
 
     const yahooCheck = checkLatency(async () => {
       await (yahooFinance as any).quote('QQQ');
-    }, true, 'yahooFinance.quote(QQQ)');
+    }, true, 'yahooFinance.quote(QQQ)', 'yahooFinance');
 
     const sscgexCheck = checkLatency(async () => {
       const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
@@ -3591,13 +3593,13 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
         headers: { Authorization: `Bearer ${token}` },
         timeout: 4000
       });
-    }, !!settings.sscgex_password, 'https://sscgex.up.railway.app/api/gex/QQQ?strikes=10');
+    }, !!settings.sscgex_password, 'https://sscgex.up.railway.app/api/gex/QQQ?strikes=10', 'sscgexPortal');
 
     const thetaDataCheck = checkLatency(async () => {
       const thetaData = new ThetaDataService(this.fastify);
       const health = await thetaData.getHealth(targetUserId);
       if (!health.connected) throw new Error(health.lastError || 'ThetaData unavailable');
-    }, !!settings.thetadata_base_url || !!process.env.THETADATA_BASE_URL, `${settings.thetadata_base_url || process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status`);
+    }, !!settings.thetadata_base_url || !!process.env.THETADATA_BASE_URL, `${settings.thetadata_base_url || process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status`, 'thetaData');
 
     const openrouterCheck = checkLatency(async () => {
       const aiSettings = await this.aiService.getSettings(targetUserId);
@@ -3611,11 +3613,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       } else {
         throw new Error('No AI provider key configured');
       }
-    }, settings.day_trading_ai_enabled === 'true', 'https://openrouter.ai/api/v1/models');
+    }, settings.day_trading_ai_enabled === 'true', 'https://openrouter.ai/api/v1/models', 'openRouter');
 
     const discordCheck = checkLatency(async () => {
       await axios.get(settings.discord_webhook_url, { timeout: 4000 });
-    }, !!settings.discord_webhook_url, settings.discord_webhook_url ? 'configured Discord webhook URL' : undefined);
+    }, !!settings.discord_webhook_url, settings.discord_webhook_url ? 'configured Discord webhook URL' : undefined, 'discord');
 
     const [yahoo, sscgex, thetaData, openrouter, discord] = await Promise.all([
       yahooCheck,
