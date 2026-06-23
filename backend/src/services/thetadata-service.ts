@@ -48,6 +48,23 @@ export type ThetaDataOptionChainQuote = {
 export class ThetaDataService {
   constructor(private fastify: FastifyInstance) {}
 
+  public async getOptionExpirations(userId: number | null, symbol: string): Promise<string[]> {
+    const config = await this.getConfig(userId);
+    const params = new URLSearchParams({
+      symbol: symbol.toUpperCase(),
+      format: 'json'
+    });
+
+    const data = await this.fetchJson(config, `/v3/option/list/expirations?${params.toString()}`);
+    const expirations = this.rows(data)
+      .map((row: any) => this.normalizeExpirationValue(
+        row?.expiration ?? row?.expiration_date ?? row?.expirationDate ?? row?.date ?? row
+      ))
+      .filter((value: string | null): value is string => Boolean(value));
+
+    return [...new Set(expirations)].sort();
+  }
+
   public async getOptionQuoteForOsi(userId: number | null, osiTicker: string): Promise<ThetaDataOptionQuote | null> {
     const contract = this.parseCompactOsiTicker(osiTicker);
     if (!contract) return null;
@@ -402,6 +419,14 @@ export class ThetaDataService {
       if (Number.isFinite(parsed)) return parsed;
     }
     return null;
+  }
+
+  private normalizeExpirationValue(value: any): string | null {
+    if (value === null || value === undefined || value === '') return null;
+    const raw = String(value).trim();
+    const compact = raw.replace(/-/g, '').slice(0, 8);
+    if (!/^\d{8}$/.test(compact)) return null;
+    return `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`;
   }
 
   private parseCompactOsiTicker(ticker: string): ThetaDataContract | null {

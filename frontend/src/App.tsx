@@ -5,7 +5,7 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { Button } from './components/ui/button';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Activity, BarChart3, FlaskConical, Info, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
+import { Activity, BadgeDollarSign, BarChart3, FlaskConical, Info, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const PositionDetailsPage = lazy(() => import('./pages/PositionDetailsPage'));
@@ -15,6 +15,7 @@ const SystemHealthPage = lazy(() => import('./pages/SystemHealthPage'));
 const TradeCommandCenterPage = lazy(() => import('./pages/TradeCommandCenterPage'));
 const StrategyGuidePage = lazy(() => import('./pages/StrategyGuidePage'));
 const TradeIntelligencePage = lazy(() => import('./pages/TradeIntelligencePage'));
+const CoveredCallsPage = lazy(() => import('./pages/CoveredCallsPage'));
 
 function RouteLoader() {
   return (
@@ -108,6 +109,15 @@ function App() {
                   variant="ghost"
                   size="icon"
                   className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
+                  onClick={() => { window.location.href = '/covered-calls'; }}
+                  title="Covered Calls"
+                >
+                  <BadgeDollarSign className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
                   onClick={() => { window.location.href = '/trade-intelligence'; }}
                   title="Trade Intelligence"
                 >
@@ -140,6 +150,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
                 <Route path="/trades" element={<TradesPage />} />
+                <Route path="/covered-calls" element={<CoveredCallsPage />} />
                 <Route path="/trade-intelligence" element={<TradeIntelligencePage />} />
                 <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
                 <Route path="/system-health" element={<SystemHealthPage />} />

@@ -236,6 +236,71 @@ export interface TradeAlertsResponse {
   }>;
 }
 
+export interface CoveredCallSymbolResult {
+  symbol: string;
+  name: string;
+  exchange?: string | null;
+  quoteType?: string | null;
+}
+
+export interface CoveredCallCandidate {
+  ticker: string;
+  expiration: string;
+  dte: number;
+  strike: number;
+  bid: number | null;
+  ask: number | null;
+  mark: number | null;
+  spreadPct: number | null;
+  volume: number | null;
+  openInterest: number | null;
+  delta: number | null;
+  theta: number | null;
+  impliedVolatility: number | null;
+  premiumPerContract: number;
+  premiumYieldPct: number;
+  annualizedYieldPct: number;
+  otmPct: number;
+  score: number;
+  eligible: boolean;
+  reasons: string[];
+}
+
+export interface CoveredCallAnalysis {
+  symbol: string;
+  generatedAt: string;
+  profile: 'conservative';
+  quote: {
+    price: number;
+    name: string | null;
+    currency: string | null;
+    marketState: string | null;
+  };
+  scan: {
+    minDte: number;
+    maxDte: number;
+    expirationsChecked: string[];
+    contractsReviewed: number;
+  };
+  best: CoveredCallCandidate | null;
+  candidates: CoveredCallCandidate[];
+  news: Array<{
+    title: string;
+    publisher: string | null;
+    link: string | null;
+    publishedAt: string | null;
+  }>;
+  ai: {
+    summary: string;
+    bestContractTicker: string | null;
+    riskNotes: string[];
+    incomeRationale: string;
+    avoidIf: string[];
+    fallback: boolean;
+    error?: string;
+  };
+}
+
 const API_BASE = '/api';
 
 const getToken = () => localStorage.getItem('token');
@@ -614,6 +679,24 @@ export const api = {
   async searchSymbols(q: string): Promise<{ symbol: string, name: string }[]> {
     const res = await authFetch(`${API_BASE}/positions/search?q=${encodeURIComponent(q)}`);
     if (!res.ok) throw new Error('Failed to search symbols');
+    return res.json();
+  },
+
+  async searchCoveredCallSymbols(q: string): Promise<CoveredCallSymbolResult[]> {
+    const res = await authFetch(`${API_BASE}/covered-calls/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) throw new Error('Failed to search covered call symbols');
+    return res.json();
+  },
+
+  async analyzeCoveredCalls(symbol: string): Promise<CoveredCallAnalysis> {
+    const res = await authFetch(`${API_BASE}/covered-calls/analyze`, {
+      method: 'POST',
+      body: JSON.stringify({ symbol, profile: 'conservative' })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to analyze covered calls');
+    }
     return res.json();
   },
 

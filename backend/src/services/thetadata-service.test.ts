@@ -60,6 +60,28 @@ async function testNestedQuoteResponseParsesBidAsk() {
   assert(quote?.ticker === 'QQQ260622C00741000', `Expected OSI ticker, got ${quote?.ticker}`);
 }
 
+async function testOptionExpirationsNormalizeRows() {
+  const service = createService(async (_config, path) => {
+    assert(path.startsWith('/v3/option/list/expirations?'), 'Should call the v3 option expirations endpoint');
+    return {
+      response: [
+        { expiration: '20260717' },
+        { expiration_date: '2026-07-24' },
+        '20260731',
+        { date: 'bad' },
+        { expiration: '20260717' }
+      ]
+    };
+  });
+
+  const expirations = await service.getOptionExpirations(null, 'AAPL');
+
+  assert(expirations.length === 3, `Expected three unique expirations, got ${expirations.length}`);
+  assert(expirations[0] === '2026-07-17', `Expected normalized first expiration, got ${expirations[0]}`);
+  assert(expirations[1] === '2026-07-24', `Expected normalized second expiration, got ${expirations[1]}`);
+  assert(expirations[2] === '2026-07-31', `Expected normalized third expiration, got ${expirations[2]}`);
+}
+
 async function testChainUsesFirstOrderGreeksAndMergesOpenInterest() {
   const paths: string[] = [];
   const service = createService(async (_config, path) => {
@@ -254,6 +276,7 @@ async function testNaiveThetaDataQuoteTimestampsParseAsEasternTime() {
 
 async function runTests() {
   console.log('Running ThetaDataService v3 response tests...');
+  await testOptionExpirationsNormalizeRows();
   await testNestedQuoteResponseParsesBidAsk();
   await testChainUsesFirstOrderGreeksAndMergesOpenInterest();
   await testChainMergesScaledStrikeAndExpirationDateRows();

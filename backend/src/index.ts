@@ -16,6 +16,7 @@ import { goalRoutes } from './routes/goals';
 import { signalRoutes } from './routes/signals';
 import { tradeRoutes } from './routes/trades';
 import { backtestRoutes } from './routes/backtests';
+import { coveredCallRoutes } from './routes/covered-calls';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -478,6 +479,7 @@ const start = async () => {
     fastify.register(tradeRoutes, { prefix: '/api/trades' });
     fastify.register(signalRoutes, { prefix: '/api/signals' });
     fastify.register(backtestRoutes, { prefix: '/api/backtests' });
+    fastify.register(coveredCallRoutes, { prefix: '/api/covered-calls' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
