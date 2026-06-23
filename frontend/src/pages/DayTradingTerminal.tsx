@@ -171,6 +171,48 @@ const formatPercent = (value: unknown, decimals = 1) => {
   return Number.isFinite(numeric) ? `${numeric.toFixed(decimals)}%` : 'N/A';
 };
 
+const formatSignedPercent = (value: unknown, decimals = 1) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'N/A';
+  return `${numeric >= 0 ? '+' : ''}${numeric.toFixed(decimals)}%`;
+};
+
+const formatSignedBps = (value: unknown, decimals = 1) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'N/A';
+  return `${numeric >= 0 ? '+' : ''}${numeric.toFixed(decimals)} bps`;
+};
+
+const formatTenYearYield = (value: unknown) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 'N/A';
+  const yieldPercent = numeric > 20 ? numeric / 10 : numeric;
+  return `${yieldPercent.toFixed(2)}%`;
+};
+
+const getMacroImpact = (
+  change: unknown,
+  invertForEquities = true,
+  neutralThreshold = 0
+): 'positive' | 'negative' | 'neutral' => {
+  const numeric = Number(change);
+  if (!Number.isFinite(numeric) || Math.abs(numeric) <= neutralThreshold) return 'neutral';
+  const isPositiveForRisk = invertForEquities ? numeric < 0 : numeric > 0;
+  return isPositiveForRisk ? 'positive' : 'negative';
+};
+
+const getMacroToneClass = (impact: 'positive' | 'negative' | 'neutral') => {
+  if (impact === 'positive') return 'border-emerald-500/25 bg-emerald-950/20 text-emerald-200';
+  if (impact === 'negative') return 'border-red-500/25 bg-red-950/20 text-red-200';
+  return 'border-zinc-700/80 bg-zinc-950/40 text-zinc-300';
+};
+
+const getMacroImpactLabel = (impact: 'positive' | 'negative' | 'neutral') => {
+  if (impact === 'positive') return 'Positive';
+  if (impact === 'negative') return 'Negative';
+  return 'Neutral';
+};
+
 const getSystemHealthSummary = (apiHealth: ApiHealthState, services: ServiceHealthState, websocketConnected: boolean, loading: boolean) => {
   if (loading) {
     return {
@@ -465,6 +507,84 @@ function SymbolLane({
         )}
       </div>
     </button>
+  );
+}
+
+function MacroMetricsStrip({
+  signal,
+  fallbackVix
+}: {
+  signal: Signal | null;
+  fallbackVix: number;
+}) {
+  const volatility = signal?.volatility;
+  const macroRegime = volatility?.macroRegime;
+  const metrics = [
+    {
+      key: 'vix',
+      label: 'VIX',
+      value: formatNumber(volatility?.vixQuote ?? fallbackVix, 1),
+      move: formatSignedPercent(volatility?.vixChangePercent, 2),
+      impact: getMacroImpact(volatility?.vixChangePercent, true, 0.05)
+    },
+    {
+      key: 'ten-year',
+      label: '10Y',
+      value: formatTenYearYield(volatility?.tenYearYield),
+      move: formatSignedBps(volatility?.tenYearChangeBps, 1),
+      impact: getMacroImpact(volatility?.tenYearChangeBps, true, 0.3)
+    },
+    {
+      key: 'dxy',
+      label: 'DXY',
+      value: formatNumber(volatility?.dxy?.value, 2),
+      move: formatSignedPercent(volatility?.dxy?.changePercent, 2),
+      impact: getMacroImpact(volatility?.dxy?.changePercent, true, 0.05)
+    }
+  ];
+  const hasMacroData = metrics.some(metric => metric.value !== 'N/A' || metric.move !== 'N/A');
+
+  return (
+    <div className="motion-panel rounded border border-emerald-500/15 bg-zinc-900/30 p-3">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70">Current macro metrics</div>
+          <div className="mt-1 break-words text-xs text-zinc-400">
+            {hasMacroData && signal
+              ? `${signal.symbol} snapshot ${formatTime(signal.created_at)}`
+              : 'Waiting for the latest scanner macro snapshot.'}
+          </div>
+        </div>
+        {macroRegime && (
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-[10px]">
+            <Badge variant="outline" className="border-emerald-500/20 bg-zinc-950/40 text-emerald-300">
+              {macroRegime.regime || 'MACRO'}
+            </Badge>
+            <span className="font-mono text-zinc-400">
+              Score {formatNumber(macroRegime.score, 0)} · Bias {macroRegime.directionBias || 'MIXED'}
+            </span>
+          </div>
+        )}
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-3">
+        {metrics.map(metric => (
+          <div key={metric.key} className={`rounded border p-2.5 ${getMacroToneClass(metric.impact)}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase text-zinc-400">{metric.label}</span>
+              <span className="rounded border border-current/20 bg-zinc-950/30 px-1.5 py-0.5 text-[9px] font-bold uppercase">
+                {getMacroImpactLabel(metric.impact)}
+              </span>
+            </div>
+            <div className="mt-1 flex items-end justify-between gap-2 font-mono">
+              <span className="text-lg font-semibold text-zinc-100">{metric.value}</span>
+              <span className={metric.impact === 'positive' ? 'text-emerald-300' : metric.impact === 'negative' ? 'text-red-300' : 'text-zinc-400'}>
+                {metric.move}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -793,6 +913,11 @@ export default function DayTradingTerminal() {
 
   const latestSignal = filteredSignals[0] || null;
   const latestLog = filteredLogs[0] || null;
+  const latestMacroSignal = symbolSignals.find(signal =>
+    signal.volatility?.vixQuote != null
+    || signal.volatility?.tenYearYield != null
+    || signal.volatility?.dxy?.value != null
+  ) || symbolSignals[0] || null;
 
 
   // Mega-caps change tracking (retrieve from latest log or latest signal, else standard fallback)
@@ -998,6 +1123,8 @@ export default function DayTradingTerminal() {
           }}
         />
       </div>
+
+      <MacroMetricsStrip signal={latestMacroSignal} fallbackVix={vixValue} />
 
       {/* Row 1: Dashboard Gauges / Widgets */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

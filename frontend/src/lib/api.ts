@@ -1102,6 +1102,34 @@ export interface GexJSON {
 export interface VolatilityJSON {
   vixQuote?: number;
   vixChangePercent?: number;
+  tenYearYield?: number;
+  tenYearChangePercent?: number;
+  tenYearChangeBps?: number;
+  dxy?: {
+    symbol?: string;
+    value?: number;
+    changePercent?: number;
+  };
+  oil?: {
+    symbol?: string;
+    value?: number;
+    changePercent?: number;
+  };
+  gold?: {
+    symbol?: string;
+    value?: number;
+    changePercent?: number;
+  };
+  macroRegime?: {
+    regime?: string;
+    score?: number;
+    directionBias?: string;
+    confidenceAdjustment?: number;
+    thresholdAdjustment?: number;
+    blockers?: string[];
+    warnings?: string[];
+    contributors?: string[];
+  };
   [key: string]: any;
 }
 
