@@ -116,7 +116,7 @@ Bug check:
 
 Status: completed in current work.
 
-## Task 7: Central Pre-Submit Risk Engine
+## Completed Task 7: Central Pre-Submit Risk Engine
 
 Goal: put every live-order denial rule through one hard pre-submit risk layer before SnapTrade or any broker adapter is called.
 
@@ -135,6 +135,8 @@ Bug check:
 - Run `git diff --check`.
 - Restore generated `backend/dist` before commit.
 - Commit message: `Add pre-submit risk engine`.
+
+Status: completed in current work.
 
 ## Task 8: Adapter Health Contracts And Freshness
 

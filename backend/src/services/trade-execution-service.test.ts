@@ -260,6 +260,84 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
       grade: { pricingWarnings: [] }
     }
   });
+  const liveAck = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    broker: 'wealthsimple_snaptrade',
+    settings: { live_trading_acknowledged: 'false', snaptrade_trading_account_id: 'acct-1' }
+  });
+  const account = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    broker: 'wealthsimple_snaptrade',
+    settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: '' }
+  });
+  const staleQuote = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    broker: 'wealthsimple_snaptrade',
+    settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
+    quoteValidation: { quote: createEntryQuote({ quoteAgeMs: 5_000 }), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    intendedEntry: 2.05
+  });
+  const missingBidAsk = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    broker: 'wealthsimple_snaptrade',
+    settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
+    quoteValidation: { quote: createEntryQuote({ bid: 0, ask: 0, spreadPct: null }), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    intendedEntry: 2.05
+  });
+  const wideSpread = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    broker: 'wealthsimple_snaptrade',
+    settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
+    quoteValidation: { quote: createEntryQuote({ spreadPct: 18 }), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    intendedEntry: 2.05
+  });
+  const premiumJump = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    broker: 'wealthsimple_snaptrade',
+    settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
+    quoteValidation: { quote: createEntryQuote({ mark: 2.4 }), baselineMark: 2, movePct: 20, stabilityMovePct: 0 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    intendedEntry: 2.05
+  });
+  const macro = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    broker: 'wealthsimple_snaptrade',
+    side: 'PUT',
+    settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
+    optionDetails: {
+      risk_flags: { macroSupportsSignal: false },
+      decisionSnapshot: {
+        macroSnapshot: {
+          macroRegime: { directionBias: 'CALL' }
+        }
+      }
+    }
+  });
+  const clean = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    broker: 'wealthsimple_snaptrade',
+    side: 'PUT',
+    settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
+    setupGrade: 'A',
+    currentTradeCount: 1,
+    maxTradesPerDay: 3,
+    duplicateOpenEntry: null,
+    optionDetails: {
+      decision: {
+        quote: { usingTheoreticalPricing: false },
+        grade: {
+          pricingWarnings: [],
+          executionRealism: { score: 85, executable: true, threshold: 70 }
+        }
+      }
+    },
+    quoteValidation: { quote: createEntryQuote(), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    intendedEntry: 2.05
+  });
 
   assert(existing.allowed === false && existing.code === 'EXISTING_SIGNAL_EXECUTION', 'Should block existing signal execution');
   assert(grade.allowed === false && grade.code === 'SETUP_GRADE_NOT_EXECUTABLE', 'Should block non-executable setup grade');
@@ -267,9 +345,50 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(dailyLimit.allowed === false && dailyLimit.code === 'DAILY_TRADE_LIMIT', 'Should block daily trade limit');
   assert(executionRealism.allowed === false && executionRealism.code === 'EXECUTION_REALISM_TOO_LOW', 'Should block low execution realism');
   assert(theoretical.allowed === false && theoretical.code === 'THEORETICAL_PRICING', 'Should block theoretical pricing');
+  assert(liveAck.denials[0]?.code === 'LIVE_TRADING_NOT_ACKNOWLEDGED', 'Should block missing live acknowledgement');
+  assert(account.denials[0]?.code === 'ACCOUNT_NOT_SELECTED', 'Should block missing trading account');
+  assert(staleQuote.denials[0]?.code === 'STALE_QUOTE', 'Should block stale option quote');
+  assert(missingBidAsk.denials[0]?.code === 'MISSING_BID_ASK', 'Should block missing bid/ask');
+  assert(wideSpread.denials[0]?.code === 'SPREAD_TOO_WIDE', 'Should block wide spread');
+  assert(premiumJump.denials[0]?.code === 'PREMIUM_JUMP', 'Should block premium jump');
+  assert(macro.denials[0]?.code === 'MACRO_CONTRADICTION', 'Should block macro contradiction');
+  assert(clean.approved === true && clean.denials.length === 0, `Clean pre-submit risk should approve, got ${JSON.stringify(clean.denials)}`);
   assert(RiskDecisionService.forSetupGrade(42, 'A+ / FULL').allowed === true, 'Should allow A+ setup grade');
   assert(RiskDecisionService.forDailyTradeLimit(2, 3).allowed === true, 'Should allow under daily trade limit');
   assert(RiskDecisionService.forExecutionRealism({ decision: { grade: { executionRealism: { score: 80, executable: true, threshold: 70 } } } }).allowed === true, 'Should allow sufficient execution realism');
+}
+
+async function testPreSubmitRiskDenialSkipsBeforeBrokerPath() {
+  const service = new TradeExecutionService(createFastifyMock());
+  const input = createSignalInput();
+  let failureMetadata: any = null;
+  let quoteValidated = false;
+
+  (service as any).getSignalOptionDetails = async () => ({
+    decision: {
+      quote: { usingTheoreticalPricing: false },
+      grade: { pricingWarnings: [] }
+    }
+  });
+  (service as any).validateEntryQuote = async () => {
+    quoteValidated = true;
+    throw new Error('Quote validation should not run after live acknowledgement denial');
+  };
+  (service as any).markSignalExecutionFailure = async (_userId: number, _signalId: number, _message: string, skipped: boolean, metadata: any) => {
+    failureMetadata = { skipped, metadata };
+  };
+
+  const result = await (service as any).executeSnapTradeOptionTrade(input, {
+    live_trading_acknowledged: 'false',
+    snaptrade_trading_account_id: '7:wealthsimple-account',
+    order_type: 'LIMIT',
+    entry_slippage_pct: '3'
+  }, 1);
+
+  assert(result.skipped === true, 'Risk denial should be skipped');
+  assert(result.riskCode === 'LIVE_TRADING_NOT_ACKNOWLEDGED', `Expected live acknowledgement risk code, got ${result.riskCode}`);
+  assert(quoteValidated === false, 'Quote validation should not run after pre-submit risk denial');
+  assert(failureMetadata?.metadata?.riskCode === 'LIVE_TRADING_NOT_ACKNOWLEDGED', 'Risk code should be recorded in failure metadata');
 }
 
 async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
@@ -335,6 +454,7 @@ async function runTests() {
   await testLiveExecutionSkipsLowExecutionRealismSignal();
   await testTheoreticalPricingDetectionCoversStoredShapes();
   await testRiskDecisionServiceCentralizesPreTradeBlocks();
+  await testPreSubmitRiskDenialSkipsBeforeBrokerPath();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   console.log('All TradeExecutionService broker lifecycle tests passed!');
 }

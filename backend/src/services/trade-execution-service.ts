@@ -8,6 +8,7 @@ import { DiscordAlertService } from './discord-alert-service';
 import { ThetaDataService } from './thetadata-service';
 import { tradingEventBus } from '../lib/trading-events';
 import { RiskDecisionService } from './risk-decision-service';
+import type { PreSubmitRiskAssessment } from './risk-decision-service';
 
 type ExecutionBroker = 'none' | 'wealthsimple_snaptrade' | 'simulated';
 
@@ -95,24 +96,25 @@ export class TradeExecutionService {
     const maxTradesPerDay = this.parsePositiveInt(settings.max_trades_per_day, 2, 100);
 
     const existingExecution = await this.getExistingSignalExecution(input.userId, input.signalId);
-    const existingExecutionDecision = RiskDecisionService.forExistingSignalExecution(input.signalId, existingExecution);
-    if (!existingExecutionDecision.allowed) {
-      return { success: false, skipped: existingExecutionDecision.skipped, broker, message: existingExecutionDecision.message };
+    const existingExecutionRisk = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      broker,
+      contractLabel: this.contractLabel(input),
+      existingExecution
+    });
+    if (!existingExecutionRisk.approved) {
+      return this.denyPreSubmitRisk(input, broker, existingExecutionRisk);
     }
 
     const setupGrade = await this.getSignalSetupGrade(input.signalId);
-    const setupGradeDecision = RiskDecisionService.forSetupGrade(input.signalId, setupGrade);
-    if (!setupGradeDecision.allowed) {
-      await this.markSignalExecutionFailure(input.userId, input.signalId, setupGradeDecision.message, setupGradeDecision.skipped);
-      tradingEventBus.publish({
-        type: 'EXECUTION_SKIPPED',
-        createdAt: new Date().toISOString(),
-        signalId: input.signalId,
-        userId: input.userId,
-        reason: setupGradeDecision.message
-      });
-      this.fastify.log.info(`[TradeExecutionService] ${setupGradeDecision.message}`);
-      return { success: false, skipped: setupGradeDecision.skipped, broker, message: setupGradeDecision.message };
+    const setupGradeRisk = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      broker,
+      contractLabel: this.contractLabel(input),
+      setupGrade
+    });
+    if (!setupGradeRisk.approved) {
+      return this.denyPreSubmitRisk(input, broker, setupGradeRisk);
     }
 
     const entryLockKey = TradeRedisService.keys.entryLock(
@@ -144,11 +146,14 @@ export class TradeExecutionService {
     }
 
     const duplicate = await this.findDuplicateOpenEntry(input);
-    const duplicateDecision = RiskDecisionService.forDuplicateOpenEntry(this.contractLabel(input), duplicate);
-    if (!duplicateDecision.allowed) {
-      await this.markSignalExecutionFailure(input.userId, input.signalId, duplicateDecision.message, duplicateDecision.skipped);
-      this.fastify.log.info(`[TradeExecutionService] ${duplicateDecision.message}`);
-      return { success: false, skipped: duplicateDecision.skipped, broker, message: duplicateDecision.message, duplicatePositionId: duplicateDecision.metadata?.duplicatePositionId };
+    const duplicateRisk = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      broker,
+      contractLabel: this.contractLabel(input),
+      duplicateOpenEntry: duplicate
+    });
+    if (!duplicateRisk.approved) {
+      return this.denyPreSubmitRisk(input, broker, duplicateRisk, { duplicatePositionId: duplicateRisk.denials[0]?.metadata?.duplicatePositionId });
     }
 
     const supersededSummary = await this.closeSupersededPositions(input, settings, broker);
@@ -162,10 +167,15 @@ export class TradeExecutionService {
     }
 
     const currentTradeCount = await this.countTradesToday(input.userId);
-    const dailyLimitDecision = RiskDecisionService.forDailyTradeLimit(currentTradeCount, maxTradesPerDay);
-    if (!dailyLimitDecision.allowed) {
-      await this.markSignalExecutionFailure(input.userId, input.signalId, dailyLimitDecision.message, dailyLimitDecision.skipped);
-      return { success: false, skipped: dailyLimitDecision.skipped, broker, message: dailyLimitDecision.message };
+    const dailyLimitRisk = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      broker,
+      contractLabel: this.contractLabel(input),
+      currentTradeCount,
+      maxTradesPerDay
+    });
+    if (!dailyLimitRisk.approved) {
+      return this.denyPreSubmitRisk(input, broker, dailyLimitRisk);
     }
 
     tradingEventBus.publish({
@@ -195,6 +205,35 @@ export class TradeExecutionService {
       used,
       max: maxTradesPerDay,
       remaining: Math.max(0, maxTradesPerDay - used)
+    };
+  }
+
+  private async denyPreSubmitRisk(input: ExecuteSignalInput, broker: ExecutionBroker, assessment: PreSubmitRiskAssessment, extra: Record<string, any> = {}) {
+    const primaryDenial = assessment.denials[0];
+    const message = primaryDenial?.message || 'Entry skipped: pre-submit risk check denied order';
+    const skipped = primaryDenial?.skipped ?? true;
+    await this.markSignalExecutionFailure(input.userId, input.signalId, message, skipped, {
+      riskCode: primaryDenial?.code || null,
+      riskDenials: assessment.denials,
+      riskWarnings: assessment.warnings,
+      riskEvidence: assessment.evidence
+    });
+    tradingEventBus.publish({
+      type: 'EXECUTION_SKIPPED',
+      createdAt: new Date().toISOString(),
+      signalId: input.signalId,
+      userId: input.userId,
+      reason: message
+    });
+    this.fastify.log.info(`[TradeExecutionService] ${message}`);
+    return {
+      success: false,
+      skipped,
+      broker,
+      message,
+      riskCode: primaryDenial?.code || null,
+      riskDenials: assessment.denials.map((denial) => denial.code),
+      ...extra
     };
   }
 
@@ -534,34 +573,30 @@ export class TradeExecutionService {
     return RiskDecisionService.hasTheoreticalPricing(optionDetails);
   }
 
-  private assertEntryQuote(quote: EntryQuoteSnapshot, intendedEntry: number, baselineMark: number | null, stabilityMovePct: number | null) {
-    if (!quote || quote.mark <= 0) {
-      throw new Error('Entry skipped: no usable live option quote was available');
-    }
-    if (quote.syntheticOnly) {
-      throw new Error('Entry skipped: option quote is missing a usable bid/ask spread');
-    }
-    if (quote.quoteAgeMs !== null && quote.quoteAgeMs > this.ENTRY_MAX_QUOTE_AGE_MS) {
-      throw new Error(`Entry skipped: option quote is stale (${Math.round(quote.quoteAgeMs / 1000)}s old)`);
-    }
-    if (!quote.bid || !quote.ask || quote.bid <= 0 || quote.ask <= 0 || quote.spreadPct === null) {
-      throw new Error('Entry skipped: option quote is missing a usable bid/ask spread');
-    }
-    if (quote.spreadPct > this.ENTRY_MAX_SPREAD_PCT) {
-      throw new Error(`Entry skipped: option spread ${quote.spreadPct}% is wider than ${this.ENTRY_MAX_SPREAD_PCT}%`);
-    }
-    if (intendedEntry > 0 && quote.bid < intendedEntry * this.ENTRY_MIN_BID_TO_ENTRY_RATIO) {
-      const underwaterPct = Number(((1 - quote.bid / intendedEntry) * 100).toFixed(1));
-      throw new Error(`Entry skipped: immediate sellable bid $${quote.bid.toFixed(2)} is ${underwaterPct}% below intended entry $${intendedEntry.toFixed(2)}`);
-    }
-    if (baselineMark && baselineMark > 0) {
-      const movePct = ((quote.mark - baselineMark) / baselineMark) * 100;
-      if (movePct > this.ENTRY_MAX_PREMIUM_JUMP_PCT) {
-        throw new Error(`Entry skipped: premium jumped ${movePct.toFixed(1)}% from signal mark $${baselineMark.toFixed(2)} to $${quote.mark.toFixed(2)}`);
-      }
-    }
-    if (stabilityMovePct !== null && Math.abs(stabilityMovePct) > this.ENTRY_MAX_STABILITY_MOVE_PCT) {
-      throw new Error(`Entry skipped: premium moved ${Math.abs(stabilityMovePct).toFixed(1)}% during quote stability check`);
+  private assertEntryQuote(input: ExecuteSignalInput, quote: EntryQuoteSnapshot, intendedEntry: number, baselineMark: number | null, movePct: number | null, stabilityMovePct: number | null) {
+    const assessment = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      side: input.winningSide,
+      contractLabel: this.contractLabel(input),
+      quoteValidation: {
+        quote,
+        baselineMark,
+        movePct,
+        stabilityMovePct
+      },
+      quoteThresholds: {
+        maxQuoteAgeMs: this.ENTRY_MAX_QUOTE_AGE_MS,
+        maxSpreadPct: this.ENTRY_MAX_SPREAD_PCT,
+        minBidToEntryRatio: this.ENTRY_MIN_BID_TO_ENTRY_RATIO,
+        maxPremiumJumpPct: this.ENTRY_MAX_PREMIUM_JUMP_PCT,
+        maxStabilityMovePct: this.ENTRY_MAX_STABILITY_MOVE_PCT
+      },
+      intendedEntry
+    });
+    if (!assessment.approved) {
+      const err = new Error(assessment.denials[0]?.message || 'Entry skipped: pre-submit quote risk check denied order') as Error & { riskAssessment?: PreSubmitRiskAssessment };
+      err.riskAssessment = assessment;
+      throw err;
     }
   }
 
@@ -586,8 +621,9 @@ export class TradeExecutionService {
     const stabilityMovePct = firstQuote.mark > 0
       ? Number((((finalQuote.mark - firstQuote.mark) / firstQuote.mark) * 100).toFixed(2))
       : null;
+    const movePct = baselineMark ? Number((((finalQuote.mark - baselineMark) / baselineMark) * 100).toFixed(2)) : null;
     const effectiveIntendedEntry = intendedEntry > 0 ? intendedEntry : finalQuote.mark;
-    this.assertEntryQuote(finalQuote, effectiveIntendedEntry, baselineMark, stabilityMovePct);
+    this.assertEntryQuote(input, finalQuote, effectiveIntendedEntry, baselineMark, movePct, stabilityMovePct);
 
     const protectedLimit = Number(Math.min(
       finalQuote.ask,
@@ -598,40 +634,26 @@ export class TradeExecutionService {
       quote: finalQuote,
       protectedLimit,
       baselineMark,
-      movePct: baselineMark ? Number((((finalQuote.mark - baselineMark) / baselineMark) * 100).toFixed(2)) : null,
+      movePct,
       stabilityMovePct
     };
   }
 
   private async executeSnapTradeOptionTrade(input: ExecuteSignalInput, settings: ExecutionSettings, quantity: number) {
-    if (settings.live_trading_acknowledged !== 'true') {
-      const message = 'Wealthsimple live trading acknowledgement is required';
-      await this.markSignalExecutionFailure(input.userId, input.signalId, message);
-      return { success: false, broker: 'wealthsimple_snaptrade', message };
-    }
-
-    const accountId = settings.snaptrade_trading_account_id?.trim();
-    if (!accountId) {
-      const message = 'No Wealthsimple/SnapTrade trading account selected';
-      await this.markSignalExecutionFailure(input.userId, input.signalId, message);
-      return { success: false, broker: 'wealthsimple_snaptrade', message };
-    }
-
     const osiTicker = this.constructOSITicker(input.symbol, input.chosenStrike, input.winningSide, input.chosenExpiry);
     const optionDetails = await this.getSignalOptionDetails(input.signalId);
-    const theoreticalPricingDecision = RiskDecisionService.forTheoreticalPricing(optionDetails);
-    if (!theoreticalPricingDecision.allowed) {
-      await this.markSignalExecutionFailure(input.userId, input.signalId, theoreticalPricingDecision.message, theoreticalPricingDecision.skipped);
-      this.fastify.log.info(`[TradeExecutionService] ${theoreticalPricingDecision.message}`);
-      return { success: false, skipped: theoreticalPricingDecision.skipped, broker: 'wealthsimple_snaptrade', message: theoreticalPricingDecision.message };
+    const preSubmitRisk = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      broker: 'wealthsimple_snaptrade',
+      side: input.winningSide,
+      contractLabel: this.contractLabel(input),
+      settings,
+      optionDetails
+    });
+    if (!preSubmitRisk.approved) {
+      return this.denyPreSubmitRisk(input, 'wealthsimple_snaptrade', preSubmitRisk);
     }
-
-    const executionRealismDecision = RiskDecisionService.forExecutionRealism(optionDetails);
-    if (!executionRealismDecision.allowed) {
-      await this.markSignalExecutionFailure(input.userId, input.signalId, executionRealismDecision.message, executionRealismDecision.skipped);
-      this.fastify.log.info(`[TradeExecutionService] ${executionRealismDecision.message}`);
-      return { success: false, skipped: executionRealismDecision.skipped, broker: 'wealthsimple_snaptrade', message: executionRealismDecision.message };
-    }
+    const accountId = settings.snaptrade_trading_account_id!.trim();
 
     const slippagePct = Math.max(0, Number(settings.entry_slippage_pct || 3));
     const useLimitOrder = input.mark !== null && input.mark > 0 && (settings.order_type || 'LIMIT') === 'LIMIT';
@@ -647,6 +669,9 @@ export class TradeExecutionService {
         orderType = 'LIMIT';
       } catch (err: any) {
         const message = err.message || String(err);
+        if (err.riskAssessment) {
+          return this.denyPreSubmitRisk(input, 'wealthsimple_snaptrade', err.riskAssessment);
+        }
         await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
         this.fastify.log.info(`[TradeExecutionService] ${message}`);
         return { success: false, skipped: true, broker: 'wealthsimple_snaptrade', message };
@@ -861,7 +886,7 @@ export class TradeExecutionService {
     );
   }
 
-  private async markSignalExecutionFailure(userId: number, signalId: number, error: string, skipped = false) {
+  private async markSignalExecutionFailure(userId: number, signalId: number, error: string, skipped = false, metadata: Record<string, any> = {}) {
     const executionStatus = skipped ? 'SKIPPED' : 'FAILED';
     const status = skipped ? 'CANCELLED' : 'PENDING';
 
@@ -885,7 +910,8 @@ export class TradeExecutionService {
       message: error,
       metadata: {
         executionStatus,
-        skipped
+        skipped,
+        ...metadata
       }
     });
 
