@@ -1,5 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { DiscordAlertService } from './discord-alert-service';
+import { TradeLifecycleService } from './trade-lifecycle-service';
+import { TradeRedisService } from './trade-redis-service';
 
 type WatchdogSummary = {
   checked: number;
@@ -40,11 +42,7 @@ export class OrderWatchdogService {
         if (row.status === 'PENDING_ORDER') {
           const createdAtMs = new Date(row.created_at).getTime();
           if (Number.isFinite(createdAtMs) && Date.now() - createdAtMs > this.entryStaleMs) {
-            const isProtectedLimitPending = row.execution_status === 'PENDING_RECONCILE';
-            const nextExecutionStatus = isProtectedLimitPending ? 'ENTRY_RECONCILE_REQUIRED' : 'ENTRY_STALE';
-            const executionError = isProtectedLimitPending
-              ? 'Protected limit entry is still pending after watchdog timeout; broker reconciliation is required before another entry.'
-              : 'Entry order is still pending after watchdog timeout; broker reconciliation is required before another entry.';
+            const staleDecision = TradeLifecycleService.staleEntryDecision(row.execution_status);
             const staleUpdate = await this.fastify.pg.query(
               `UPDATE positions
                SET execution_status = $1,
@@ -53,17 +51,35 @@ export class OrderWatchdogService {
                    updated_at = CURRENT_TIMESTAMP
                WHERE id = $4
                  AND status = 'PENDING_ORDER'
-                 AND COALESCE(execution_status, '') NOT IN ('EXECUTED', 'FILLED', 'FILLED_FULLY', 'ENTRY_STALE', 'ENTRY_RECONCILE_REQUIRED')`,
+                 AND NOT (COALESCE(execution_status, '') = ANY($5::text[]))`,
               [
-                nextExecutionStatus,
-                executionError,
-                ` [Watchdog marked ${isProtectedLimitPending ? 'protected limit entry reconcile-required' : 'entry stale'} after ${Math.round(this.entryStaleMs / 1000)}s]`,
-                row.id
+                staleDecision.executionStatus,
+                staleDecision.message,
+                ` [Watchdog marked ${staleDecision.noteLabel} after ${Math.round(this.entryStaleMs / 1000)}s]`,
+                row.id,
+                TradeLifecycleService.FINAL_ENTRY_EXECUTION_STATUSES
               ]
             );
             if (staleUpdate.rowCount === 0) {
               summary.stillPending += 1;
               continue;
+            }
+            try {
+              await TradeRedisService.recordEvent(this.fastify.pg, {
+                userId: Number(row.user_id),
+                positionId: row.id,
+                eventType: 'ENTRY_STATE_CHANGED',
+                message: staleDecision.message,
+                metadata: {
+                  from: row.execution_status || null,
+                  to: staleDecision.executionStatus,
+                  state: staleDecision.state,
+                  source: 'order-watchdog',
+                  staleAfterSeconds: Math.round(this.entryStaleMs / 1000)
+                }
+              });
+            } catch (err: any) {
+              this.fastify.log.warn(`[OrderWatchdog] Failed to record entry state event for position ${row.id}: ${err.message || String(err)}`);
             }
             await new DiscordAlertService(this.fastify).send({
               userId: Number(row.user_id),

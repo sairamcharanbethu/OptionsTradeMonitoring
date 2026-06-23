@@ -3,6 +3,23 @@ type Queryable = {
 };
 
 export type ExitExecutionStatus = 'PENDING_EXIT' | 'PENDING_TRIM';
+export type EntryOrderState =
+  | 'LOCAL_BLOCKED'
+  | 'SUBMITTED'
+  | 'PENDING_RECONCILE'
+  | 'ACCEPTED'
+  | 'FILLED'
+  | 'REJECTED'
+  | 'STALE'
+  | 'REVIEW_REQUIRED';
+
+export type EntryOrderDecision = {
+  state: EntryOrderState;
+  executionStatus: string;
+  message: string;
+  noteLabel: string;
+};
+
 export type ExitRetryDecision = {
   allowed: boolean;
   reason?: string;
@@ -10,6 +27,45 @@ export type ExitRetryDecision = {
 
 export class TradeLifecycleService {
   static readonly MAX_EXIT_RETRIES = Number(process.env.MAX_EXIT_RETRIES || 2);
+  static readonly FINAL_ENTRY_EXECUTION_STATUSES = ['EXECUTED', 'FILLED', 'FILLED_FULLY', 'ENTRY_STALE', 'ENTRY_RECONCILE_REQUIRED'];
+
+  static entrySubmittedStatus(orderType: 'MARKET' | 'LIMIT'): EntryOrderDecision {
+    if (orderType === 'LIMIT') {
+      return {
+        state: 'PENDING_RECONCILE',
+        executionStatus: 'PENDING_RECONCILE',
+        message: 'Protected limit entry submitted; broker reconciliation is required before treating it as filled.',
+        noteLabel: 'protected limit entry pending reconciliation'
+      };
+    }
+    return {
+      state: 'SUBMITTED',
+      executionStatus: 'PENDING',
+      message: 'Market entry submitted; broker reconciliation is required before treating it as filled.',
+      noteLabel: 'market entry pending reconciliation'
+    };
+  }
+
+  static staleEntryDecision(currentExecutionStatus?: string | null): EntryOrderDecision {
+    if (currentExecutionStatus === 'PENDING_RECONCILE') {
+      return {
+        state: 'REVIEW_REQUIRED',
+        executionStatus: 'ENTRY_RECONCILE_REQUIRED',
+        message: 'Protected limit entry is still pending after watchdog timeout; broker reconciliation is required before another entry.',
+        noteLabel: 'protected limit entry reconcile-required'
+      };
+    }
+    return {
+      state: 'STALE',
+      executionStatus: 'ENTRY_STALE',
+      message: 'Entry order is still pending after watchdog timeout; broker reconciliation is required before another entry.',
+      noteLabel: 'entry stale'
+    };
+  }
+
+  static isFinalEntryExecutionStatus(status?: string | null): boolean {
+    return this.FINAL_ENTRY_EXECUTION_STATUSES.includes(String(status || ''));
+  }
 
   static isPendingExitStatus(status?: string | null): boolean {
     return ['PENDING_EXIT', 'PENDING_TRIM'].includes(String(status || ''));

@@ -38,6 +38,7 @@ function createFastifyMock() {
           assert(String(params?.[1] || '').includes('Protected limit entry'), 'Expected protected-limit reconciliation error');
           assert(String(params?.[2] || '').includes('protected limit entry reconcile-required'), 'Expected protected-limit reconciliation note');
           assert(params?.[3] === 704, `Expected position id 704, got ${params?.[3]}`);
+          assert(Array.isArray(params?.[4]) && params?.[4].includes('ENTRY_RECONCILE_REQUIRED'), 'Expected centralized final-entry guard list');
           return { rowCount: 1, rows: [] };
         }
         if (sql.includes('FROM settings')) {
@@ -60,7 +61,7 @@ async function testProtectedLimitPendingEntryBecomesReconcileRequired() {
   assert(summary.checked === 1, `Expected 1 checked order, got ${summary.checked}`);
   assert(summary.entryStale === 1, `Expected 1 stale entry, got ${summary.entryStale}`);
   assert(summary.errors.length === 0, `Expected no watchdog errors, got ${summary.errors.join('; ')}`);
-  assert(calls.some((call) => call.sql.includes('ENTRY_RECONCILE_REQUIRED')), 'Expected SQL to guard against repeated reconcile-required updates');
+  assert(calls.some((call) => call.sql.includes('INSERT INTO trade_events') && call.params?.[3] === 'ENTRY_STATE_CHANGED'), 'Expected entry state change event to be recorded');
 }
 
 async function runTests() {

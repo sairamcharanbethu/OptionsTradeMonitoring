@@ -662,7 +662,7 @@ export class TradeExecutionService {
         orderType,
         limitPrice
       );
-      const pendingExecutionStatus = orderType === 'LIMIT' ? 'PENDING_RECONCILE' : 'PENDING';
+      const entryState = TradeLifecycleService.entrySubmittedStatus(orderType);
       const protectedLimitNote = orderType === 'LIMIT'
         ? ` protected LIMIT ${limitPrice || ''} pending broker reconciliation`
         : ' MARKET pending broker reconciliation';
@@ -675,7 +675,7 @@ export class TradeExecutionService {
         executionBroker: 'wealthsimple_snaptrade',
         brokerOrderId: result.orderId || null,
         brokerTradeId: result.tradeId || null,
-        executionStatus: pendingExecutionStatus,
+        executionStatus: entryState.executionStatus,
         positionStatus: 'PENDING_ORDER',
         takeProfitPct: settings.take_profit_pct,
         notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId};${protectedLimitNote}]`
@@ -694,7 +694,8 @@ export class TradeExecutionService {
           quantity,
           orderType,
           limitPrice: limitPrice || null,
-          pendingExecutionStatus,
+          state: entryState.state,
+          pendingExecutionStatus: entryState.executionStatus,
           protectedLimitTimeoutSeconds: Number(process.env.ORDER_WATCHDOG_ENTRY_STALE_SECONDS || 180),
           entryQuoteValidation,
           setupGrade: await this.getSignalSetupGrade(input.signalId),
@@ -704,11 +705,11 @@ export class TradeExecutionService {
           targetUnderlying: input.targetUnderlying
         }
       });
-      await this.markSignalExecuted(input.userId, input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity, pendingExecutionStatus);
+      await this.markSignalExecuted(input.userId, input.signalId, 'wealthsimple_snaptrade', result.orderId || null, result.tradeId || null, quantity, entryState.executionStatus);
       await this.invalidateUserCaches(input.userId);
       await TradeRedisService.requestBrokerSync(input.userId);
       this.scheduleSnapTradePendingSync(input.userId);
-      return { success: true, broker: 'wealthsimple_snaptrade', orderId: result.orderId, tradeId: result.tradeId, quantity, executionStatus: pendingExecutionStatus };
+      return { success: true, broker: 'wealthsimple_snaptrade', orderId: result.orderId, tradeId: result.tradeId, quantity, executionStatus: entryState.executionStatus };
     } catch (err: any) {
       await this.markSignalExecutionFailure(input.userId, input.signalId, err.message);
       throw err;
