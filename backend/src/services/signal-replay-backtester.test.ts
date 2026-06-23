@@ -24,6 +24,49 @@ function createBacktester() {
   return new SignalReplayBacktester(createFastifyMock()) as any;
 }
 
+function createDecision(overrides: Record<string, any> = {}) {
+  return {
+    signalId: 101,
+    symbol: 'QQQ',
+    side: 'CALL',
+    createdAt: '2026-06-22T13:45:00.000Z',
+    contract: {
+      ticker: 'QQQ260622C00741000',
+      strike: 741,
+      expiry: '2026-06-22'
+    },
+    quote: {
+      mark: 1,
+      bid: 0.99,
+      ask: 1.01,
+      spreadPct: 2,
+      volume: 500,
+      openInterest: 1000,
+      usingTheoreticalPricing: false
+    },
+    grade: {
+      baseScore: 82,
+      macroScore: 76,
+      macroConfidenceAdjustment: 4,
+      pricingPenalty: 0,
+      finalConfidence: 91,
+      setupGrade: 'A',
+      gradeKey: 'A',
+      executable: true,
+      thresholds: {
+        minExecutable: 70,
+        minA: 85,
+        minB: 70
+      },
+      reasons: ['strong setup'],
+      warnings: [],
+      blockers: [],
+      pricingWarnings: []
+    },
+    ...overrides
+  };
+}
+
 function createSignal(overrides: Record<string, any> = {}) {
   return {
     id: 101,
@@ -36,7 +79,8 @@ function createSignal(overrides: Record<string, any> = {}) {
     option_expiration_date: '2026-06-22',
     option_details: {
       ticker: 'QQQ260622C00741000',
-      mark: 1
+      mark: 1,
+      decision: createDecision()
     },
     volatility: {
       macroRegime: {
@@ -111,6 +155,100 @@ async function testMacroStrictSkipsWeakMacroScore() {
   assert(backtester.getScenarioSkipReason('macro_strict', signal) === 'macro_score_below_62', 'Strict macro should require score >= 62');
 }
 
+async function testStoredSignalDecisionDrivesReplayMetadata() {
+  const backtester = createBacktester();
+  const signal = createSignal({
+    confidence_score: 80,
+    option_details: {
+      ticker: 'QQQ260622C00741000',
+      mark: 1,
+      decision: createDecision({
+        quote: {
+          mark: 1.25,
+          bid: 1.24,
+          ask: 1.26,
+          spreadPct: 1.6,
+          volume: 700,
+          openInterest: 1200,
+          usingTheoreticalPricing: false
+        },
+        grade: {
+          ...createDecision().grade,
+          finalConfidence: 88,
+          setupGrade: 'B',
+          gradeKey: 'B'
+        }
+      })
+    }
+  });
+  const contract = backtester.resolveContract(signal);
+  const bars = [
+    { start: '2026-06-22T13:45:00.000Z', open: 1.25, high: 1.41, low: 1.2, close: 1.35, volume: 100 }
+  ];
+
+  const trade = backtester.simulateTrade(signal, contract, bars, createConfig());
+
+  assert(trade !== null, 'Trade should simulate');
+  assert(trade.entryPrice === 1.25, `Expected stored decision mark entry price, got ${trade.entryPrice}`);
+  assert(trade.confidenceScore === 88, `Expected stored decision confidence, got ${trade.confidenceScore}`);
+  assert(trade.setupGrade === 'B', `Expected stored decision setup grade, got ${trade.setupGrade}`);
+  assert(trade.signalDecision?.gradeKey === 'B', `Expected compact decision metadata, got ${JSON.stringify(trade.signalDecision)}`);
+  assert(trade.exitReason === 'TAKE_PROFIT', `Expected TAKE_PROFIT, got ${trade.exitReason}`);
+}
+
+async function testParitySummaryReportsDecisionGaps() {
+  const backtester = createBacktester();
+  const signals = [
+    createSignal({
+      id: 201,
+      option_details: {
+        ticker: 'QQQ260622C00741000',
+        mark: 1
+      }
+    }),
+    createSignal({
+      id: 202,
+      option_details: {
+        ticker: 'QQQ260622C00741000',
+        mark: 1,
+        decision: createDecision({
+          side: 'PUT',
+          quote: {
+            mark: 1,
+            bid: 0.5,
+            ask: 1.5,
+            spreadPct: 100,
+            volume: 0,
+            openInterest: 0,
+            usingTheoreticalPricing: true
+          },
+          grade: {
+            ...createDecision().grade,
+            finalConfidence: 55,
+            setupGrade: 'NO_SETUP',
+            gradeKey: 'UNKNOWN',
+            executable: false,
+            pricingWarnings: ['wide spread']
+          }
+        })
+      }
+    })
+  ];
+
+  const summary = backtester.buildParitySummary(signals);
+
+  assert(summary.signalsChecked === 2, `Expected 2 checked signals, got ${summary.signalsChecked}`);
+  assert(summary.withSignalDecision === 1, `Expected 1 signal with decision, got ${summary.withSignalDecision}`);
+  assert(summary.missingSignalDecision === 1, `Expected 1 missing decision, got ${summary.missingSignalDecision}`);
+  assert(summary.gaps.missing_signal_decision === 1, 'Expected missing SignalDecision gap');
+  assert(summary.gaps.side_mismatch === 1, 'Expected side mismatch gap');
+  assert(summary.gaps.grade_mismatch === 1, 'Expected grade mismatch gap');
+  assert(summary.gaps.confidence_mismatch === 1, 'Expected confidence mismatch gap');
+  assert(summary.gaps.executable_mismatch === 1, 'Expected executable mismatch gap');
+  assert(summary.gaps.theoretical_pricing === 1, 'Expected theoretical pricing gap');
+  assert(summary.gaps.pricing_warning === 1, 'Expected pricing warning gap');
+}
+
 async function testNaiveThetaDataBarsParseAsEasternTime() {
   const backtester = createBacktester();
 
@@ -133,6 +271,8 @@ async function runTests() {
   await testTakeProfitUsesOptionOhlcTarget();
   await testAmbiguousBarUsesStopFirst();
   await testMacroStrictSkipsWeakMacroScore();
+  await testStoredSignalDecisionDrivesReplayMetadata();
+  await testParitySummaryReportsDecisionGaps();
   await testNaiveThetaDataBarsParseAsEasternTime();
   await testEasternDateHelperHandlesStandardTime();
   console.log('All SignalReplayBacktester tests passed!');

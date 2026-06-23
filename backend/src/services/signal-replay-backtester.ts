@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { SignalDecision } from '../lib/trading-events';
 import { ThetaDataContract, ThetaDataService } from './thetadata-service';
 
 type ReplayBar = {
@@ -56,6 +57,41 @@ type ReplayTrade = {
   roiPct: number;
   exitReason: string;
   skippedBy: string[];
+  signalDecision: ReplayTradeDecision | null;
+};
+
+type ReplayTradeDecision = {
+  gradeKey: string | null;
+  executable: boolean | null;
+  usingTheoreticalPricing: boolean;
+  pricingWarnings: string[];
+  blockers: string[];
+};
+
+type ReplayParityGapType =
+  | 'missing_signal_decision'
+  | 'contract_mismatch'
+  | 'side_mismatch'
+  | 'grade_mismatch'
+  | 'confidence_mismatch'
+  | 'executable_mismatch'
+  | 'theoretical_pricing'
+  | 'pricing_warning';
+
+type ReplayParityGap = {
+  signalId: number;
+  symbol: string;
+  type: ReplayParityGapType;
+  message: string;
+  metadata?: Record<string, any>;
+};
+
+type ReplayParitySummary = {
+  signalsChecked: number;
+  withSignalDecision: number;
+  missingSignalDecision: number;
+  gaps: Record<ReplayParityGapType, number>;
+  examples: ReplayParityGap[];
 };
 
 type ReplayScenario = {
@@ -96,12 +132,14 @@ export class SignalReplayBacktester {
     signalsLoaded: number;
     signalsUsable: number;
     missingOptionData: number;
+    parity: ReplayParitySummary;
     scenarios: ReplayScenario[];
   }> {
     const config = this.normalizeConfig(input);
     const signals = await this.loadSignals(config);
     const usableSignals = signals.filter((signal) => this.resolveContract(signal) !== null);
     const missingOptionData = signals.length - usableSignals.length;
+    const parity = this.buildParitySummary(signals);
 
     const scenarios: ReplayScenario[] = [
       {
@@ -186,6 +224,7 @@ export class SignalReplayBacktester {
       signalsLoaded: signals.length,
       signalsUsable: usableSignals.length,
       missingOptionData,
+      parity,
       scenarios
     };
   }
@@ -231,6 +270,12 @@ export class SignalReplayBacktester {
   }
 
   private resolveContract(signal: ReplaySignal): ThetaDataContract | null {
+    const decision = this.getSignalDecision(signal);
+    if (decision?.contract?.ticker) {
+      const parsedDecisionTicker = this.parseOsiTicker(decision.contract.ticker);
+      if (parsedDecisionTicker) return parsedDecisionTicker;
+    }
+
     const details = signal.option_details || {};
     const ticker = details.ticker || details.symbol;
     const parsed = this.parseOsiTicker(ticker);
@@ -248,6 +293,7 @@ export class SignalReplayBacktester {
   }
 
   private simulateTrade(signal: ReplaySignal, contract: ThetaDataContract, bars: ReplayBar[], config: ReplayConfig): ReplayTrade | null {
+    const decision = this.getSignalDecision(signal);
     const signalTime = new Date(signal.created_at);
     const marketDate = this.getSignalDate(signal);
     const sortedBars = bars
@@ -258,8 +304,10 @@ export class SignalReplayBacktester {
     const entryBar = sortedBars.find((bar) => (bar.parsedTime as Date).getTime() >= signalTime.getTime());
     if (!entryBar) return null;
 
+    const decisionMark = Number(decision?.quote?.mark || 0);
     const optionMark = Number(signal.option_details?.mark || 0);
-    const entryPrice = Number((optionMark > 0 ? optionMark : entryBar.close).toFixed(2));
+    const storedMark = decisionMark > 0 ? decisionMark : optionMark;
+    const entryPrice = Number((storedMark > 0 ? storedMark : entryBar.close).toFixed(2));
     if (entryPrice <= 0) return null;
 
     const targetPrice = Number((entryPrice * (1 + config.takeProfitPct / 100)).toFixed(2));
@@ -302,8 +350,8 @@ export class SignalReplayBacktester {
       symbol: signal.symbol,
       optionTicker: this.constructOsiTicker(contract),
       side: signal.signal_type,
-      setupGrade: signal.setup_grade,
-      confidenceScore: Number(signal.confidence_score || 0),
+      setupGrade: decision?.grade?.setupGrade || signal.setup_grade,
+      confidenceScore: Number(decision?.grade?.finalConfidence ?? signal.confidence_score ?? 0),
       macroRegime: signal.volatility?.macroRegime || null,
       entryTime: (entryBar.parsedTime as Date).toISOString(),
       exitTime: (exitBar.parsedTime as Date).toISOString(),
@@ -313,8 +361,147 @@ export class SignalReplayBacktester {
       pnl,
       roiPct: Number((((exitPrice - entryPrice) / entryPrice) * 100).toFixed(2)),
       exitReason,
-      skippedBy: []
+      skippedBy: [],
+      signalDecision: this.toReplayTradeDecision(decision)
     };
+  }
+
+  private buildParitySummary(signals: ReplaySignal[]): ReplayParitySummary {
+    const gaps = this.emptyParityGaps();
+    const examples: ReplayParityGap[] = [];
+    let withSignalDecision = 0;
+
+    for (const signal of signals) {
+      const signalGaps = this.collectParityGaps(signal);
+      if (this.getSignalDecision(signal)) withSignalDecision++;
+      for (const gap of signalGaps) {
+        gaps[gap.type]++;
+        if (examples.length < 50) examples.push(gap);
+      }
+    }
+
+    return {
+      signalsChecked: signals.length,
+      withSignalDecision,
+      missingSignalDecision: signals.length - withSignalDecision,
+      gaps,
+      examples
+    };
+  }
+
+  private collectParityGaps(signal: ReplaySignal): ReplayParityGap[] {
+    const decision = this.getSignalDecision(signal);
+    if (!decision) {
+      return [this.parityGap(signal, 'missing_signal_decision', 'Signal has no stored SignalDecision in option_details.decision.')];
+    }
+
+    const gaps: ReplayParityGap[] = [];
+    const details = signal.option_details || {};
+    const decisionTicker = this.normalizeTicker(decision.contract?.ticker);
+    const storedTicker = this.normalizeTicker(details.ticker || details.symbol);
+    if (decisionTicker && storedTicker && decisionTicker !== storedTicker) {
+      gaps.push(this.parityGap(signal, 'contract_mismatch', 'Stored SignalDecision contract ticker differs from option_details ticker.', {
+        decisionTicker,
+        storedTicker
+      }));
+    }
+
+    const decisionSide = String(decision.side || '').toUpperCase();
+    if (decisionSide && decisionSide !== signal.signal_type) {
+      gaps.push(this.parityGap(signal, 'side_mismatch', 'Stored SignalDecision side differs from signal_type.', {
+        decisionSide,
+        signalType: signal.signal_type
+      }));
+    }
+
+    const decisionGrade = decision.grade?.setupGrade || decision.grade?.gradeKey || null;
+    if (decisionGrade && signal.setup_grade && decisionGrade !== signal.setup_grade) {
+      gaps.push(this.parityGap(signal, 'grade_mismatch', 'Stored SignalDecision grade differs from signal setup_grade.', {
+        decisionGrade,
+        setupGrade: signal.setup_grade
+      }));
+    }
+
+    const decisionConfidence = Number(decision.grade?.finalConfidence);
+    const signalConfidence = Number(signal.confidence_score);
+    if (Number.isFinite(decisionConfidence) && Number.isFinite(signalConfidence) && Math.abs(decisionConfidence - signalConfidence) > 0.01) {
+      gaps.push(this.parityGap(signal, 'confidence_mismatch', 'Stored SignalDecision final confidence differs from signal confidence_score.', {
+        decisionConfidence,
+        signalConfidence
+      }));
+    }
+
+    const expectedExecutable = this.isExecutableGrade(signal.setup_grade);
+    if (typeof decision.grade?.executable === 'boolean' && decision.grade.executable !== expectedExecutable) {
+      gaps.push(this.parityGap(signal, 'executable_mismatch', 'Stored SignalDecision executable flag differs from replay grade executable assumption.', {
+        decisionExecutable: decision.grade.executable,
+        replayExecutable: expectedExecutable,
+        setupGrade: signal.setup_grade
+      }));
+    }
+
+    if (decision.quote?.usingTheoreticalPricing) {
+      gaps.push(this.parityGap(signal, 'theoretical_pricing', 'Stored SignalDecision used theoretical option pricing.', {
+        ticker: decision.contract?.ticker || storedTicker || null
+      }));
+    }
+
+    const pricingWarnings = Array.isArray(decision.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [];
+    if (pricingWarnings.length > 0) {
+      gaps.push(this.parityGap(signal, 'pricing_warning', 'Stored SignalDecision includes pricing warnings.', {
+        pricingWarnings: pricingWarnings.slice(0, 5)
+      }));
+    }
+
+    return gaps;
+  }
+
+  private getSignalDecision(signal: ReplaySignal): SignalDecision | null {
+    const decision = signal.option_details?.decision;
+    return decision && typeof decision === 'object' ? decision as SignalDecision : null;
+  }
+
+  private toReplayTradeDecision(decision: SignalDecision | null): ReplayTradeDecision | null {
+    if (!decision) return null;
+    return {
+      gradeKey: decision.grade?.gradeKey || null,
+      executable: typeof decision.grade?.executable === 'boolean' ? decision.grade.executable : null,
+      usingTheoreticalPricing: Boolean(decision.quote?.usingTheoreticalPricing),
+      pricingWarnings: Array.isArray(decision.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [],
+      blockers: Array.isArray(decision.grade?.blockers) ? decision.grade.blockers : []
+    };
+  }
+
+  private parityGap(signal: ReplaySignal, type: ReplayParityGapType, message: string, metadata?: Record<string, any>): ReplayParityGap {
+    return {
+      signalId: signal.id,
+      symbol: signal.symbol,
+      type,
+      message,
+      ...(metadata ? { metadata } : {})
+    };
+  }
+
+  private emptyParityGaps(): Record<ReplayParityGapType, number> {
+    return {
+      missing_signal_decision: 0,
+      contract_mismatch: 0,
+      side_mismatch: 0,
+      grade_mismatch: 0,
+      confidence_mismatch: 0,
+      executable_mismatch: 0,
+      theoretical_pricing: 0,
+      pricing_warning: 0
+    };
+  }
+
+  private isExecutableGrade(setupGrade: string | null): boolean {
+    return ['A+', 'A', 'B'].includes(String(setupGrade || '').toUpperCase());
+  }
+
+  private normalizeTicker(value: any): string | null {
+    const ticker = String(value || '').replace(/\s+/g, '').toUpperCase();
+    return ticker || null;
   }
 
   private getScenarioSkipReason(scenario: ReplayScenario['name'], signal: ReplaySignal): string | null {
