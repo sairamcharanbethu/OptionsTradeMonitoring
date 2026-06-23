@@ -213,6 +213,24 @@ const getMacroImpactLabel = (impact: 'positive' | 'negative' | 'neutral') => {
   return 'Neutral';
 };
 
+type OpsTone = 'ok' | 'warning' | 'blocked' | 'idle';
+
+const getOpsToneClass = (tone: OpsTone) => {
+  if (tone === 'ok') return 'border-emerald-500/25 bg-emerald-950/20 text-emerald-200';
+  if (tone === 'warning') return 'border-amber-500/25 bg-amber-950/20 text-amber-200';
+  if (tone === 'blocked') return 'border-red-500/25 bg-red-950/20 text-red-200';
+  return 'border-zinc-700/80 bg-zinc-950/40 text-zinc-300';
+};
+
+const getStatusTone = (status?: string | null, connected?: boolean): OpsTone => {
+  if (connected === true) return 'ok';
+  const normalized = String(status || '').toUpperCase();
+  if (!normalized || normalized === 'N/A' || normalized === 'UNKNOWN') return 'idle';
+  if (/(OK|UP|HEALTHY|CONNECTED|RUNNING|ACTIVE|READY|SUCCESS|ONLINE|ENABLED)/.test(normalized)) return 'ok';
+  if (/(MARKET_CLOSED|PAUSED|DISABLED|SKIPPED|PENDING|DEGRADED|STALE)/.test(normalized)) return 'warning';
+  return 'blocked';
+};
+
 const getSystemHealthSummary = (apiHealth: ApiHealthState, services: ServiceHealthState, websocketConnected: boolean, loading: boolean) => {
   if (loading) {
     return {
@@ -583,6 +601,138 @@ function MacroMetricsStrip({
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function EngineFlowPanel({
+  selectedSymbol,
+  latestSignal,
+  latestLog,
+  latestActionableSignal,
+  activeBlockers,
+  canTradeNow,
+  healthData,
+  serviceHealth,
+  websocketConnected,
+  brokerLabel
+}: {
+  selectedSymbol: 'QQQ' | 'SPY' | 'BOTH';
+  latestSignal: Signal | null;
+  latestLog: ScannerLog | null;
+  latestActionableSignal: Signal | null;
+  activeBlockers: string[];
+  canTradeNow: boolean;
+  healthData: ApiHealthState;
+  serviceHealth: ServiceHealthState;
+  websocketConnected: boolean;
+  brokerLabel: string;
+}) {
+  const feedConnected = Boolean(serviceHealth.streams.thetadata.connected || serviceHealth.streams.alpaca.connected);
+  const scannerTone = getStatusTone(serviceHealth.scanner.status, serviceHealth.scanner.status === 'RUNNING');
+  const scoringTone: OpsTone = latestSignal ? 'ok' : latestLog ? 'warning' : 'idle';
+  const executionTone: OpsTone = canTradeNow ? 'ok' : latestActionableSignal ? 'warning' : 'idle';
+  const monitorTone = getStatusTone(serviceHealth.liveExitMonitor.status, serviceHealth.liveExitMonitor.active);
+  const flowItems = [
+    {
+      label: 'Feed',
+      value: feedConnected ? 'Streaming' : 'Polling',
+      detail: feedConnected
+        ? `${serviceHealth.liveExitMonitor.provider || 'market'} ${formatRelativeTime(serviceHealth.liveExitMonitor.lastQuoteAt)}`
+        : `Yahoo ${healthData.yahooFinance.latencyMs || 0}ms`,
+      tone: feedConnected ? 'ok' as OpsTone : getStatusTone(healthData.yahooFinance.status)
+    },
+    {
+      label: 'Scan',
+      value: serviceHealth.scanner.status || 'N/A',
+      detail: serviceHealth.scanner.lastScanAt ? formatRelativeTime(serviceHealth.scanner.lastScanAt) : selectedSymbol,
+      tone: scannerTone
+    },
+    {
+      label: 'Score',
+      value: latestSignal ? `#${latestSignal.id} ${latestSignal.symbol}` : latestLog ? `${latestLog.symbol} log` : 'No event',
+      detail: latestSignal ? `${latestSignal.confidence_score}% ${latestSignal.setup_grade || 'ungraded'}` : latestLog ? latestLog.outcome : 'waiting',
+      tone: scoringTone
+    },
+    {
+      label: 'Risk',
+      value: canTradeNow ? 'Clear' : activeBlockers[0] || 'Standby',
+      detail: activeBlockers.length > 1 ? `${activeBlockers.length} blockers` : 'gate',
+      tone: canTradeNow ? 'ok' as OpsTone : activeBlockers.length ? 'blocked' as OpsTone : 'idle' as OpsTone
+    },
+    {
+      label: 'Order',
+      value: latestActionableSignal ? latestActionableSignal.status : 'No setup',
+      detail: brokerLabel,
+      tone: executionTone
+    },
+    {
+      label: 'Monitor',
+      value: serviceHealth.liveExitMonitor.active ? 'Active' : serviceHealth.liveExitMonitor.status || 'N/A',
+      detail: `${serviceHealth.liveExitMonitor.matchedUpdates || 0} matched`,
+      tone: monitorTone
+    }
+  ];
+  const adapters = [
+    { label: 'Yahoo', status: healthData.yahooFinance.status, detail: `${healthData.yahooFinance.latencyMs || 0}ms` },
+    { label: 'GEX', status: healthData.sscgexPortal.status, detail: `${healthData.sscgexPortal.latencyMs || 0}ms` },
+    { label: 'Theta API', status: healthData.thetaData.status, detail: `${healthData.thetaData.latencyMs || 0}ms` },
+    {
+      label: 'Theta WS',
+      status: serviceHealth.streams.thetadata.status,
+      detail: `${serviceHealth.streams.thetadata.activeSubscriptions || 0} subs`,
+      connected: serviceHealth.streams.thetadata.connected
+    },
+    {
+      label: 'Alpaca WS',
+      status: serviceHealth.streams.alpaca.status,
+      detail: `${serviceHealth.streams.alpaca.activeSubscriptions || 0} subs`,
+      connected: serviceHealth.streams.alpaca.connected
+    },
+    { label: 'OpenRouter', status: healthData.openRouter.status, detail: `${healthData.openRouter.latencyMs || 0}ms` },
+    { label: 'Discord', status: healthData.discord.status, detail: `${healthData.discord.latencyMs || 0}ms` },
+    { label: 'Browser WS', status: websocketConnected ? 'CONNECTED' : 'DISCONNECTED', detail: websocketConnected ? 'live' : 'offline', connected: websocketConnected }
+  ];
+
+  return (
+    <div className="motion-panel overflow-hidden rounded border border-zinc-800 bg-zinc-900/30">
+      <div className="flex flex-col gap-2 border-b border-zinc-800 bg-zinc-950/45 p-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70">Engine flow</div>
+          <div className="mt-1 break-words text-xs text-zinc-400">event rail · adapter matrix · replay-ready snapshot</div>
+        </div>
+        <div className="font-mono text-[10px] text-zinc-500">
+          {latestSignal ? `last signal ${formatRelativeTime(latestSignal.created_at)}` : latestLog ? `last log ${formatRelativeTime(latestLog.created_at)}` : 'no recent engine event'}
+        </div>
+      </div>
+      <div className="grid gap-px bg-zinc-800/70 md:grid-cols-3 xl:grid-cols-6">
+        {flowItems.map((item) => (
+          <div key={item.label} className={`min-h-[74px] bg-zinc-950/70 p-3 ${getOpsToneClass(item.tone)}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase text-zinc-500">{item.label}</span>
+              <span className="h-1.5 w-1.5 rounded-full bg-current" />
+            </div>
+            <div className="mt-2 truncate text-sm font-semibold text-zinc-100" title={item.value}>{item.value}</div>
+            <div className="mt-1 truncate font-mono text-[10px] opacity-75" title={item.detail}>{item.detail}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        {adapters.map((adapter) => {
+          const tone = getStatusTone(adapter.status, adapter.connected);
+          return (
+            <div key={adapter.label} className={`flex min-w-0 items-center justify-between gap-2 rounded border px-2.5 py-2 text-[10px] ${getOpsToneClass(tone)}`}>
+              <div className="min-w-0">
+                <div className="truncate font-semibold uppercase text-zinc-400">{adapter.label}</div>
+                <div className="truncate font-mono text-zinc-100">{adapter.detail}</div>
+              </div>
+              <span className="shrink-0 rounded border border-current/20 bg-zinc-950/30 px-1.5 py-0.5 font-mono uppercase">
+                {adapter.status || 'N/A'}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1125,6 +1275,19 @@ export default function DayTradingTerminal() {
       </div>
 
       <MacroMetricsStrip signal={latestMacroSignal} fallbackVix={vixValue} />
+
+      <EngineFlowPanel
+        selectedSymbol={selectedSymbol}
+        latestSignal={latestSignal}
+        latestLog={latestLog}
+        latestActionableSignal={latestActionableSignal}
+        activeBlockers={activeBlockers}
+        canTradeNow={canTradeNow}
+        healthData={healthData}
+        serviceHealth={serviceHealth}
+        websocketConnected={isConnected}
+        brokerLabel={brokerLabel}
+      />
 
       {/* Row 1: Dashboard Gauges / Widgets */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
