@@ -290,24 +290,20 @@ const renderTokenUsageBadge = (usage: any) => {
   const totalTokens = (usage.classifier?.total_tokens || 0) + (usage.coach?.total_tokens || 0);
   
   return (
-    <div className="flex flex-wrap gap-2.5 mt-2 items-center text-[9px] text-zinc-400 font-mono bg-zinc-950/60 p-2 px-2.5 rounded border border-emerald-500/10 w-full animate-in fade-in duration-200">
-      <div className="flex items-center gap-1">
+    <details className="smooth-details mt-2 rounded border border-emerald-500/10 bg-zinc-950/45 px-2 py-1.5 text-[9px] text-zinc-400">
+      <summary className="flex cursor-pointer list-none items-center gap-1 font-mono text-zinc-500 hover:text-zinc-300">
         <Database className="h-3 w-3 text-emerald-400" />
-        <span>TOTAL TOKENS: <strong className="text-zinc-200 font-bold">{totalTokens.toLocaleString()}</strong></span>
+        AI usage: <strong className="text-zinc-300">{totalTokens.toLocaleString()}</strong> tokens
+      </summary>
+      <div className="mt-2 flex flex-wrap gap-2 font-mono">
+        {usage.classifier && (
+          <span>Classifier <strong className="text-purple-400">{usage.classifier.total_tokens}</strong> ({usage.classifier.prompt_tokens} in/{usage.classifier.completion_tokens} out)</span>
+        )}
+        {usage.coach && (
+          <span>Coach <strong className="text-amber-400">{usage.coach.total_tokens}</strong> ({usage.coach.prompt_tokens} in/{usage.coach.completion_tokens} out)</span>
+        )}
       </div>
-      {usage.classifier && (
-        <>
-          <span className="text-zinc-700">|</span>
-          <span>CLASSIFIER: <strong className="text-purple-400 font-bold">{usage.classifier.total_tokens}</strong> ({usage.classifier.prompt_tokens} in/{usage.classifier.completion_tokens} out)</span>
-        </>
-      )}
-      {usage.coach && (
-        <>
-          <span className="text-zinc-700">|</span>
-          <span>COACH: <strong className="text-amber-400 font-bold">{usage.coach.total_tokens}</strong> ({usage.coach.prompt_tokens} in/{usage.coach.completion_tokens} out)</span>
-        </>
-      )}
-    </div>
+    </details>
   );
 };
 
@@ -394,7 +390,7 @@ const renderGradeDiagnostics = (signal?: Signal | null) => {
   return (
     <div className="rounded border border-amber-500/20 bg-amber-950/10 p-2.5 text-[10px] text-zinc-300">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <span className="font-bold uppercase text-amber-300">GRADE_DIAGNOSTICS</span>
+        <span className="font-bold uppercase text-amber-300">Grade diagnostics</span>
         <span className="font-mono text-amber-100">{detailItems.join(' / ')}</span>
       </div>
       <ul className="space-y-1">
@@ -486,19 +482,24 @@ function SymbolLane({
     <button
       type="button"
       onClick={onSelect}
-      className={`motion-press min-w-0 text-left rounded border p-3 transition-colors hover:border-emerald-400/40 hover:bg-zinc-900/60 ${getReadinessTone(tone)}`}
+      className={`motion-press min-w-0 text-left rounded border px-3 py-2.5 transition-colors hover:border-emerald-400/40 hover:bg-zinc-900/60 ${getReadinessTone(tone)}`}
     >
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-zinc-100">{symbol}</div>
-          <div className="mt-1 break-words text-[11px] text-zinc-400">{regime.marketRegime} · GEX {regime.currentGexRegime}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-sm font-semibold text-zinc-100">{symbol}</div>
+            <span className="rounded border border-current/20 bg-zinc-950/25 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-zinc-300">
+              {regime.marketRegime}
+            </span>
+          </div>
+          <div className="mt-1 break-words text-[10px] text-zinc-400">GEX {regime.currentGexRegime} · VIX {formatNumber(regime.vixValue, 1)}</div>
         </div>
         <Badge variant="outline" className={`w-fit text-[10px] font-semibold ${getSignalSideTone(side)}`}>
           {side === 'NONE' ? 'NO SETUP' : side}
         </Badge>
       </div>
       {signal ? (
-        <div className="mt-3 grid grid-cols-1 gap-2 text-[11px] sm:grid-cols-3">
+        <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
           <div className="min-w-0">
             <div className="text-zinc-500">Score</div>
             <div className="break-words font-mono font-semibold text-zinc-100">{signal.confidence_score}%</div>
@@ -513,9 +514,9 @@ function SymbolLane({
           </div>
         </div>
       ) : (
-        <div className="mt-3 text-xs text-zinc-500">Waiting for the scanner to produce a pending directional setup.</div>
+        <div className="mt-2 text-[11px] text-zinc-500">Waiting for a pending setup.</div>
       )}
-      <div className="mt-3 border-t border-current/10 pt-2 text-[11px]">
+      <div className="mt-2 border-t border-current/10 pt-2 text-[10px]">
         {isTradeable ? (
           <span className="font-medium text-emerald-200">Ready to review.</span>
         ) : (
@@ -583,14 +584,14 @@ function MacroMetricsStrip({
   const updatedAt = liveMacro?.generatedAt || signal?.created_at || null;
 
   return (
-    <div className="motion-panel rounded border border-emerald-500/15 bg-zinc-900/30 p-3">
-      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+    <div className="motion-panel rounded border border-emerald-500/15 bg-zinc-900/25 p-2.5">
+      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70">Current macro metrics</div>
-          <div className="mt-1 break-words text-xs text-zinc-400">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70">Macro</div>
+          <div className="mt-0.5 break-words text-[11px] text-zinc-400">
             {hasMacroData && updatedAt
-              ? `${liveMacro ? 'Live refresh' : 'Scanner snapshot'} ${formatTime(updatedAt)}`
-              : 'Waiting for the latest scanner macro snapshot.'}
+              ? `${liveMacro ? 'Live' : 'Snapshot'} ${formatTime(updatedAt)}`
+              : 'Waiting for macro data.'}
           </div>
         </div>
         {macroRegime && (
@@ -604,17 +605,17 @@ function MacroMetricsStrip({
           </div>
         )}
       </div>
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-5">
         {metrics.map(metric => (
-          <div key={metric.key} className={`rounded border p-2.5 ${getMacroToneClass(metric.impact)}`}>
+          <div key={metric.key} className={`rounded border px-2 py-1.5 ${getMacroToneClass(metric.impact)}`}>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] font-semibold uppercase text-zinc-400">{metric.label}</span>
               <span className="rounded border border-current/20 bg-zinc-950/30 px-1.5 py-0.5 text-[9px] font-bold uppercase">
                 {getMacroImpactLabel(metric.impact)}
               </span>
             </div>
-            <div className="mt-1 flex items-end justify-between gap-2 font-mono">
-              <span className="text-lg font-semibold text-zinc-100">{metric.value}</span>
+            <div className="mt-0.5 flex items-end justify-between gap-2 font-mono">
+              <span className="text-sm font-semibold text-zinc-100">{metric.value}</span>
               <span className={metric.impact === 'positive' ? 'text-emerald-300' : metric.impact === 'negative' ? 'text-red-300' : 'text-zinc-400'}>
                 {metric.move}
               </span>
@@ -660,7 +661,7 @@ function EngineFlowPanel({
       value: feedConnected ? 'Streaming' : 'Polling',
       detail: feedConnected
         ? `${serviceHealth.liveExitMonitor.provider || 'market'} ${formatRelativeTime(serviceHealth.liveExitMonitor.lastQuoteAt)}`
-        : `Yahoo ${healthData.yahooFinance.latencyMs || 0}ms`,
+        : `REST ${healthData.yahooFinance.latencyMs || 0}ms`,
       tone: feedConnected ? 'ok' as OpsTone : getStatusTone(healthData.yahooFinance.status)
     },
     {
@@ -695,7 +696,7 @@ function EngineFlowPanel({
     }
   ];
   const adapters = [
-    { label: 'Yahoo', status: healthData.yahooFinance.status, detail: `${healthData.yahooFinance.latencyMs || 0}ms` },
+    { label: 'Candle REST', status: healthData.yahooFinance.status, detail: `${healthData.yahooFinance.latencyMs || 0}ms` },
     { label: 'GEX', status: healthData.sscgexPortal.status, detail: `${healthData.sscgexPortal.latencyMs || 0}ms` },
     { label: 'Theta API', status: healthData.thetaData.status, detail: `${healthData.thetaData.latencyMs || 0}ms` },
     {
@@ -717,10 +718,10 @@ function EngineFlowPanel({
 
   return (
     <div className="motion-panel overflow-hidden rounded border border-zinc-800 bg-zinc-900/30">
-      <div className="flex flex-col gap-2 border-b border-zinc-800 bg-zinc-950/45 p-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-2 border-b border-zinc-800 bg-zinc-950/45 px-3 py-2.5 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70">Engine flow</div>
-          <div className="mt-1 break-words text-xs text-zinc-400">event rail · adapter matrix · replay-ready snapshot</div>
+          <div className="mt-0.5 break-words text-[11px] text-zinc-400">scan rail and live execution gates</div>
         </div>
         <div className="font-mono text-[10px] text-zinc-500">
           {latestSignal ? `last signal ${formatRelativeTime(latestSignal.created_at)}` : latestLog ? `last log ${formatRelativeTime(latestLog.created_at)}` : 'no recent engine event'}
@@ -728,32 +729,38 @@ function EngineFlowPanel({
       </div>
       <div className="grid gap-px bg-zinc-800/70 md:grid-cols-3 xl:grid-cols-6">
         {flowItems.map((item) => (
-          <div key={item.label} className={`min-h-[74px] bg-zinc-950/70 p-3 ${getOpsToneClass(item.tone)}`}>
+          <div key={item.label} className={`min-h-[58px] bg-zinc-950/70 px-3 py-2 ${getOpsToneClass(item.tone)}`}>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[10px] font-semibold uppercase text-zinc-500">{item.label}</span>
               <span className="h-1.5 w-1.5 rounded-full bg-current" />
             </div>
-            <div className="mt-2 truncate text-sm font-semibold text-zinc-100" title={item.value}>{item.value}</div>
-            <div className="mt-1 truncate font-mono text-[10px] opacity-75" title={item.detail}>{item.detail}</div>
+            <div className="mt-1 truncate text-xs font-semibold text-zinc-100" title={item.value}>{item.value}</div>
+            <div className="truncate font-mono text-[9px] opacity-75" title={item.detail}>{item.detail}</div>
           </div>
         ))}
       </div>
-      <div className="grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-4">
-        {adapters.map((adapter) => {
-          const tone = getStatusTone(adapter.status, adapter.connected);
-          return (
-            <div key={adapter.label} className={`flex min-w-0 items-center justify-between gap-2 rounded border px-2.5 py-2 text-[10px] ${getOpsToneClass(tone)}`}>
-              <div className="min-w-0">
-                <div className="truncate font-semibold uppercase text-zinc-400">{adapter.label}</div>
-                <div className="truncate font-mono text-zinc-100">{adapter.detail}</div>
+      <details className="smooth-details border-t border-zinc-800 bg-zinc-950/30">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-[10px] font-semibold uppercase text-zinc-500 hover:text-zinc-300">
+          Adapter health
+          <span className="font-mono normal-case text-zinc-600">{adapters.filter(adapter => getStatusTone(adapter.status, adapter.connected) === 'ok').length}/{adapters.length} ok</span>
+        </summary>
+        <div className="grid gap-2 px-3 pb-3 sm:grid-cols-2 lg:grid-cols-4">
+          {adapters.map((adapter) => {
+            const tone = getStatusTone(adapter.status, adapter.connected);
+            return (
+              <div key={adapter.label} className={`flex min-w-0 items-center justify-between gap-2 rounded border px-2.5 py-2 text-[10px] ${getOpsToneClass(tone)}`}>
+                <div className="min-w-0">
+                  <div className="truncate font-semibold uppercase text-zinc-400">{adapter.label}</div>
+                  <div className="truncate font-mono text-zinc-100">{adapter.detail}</div>
+                </div>
+                <span className="shrink-0 rounded border border-current/20 bg-zinc-950/30 px-1.5 py-0.5 font-mono uppercase">
+                  {adapter.status || 'N/A'}
+                </span>
               </div>
-              <span className="shrink-0 rounded border border-current/20 bg-zinc-950/30 px-1.5 py-0.5 font-mono uppercase">
-                {adapter.status || 'N/A'}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </details>
     </div>
   );
 }
@@ -1154,15 +1161,15 @@ export default function DayTradingTerminal() {
   ];
 
   return (
-    <div className="terminal-scanline motion-enter flex max-w-full flex-col gap-4 overflow-x-hidden rounded-lg border border-emerald-500/20 bg-zinc-950 p-2 text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.05)] sm:p-4 lg:gap-5">
+    <div className="terminal-scanline motion-enter flex max-w-full flex-col gap-3 overflow-x-hidden rounded-lg border border-emerald-500/20 bg-zinc-950 p-2 text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.05)] sm:p-3">
       
       {/* Top Banner & Timer Bar */}
-      <div className="flex flex-col xl:flex-row justify-between items-stretch xl:items-center border-b border-emerald-500/20 pb-4 gap-4">
+      <div className="flex flex-col gap-3 border-b border-emerald-500/20 pb-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex min-w-0 items-start gap-2 sm:gap-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-emerald-500/25 bg-emerald-950/35 shadow-[0_0_18px_rgba(16,185,129,0.08)] sm:h-9 sm:w-9">
-            <TerminalIcon className="h-[18px] w-[18px] text-emerald-300" />
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-emerald-500/25 bg-emerald-950/35 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
+            <TerminalIcon className="h-4 w-4 text-emerald-300" />
           </div>
-          <div className="flex flex-col min-w-0 gap-2">
+          <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="outline" className="text-[9px] bg-zinc-950/70 border-emerald-500/25 text-emerald-300 font-mono">
                 {selectedSymbol === 'BOTH' ? 'QQQ + SPY' : selectedSymbol}
@@ -1171,12 +1178,12 @@ export default function DayTradingTerminal() {
                 v{import.meta.env.VITE_APP_VERSION || '1.4.1'}
               </span>
             </div>
-            <div className="flex flex-wrap gap-2 text-[10px]">
+            <div className="flex flex-wrap gap-1.5 text-[10px]">
               <span className={`break-words px-2 py-1 rounded border font-bold ${scannerStatusTone}`}>
                 {scannerStatusLabel}
               </span>
               <span className="break-words rounded border border-zinc-800 bg-zinc-950/55 px-2 py-1 text-zinc-300">
-                Next scan {isDayTradingEnabled && !isScannerMarketClosed ? formatMinSec(countdown) : scannerWindowLabel}
+                {isDayTradingEnabled && !isScannerMarketClosed ? `Next ${formatMinSec(countdown)}` : scannerWindowLabel}
               </span>
               <span className="break-words rounded border border-zinc-800 bg-zinc-950/55 px-2 py-1 text-zinc-300">
                 Broker {brokerLabel}
@@ -1189,11 +1196,11 @@ export default function DayTradingTerminal() {
         </div>
 
         {/* Ticker switcher Tabs & Sync Timer */}
-        <div className="flex w-full min-w-0 flex-col flex-wrap items-stretch justify-between gap-3 sm:flex-row sm:items-center xl:w-auto xl:justify-end">
-          <div className="motion-panel grid w-full min-w-0 grid-cols-3 rounded border border-emerald-500/20 bg-zinc-900 p-1 animate-in fade-in duration-200 sm:w-auto sm:min-w-[230px]">
+        <div className="flex w-full min-w-0 flex-col flex-wrap items-stretch justify-between gap-2 sm:flex-row sm:items-center xl:w-auto xl:justify-end">
+          <div className="motion-panel grid w-full min-w-0 grid-cols-3 rounded border border-emerald-500/20 bg-zinc-900 p-1 animate-in fade-in duration-200 sm:w-auto sm:min-w-[210px]">
             <button
               onClick={() => setSelectedSymbol('QQQ')}
-              className={`rounded px-2 py-2 text-xs font-bold transition-colors sm:px-4 ${
+              className={`rounded px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 ${
                 selectedSymbol === 'QQQ' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -1201,7 +1208,7 @@ export default function DayTradingTerminal() {
             </button>
             <button
               onClick={() => setSelectedSymbol('SPY')}
-              className={`rounded px-2 py-2 text-xs font-bold transition-colors sm:px-4 ${
+              className={`rounded px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 ${
                 selectedSymbol === 'SPY' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -1209,7 +1216,7 @@ export default function DayTradingTerminal() {
             </button>
             <button
               onClick={() => setSelectedSymbol('BOTH')}
-              className={`rounded px-2 py-2 text-xs font-bold transition-colors sm:px-4 ${
+              className={`rounded px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 ${
                 selectedSymbol === 'BOTH' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
               }`}
             >
@@ -1218,7 +1225,7 @@ export default function DayTradingTerminal() {
           </div>
 
           {isDayTradingEnabled && !isScannerMarketClosed ? (
-            <div className="flex w-full min-w-0 items-center justify-between gap-2 rounded border border-emerald-500/30 bg-emerald-950/40 px-3 py-2 text-xs sm:w-auto sm:min-w-[178px] sm:justify-start">
+            <div className="flex w-full min-w-0 items-center justify-between gap-2 rounded border border-emerald-500/30 bg-emerald-950/40 px-3 py-1.5 text-xs sm:w-auto sm:min-w-[164px] sm:justify-start">
               <Clock className="h-4 w-4 text-emerald-400" />
               <span className="min-w-0 break-words font-bold">Rescan in {formatMinSec(countdown)}</span>
               <button
@@ -1230,7 +1237,7 @@ export default function DayTradingTerminal() {
               </button>
             </div>
           ) : (
-            <div className="flex w-full min-w-0 items-center gap-2 rounded border border-zinc-700 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-500 sm:w-auto sm:min-w-[178px]">
+            <div className="flex w-full min-w-0 items-center gap-2 rounded border border-zinc-700 bg-zinc-900/60 px-3 py-1.5 text-xs text-zinc-500 sm:w-auto sm:min-w-[164px]">
               <ShieldAlert className={`h-4 w-4 ${isScannerMarketClosed ? 'text-sky-400/80' : 'text-amber-500/70 animate-pulse'}`} />
               <span className="min-w-0 break-words font-bold tracking-wider">{isScannerMarketClosed ? 'Auto resumes at open' : 'Scanner paused'}</span>
             </div>
@@ -1239,18 +1246,18 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* Decision-first status */}
-      <div className={`motion-panel grid gap-4 rounded border p-3 lg:grid-cols-[0.9fr_1.4fr_1fr] ${getReadinessTone(primaryDecisionTone)}`}>
+      <div className={`motion-panel grid gap-3 rounded border p-2.5 lg:grid-cols-[0.75fr_1.5fr_1fr] ${getReadinessTone(primaryDecisionTone)}`}>
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase text-zinc-400">Can I trade now?</div>
-          <div className="mt-1 text-xl font-semibold text-zinc-100">{primaryDecision}</div>
-          <div className="mt-1 break-words text-xs text-zinc-400">
+          <div className="mt-0.5 text-lg font-semibold text-zinc-100">{primaryDecision}</div>
+          <div className="mt-0.5 break-words text-[11px] text-zinc-400">
             {canTradeNow ? 'Execution checks are clear for the best pending setup.' : avoidMessage}
           </div>
         </div>
-        <div className="min-w-0 border-t border-current/10 pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
+        <div className="min-w-0 border-t border-current/10 pt-2 lg:border-l lg:border-t-0 lg:pl-3 lg:pt-0">
           <div className="text-[10px] font-semibold uppercase text-zinc-400">Best setup</div>
           {bestScopedSignal ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
               <Badge variant="outline" className={`text-[10px] font-semibold ${getSignalSideTone(bestScopedSignal.signal_type)}`}>
                 {bestScopedSignal.symbol} {bestScopedSignal.signal_type}
               </Badge>
@@ -1264,9 +1271,9 @@ export default function DayTradingTerminal() {
             <div className="mt-2 text-sm text-zinc-500">No pending directional setup in this view.</div>
           )}
         </div>
-        <div className="min-w-0 border-t border-current/10 pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
+        <div className="min-w-0 border-t border-current/10 pt-2 lg:border-l lg:border-t-0 lg:pl-3 lg:pt-0">
           <div className="text-[10px] font-semibold uppercase text-zinc-400">What to avoid</div>
-          <div className="mt-2 break-words text-sm text-zinc-100">{avoidMessage}</div>
+          <div className="mt-1.5 break-words text-xs text-zinc-100">{avoidMessage}</div>
           {activeBlockers.length > 1 && (
             <div className="mt-1 break-words text-xs text-zinc-400">{activeBlockers.slice(1, 3).join(' · ')}</div>
           )}
@@ -1321,19 +1328,19 @@ export default function DayTradingTerminal() {
         brokerLabel={brokerLabel}
       />
 
-      {/* Row 1: Dashboard Gauges / Widgets */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Compact context strip */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         
         {/* Widget 1: Glowing Market Regime Gauge */}
         {selectedSymbol === 'BOTH' ? (
-          <div className="motion-panel flex min-h-[76px] flex-row items-center justify-between rounded border border-zinc-800 bg-zinc-900/40 p-3 shadow-inner shadow-[0_0_20px_rgba(16,185,129,0.02)]">
-            <div className="grid w-full grid-cols-1 gap-3 font-mono sm:grid-cols-2">
+          <div className="motion-panel flex min-h-[64px] flex-row items-center justify-between rounded border border-zinc-800 bg-zinc-900/35 p-2.5 shadow-inner shadow-[0_0_20px_rgba(16,185,129,0.02)]">
+            <div className="grid w-full grid-cols-1 gap-2 font-mono sm:grid-cols-2">
               {/* QQQ Side */}
               <div className="flex min-w-0 flex-col border-b border-zinc-800/80 pb-2 sm:border-b-0 sm:border-r sm:pb-0 sm:pr-2">
                 <div className="flex flex-wrap items-center justify-between gap-1.5">
-                  <span className="text-[9px] text-emerald-500/70 uppercase font-semibold">QQQ REGIME</span>
+                  <span className="text-[9px] text-emerald-500/70 uppercase font-semibold">QQQ</span>
                   <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase ${qqqDetails.badgeBg}`}>
-                    {qqqDetails.marketRegime === 'EUPHORIA' ? '🔥 RISK-ON' : qqqDetails.marketRegime === 'BULLISH' ? '🟢 BUY' : qqqDetails.marketRegime === 'BEARISH' ? '🔴 FADE' : '🟡 RANGE'}
+                    {qqqDetails.marketRegime === 'EUPHORIA' ? 'RISK-ON' : qqqDetails.marketRegime === 'BULLISH' ? 'BUY' : qqqDetails.marketRegime === 'BEARISH' ? 'FADE' : 'RANGE'}
                   </span>
                 </div>
                 <span className="text-[11px] text-zinc-300 block mt-1 font-bold tracking-wider">
@@ -1347,9 +1354,9 @@ export default function DayTradingTerminal() {
               {/* SPY Side */}
               <div className="flex min-w-0 flex-col sm:pl-1">
                 <div className="flex flex-wrap items-center justify-between gap-1.5">
-                  <span className="text-[9px] text-emerald-500/70 uppercase font-semibold">SPY REGIME</span>
+                  <span className="text-[9px] text-emerald-500/70 uppercase font-semibold">SPY</span>
                   <span className={`px-1.5 py-0.5 rounded text-[8px] font-extrabold uppercase ${spyDetails.badgeBg}`}>
-                    {spyDetails.marketRegime === 'EUPHORIA' ? '🔥 RISK-ON' : spyDetails.marketRegime === 'BULLISH' ? '🟢 BUY' : spyDetails.marketRegime === 'BEARISH' ? '🔴 FADE' : '🟡 RANGE'}
+                    {spyDetails.marketRegime === 'EUPHORIA' ? 'RISK-ON' : spyDetails.marketRegime === 'BULLISH' ? 'BUY' : spyDetails.marketRegime === 'BEARISH' ? 'FADE' : 'RANGE'}
                   </span>
                 </div>
                 <span className="text-[11px] text-zinc-300 block mt-1 font-bold tracking-wider">
@@ -1362,7 +1369,7 @@ export default function DayTradingTerminal() {
             </div>
           </div>
         ) : (
-          <div className={`motion-panel flex flex-row items-center justify-between p-3 border rounded bg-zinc-900/40 shadow-inner min-h-[76px] ${regimeGlowColor}`}>
+          <div className={`motion-panel flex min-h-[64px] flex-row items-center justify-between rounded border bg-zinc-900/35 p-2.5 shadow-inner ${regimeGlowColor}`}>
             <div className="flex min-w-0 flex-col justify-center">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[9px] text-emerald-500/70 uppercase tracking-wider font-semibold">REGIME</span>
@@ -1370,7 +1377,7 @@ export default function DayTradingTerminal() {
                   {selectedSymbol}
                 </Badge>
               </div>
-              <span className="mt-0.5 block break-words text-xl font-extrabold uppercase tracking-widest drop-shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+              <span className="mt-0.5 block break-words text-lg font-extrabold uppercase tracking-widest drop-shadow-[0_0_10px_rgba(16,185,129,0.2)]">
                 {marketRegime}
               </span>
               <span className="block break-words text-[9px] text-zinc-400">
@@ -1379,19 +1386,19 @@ export default function DayTradingTerminal() {
             </div>
             <div className="flex shrink-0 items-center pl-2">
               <span className={`rounded px-2 py-1 text-[9px] font-extrabold uppercase select-none ${regimeBadgeBg}`}>
-                {marketRegime === 'EUPHORIA' ? '🔥 ULTRA RISK-ON' : marketRegime === 'BULLISH' ? '🟢 BUY THE DIPS' : marketRegime === 'BEARISH' ? '🔴 FADE THE RIPS' : '🟡 RANGE'}
+                {marketRegime === 'EUPHORIA' ? 'RISK-ON' : marketRegime === 'BULLISH' ? 'BUY DIPS' : marketRegime === 'BEARISH' ? 'FADE RIPS' : 'RANGE'}
               </span>
             </div>
           </div>
         )}
 
         {/* Widget 2: Mega Caps Tracking Panel */}
-        <div className="motion-panel p-3 border border-emerald-500/20 rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px]">
-          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[9px] text-emerald-500/70 block uppercase tracking-wider font-semibold">MEGA-CAPS CO-TREND</span>
+        <div className="motion-panel flex min-h-[64px] flex-col justify-center rounded border border-emerald-500/20 bg-zinc-900/25 p-2.5">
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <span className="block text-[9px] font-semibold uppercase tracking-wider text-emerald-500/70">Mega-caps</span>
             <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400">NASDAQ Heavy</Badge>
           </div>
-          <div className="grid grid-cols-3 gap-2 font-mono text-[10px]">
+          <div className="grid grid-cols-3 gap-1.5 font-mono text-[10px]">
             <div className="flex flex-col justify-between p-1 border border-emerald-500/5 bg-zinc-950/40 rounded text-center">
               <span className="font-semibold text-zinc-400">AAPL</span>
               <span className={AAPL_change >= 0 ? 'text-green-400' : 'text-red-400'}>
@@ -1414,17 +1421,17 @@ export default function DayTradingTerminal() {
         </div>
 
         {/* Widget 3: Aggregate system health */}
-        <div className={`motion-panel p-3 border rounded bg-zinc-900/30 flex flex-col justify-center min-h-[76px] ${systemHealthSummary.tone}`}>
+        <div className={`motion-panel flex min-h-[64px] flex-col justify-center rounded border bg-zinc-900/25 p-2.5 ${systemHealthSummary.tone}`}>
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <span className="text-[9px] block uppercase tracking-wider font-semibold opacity-80">SYSTEM HEALTH</span>
+              <span className="block text-[9px] font-semibold uppercase tracking-wider opacity-80">System</span>
               <div className="mt-1 flex min-w-0 items-center gap-2">
                 <span className={systemHealthSummary.dot}>●</span>
                 <span className="min-w-0 break-words text-sm font-extrabold tracking-wide">{systemHealthSummary.label}</span>
               </div>
               <div className="mt-1 break-words text-[10px] text-zinc-400">{systemHealthSummary.detail}</div>
             </div>
-            <Button asChild variant="outline" size="sm" className="h-8 shrink-0 border-current bg-zinc-950/30 px-2 text-[10px]">
+            <Button asChild variant="outline" size="sm" className="h-7 shrink-0 border-current bg-zinc-950/30 px-2 text-[10px]">
               <Link to="/system-health">
                 Details
               </Link>
@@ -1436,7 +1443,7 @@ export default function DayTradingTerminal() {
 
       {/* Execution Setup */}
       <div className="motion-panel border border-emerald-500/15 rounded bg-zinc-900/30 overflow-hidden">
-        <div className="flex flex-col justify-between gap-2 border-b border-emerald-500/10 bg-zinc-900/80 p-2.5 px-3 sm:flex-row sm:items-center">
+        <div className="flex flex-col justify-between gap-2 border-b border-emerald-500/10 bg-zinc-900/75 px-3 py-2 sm:flex-row sm:items-center">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <ShieldAlert className={`h-4 w-4 ${isLiveBroker ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`} />
             <span className="text-xs font-bold text-emerald-300">Execution setup</span>
@@ -1455,25 +1462,27 @@ export default function DayTradingTerminal() {
             {isExecutionBlocked ? `${activeBlockers.length} blocker${activeBlockers.length === 1 ? '' : 's'}` : 'Ready for pending signals.'}
           </span>
 	        </div>
-	        <div className="grid grid-cols-1 gap-px bg-emerald-500/10 sm:grid-cols-3 xl:grid-cols-6">
+	        <div className="grid grid-cols-2 gap-px bg-emerald-500/10 sm:grid-cols-3 xl:grid-cols-6">
           {readinessItems.map(item => (
-            <div key={item.label} className="motion-panel flex min-h-[54px] min-w-0 flex-col justify-center bg-zinc-950/70 px-3 py-2">
+            <div key={item.label} className="motion-panel flex min-h-[44px] min-w-0 flex-col justify-center bg-zinc-950/70 px-3 py-1.5">
               <span className="text-[9px] uppercase text-zinc-500 font-bold">{item.label}</span>
               <span className={`break-words text-xs font-bold ${item.tone}`} title={item.value}>{item.value}</span>
 	            </div>
 	          ))}
 	        </div>
 	        {isExecutionBlocked && (
-	          <div className="border-t border-red-500/10 bg-red-950/10 px-3 py-2">
-	            <div className="mb-1 text-[10px] font-semibold uppercase text-red-300">Why not trading</div>
-	            <div className="flex flex-wrap gap-1.5">
+	          <details className="smooth-details border-t border-red-500/10 bg-red-950/10 px-3 py-2">
+	            <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase text-red-300">
+                Why not trading ({activeBlockers.length})
+              </summary>
+	            <div className="mt-2 flex flex-wrap gap-1.5">
 	              {activeBlockers.map((blocker) => (
 	                <span key={blocker} className="max-w-full break-words rounded border border-red-500/25 bg-red-950/20 px-2 py-1 text-[10px] text-red-200">
 	                  {blocker}
 	                </span>
 	              ))}
 	            </div>
-	          </div>
+	          </details>
 	        )}
 	      </div>
 
@@ -1486,12 +1495,12 @@ export default function DayTradingTerminal() {
             : 'border-zinc-800 shadow-inner bg-zinc-900/20'
         }`}
       >
-        <div className="flex flex-col items-start justify-between gap-2 border-b border-emerald-500/10 bg-zinc-950/65 p-3 sm:flex-row sm:items-center">
+        <div className="flex flex-col items-start justify-between gap-2 border-b border-emerald-500/10 bg-zinc-950/65 px-3 py-2.5 sm:flex-row sm:items-center">
           <div className="flex min-w-0 items-center gap-2">
             <Activity className="h-4 w-4 text-emerald-300" />
             <div className="min-w-0">
               <h3 className="text-sm font-semibold text-zinc-100">
-                Live decision pipeline
+                Latest setup
               </h3>
               <div className="text-[10px] text-zinc-500">scan {'->'} score {'->'} validate {'->'} execute</div>
             </div>
@@ -1509,10 +1518,10 @@ export default function DayTradingTerminal() {
           )}
         </div>
         
-        <div className="p-3">
+        <div className="p-2.5">
           {!isDayTradingEnabled || isScannerMarketClosed ? (
-            <div className="py-6 flex flex-col items-center justify-center text-center text-zinc-500 text-xs">
-              <ShieldAlert className={`h-8 w-8 mb-2 ${isScannerMarketClosed ? 'text-sky-400/80' : 'text-amber-500/80 animate-pulse'}`} />
+            <div className="flex flex-col items-center justify-center py-4 text-center text-xs text-zinc-500">
+              <ShieldAlert className={`mb-2 h-6 w-6 ${isScannerMarketClosed ? 'text-sky-400/80' : 'text-amber-500/80 animate-pulse'}`} />
               <span className="font-bold text-zinc-300">
                 {isScannerMarketClosed ? 'Scanner is waiting for market hours' : 'Day trading scanner is paused'}
               </span>
@@ -1523,8 +1532,8 @@ export default function DayTradingTerminal() {
               </span>
             </div>
           ) : !latestActionableSignal ? (
-            <div className="py-5 flex flex-col items-center justify-center text-center text-emerald-500/40 text-xs">
-              <AlertCircle className="h-8 w-8 opacity-30 mb-2" />
+            <div className="flex flex-col items-center justify-center py-4 text-center text-xs text-emerald-500/40">
+              <AlertCircle className="mb-2 h-6 w-6 opacity-30" />
               <span>No setup meets your filters right now.</span>
               <span className="text-[10px] text-zinc-500 mt-1">Next scan in {formatMinSec(countdown)}.</span>
             </div>
@@ -1784,11 +1793,11 @@ export default function DayTradingTerminal() {
                 disabled={triggerLoading}
               >
                 {triggerLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-                {triggerLoading ? 'SCANNING...' : 'TRIGGER SCAN'}
+                {triggerLoading ? 'Scanning...' : 'Trigger scan'}
               </Button>
               <details className="smooth-details relative w-full sm:w-auto">
                 <summary className="motion-press h-7 w-full list-none cursor-pointer rounded border border-zinc-700 bg-zinc-950/40 px-2 py-1 text-center text-[10px] font-bold text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 sm:w-auto">
-                  DEV TOOLS
+                  Dev tools
                 </summary>
                 <div className="absolute left-0 z-20 mt-2 w-44 max-w-[calc(100vw-2rem)] space-y-2 rounded border border-zinc-700 bg-zinc-950 p-2 shadow-xl sm:left-auto sm:right-0 sm:w-40">
                   <Button
@@ -1963,7 +1972,7 @@ export default function DayTradingTerminal() {
                     <tr>
                       <td colSpan={13} className="px-2 py-8 text-center text-emerald-500/60">
                         <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-emerald-400" />
-                        RETRIEVING FROM POSTGRES...
+                        Loading signals...
                       </td>
                     </tr>
                   ) : tableSignals.length === 0 ? (
@@ -2069,7 +2078,7 @@ export default function DayTradingTerminal() {
                                 ) : hasAi ? (
                                   <div className="space-y-2">
                                     <span className="text-[10px] font-bold text-amber-400 uppercase flex items-center gap-1">
-                                      <Zap className="h-3 w-3" /> AI_COACH_COMMENTARY
+                                      <Zap className="h-3 w-3" /> AI coach
                                     </span>
                                     <div className="text-[10px] text-zinc-300 space-y-0.5 leading-relaxed">
                                       {(sig.ai_coach_commentary || '').split('\n').filter(Boolean).map((line, i) => {
@@ -2236,7 +2245,7 @@ export default function DayTradingTerminal() {
                     <tr>
                       <td colSpan={10} className="px-2 py-8 text-center text-emerald-500/60">
                         <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-emerald-400" />
-                        RETRIEVING SCANNER LOGS FROM POSTGRES...
+                        Loading scanner logs...
                       </td>
                     </tr>
                   ) : filteredLogs.length === 0 ? (
@@ -2244,7 +2253,7 @@ export default function DayTradingTerminal() {
                       <td colSpan={10} className="px-2 py-8 text-center text-red-500/80 font-bold">
                         [NO SCANNER RUN LOGS FOUND]
                         <div className="text-[10px] text-emerald-600 mt-2 font-normal">
-                          Click 'TRIGGER SCAN' above to run a live scanner evaluation cycle.
+                          Click Trigger scan above to run a live scanner evaluation cycle.
                         </div>
                       </td>
                     </tr>
@@ -2406,7 +2415,7 @@ export default function DayTradingTerminal() {
                  {/* Option Contract Details Block */}
                  <div className="space-y-1">
                    <span className="text-[10px] font-bold text-sky-400 uppercase flex items-center gap-1">
-                     <TrendingUp className="h-3 w-3 text-sky-400" /> OPTION_CONTRACT_DETAILS
+                     <TrendingUp className="h-3 w-3 text-sky-400" /> Option contract
                    </span>
                    {selectedSignal.option_details ? (
                      <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 rounded border border-sky-500/30 bg-zinc-950/60 p-2.5 font-mono text-[11px] text-zinc-300 sm:grid-cols-2">
@@ -2476,8 +2485,8 @@ export default function DayTradingTerminal() {
                     ) : (
                       <div className="text-zinc-500 italic p-3 bg-zinc-950/40 rounded border border-zinc-800/50 font-mono text-[10px] leading-relaxed">
                         {activeTab === 'logs' 
-                          ? 'INFO: Selected record is a background scanner execution log. Option contract specifications are only generated and saved for active trade signals.'
-                          : 'INFO: No option contract specifications exist for this historical record.'}
+                          ? 'Selected record is a background scanner execution log. Option contract specs are only saved for active trade signals.'
+                          : 'No option contract specs exist for this historical record.'}
                       </div>
                     )}
                  </div>
@@ -2485,7 +2494,7 @@ export default function DayTradingTerminal() {
                  {/* Indicators Block */}
                  <div className="space-y-1">
                    <span className="text-[10px] font-bold text-emerald-500 uppercase flex items-center gap-1">
-                     <Activity className="h-3 w-3" /> TECHNICAL_INDICATORS
+                     <Activity className="h-3 w-3" /> Technical indicators
                    </span>
                    {selectedSignal.indicators ? (
                      <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 rounded border border-emerald-500/10 bg-zinc-950/60 p-2.5 font-mono text-[11px] sm:grid-cols-2">
@@ -2522,7 +2531,7 @@ export default function DayTradingTerminal() {
                  {/* GEX Blocks */}
                  <div className="space-y-1">
                    <span className="text-[10px] font-bold text-emerald-500 uppercase flex items-center gap-1">
-                     <TrendingUp className="h-3 w-3" /> GAMMA_EXPOSURE_PROFILE
+                     <TrendingUp className="h-3 w-3" /> Gamma exposure
                    </span>
                    {selectedSignal.gex ? (
                      <div className="grid grid-cols-1 gap-x-4 gap-y-1.5 rounded border border-emerald-500/10 bg-zinc-950/60 p-2.5 font-mono text-[11px] sm:grid-cols-2">
@@ -2587,7 +2596,7 @@ export default function DayTradingTerminal() {
                  {selectedSignal.no_trade_reasons && selectedSignal.no_trade_reasons.length > 0 && (
                    <div className="space-y-1">
                      <span className="text-[10px] font-bold text-red-400 uppercase flex items-center gap-1">
-                       <ShieldAlert className="h-3.5 w-3.5 text-red-500 animate-pulse" /> NO_TRADE_BLOCK_REASONS
+                       <ShieldAlert className="h-3.5 w-3.5 text-red-500 animate-pulse" /> No-trade blockers
                      </span>
                      <ul className="bg-red-950/15 border border-red-500/20 p-3 rounded text-[11px] space-y-1.5">
                        {selectedSignal.no_trade_reasons.map((reason, idx) => (
@@ -2604,7 +2613,7 @@ export default function DayTradingTerminal() {
                  {selectedSignal.ai_coach_commentary && (
                    <div className="space-y-1">
                      <span className="text-[10px] font-bold text-amber-400 uppercase flex items-center gap-1">
-                       <Zap className="h-3 w-3 text-amber-400 animate-pulse" /> AI_COACH_COMMENTARY
+                       <Zap className="h-3 w-3 text-amber-400 animate-pulse" /> AI coach
                      </span>
                      <div className="bg-zinc-950/60 border border-amber-500/15 p-2.5 rounded text-[10px] space-y-1">
                        {selectedSignal.ai_coach_commentary.split('\n').filter(Boolean).map((line, i) => {
@@ -2624,7 +2633,7 @@ export default function DayTradingTerminal() {
                  {selectedSignal.news_context && selectedSignal.news_context !== 'No material news in the last 6 hours.' && (
                    <div className="space-y-1">
                      <span className="text-[10px] font-bold text-zinc-400 uppercase flex items-center gap-1">
-                       📰 NEWS_CONTEXT_AT_SCAN
+                       News context at scan
                      </span>
                      <div className="space-y-0.5 rounded border border-zinc-700/30 bg-zinc-950/40 p-2 text-[9px] leading-relaxed text-zinc-500">
                        {selectedSignal.news_context.split('\n').map((line, i) => <div key={i} className="break-words">{line}</div>)}
