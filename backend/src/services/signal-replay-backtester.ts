@@ -58,6 +58,7 @@ type ReplayTrade = {
   exitReason: string;
   skippedBy: string[];
   signalDecision: ReplayTradeDecision | null;
+  fillRealism: ReplayFillRealism;
 };
 
 type ReplayTradeDecision = {
@@ -66,12 +67,26 @@ type ReplayTradeDecision = {
   usingTheoreticalPricing: boolean;
   spreadPct: number | null;
   spreadBucket: string;
+  volume: number | null;
+  openInterest: number | null;
   delta: number | null;
   deltaBucket: string;
   quoteQuality: ReplayQuoteQualityBucket;
   pricingWarnings: string[];
   warningTypes: string[];
   blockers: string[];
+};
+
+type ReplayFillRealismAction = 'UNCHANGED' | 'PENALIZED' | 'SKIPPED';
+
+type ReplayFillRealism = {
+  action: ReplayFillRealismAction;
+  score: number;
+  reasons: string[];
+  adjustedEntryPrice: number;
+  adjustedExitPrice: number;
+  adjustedPnl: number;
+  adjustedRoiPct: number;
 };
 
 type ReplayQuoteQualityBucket =
@@ -114,6 +129,16 @@ type ReplayScenario = {
   skippedSignals: number;
   skippedReasons: Record<string, number>;
   summary: ReplaySummary;
+  fillRealism: ReplayFillRealismSummary;
+};
+
+type ReplayFillRealismSummary = {
+  rawTotalPnl: number;
+  realisticTotalPnl: number;
+  pnlDelta: number;
+  skippedTrades: number;
+  penalizedTrades: number;
+  unchangedTrades: number;
 };
 
 type ReplayCalibrationThreshold = {
@@ -212,7 +237,8 @@ export class SignalReplayBacktester {
         trades: [],
         skippedSignals: 0,
         skippedReasons: {},
-        summary: this.emptySummary()
+        summary: this.emptySummary(),
+        fillRealism: this.emptyFillRealismSummary()
       },
       {
         name: 'macro_aligned',
@@ -220,7 +246,8 @@ export class SignalReplayBacktester {
         trades: [],
         skippedSignals: 0,
         skippedReasons: {},
-        summary: this.emptySummary()
+        summary: this.emptySummary(),
+        fillRealism: this.emptyFillRealismSummary()
       },
       {
         name: 'macro_strict',
@@ -228,7 +255,8 @@ export class SignalReplayBacktester {
         trades: [],
         skippedSignals: 0,
         skippedReasons: {},
-        summary: this.emptySummary()
+        summary: this.emptySummary(),
+        fillRealism: this.emptyFillRealismSummary()
       }
     ];
 
@@ -281,6 +309,7 @@ export class SignalReplayBacktester {
         this.applyTradeToState(state, dateKey, trade.pnl, config);
       }
       scenario.summary = this.summarize(scenario.trades, state.dailyPnl, config);
+      scenario.fillRealism = this.summarizeFillRealism(scenario.trades);
     }
     const baseline = scenarios.find((scenario) => scenario.name === 'baseline') as ReplayScenario;
     const calibration = this.buildCalibrationReport(baseline.trades);
@@ -412,7 +441,9 @@ export class SignalReplayBacktester {
       exitPrice = bar.close;
     }
 
+    const roundedExitPrice = Number(exitPrice.toFixed(2));
     const pnl = Number(((exitPrice - entryPrice) * config.contractsPerTrade * 100).toFixed(2));
+    const signalDecision = this.toReplayTradeDecision(signal, decision);
     return {
       signalId: signal.id,
       date: marketDate,
@@ -425,13 +456,14 @@ export class SignalReplayBacktester {
       entryTime: (entryBar.parsedTime as Date).toISOString(),
       exitTime: (exitBar.parsedTime as Date).toISOString(),
       entryPrice,
-      exitPrice: Number(exitPrice.toFixed(2)),
+      exitPrice: roundedExitPrice,
       quantity: config.contractsPerTrade,
       pnl,
       roiPct: Number((((exitPrice - entryPrice) / entryPrice) * 100).toFixed(2)),
       exitReason,
       skippedBy: [],
-      signalDecision: this.toReplayTradeDecision(signal, decision)
+      signalDecision,
+      fillRealism: this.buildFillRealism(signalDecision, entryPrice, roundedExitPrice, config.contractsPerTrade)
     };
   }
 
@@ -533,6 +565,8 @@ export class SignalReplayBacktester {
   private toReplayTradeDecision(signal: ReplaySignal, decision: SignalDecision | null): ReplayTradeDecision | null {
     if (!decision) return null;
     const spreadPct = this.finiteNumber(decision.quote?.spreadPct);
+    const volume = this.finiteNumber(decision.quote?.volume);
+    const openInterest = this.finiteNumber(decision.quote?.openInterest);
     const delta = this.getDecisionDelta(signal, decision);
     const pricingWarnings = Array.isArray(decision.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [];
     const blockers = Array.isArray(decision.grade?.blockers) ? decision.grade.blockers : [];
@@ -543,6 +577,8 @@ export class SignalReplayBacktester {
       usingTheoreticalPricing: Boolean(decision.quote?.usingTheoreticalPricing),
       spreadPct,
       spreadBucket: this.getSpreadBucket(spreadPct),
+      volume,
+      openInterest,
       delta,
       deltaBucket: this.getDeltaBucket(delta),
       quoteQuality: this.getQuoteQualityBucket(decision),
@@ -577,6 +613,98 @@ export class SignalReplayBacktester {
         spreadBucket: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.spreadBucket || 'spread_unknown'),
         timeOfDay: this.buildCalibrationBuckets(trades, (trade) => this.getTimeWindowKey(trade.entryTime))
       }
+    };
+  }
+
+  private buildFillRealism(decision: ReplayTradeDecision | null, entryPrice: number, exitPrice: number, quantity: number): ReplayFillRealism {
+    const reasons: string[] = [];
+    let penaltyPct = 0;
+    let score = 100;
+    let action: ReplayFillRealismAction = 'UNCHANGED';
+
+    if (!decision) {
+      return this.fillRealismResult('PENALIZED', 70, ['No stored decision metadata; applying conservative fill penalty'], entryPrice, exitPrice, quantity, 4);
+    }
+    if (decision.usingTheoreticalPricing || decision.warningTypes.includes('theoretical_pricing')) {
+      return this.fillRealismResult('SKIPPED', 0, ['Theoretical option pricing is not fill-realistic'], entryPrice, exitPrice, quantity, 100);
+    }
+    if (decision.spreadPct === null) {
+      score -= 20;
+      penaltyPct += 4;
+      reasons.push('Spread unavailable');
+    } else if (decision.spreadPct > 20) {
+      return this.fillRealismResult('SKIPPED', 10, [`Spread ${decision.spreadPct}% is too extreme for realistic replay fill`], entryPrice, exitPrice, quantity, 100);
+    } else if (decision.spreadPct > 12) {
+      score -= 25;
+      penaltyPct += 10;
+      reasons.push(`Spread ${decision.spreadPct}% is very wide`);
+    } else if (decision.spreadPct > 8) {
+      score -= 12;
+      penaltyPct += 5;
+      reasons.push(`Spread ${decision.spreadPct}% is above preferred range`);
+    }
+
+    if (decision.volume !== null && decision.volume < 100) {
+      return this.fillRealismResult('SKIPPED', 15, [`Volume ${decision.volume} is too light for realistic replay fill`], entryPrice, exitPrice, quantity, 100);
+    }
+    if (decision.volume === null) {
+      score -= 8;
+      penaltyPct += 2;
+      reasons.push('Volume unavailable');
+    } else if (decision.volume < 500) {
+      score -= 10;
+      penaltyPct += 3;
+      reasons.push(`Volume ${decision.volume} is below preferred liquidity`);
+    }
+
+    if (decision.openInterest !== null && decision.openInterest < 250) {
+      return this.fillRealismResult('SKIPPED', 20, [`Open interest ${decision.openInterest} is too thin for realistic replay fill`], entryPrice, exitPrice, quantity, 100);
+    }
+    if (decision.openInterest === null) {
+      score -= 8;
+      penaltyPct += 2;
+      reasons.push('Open interest unavailable');
+    } else if (decision.openInterest < 1000) {
+      score -= 5;
+      penaltyPct += 2;
+      reasons.push(`Open interest ${decision.openInterest} is below preferred depth`);
+    }
+
+    if (decision.warningTypes.includes('quote_warning')) {
+      score -= 15;
+      penaltyPct += 5;
+      reasons.push('Quote warning present');
+    }
+
+    if (penaltyPct > 0) action = 'PENALIZED';
+    return this.fillRealismResult(action, Math.max(0, score), reasons.length > 0 ? reasons : ['Clean replay fill'], entryPrice, exitPrice, quantity, penaltyPct);
+  }
+
+  private fillRealismResult(action: ReplayFillRealismAction, score: number, reasons: string[], entryPrice: number, exitPrice: number, quantity: number, penaltyPct: number): ReplayFillRealism {
+    const adjustedEntryPrice = action === 'SKIPPED' ? entryPrice : Number((entryPrice * (1 + penaltyPct / 100)).toFixed(2));
+    const adjustedExitPrice = action === 'SKIPPED' ? entryPrice : Number((exitPrice * (1 - Math.min(penaltyPct / 2, 8) / 100)).toFixed(2));
+    const adjustedPnl = action === 'SKIPPED' ? 0 : Number(((adjustedExitPrice - adjustedEntryPrice) * quantity * 100).toFixed(2));
+    return {
+      action,
+      score,
+      reasons,
+      adjustedEntryPrice,
+      adjustedExitPrice,
+      adjustedPnl,
+      adjustedRoiPct: adjustedEntryPrice > 0 ? Number((((adjustedExitPrice - adjustedEntryPrice) / adjustedEntryPrice) * 100).toFixed(2)) : 0
+    };
+  }
+
+  private summarizeFillRealism(trades: ReplayTrade[]): ReplayFillRealismSummary {
+    const rawTotalPnl = Number(trades.reduce((sum, trade) => sum + trade.pnl, 0).toFixed(2));
+    const realisticTotalPnl = Number(trades.reduce((sum, trade) => sum + trade.fillRealism.adjustedPnl, 0).toFixed(2));
+    return {
+      rawTotalPnl,
+      realisticTotalPnl,
+      pnlDelta: Number((realisticTotalPnl - rawTotalPnl).toFixed(2)),
+      skippedTrades: trades.filter((trade) => trade.fillRealism.action === 'SKIPPED').length,
+      penalizedTrades: trades.filter((trade) => trade.fillRealism.action === 'PENALIZED').length,
+      unchangedTrades: trades.filter((trade) => trade.fillRealism.action === 'UNCHANGED').length
     };
   }
 
@@ -866,6 +994,17 @@ export class SignalReplayBacktester {
       redDays: 0,
       targetDays: 0,
       lossLimitDays: 0
+    };
+  }
+
+  private emptyFillRealismSummary(): ReplayFillRealismSummary {
+    return {
+      rawTotalPnl: 0,
+      realisticTotalPnl: 0,
+      pnlDelta: 0,
+      skippedTrades: 0,
+      penalizedTrades: 0,
+      unchangedTrades: 0
     };
   }
 

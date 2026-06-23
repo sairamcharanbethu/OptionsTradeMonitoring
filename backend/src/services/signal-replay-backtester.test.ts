@@ -135,12 +135,23 @@ function createReplayTrade(overrides: Record<string, any> = {}) {
       usingTheoreticalPricing: false,
       spreadPct: 2,
       spreadBucket: 'spread_tight_lte_5',
+      volume: 2500,
+      openInterest: 4500,
       delta: 0.45,
       deltaBucket: 'delta_core_35_60',
       quoteQuality: 'clean',
       pricingWarnings: [],
       warningTypes: ['no_warning'],
       blockers: []
+    },
+    fillRealism: {
+      action: 'UNCHANGED',
+      score: 100,
+      reasons: ['Clean replay fill'],
+      adjustedEntryPrice: 1,
+      adjustedExitPrice: 1.12,
+      adjustedPnl: 60,
+      adjustedRoiPct: 12
     },
     ...overrides
   };
@@ -160,6 +171,8 @@ async function testTakeProfitUsesOptionOhlcTarget() {
   assert(trade !== null, 'Trade should simulate');
   assert(trade.exitReason === 'TAKE_PROFIT', `Expected TAKE_PROFIT, got ${trade.exitReason}`);
   assert(trade.pnl === 60, `Expected $60 PnL for 5 contracts at 12%, got ${trade.pnl}`);
+  assert(trade.fillRealism.action === 'UNCHANGED', `Expected clean fill unchanged, got ${trade.fillRealism.action}`);
+  assert(trade.fillRealism.adjustedPnl === trade.pnl, `Expected clean adjusted PnL to equal raw PnL, got ${trade.fillRealism.adjustedPnl}`);
 }
 
 async function testAmbiguousBarUsesStopFirst() {
@@ -398,6 +411,85 @@ async function testReplayDecisionAddsAttributionBuckets() {
   assert(trade.signalDecision?.deltaBucket === 'delta_core_35_60', `Expected core delta bucket, got ${trade.signalDecision?.deltaBucket}`);
   assert(trade.signalDecision?.spreadBucket === 'spread_very_wide_12_20', `Expected spread bucket, got ${trade.signalDecision?.spreadBucket}`);
   assert(trade.signalDecision?.warningTypes.includes('spread_warning'), `Expected spread warning type, got ${trade.signalDecision?.warningTypes}`);
+  assert(trade.signalDecision?.volume === 700, `Expected replay decision volume 700, got ${trade.signalDecision?.volume}`);
+  assert(trade.fillRealism.action === 'PENALIZED', `Expected wide spread fill to be penalized, got ${trade.fillRealism.action}`);
+  assert(trade.fillRealism.adjustedPnl < trade.pnl, `Expected adjusted PnL below raw PnL, got adjusted ${trade.fillRealism.adjustedPnl} raw ${trade.pnl}`);
+}
+
+async function testFillRealismSkipsTheoreticalReplayFill() {
+  const backtester = createBacktester();
+  const signal = createSignal({
+    option_details: {
+      ticker: 'QQQ260622C00741000',
+      mark: 1,
+      decision: createDecision({
+        quote: {
+          mark: 1,
+          bid: 0.95,
+          ask: 1.05,
+          spreadPct: 10,
+          volume: 1000,
+          openInterest: 1500,
+          usingTheoreticalPricing: true
+        },
+        grade: {
+          ...createDecision().grade,
+          pricingWarnings: ['Using theoretical option price fallback']
+        }
+      })
+    }
+  });
+  const contract = backtester.resolveContract(signal);
+  const bars = [
+    { start: '2026-06-22T13:45:00.000Z', open: 1, high: 1.14, low: 0.98, close: 1.12, volume: 100 }
+  ];
+
+  const trade = backtester.simulateTrade(signal, contract, bars, createConfig());
+
+  assert(trade !== null, 'Trade should simulate');
+  assert(trade.pnl === 60, `Expected raw PnL still recorded as 60, got ${trade.pnl}`);
+  assert(trade.fillRealism.action === 'SKIPPED', `Expected theoretical fill skipped, got ${trade.fillRealism.action}`);
+  assert(trade.fillRealism.adjustedPnl === 0, `Expected skipped fill adjusted PnL 0, got ${trade.fillRealism.adjustedPnl}`);
+}
+
+async function testFillRealismSummaryComparesRawAndAdjustedPnl() {
+  const backtester = createBacktester();
+  const summary = backtester.summarizeFillRealism([
+    createReplayTrade(),
+    createReplayTrade({
+      signalId: 302,
+      pnl: 100,
+      fillRealism: {
+        action: 'PENALIZED',
+        score: 70,
+        reasons: ['Spread 16% is very wide'],
+        adjustedEntryPrice: 1.1,
+        adjustedExitPrice: 1.15,
+        adjustedPnl: 25,
+        adjustedRoiPct: 4.55
+      }
+    }),
+    createReplayTrade({
+      signalId: 303,
+      pnl: 80,
+      fillRealism: {
+        action: 'SKIPPED',
+        score: 0,
+        reasons: ['Theoretical option pricing is not fill-realistic'],
+        adjustedEntryPrice: 1,
+        adjustedExitPrice: 1,
+        adjustedPnl: 0,
+        adjustedRoiPct: 0
+      }
+    })
+  ]);
+
+  assert(summary.rawTotalPnl === 240, `Expected raw PnL 240, got ${summary.rawTotalPnl}`);
+  assert(summary.realisticTotalPnl === 85, `Expected realistic PnL 85, got ${summary.realisticTotalPnl}`);
+  assert(summary.pnlDelta === -155, `Expected PnL delta -155, got ${summary.pnlDelta}`);
+  assert(summary.penalizedTrades === 1, `Expected 1 penalized trade, got ${summary.penalizedTrades}`);
+  assert(summary.skippedTrades === 1, `Expected 1 skipped trade, got ${summary.skippedTrades}`);
+  assert(summary.unchangedTrades === 1, `Expected 1 unchanged trade, got ${summary.unchangedTrades}`);
 }
 
 async function testAttributionReportGroupsPostTradeBuckets() {
@@ -510,6 +602,8 @@ async function runTests() {
   await testParitySummaryReportsDecisionGaps();
   await testCalibrationReportGroupsReplayOutcomes();
   await testReplayDecisionAddsAttributionBuckets();
+  await testFillRealismSkipsTheoreticalReplayFill();
+  await testFillRealismSummaryComparesRawAndAdjustedPnl();
   await testAttributionReportGroupsPostTradeBuckets();
   await testQuoteQualityBuckets();
   await testNaiveThetaDataBarsParseAsEasternTime();
