@@ -190,6 +190,50 @@ async function testAmbiguousBarUsesStopFirst() {
   assert(trade.pnl === -100, `Expected -$100 PnL for 5 contracts at 20% stop, got ${trade.pnl}`);
 }
 
+async function testSignalSnapshotOverridesReplayTradeConfig() {
+  const backtester = createBacktester();
+  const signal = createSignal({
+    option_details: {
+      ticker: 'QQQ260622C00741000',
+      mark: 1,
+      configSnapshot: {
+        replay: {
+          contractsPerTrade: 2,
+          takeProfitPct: 20,
+          stopLossPct: 25,
+          maxTradesPerDay: 1,
+          dailyProfitTarget: 200,
+          dailyLossLimit: 80
+        }
+      },
+      decision: createDecision()
+    }
+  });
+  const contract = backtester.resolveContract(signal);
+  const bars = [
+    { start: '2026-06-22T13:45:00.000Z', open: 1, high: 1.14, low: 0.98, close: 1.15, volume: 100 }
+  ];
+
+  const signalConfig = backtester.getSignalReplayConfig(signal, createConfig({ contractsPerTrade: 5, takeProfitPct: 12, stopLossPct: 20 }));
+  const trade = backtester.simulateTrade(signal, contract, bars, signalConfig);
+
+  assert(signalConfig.contractsPerTrade === 2, `Expected snapshot contracts 2, got ${signalConfig.contractsPerTrade}`);
+  assert(signalConfig.takeProfitPct === 20, `Expected snapshot TP 20, got ${signalConfig.takeProfitPct}`);
+  assert(trade !== null, 'Trade should simulate');
+  assert(trade.exitReason === 'EOD', `Expected snapshot TP to avoid 12% fallback take-profit, got ${trade.exitReason}`);
+  assert(trade.quantity === 2, `Expected snapshot quantity 2, got ${trade.quantity}`);
+  assert(trade.pnl === 30, `Expected snapshot PnL 30, got ${trade.pnl}`);
+}
+
+async function testSignalSnapshotReplayConfigFallsBackForLegacySignals() {
+  const backtester = createBacktester();
+  const fallback = createConfig({ contractsPerTrade: 4, takeProfitPct: 11 });
+  const signalConfig = backtester.getSignalReplayConfig(createSignal(), fallback);
+
+  assert(signalConfig.contractsPerTrade === 4, `Expected fallback contracts 4, got ${signalConfig.contractsPerTrade}`);
+  assert(signalConfig.takeProfitPct === 11, `Expected fallback take profit 11, got ${signalConfig.takeProfitPct}`);
+}
+
 async function testMacroStrictSkipsWeakMacroScore() {
   const backtester = createBacktester();
   const signal = createSignal({
@@ -597,6 +641,8 @@ async function runTests() {
   console.log('Running SignalReplayBacktester tests...');
   await testTakeProfitUsesOptionOhlcTarget();
   await testAmbiguousBarUsesStopFirst();
+  await testSignalSnapshotOverridesReplayTradeConfig();
+  await testSignalSnapshotReplayConfigFallsBackForLegacySignals();
   await testMacroStrictSkipsWeakMacroScore();
   await testStoredSignalDecisionDrivesReplayMetadata();
   await testParitySummaryReportsDecisionGaps();

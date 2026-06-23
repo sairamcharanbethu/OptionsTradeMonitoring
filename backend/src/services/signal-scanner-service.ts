@@ -1433,6 +1433,12 @@ Rules:
 
       const optionStopLoss = mark !== null ? Number((mark * 0.8).toFixed(2)) : null;
       const optionTakeProfit = mark !== null ? Number((mark * 1.4).toFixed(2)) : null;
+      const configSnapshot = this.buildSignalConfigSnapshot(settings, {
+        minOptionMark,
+        maxBidAskSpreadPct,
+        minOptionVolume,
+        minOpenInterest
+      });
 
       pricingData = {
         ticker: optionTicker,
@@ -1452,7 +1458,8 @@ Rules:
         usingTheoreticalPricing,
         macroConfidenceAdjustment: macroRegime.confidenceAdjustment,
         decision: signalDecision,
-        gradeDiagnostics
+        gradeDiagnostics,
+        configSnapshot
       };
 
       const entryTrigger = winningSide === 'CALL' ? latest.high : latest.low;
@@ -1919,6 +1926,16 @@ Rules:
     return Math.round(numeric * multiplier) / multiplier;
   }
 
+  private positiveNumberSetting(value: any, fallback: number): number {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+  }
+
+  private positiveIntSetting(value: any, fallback: number): number {
+    const numeric = Math.floor(Number(value));
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+  }
+
   private getSetupGradeKey(setupGrade: string): SignalGradeDiagnostics['gradeKey'] {
     const normalized = String(setupGrade || '').toUpperCase();
     if (normalized.includes('A+')) return 'A+';
@@ -2047,6 +2064,43 @@ Rules:
       executable: boundedScore >= threshold,
       threshold,
       reasons: reasons.length > 0 ? reasons : ['Live quote, spread, and liquidity passed execution realism checks']
+    };
+  }
+
+  private buildSignalConfigSnapshot(settings: any, thresholds: {
+    minOptionMark: number;
+    maxBidAskSpreadPct: number;
+    minOptionVolume: number;
+    minOpenInterest: number;
+  }) {
+    return {
+      version: 1,
+      capturedAt: new Date().toISOString(),
+      scanner: {
+        tradingStartTime: settings.trading_start_time || '09:30',
+        tradingCutoffTime: settings.trading_cutoff_time || '16:00',
+        minSignalScore: this.finiteNumber(settings.min_signal_score) ?? 70,
+        strikeOffset: parseInt(settings.strike_offset, 10) || 0,
+        minOptionMark: thresholds.minOptionMark,
+        maxBidAskSpreadPct: thresholds.maxBidAskSpreadPct,
+        minOptionVolume: thresholds.minOptionVolume,
+        minOpenInterest: thresholds.minOpenInterest
+      },
+      replay: {
+        contractsPerTrade: this.positiveIntSetting(settings.contracts_per_trade, 1),
+        takeProfitPct: this.positiveNumberSetting(settings.take_profit_pct, 12),
+        stopLossPct: 20,
+        maxTradesPerDay: this.positiveIntSetting(settings.max_trades_per_day, 2),
+        dailyProfitTarget: 400,
+        dailyLossLimit: 100
+      },
+      execution: {
+        broker: settings.execution_broker || 'none',
+        orderType: settings.order_type || 'LIMIT',
+        entrySlippagePct: this.positiveNumberSetting(settings.entry_slippage_pct, 3),
+        autoTradeMode: settings.alpaca_auto_trade_mode || 'instant',
+        snaptradeAutoTrade: settings.snaptrade_auto_trade === 'true'
+      }
     };
   }
 

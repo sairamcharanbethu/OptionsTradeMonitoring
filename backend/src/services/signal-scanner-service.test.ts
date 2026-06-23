@@ -499,6 +499,37 @@ async function testExecutionRealismScoresCleanQuoteAsExecutable() {
   assert(diagnostics.reasons[0].includes('passed'), 'Clean quote should explain passed execution checks');
 }
 
+async function testSignalConfigSnapshotCapturesReplayAndExecutionSettings() {
+  const scanner = createScanner();
+  const snapshot = scanner.buildSignalConfigSnapshot({
+    trading_start_time: '09:45',
+    trading_cutoff_time: '15:45',
+    min_signal_score: '82',
+    strike_offset: '1',
+    contracts_per_trade: '3',
+    take_profit_pct: '18',
+    max_trades_per_day: '4',
+    execution_broker: 'wealthsimple_snaptrade',
+    order_type: 'LIMIT',
+    entry_slippage_pct: '4',
+    alpaca_auto_trade_mode: 'instant',
+    snaptrade_auto_trade: 'true'
+  }, {
+    minOptionMark: 0.3,
+    maxBidAskSpreadPct: 12,
+    minOptionVolume: 200,
+    minOpenInterest: 500
+  });
+
+  assert(snapshot.version === 1, `Expected snapshot version 1, got ${snapshot.version}`);
+  assert(snapshot.scanner.minSignalScore === 82, `Expected min signal score 82, got ${snapshot.scanner.minSignalScore}`);
+  assert(snapshot.scanner.maxBidAskSpreadPct === 12, `Expected spread threshold 12, got ${snapshot.scanner.maxBidAskSpreadPct}`);
+  assert(snapshot.replay.contractsPerTrade === 3, `Expected replay contracts 3, got ${snapshot.replay.contractsPerTrade}`);
+  assert(snapshot.replay.takeProfitPct === 18, `Expected replay take profit 18, got ${snapshot.replay.takeProfitPct}`);
+  assert(snapshot.execution.broker === 'wealthsimple_snaptrade', `Expected broker snapshot, got ${snapshot.execution.broker}`);
+  assert(snapshot.execution.snaptradeAutoTrade === true, 'Expected SnapTrade auto trade snapshot');
+}
+
 async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
   await testThetaDataMissingVolumeDoesNotRejectLiquidCandidate();
@@ -514,6 +545,7 @@ async function runTests() {
   await testMacroRewardsRiskOnCallSetups();
   await testLottoDiagnosticsExplainScoreAndPricingPenalty();
   await testExecutionRealismScoresCleanQuoteAsExecutable();
+  await testSignalConfigSnapshotCapturesReplayAndExecutionSettings();
   console.log('All SignalScannerService candidate and macro tests passed!');
 }
 

@@ -265,12 +265,13 @@ export class SignalReplayBacktester {
       const state = this.newScenarioState();
       for (const signal of usableSignals) {
         const dateKey = this.getSignalDate(signal);
+        const signalConfig = this.getSignalReplayConfig(signal, config);
         const skippedByFilter = this.getScenarioSkipReason(scenario.name, signal);
         if (skippedByFilter) {
           this.noteSkip(scenario, skippedByFilter);
           continue;
         }
-        if (this.shouldSkipForDailyControls(state, dateKey, config)) {
+        if (this.shouldSkipForDailyControls(state, dateKey, signalConfig)) {
           this.noteSkip(scenario, 'daily_control');
           continue;
         }
@@ -281,7 +282,7 @@ export class SignalReplayBacktester {
           continue;
         }
 
-        const cacheKey = `${contract.symbol}:${contract.expiration}:${contract.right}:${contract.strike}:${dateKey}:${config.interval}`;
+        const cacheKey = `${contract.symbol}:${contract.expiration}:${contract.right}:${contract.strike}:${dateKey}:${signalConfig.interval}`;
         let bars = historyCache.get(cacheKey);
         if (!bars) {
           try {
@@ -290,7 +291,7 @@ export class SignalReplayBacktester {
               contract,
               this.dateAtEt(dateKey, 9, 30),
               this.dateAtEt(dateKey, 16, 0),
-              config.interval
+              signalConfig.interval
             );
           } catch (err: any) {
             this.fastify.log.warn(`[SignalReplayBacktester] ThetaData history unavailable for ${cacheKey}: ${err.message || String(err)}`);
@@ -299,14 +300,14 @@ export class SignalReplayBacktester {
           historyCache.set(cacheKey, bars);
         }
 
-        const trade = this.simulateTrade(signal, contract, bars, config);
+        const trade = this.simulateTrade(signal, contract, bars, signalConfig);
         if (!trade) {
           this.noteSkip(scenario, 'missing_price_history');
           continue;
         }
 
         scenario.trades.push(trade);
-        this.applyTradeToState(state, dateKey, trade.pnl, config);
+        this.applyTradeToState(state, dateKey, trade.pnl, signalConfig);
       }
       scenario.summary = this.summarize(scenario.trades, state.dailyPnl, config);
       scenario.fillRealism = this.summarizeFillRealism(scenario.trades);
@@ -342,6 +343,20 @@ export class SignalReplayBacktester {
       dailyLossLimit: this.positiveNumber(input.dailyLossLimit, 100),
       interval: input.interval || '1m',
       maxSignals: Math.min(this.positiveInt(input.maxSignals, 250), 1000)
+    };
+  }
+
+  private getSignalReplayConfig(signal: ReplaySignal, fallback: ReplayConfig): ReplayConfig {
+    const snapshot = signal.option_details?.configSnapshot?.replay;
+    if (!snapshot || typeof snapshot !== 'object') return fallback;
+    return {
+      ...fallback,
+      contractsPerTrade: this.positiveInt(snapshot.contractsPerTrade, fallback.contractsPerTrade),
+      takeProfitPct: this.positiveNumber(snapshot.takeProfitPct, fallback.takeProfitPct),
+      stopLossPct: this.positiveNumber(snapshot.stopLossPct, fallback.stopLossPct),
+      maxTradesPerDay: this.positiveInt(snapshot.maxTradesPerDay, fallback.maxTradesPerDay),
+      dailyProfitTarget: this.positiveNumber(snapshot.dailyProfitTarget, fallback.dailyProfitTarget),
+      dailyLossLimit: this.positiveNumber(snapshot.dailyLossLimit, fallback.dailyLossLimit)
     };
   }
 
