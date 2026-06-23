@@ -458,6 +458,60 @@ async function testOptionChainCacheIgnoresStaleSnapshotAfterTtl() {
   assert(refreshed.chain[0].strike === 743, `Expected refreshed chain contents, got ${refreshed.chain[0].strike}`);
 }
 
+async function testOptionChainCacheBypassesSnapshotOnForceRefresh() {
+  const scanner = createScanner();
+  let fetchCount = 0;
+  const thetaData = {
+    getOptionChainSnapshot: async () => {
+      fetchCount++;
+      return [{
+        ticker: `QQQ260622C0074${fetchCount}000`,
+        symbol: 'QQQ',
+        expiration: '2026-06-22',
+        right: 'CALL',
+        strike: 741 + fetchCount,
+        bid: 1.18,
+        ask: 1.22,
+        mark: 1.2,
+        spread: 0.04,
+        spreadPct: 3.3,
+        volume: 1400,
+        openInterest: 2500,
+        last: 1.2,
+        delta: 0.45,
+        gamma: null,
+        theta: -0.2,
+        impliedVolatility: 0.18,
+        timestamp: new Date().toISOString()
+      }];
+    }
+  };
+
+  await scanner.getCachedOptionChainSnapshot({
+    userId: 1,
+    symbol: 'QQQ',
+    expiration: '2026-06-22',
+    side: 'CALL',
+    windowKey: '2026-06-22:570',
+    nowMs: 1_000,
+    thetaData
+  });
+  const refreshed = await scanner.getCachedOptionChainSnapshot({
+    userId: 1,
+    symbol: 'QQQ',
+    expiration: '2026-06-22',
+    side: 'CALL',
+    windowKey: '2026-06-22:570',
+    forceRefresh: true,
+    nowMs: 2_000,
+    thetaData
+  });
+
+  assert(fetchCount === 2, `Expected force refresh to bypass cache, got ${fetchCount} fetch(es)`);
+  assert(refreshed.cache.hit === false, 'Force-refreshed chain lookup should miss cache');
+  assert(refreshed.chain[0].strike === 743, `Expected forced refresh chain contents, got ${refreshed.chain[0].strike}`);
+}
+
 async function testScannerUsesOnlyCompletedCandles() {
   const scanner = createScanner();
   const candles = [
@@ -896,6 +950,7 @@ async function runTests() {
   await testThetaDataRejectsHighThetaDragCandidate();
   await testOptionChainCacheReusesSnapshotWithinWindow();
   await testOptionChainCacheIgnoresStaleSnapshotAfterTtl();
+  await testOptionChainCacheBypassesSnapshotOnForceRefresh();
   await testScannerUsesOnlyCompletedCandles();
   await testScannerCycleContextUsesFixedClock();
   await testFixedClockDrivesExpiryAndAfternoonThreshold();

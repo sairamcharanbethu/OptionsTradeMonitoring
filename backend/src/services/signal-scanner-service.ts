@@ -1461,7 +1461,8 @@ Rules:
             symbol,
             expiration: targetExpiryDateStr,
             side: winningSide,
-            windowKey: `${nyParts.marketDate}:${Math.floor(nyParts.minutes / 5) * 5}`
+            windowKey: `${nyParts.marketDate}:${Math.floor(nyParts.minutes / 5) * 5}`,
+            forceRefresh: cycle.force
           })
         );
         const chain = chainSnapshot.chain;
