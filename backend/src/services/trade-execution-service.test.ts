@@ -138,6 +138,54 @@ async function testEntryValidationRejectsQuoteSourceSwitch() {
   assert(rejected, 'Should reject entry when quote source changes during stability check');
 }
 
+async function testLiveExecutionSkipsTheoreticalPricingSignal() {
+  const service = new TradeExecutionService(createFastifyMock());
+  const input = createSignalInput();
+  let failureMarked = false;
+  let quoteValidated = false;
+
+  (service as any).getSignalOptionDetails = async () => ({
+    usingTheoreticalPricing: true,
+    decision: {
+      quote: {
+        usingTheoreticalPricing: true
+      },
+      grade: {
+        pricingWarnings: ['Using theoretical option price fallback']
+      }
+    }
+  });
+  (service as any).markSignalExecutionFailure = async (_userId: number, _signalId: number, message: string, skipped: boolean) => {
+    failureMarked = skipped && message.includes('theoretical option pricing');
+  };
+  (service as any).validateEntryQuote = async () => {
+    quoteValidated = true;
+    return {};
+  };
+
+  const result = await (service as any).executeSnapTradeOptionTrade(input, {
+    live_trading_acknowledged: 'true',
+    snaptrade_trading_account_id: '7:wealthsimple-account',
+    order_type: 'LIMIT',
+    entry_slippage_pct: '3'
+  }, 1);
+
+  assert(result.skipped === true, 'Theoretical pricing signal should be skipped');
+  assert(failureMarked, 'Should mark theoretical pricing entry as skipped failure');
+  assert(quoteValidated === false, 'Should skip before live quote validation or order placement');
+}
+
+async function testTheoreticalPricingDetectionCoversStoredShapes() {
+  const service = new TradeExecutionService(createFastifyMock());
+
+  assert((service as any).hasTheoreticalPricing({ usingTheoreticalPricing: true }), 'Should detect camelCase theoretical flag');
+  assert((service as any).hasTheoreticalPricing({ using_theoretical_pricing: true }), 'Should detect snake_case theoretical flag');
+  assert((service as any).hasTheoreticalPricing({ decision: { quote: { usingTheoreticalPricing: true } } }), 'Should detect decision quote theoretical flag');
+  assert((service as any).hasTheoreticalPricing({ gradeDiagnostics: { pricingWarnings: ['Using theoretical option price fallback'] } }), 'Should detect grade pricing warning');
+  assert((service as any).hasTheoreticalPricing({ decision: { grade: { pricingWarnings: ['Using theoretical option price fallback'] } } }), 'Should detect decision grade pricing warning');
+  assert(!(service as any).hasTheoreticalPricing({ decision: { quote: { usingTheoreticalPricing: false }, grade: { pricingWarnings: [] } } }), 'Should not flag clean decision');
+}
+
 async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
   const service = new TradeExecutionService(createFastifyMock());
   const input = createSignalInput();
@@ -197,6 +245,8 @@ async function runTests() {
   await testThetaDataQuoteAllowsProtectedLimit();
   await testSnapTradeQuoteIsNotUsedForEntryValidation();
   await testEntryValidationRejectsQuoteSourceSwitch();
+  await testLiveExecutionSkipsTheoreticalPricingSignal();
+  await testTheoreticalPricingDetectionCoversStoredShapes();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   console.log('All TradeExecutionService broker lifecycle tests passed!');
 }

@@ -535,6 +535,19 @@ export class TradeExecutionService {
     return null;
   }
 
+  private hasTheoreticalPricing(optionDetails: any): boolean {
+    if (!optionDetails || typeof optionDetails !== 'object') return false;
+    if (optionDetails.usingTheoreticalPricing || optionDetails.using_theoretical_pricing) return true;
+    if (optionDetails.decision?.quote?.usingTheoreticalPricing) return true;
+
+    const warnings = [
+      ...(Array.isArray(optionDetails.pricingWarnings) ? optionDetails.pricingWarnings : []),
+      ...(Array.isArray(optionDetails.gradeDiagnostics?.pricingWarnings) ? optionDetails.gradeDiagnostics.pricingWarnings : []),
+      ...(Array.isArray(optionDetails.decision?.grade?.pricingWarnings) ? optionDetails.decision.grade.pricingWarnings : [])
+    ];
+    return warnings.some((warning) => String(warning || '').toLowerCase().includes('theoretical'));
+  }
+
   private assertEntryQuote(quote: EntryQuoteSnapshot, intendedEntry: number, baselineMark: number | null, stabilityMovePct: number | null) {
     if (!quote || quote.mark <= 0) {
       throw new Error('Entry skipped: no usable live option quote was available');
@@ -619,6 +632,14 @@ export class TradeExecutionService {
     }
 
     const osiTicker = this.constructOSITicker(input.symbol, input.chosenStrike, input.winningSide, input.chosenExpiry);
+    const optionDetails = await this.getSignalOptionDetails(input.signalId);
+    if (this.hasTheoreticalPricing(optionDetails)) {
+      const message = 'Entry skipped: signal used theoretical option pricing fallback';
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      this.fastify.log.info(`[TradeExecutionService] ${message}`);
+      return { success: false, skipped: true, broker: 'wealthsimple_snaptrade', message };
+    }
+
     const slippagePct = Math.max(0, Number(settings.entry_slippage_pct || 3));
     const useLimitOrder = input.mark !== null && input.mark > 0 && (settings.order_type || 'LIMIT') === 'LIMIT';
     let limitPrice = useLimitOrder ? (input.mark! * (1 + slippagePct / 100)).toFixed(2) : undefined;
