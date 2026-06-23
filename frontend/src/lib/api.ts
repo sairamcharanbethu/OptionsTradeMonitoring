@@ -1120,6 +1120,46 @@ export interface OptionDetailsJSON {
   suggestedStopLoss?: number;
   suggestedTakeProfit?: number;
   usingTheoreticalPricing?: boolean;
+  gradeDiagnostics?: {
+    baseScore: number;
+    macroScore: number;
+    macroConfidenceAdjustment: number;
+    pricingPenalty: number;
+    finalConfidence: number;
+    setupGrade: string;
+    gradeKey: 'A+' | 'A' | 'B' | 'UNKNOWN';
+    executable: boolean;
+    thresholds: {
+      standard: number;
+      full: number;
+      fullMacro: number;
+    };
+    reasons: string[];
+    warnings: string[];
+    blockers: string[];
+    pricingWarnings: string[];
+  };
+  decision?: {
+    signalId?: number;
+    symbol: string;
+    side: 'CALL' | 'PUT';
+    createdAt: string;
+    contract: {
+      ticker: string | null;
+      strike: number | null;
+      expiry: string | null;
+    };
+    quote: {
+      mark: number | null;
+      bid: number | null;
+      ask: number | null;
+      spreadPct: number | null;
+      volume: number | null;
+      openInterest: number | null;
+      usingTheoreticalPricing: boolean;
+    };
+    grade: OptionDetailsJSON['gradeDiagnostics'];
+  };
   [key: string]: any;
 }
 

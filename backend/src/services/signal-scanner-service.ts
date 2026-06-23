@@ -11,6 +11,7 @@ import fs from 'fs';
 import { TradeExecutionService } from './trade-execution-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { ThetaDataOptionChainQuote, ThetaDataService } from './thetadata-service';
+import { SignalDecision, SignalGradeDiagnostics, tradingEventBus } from '../lib/trading-events';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -1390,6 +1391,29 @@ Rules:
         setupGrade = '⚡ A / STANDARD';
       }
 
+      const gradeDiagnostics = this.buildSignalGradeDiagnostics({
+        baseScore: winningScore,
+        macroRegime,
+        pricingWarnings,
+        finalConfidence,
+        setupGrade
+      });
+      const signalDecision = this.buildSignalDecision({
+        symbol,
+        winningSide: winningSide as 'CALL' | 'PUT',
+        optionTicker,
+        chosenStrike,
+        chosenExpiry,
+        mark,
+        bid,
+        ask,
+        spreadPct,
+        volume,
+        openInterest,
+        usingTheoreticalPricing,
+        grade: gradeDiagnostics
+      });
+
       const optionStopLoss = mark !== null ? Number((mark * 0.8).toFixed(2)) : null;
       const optionTakeProfit = mark !== null ? Number((mark * 1.4).toFixed(2)) : null;
 
@@ -1409,7 +1433,9 @@ Rules:
         suggestedStopLoss: optionStopLoss,
         suggestedTakeProfit: optionTakeProfit,
         usingTheoreticalPricing,
-        macroConfidenceAdjustment: macroRegime.confidenceAdjustment
+        macroConfidenceAdjustment: macroRegime.confidenceAdjustment,
+        decision: signalDecision,
+        gradeDiagnostics
       };
 
       const entryTrigger = winningSide === 'CALL' ? latest.high : latest.low;
@@ -1542,6 +1568,17 @@ Rules:
       ]);
 
       const signalId: number = insertResult.rows[0].id;
+      signalDecision.signalId = signalId;
+      tradingEventBus.publish({
+        type: 'SIGNAL_GENERATED',
+        createdAt: new Date().toISOString(),
+        signalId,
+        symbol,
+        data: signalDecision
+      }, {
+        [`signal:${signalId}:decision`]: signalDecision,
+        [`symbol:${symbol}:latestDecision`]: signalDecision
+      });
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} saved instantly for ${symbol} ${winningSide} with ML Probability: ${mlProbability}.`);
 
       const cancelledResult = await this.retireOlderPendingSignals(symbol, signalId, winningSide as 'CALL' | 'PUT');
@@ -1733,7 +1770,8 @@ Rules:
             thresholdAdjustment: macroRegime.thresholdAdjustment,
             blockers: macroRegime.blockers,
             warnings: macroRegime.warnings
-          }
+          },
+          signalDecision
         }),
         'SIGNAL_GENERATED',
         []
@@ -1844,6 +1882,99 @@ Rules:
     if (numeric === null) return null;
     const multiplier = Math.pow(10, decimals);
     return Math.round(numeric * multiplier) / multiplier;
+  }
+
+  private getSetupGradeKey(setupGrade: string): SignalGradeDiagnostics['gradeKey'] {
+    const normalized = String(setupGrade || '').toUpperCase();
+    if (normalized.includes('A+')) return 'A+';
+    if (/(^|[^A-Z])A([^A-Z+]|$)/.test(normalized)) return 'A';
+    if (normalized.includes('B') || normalized.includes('LOTTO')) return 'B';
+    return 'UNKNOWN';
+  }
+
+  private buildSignalGradeDiagnostics(input: {
+    baseScore: number;
+    macroRegime: MacroRegimeAssessment;
+    pricingWarnings: string[];
+    finalConfidence: number;
+    setupGrade: string;
+  }): SignalGradeDiagnostics {
+    const thresholds = { standard: 85, full: 92, fullMacro: 70 };
+    const gradeKey = this.getSetupGradeKey(input.setupGrade);
+    const reasons: string[] = [];
+
+    if (gradeKey === 'A+') {
+      reasons.push('A+ because confidence, macro score, and pricing quality all passed full-size thresholds');
+    } else if (gradeKey === 'A') {
+      reasons.push('A because confidence passed the standard threshold');
+      if (input.finalConfidence >= thresholds.full && input.macroRegime.score < thresholds.fullMacro) {
+        reasons.push(`Not A+ because macro score ${input.macroRegime.score} is below ${thresholds.fullMacro}`);
+      }
+      if (input.pricingWarnings.length > 0) {
+        reasons.push('Not A+ because pricing warnings are present');
+      }
+    } else {
+      reasons.push(`Lotto because confidence ${input.finalConfidence} is below ${thresholds.standard}`);
+      if (input.macroRegime.confidenceAdjustment < 0) {
+        reasons.push(`Macro reduced confidence by ${Math.abs(input.macroRegime.confidenceAdjustment)} point(s)`);
+      }
+      if (input.pricingWarnings.length > 0) {
+        reasons.push(`Pricing warnings subtracted ${input.pricingWarnings.length * 10} point(s)`);
+      }
+    }
+
+    return {
+      baseScore: input.baseScore,
+      macroScore: input.macroRegime.score,
+      macroConfidenceAdjustment: input.macroRegime.confidenceAdjustment,
+      pricingPenalty: input.pricingWarnings.length * -10,
+      finalConfidence: input.finalConfidence,
+      setupGrade: input.setupGrade,
+      gradeKey,
+      executable: gradeKey === 'A+' || gradeKey === 'A',
+      thresholds,
+      reasons,
+      warnings: input.macroRegime.warnings,
+      blockers: input.macroRegime.blockers,
+      pricingWarnings: input.pricingWarnings
+    };
+  }
+
+  private buildSignalDecision(input: {
+    symbol: string;
+    winningSide: 'CALL' | 'PUT';
+    optionTicker: string | null;
+    chosenStrike: number | null;
+    chosenExpiry: string | null;
+    mark: number | null;
+    bid: number | null;
+    ask: number | null;
+    spreadPct: number | null;
+    volume: number | null;
+    openInterest: number | null;
+    usingTheoreticalPricing: boolean;
+    grade: SignalGradeDiagnostics;
+  }): SignalDecision {
+    return {
+      symbol: input.symbol,
+      side: input.winningSide,
+      createdAt: new Date().toISOString(),
+      contract: {
+        ticker: input.optionTicker,
+        strike: input.chosenStrike,
+        expiry: input.chosenExpiry
+      },
+      quote: {
+        mark: input.mark,
+        bid: input.bid,
+        ask: input.ask,
+        spreadPct: input.spreadPct,
+        volume: input.volume,
+        openInterest: input.openInterest,
+        usingTheoreticalPricing: input.usingTheoreticalPricing
+      },
+      grade: input.grade
+    };
   }
 
   private buildMacroSnapshot(input: {

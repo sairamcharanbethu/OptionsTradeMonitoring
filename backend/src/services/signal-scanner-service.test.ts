@@ -242,6 +242,41 @@ async function testMacroRewardsRiskOnCallSetups() {
   assert(result.confidenceAdjustment > 0, 'Supportive risk-on macro should improve confidence');
 }
 
+async function testLottoDiagnosticsExplainScoreAndPricingPenalty() {
+  const scanner = createScanner();
+  const macroRegime = {
+    regime: 'NEUTRAL',
+    score: 55,
+    directionBias: 'MIXED',
+    confidenceAdjustment: -4,
+    thresholdAdjustment: 0,
+    blockers: [],
+    warnings: ['Macro mixed'],
+    contributors: [],
+    assets: {
+      vix: macroSnapshot({ symbol: '^VIX', label: 'VIX', value: 18 }),
+      tenYear: macroSnapshot({ symbol: '^TNX', label: 'US 10Y', value: 43 }),
+      dxy: macroSnapshot({ symbol: 'DX-Y.NYB', label: 'DXY', value: 104 }),
+      oil: macroSnapshot({ symbol: 'CL=F', label: 'Oil', value: 78 }),
+      gold: macroSnapshot({ symbol: 'GC=F', label: 'Gold', value: 2340 })
+    }
+  };
+
+  const diagnostics = scanner.buildSignalGradeDiagnostics({
+    baseScore: 82,
+    macroRegime,
+    pricingWarnings: ['Spread 14% exceeds ceiling 8%'],
+    finalConfidence: 68,
+    setupGrade: 'B / LOTTO'
+  });
+
+  assert(diagnostics.gradeKey === 'B', `Expected B grade key, got ${diagnostics.gradeKey}`);
+  assert(diagnostics.executable === false, 'Lotto diagnostics should mark setup non-executable');
+  assert(diagnostics.pricingPenalty === -10, `Expected one pricing warning to subtract 10, got ${diagnostics.pricingPenalty}`);
+  assert(diagnostics.reasons.some((reason: string) => reason.includes('Lotto because confidence 68')), 'Should explain lotto confidence threshold');
+  assert(diagnostics.pricingWarnings[0].includes('Spread'), 'Should preserve pricing warning detail');
+}
+
 async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
   await testThetaDataMissingVolumeDoesNotRejectLiquidCandidate();
@@ -250,6 +285,7 @@ async function runTests() {
   await testMacroBlocksCallsWhenVixIsTooHighOrSpiking();
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
   await testMacroRewardsRiskOnCallSetups();
+  await testLottoDiagnosticsExplainScoreAndPricingPenalty();
   console.log('All SignalScannerService candidate and macro tests passed!');
 }
 

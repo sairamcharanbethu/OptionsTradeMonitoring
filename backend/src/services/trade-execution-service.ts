@@ -6,6 +6,7 @@ import { TradeRedisService } from './trade-redis-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { ThetaDataService } from './thetadata-service';
+import { tradingEventBus } from '../lib/trading-events';
 
 type ExecutionBroker = 'none' | 'wealthsimple_snaptrade' | 'simulated';
 
@@ -106,6 +107,13 @@ export class TradeExecutionService {
     if (!this.isExecutableSetupGrade(setupGrade)) {
       const message = `Signal #${input.signalId} skipped: setup grade ${setupGrade || 'N/A'} is below A/A+`;
       await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      tradingEventBus.publish({
+        type: 'EXECUTION_SKIPPED',
+        createdAt: new Date().toISOString(),
+        signalId: input.signalId,
+        userId: input.userId,
+        reason: message
+      });
       this.fastify.log.info(`[TradeExecutionService] ${message}`);
       return { success: false, skipped: true, broker, message };
     }
@@ -162,6 +170,14 @@ export class TradeExecutionService {
       await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
       return { success: false, skipped: true, broker, message };
     }
+
+    tradingEventBus.publish({
+      type: 'EXECUTION_REQUESTED',
+      createdAt: new Date().toISOString(),
+      signalId: input.signalId,
+      userId: input.userId,
+      broker
+    });
 
     if (broker === 'wealthsimple_snaptrade') {
       return this.executeSnapTradeOptionTrade(input, settings, quantity);
