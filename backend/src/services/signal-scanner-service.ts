@@ -139,6 +139,11 @@ type OptionContractCandidate = {
   expiry: string;
 };
 
+type OptionChainCacheEntry = {
+  fetchedAt: number;
+  chain: ThetaDataOptionChainQuote[];
+};
+
 type OptionQuoteCandidate = OptionContractCandidate & {
   alpacaTicker: string;
   source?: string;
@@ -223,6 +228,8 @@ export class SignalScannerService {
   private lastScanAt: string | null = null;
   private liveMacroSnapshot: LiveMacroSnapshot | null = null;
   private liveMacroSnapshotFetchedAt = 0;
+  private optionChainCache = new Map<string, OptionChainCacheEntry>();
+  private readonly optionChainCacheTtlMs = Number(process.env.OPTION_CHAIN_CACHE_TTL_MS || 15_000);
 
   constructor(fastify: FastifyInstance) {
     this.fastify = fastify;
@@ -1323,13 +1330,14 @@ Rules:
       chosenExpiry = targetExpiryDateStr;
 
       try {
-        const thetaData = new ThetaDataService(this.fastify);
-        const chain = await thetaData.getOptionChainSnapshot(
+        const chainSnapshot = await this.getCachedOptionChainSnapshot({
           userId,
           symbol,
-          targetExpiryDateStr,
-          winningSide === 'CALL' ? 'call' : 'put'
-        );
+          expiration: targetExpiryDateStr,
+          side: winningSide,
+          windowKey: `${nyParts.marketDate}:${Math.floor(nyParts.minutes / 5) * 5}`
+        });
+        const chain = chainSnapshot.chain;
         const parsed = chain
           .map((quote) => ({
             ticker: quote.ticker,
@@ -1377,6 +1385,7 @@ Rules:
           const selected = selection.selected;
           candidateSelection = {
             source: 'thetadata_chain',
+            cache: chainSnapshot.cache,
             preferredStrike,
             selectedScore: selected?.score ?? null,
             selectedReasons: selected?.reasons ?? [],
@@ -2632,6 +2641,56 @@ Rules:
       .sort((a, b) => a - b)
       .map((idx) => parsedContracts[idx])
       .filter(Boolean);
+  }
+
+  private async getCachedOptionChainSnapshot(input: {
+    userId: number;
+    symbol: string;
+    expiration: string;
+    side: 'CALL' | 'PUT';
+    windowKey: string;
+    forceRefresh?: boolean;
+    nowMs?: number;
+    thetaData?: Pick<ThetaDataService, 'getOptionChainSnapshot'>;
+  }): Promise<{ chain: ThetaDataOptionChainQuote[]; cache: { key: string; hit: boolean; ageMs: number | null; ttlMs: number } }> {
+    const nowMs = input.nowMs ?? Date.now();
+    const key = [
+      input.userId,
+      input.symbol.toUpperCase(),
+      input.expiration,
+      input.side,
+      input.windowKey
+    ].join(':');
+    const cached = this.optionChainCache.get(key);
+    if (!input.forceRefresh && cached && nowMs - cached.fetchedAt <= this.optionChainCacheTtlMs) {
+      return {
+        chain: cached.chain,
+        cache: {
+          key,
+          hit: true,
+          ageMs: nowMs - cached.fetchedAt,
+          ttlMs: this.optionChainCacheTtlMs
+        }
+      };
+    }
+
+    const thetaData = input.thetaData || new ThetaDataService(this.fastify);
+    const chain = await thetaData.getOptionChainSnapshot(
+      input.userId,
+      input.symbol,
+      input.expiration,
+      input.side === 'CALL' ? 'call' : 'put'
+    );
+    this.optionChainCache.set(key, { fetchedAt: nowMs, chain });
+    return {
+      chain,
+      cache: {
+        key,
+        hit: false,
+        ageMs: null,
+        ttlMs: this.optionChainCacheTtlMs
+      }
+    };
   }
 
   private scoreOptionCandidate(candidate: Omit<OptionQuoteCandidate, 'score' | 'reasons'>, preferredStrike: number, minOptionMark: number, maxBidAskSpreadPct: number, minOptionVolume: number, minOpenInterest: number): { score: number; reasons: string[] } {

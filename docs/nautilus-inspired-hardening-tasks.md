@@ -76,7 +76,7 @@ Bug check:
 
 Status: completed in prior work.
 
-## Task 5: Decision Snapshot V1
+## Completed Task 5: Decision Snapshot V1
 
 Goal: persist one immutable scanner decision packet for every generated or blocked setup so each decision can be audited without refetching live APIs.
 
@@ -94,6 +94,8 @@ Bug check:
 - Run `git diff --check`.
 - Restore generated `backend/dist` before commit.
 - Commit message: `Add signal decision snapshots`.
+
+Status: completed in prior work.
 
 ## Completed Task 6: Snapshot-Based Replay And Drift Report
 
@@ -159,7 +161,7 @@ Bug check:
 
 Status: completed in current work.
 
-## Task 9: Option Instrument Cache And Selection Stability
+## Completed Task 9: Option Instrument Cache And Selection Stability
 
 Goal: reduce transient ThetaData/API noise by caching option chain snapshots and selection evidence per symbol/expiry/time window.
 
@@ -177,6 +179,8 @@ Bug check:
 - Run `git diff --check`.
 - Restore generated `backend/dist` before commit.
 - Commit message: `Cache option chain selection inputs`.
+
+Status: completed in current work.
 
 ## Task 10: Deterministic Scanner Clock And Phase Split
 

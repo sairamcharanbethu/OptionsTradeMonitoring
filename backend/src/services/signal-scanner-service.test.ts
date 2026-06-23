@@ -350,6 +350,114 @@ async function testThetaDataRejectsHighThetaDragCandidate() {
   assert(result.ranked[0].reasons.some((reason: string) => reason.includes('theta drag')), 'Ranked candidate should explain theta drag');
 }
 
+async function testOptionChainCacheReusesSnapshotWithinWindow() {
+  const scanner = createScanner();
+  let fetchCount = 0;
+  const thetaData = {
+    getOptionChainSnapshot: async () => {
+      fetchCount++;
+      return [{
+        ticker: 'QQQ260622C00741000',
+        symbol: 'QQQ',
+        expiration: '2026-06-22',
+        right: 'CALL',
+        strike: 741,
+        bid: 1.18,
+        ask: 1.22,
+        mark: 1.2,
+        spread: 0.04,
+        spreadPct: 3.3,
+        volume: 1400,
+        openInterest: 2500,
+        last: 1.2,
+        delta: 0.45,
+        gamma: null,
+        theta: -0.2,
+        impliedVolatility: 0.18,
+        timestamp: new Date().toISOString()
+      }];
+    }
+  };
+
+  const first = await scanner.getCachedOptionChainSnapshot({
+    userId: 1,
+    symbol: 'QQQ',
+    expiration: '2026-06-22',
+    side: 'CALL',
+    windowKey: '2026-06-22:570',
+    nowMs: 1_000,
+    thetaData
+  });
+  const second = await scanner.getCachedOptionChainSnapshot({
+    userId: 1,
+    symbol: 'QQQ',
+    expiration: '2026-06-22',
+    side: 'CALL',
+    windowKey: '2026-06-22:570',
+    nowMs: 2_000,
+    thetaData
+  });
+
+  assert(fetchCount === 1, `Expected one chain fetch within cache window, got ${fetchCount}`);
+  assert(first.cache.hit === false, 'First chain lookup should miss cache');
+  assert(second.cache.hit === true, 'Second chain lookup should hit cache');
+  assert(second.cache.ageMs === 1000, `Expected 1000ms cache age, got ${second.cache.ageMs}`);
+  assert(second.chain === first.chain, 'Cached chain should reuse the normalized snapshot object');
+}
+
+async function testOptionChainCacheIgnoresStaleSnapshotAfterTtl() {
+  const scanner = createScanner();
+  let fetchCount = 0;
+  const thetaData = {
+    getOptionChainSnapshot: async () => {
+      fetchCount++;
+      return [{
+        ticker: `QQQ260622C0074${fetchCount}000`,
+        symbol: 'QQQ',
+        expiration: '2026-06-22',
+        right: 'CALL',
+        strike: 741 + fetchCount,
+        bid: 1.18,
+        ask: 1.22,
+        mark: 1.2,
+        spread: 0.04,
+        spreadPct: 3.3,
+        volume: 1400,
+        openInterest: 2500,
+        last: 1.2,
+        delta: 0.45,
+        gamma: null,
+        theta: -0.2,
+        impliedVolatility: 0.18,
+        timestamp: new Date().toISOString()
+      }];
+    }
+  };
+
+  await scanner.getCachedOptionChainSnapshot({
+    userId: 1,
+    symbol: 'QQQ',
+    expiration: '2026-06-22',
+    side: 'CALL',
+    windowKey: '2026-06-22:570',
+    nowMs: 1_000,
+    thetaData
+  });
+  const refreshed = await scanner.getCachedOptionChainSnapshot({
+    userId: 1,
+    symbol: 'QQQ',
+    expiration: '2026-06-22',
+    side: 'CALL',
+    windowKey: '2026-06-22:570',
+    nowMs: 30_000,
+    thetaData
+  });
+
+  assert(fetchCount === 2, `Expected stale cache to refetch, got ${fetchCount}`);
+  assert(refreshed.cache.hit === false, 'Stale chain lookup should miss cache');
+  assert(refreshed.chain[0].strike === 743, `Expected refreshed chain contents, got ${refreshed.chain[0].strike}`);
+}
+
 async function testScannerUsesOnlyCompletedCandles() {
   const scanner = createScanner();
   const candles = [
@@ -636,6 +744,8 @@ async function runTests() {
   await testThetaDataRejectsUnstableMarkLastCandidate();
   await testThetaDataRejectsHighSpreadCostCandidate();
   await testThetaDataRejectsHighThetaDragCandidate();
+  await testOptionChainCacheReusesSnapshotWithinWindow();
+  await testOptionChainCacheIgnoresStaleSnapshotAfterTtl();
   await testScannerUsesOnlyCompletedCandles();
   await testMacroBlocksCallsWhenVixIsTooHighOrSpiking();
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
