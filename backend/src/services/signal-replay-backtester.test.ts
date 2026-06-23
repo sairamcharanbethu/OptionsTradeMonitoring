@@ -94,6 +94,50 @@ function createSignal(overrides: Record<string, any> = {}) {
   };
 }
 
+function createDecisionSnapshot(overrides: Record<string, any> = {}) {
+  return {
+    version: 1,
+    capturedAt: '2026-06-22T13:45:00.000Z',
+    symbol: 'QQQ',
+    status: 'SIGNAL_GENERATED',
+    marketDate: '2026-06-22',
+    configSnapshot: {
+      scanner: {
+        minSignalScore: 82
+      }
+    },
+    macroSnapshot: {
+      macroRegime: {
+        score: 76,
+        directionBias: 'CALL'
+      }
+    },
+    gexSnapshot: {
+      regime: 'POSITIVE'
+    },
+    scoring: {
+      winningSide: 'CALL',
+      winningScore: 91,
+      dynamicMinScore: 82,
+      callScore: 91,
+      putScore: 42
+    },
+    optionSelection: {
+      candidateSelection: {
+        selectedScore: 122
+      }
+    },
+    finalDecision: {
+      finalConfidence: 91,
+      setupGrade: 'A',
+      tradeBias: 'BUY_CALL_ON_DIP',
+      signalDecision: createDecision()
+    },
+    blockers: [],
+    ...overrides
+  };
+}
+
 function createConfig(overrides: Record<string, any> = {}) {
   return {
     contractsPerTrade: 5,
@@ -343,6 +387,89 @@ async function testParitySummaryReportsDecisionGaps() {
   assert(summary.gaps.executable_mismatch === 1, 'Expected executable mismatch gap');
   assert(summary.gaps.theoretical_pricing === 1, 'Expected theoretical pricing gap');
   assert(summary.gaps.pricing_warning === 1, 'Expected pricing warning gap');
+}
+
+async function testSnapshotDriftReportUsesStoredDecisionSnapshot() {
+  const backtester = createBacktester();
+  const signal = createSignal({
+    option_details: {
+      ticker: 'QQQ260622C00741000',
+      mark: 1,
+      decision: createDecision(),
+      decisionSnapshot: createDecisionSnapshot()
+    }
+  });
+
+  const report = backtester.buildSnapshotDriftReport([signal]);
+
+  assert(report.signalsChecked === 1, `Expected 1 checked signal, got ${report.signalsChecked}`);
+  assert(report.withDecisionSnapshot === 1, `Expected 1 signal with decision snapshot, got ${report.withDecisionSnapshot}`);
+  assert(report.missingDecisionSnapshot === 0, `Expected 0 missing snapshots, got ${report.missingDecisionSnapshot}`);
+  assert(report.driftCounts.score_drift === 0, 'Expected no score drift');
+  assert(report.driftCounts.grade_drift === 0, 'Expected no grade drift');
+  assert(report.driftCounts.blocker_drift === 0, 'Expected no blocker drift');
+  assert(report.driftCounts.contract_selection_drift === 0, 'Expected no contract drift');
+  assert(report.examples.length === 0, `Expected no drift examples, got ${JSON.stringify(report.examples)}`);
+}
+
+async function testSnapshotDriftReportFlagsChangedThresholdAndContract() {
+  const backtester = createBacktester();
+  const signal = createSignal({
+    confidence_score: 82,
+    setup_grade: 'B / LOTTO',
+    no_trade_reasons: ['Best setup score 82 is below dynamic minimum 95'],
+    option_details: {
+      ticker: 'QQQ260622C00742000',
+      mark: 1,
+      decision: createDecision({
+        contract: {
+          ticker: 'QQQ260622C00742000',
+          strike: 742,
+          expiry: '2026-06-22'
+        },
+        grade: {
+          ...createDecision().grade,
+          finalConfidence: 82,
+          setupGrade: 'B / LOTTO',
+          gradeKey: 'B / LOTTO'
+        }
+      }),
+      decisionSnapshot: createDecisionSnapshot({
+        scoring: {
+          winningSide: 'CALL',
+          winningScore: 91,
+          dynamicMinScore: 82,
+          callScore: 91,
+          putScore: 42
+        }
+      })
+    }
+  });
+
+  const report = backtester.buildSnapshotDriftReport([signal]);
+  const scoreDrift = report.examples.find((example: any) => example.type === 'score_drift');
+  const blockerDrift = report.examples.find((example: any) => example.type === 'blocker_drift');
+
+  assert(report.driftCounts.score_drift === 1, 'Expected score drift when replayed score changes');
+  assert(report.driftCounts.grade_drift === 1, 'Expected grade drift when replayed grade changes');
+  assert(report.driftCounts.blocker_drift === 1, 'Expected blocker drift when changed threshold blocks replayed setup');
+  assert(report.driftCounts.contract_selection_drift === 1, 'Expected contract drift when replayed selected ticker changes');
+  assert(scoreDrift?.metadata?.scoreDelta === -9, `Expected score delta -9, got ${JSON.stringify(scoreDrift)}`);
+  assert(scoreDrift?.metadata?.originalDecision?.dynamicMinScore === 82, 'Expected original dynamic minimum in drift metadata');
+  assert(scoreDrift?.metadata?.replayedDecision?.score === 82, 'Expected replayed score in drift metadata');
+  assert(blockerDrift?.metadata?.blockerDelta?.added?.[0] === 'Best setup score 82 is below dynamic minimum 95', 'Expected changed threshold blocker delta');
+}
+
+async function testSnapshotDriftReportFallsBackForLegacySignals() {
+  const backtester = createBacktester();
+
+  const report = backtester.buildSnapshotDriftReport([createSignal()]);
+
+  assert(report.signalsChecked === 1, `Expected 1 checked signal, got ${report.signalsChecked}`);
+  assert(report.withDecisionSnapshot === 0, `Expected 0 snapshots, got ${report.withDecisionSnapshot}`);
+  assert(report.missingDecisionSnapshot === 1, `Expected 1 missing snapshot, got ${report.missingDecisionSnapshot}`);
+  assert(report.driftCounts.missing_decision_snapshot === 1, 'Expected missing snapshot count for legacy signal');
+  assert(report.examples[0]?.type === 'missing_decision_snapshot', `Expected missing snapshot example, got ${JSON.stringify(report.examples)}`);
 }
 
 async function testCalibrationReportGroupsReplayOutcomes() {
@@ -646,6 +773,9 @@ async function runTests() {
   await testMacroStrictSkipsWeakMacroScore();
   await testStoredSignalDecisionDrivesReplayMetadata();
   await testParitySummaryReportsDecisionGaps();
+  await testSnapshotDriftReportUsesStoredDecisionSnapshot();
+  await testSnapshotDriftReportFlagsChangedThresholdAndContract();
+  await testSnapshotDriftReportFallsBackForLegacySignals();
   await testCalibrationReportGroupsReplayOutcomes();
   await testReplayDecisionAddsAttributionBuckets();
   await testFillRealismSkipsTheoreticalReplayFill();

@@ -122,6 +122,39 @@ type ReplayParitySummary = {
   examples: ReplayParityGap[];
 };
 
+type ReplaySnapshotDriftType =
+  | 'missing_decision_snapshot'
+  | 'side_drift'
+  | 'score_drift'
+  | 'grade_drift'
+  | 'blocker_drift'
+  | 'contract_selection_drift';
+
+type ReplaySnapshotDecisionSummary = {
+  side: string | null;
+  score: number | null;
+  grade: string | null;
+  blockers: string[];
+  contractTicker: string | null;
+  dynamicMinScore: number | null;
+};
+
+type ReplaySnapshotDriftExample = {
+  signalId: number;
+  symbol: string;
+  type: ReplaySnapshotDriftType;
+  message: string;
+  metadata?: Record<string, any>;
+};
+
+type ReplaySnapshotDriftReport = {
+  signalsChecked: number;
+  withDecisionSnapshot: number;
+  missingDecisionSnapshot: number;
+  driftCounts: Record<ReplaySnapshotDriftType, number>;
+  examples: ReplaySnapshotDriftExample[];
+};
+
 type ReplayScenario = {
   name: 'baseline' | 'macro_aligned' | 'macro_strict';
   description: string;
@@ -220,6 +253,7 @@ export class SignalReplayBacktester {
     signalsUsable: number;
     missingOptionData: number;
     parity: ReplayParitySummary;
+    snapshotDrift: ReplaySnapshotDriftReport;
     calibration: ReplayCalibrationReport;
     attribution: ReplayAttributionReport;
     scenarios: ReplayScenario[];
@@ -229,6 +263,7 @@ export class SignalReplayBacktester {
     const usableSignals = signals.filter((signal) => this.resolveContract(signal) !== null);
     const missingOptionData = signals.length - usableSignals.length;
     const parity = this.buildParitySummary(signals);
+    const snapshotDrift = this.buildSnapshotDriftReport(signals);
 
     const scenarios: ReplayScenario[] = [
       {
@@ -322,6 +357,7 @@ export class SignalReplayBacktester {
       signalsUsable: usableSignals.length,
       missingOptionData,
       parity,
+      snapshotDrift,
       calibration,
       attribution,
       scenarios
@@ -570,6 +606,116 @@ export class SignalReplayBacktester {
     }
 
     return gaps;
+  }
+
+  private buildSnapshotDriftReport(signals: ReplaySignal[]): ReplaySnapshotDriftReport {
+    const driftCounts = this.emptySnapshotDriftCounts();
+    const examples: ReplaySnapshotDriftExample[] = [];
+    let withDecisionSnapshot = 0;
+
+    for (const signal of signals) {
+      const snapshot = this.getDecisionSnapshot(signal);
+      if (snapshot) withDecisionSnapshot++;
+      const signalDrifts = this.collectSnapshotDrifts(signal);
+      for (const drift of signalDrifts) {
+        driftCounts[drift.type]++;
+        if (examples.length < 50) examples.push(drift);
+      }
+    }
+
+    return {
+      signalsChecked: signals.length,
+      withDecisionSnapshot,
+      missingDecisionSnapshot: signals.length - withDecisionSnapshot,
+      driftCounts,
+      examples
+    };
+  }
+
+  private collectSnapshotDrifts(signal: ReplaySignal): ReplaySnapshotDriftExample[] {
+    const snapshot = this.getDecisionSnapshot(signal);
+    if (!snapshot) {
+      return [this.snapshotDrift(signal, 'missing_decision_snapshot', 'Signal has no immutable decisionSnapshot in option_details.decisionSnapshot.')];
+    }
+
+    const drifts: ReplaySnapshotDriftExample[] = [];
+    const originalDecision = this.summarizeSnapshotDecision(snapshot);
+    const replayedDecision = this.summarizeCurrentDecision(signal);
+    const commonMetadata = { originalDecision, replayedDecision };
+
+    if (originalDecision.side && replayedDecision.side && originalDecision.side !== replayedDecision.side) {
+      drifts.push(this.snapshotDrift(signal, 'side_drift', 'Snapshot side differs from replayed signal side.', {
+        ...commonMetadata,
+        originalSide: originalDecision.side,
+        replayedSide: replayedDecision.side
+      }));
+    }
+
+    if (originalDecision.score !== null && replayedDecision.score !== null && Math.abs(originalDecision.score - replayedDecision.score) > 0.01) {
+      drifts.push(this.snapshotDrift(signal, 'score_drift', 'Snapshot score differs from replayed signal confidence.', {
+        ...commonMetadata,
+        scoreDelta: Number((replayedDecision.score - originalDecision.score).toFixed(2))
+      }));
+    }
+
+    if (originalDecision.grade && replayedDecision.grade && originalDecision.grade !== replayedDecision.grade) {
+      drifts.push(this.snapshotDrift(signal, 'grade_drift', 'Snapshot grade differs from replayed signal grade.', {
+        ...commonMetadata,
+        originalGrade: originalDecision.grade,
+        replayedGrade: replayedDecision.grade
+      }));
+    }
+
+    const blockerDelta = this.diffStringLists(originalDecision.blockers, replayedDecision.blockers);
+    if (blockerDelta.added.length > 0 || blockerDelta.removed.length > 0) {
+      drifts.push(this.snapshotDrift(signal, 'blocker_drift', 'Snapshot blockers differ from replayed blockers.', {
+        ...commonMetadata,
+        blockerDelta
+      }));
+    }
+
+    if (
+      originalDecision.contractTicker &&
+      replayedDecision.contractTicker &&
+      originalDecision.contractTicker !== replayedDecision.contractTicker
+    ) {
+      drifts.push(this.snapshotDrift(signal, 'contract_selection_drift', 'Snapshot selected contract differs from replayed contract.', {
+        ...commonMetadata,
+        originalContractTicker: originalDecision.contractTicker,
+        replayedContractTicker: replayedDecision.contractTicker
+      }));
+    }
+
+    return drifts;
+  }
+
+  private getDecisionSnapshot(signal: ReplaySignal): any | null {
+    const snapshot = signal.option_details?.decisionSnapshot;
+    return snapshot && typeof snapshot === 'object' ? snapshot : null;
+  }
+
+  private summarizeSnapshotDecision(snapshot: any): ReplaySnapshotDecisionSummary {
+    const signalDecision = snapshot.finalDecision?.signalDecision || {};
+    return {
+      side: this.normalizeSide(signalDecision.side || snapshot.scoring?.winningSide),
+      score: this.finiteNumber(snapshot.finalDecision?.finalConfidence ?? signalDecision.grade?.finalConfidence ?? snapshot.scoring?.winningScore),
+      grade: this.normalizeGrade(snapshot.finalDecision?.setupGrade || signalDecision.grade?.setupGrade || signalDecision.grade?.gradeKey),
+      blockers: this.normalizeStringList(snapshot.blockers),
+      contractTicker: this.normalizeTicker(signalDecision.contract?.ticker || snapshot.optionSelection?.selectedContract?.ticker),
+      dynamicMinScore: this.finiteNumber(snapshot.scoring?.dynamicMinScore)
+    };
+  }
+
+  private summarizeCurrentDecision(signal: ReplaySignal): ReplaySnapshotDecisionSummary {
+    const decision = this.getSignalDecision(signal);
+    return {
+      side: this.normalizeSide(decision?.side || signal.signal_type),
+      score: this.finiteNumber(decision?.grade?.finalConfidence ?? signal.confidence_score),
+      grade: this.normalizeGrade(decision?.grade?.setupGrade || decision?.grade?.gradeKey || signal.setup_grade),
+      blockers: this.normalizeStringList(signal.no_trade_reasons),
+      contractTicker: this.normalizeTicker(decision?.contract?.ticker || signal.option_details?.ticker || signal.option_details?.symbol),
+      dynamicMinScore: null
+    };
   }
 
   private getSignalDecision(signal: ReplaySignal): SignalDecision | null {
@@ -915,13 +1061,58 @@ export class SignalReplayBacktester {
     };
   }
 
+  private snapshotDrift(signal: ReplaySignal, type: ReplaySnapshotDriftType, message: string, metadata?: Record<string, any>): ReplaySnapshotDriftExample {
+    return {
+      signalId: signal.id,
+      symbol: signal.symbol,
+      type,
+      message,
+      ...(metadata ? { metadata } : {})
+    };
+  }
+
+  private emptySnapshotDriftCounts(): Record<ReplaySnapshotDriftType, number> {
+    return {
+      missing_decision_snapshot: 0,
+      side_drift: 0,
+      score_drift: 0,
+      grade_drift: 0,
+      blocker_drift: 0,
+      contract_selection_drift: 0
+    };
+  }
+
+  private diffStringLists(original: string[], replayed: string[]): { added: string[]; removed: string[] } {
+    const originalSet = new Set(original);
+    const replayedSet = new Set(replayed);
+    return {
+      added: replayed.filter((item) => !originalSet.has(item)),
+      removed: original.filter((item) => !replayedSet.has(item))
+    };
+  }
+
   private isExecutableGrade(setupGrade: string | null): boolean {
     return ['A+', 'A', 'B'].includes(String(setupGrade || '').toUpperCase());
+  }
+
+  private normalizeSide(value: any): string | null {
+    const side = String(value || '').trim().toUpperCase();
+    return side === 'CALL' || side === 'PUT' ? side : null;
+  }
+
+  private normalizeGrade(value: any): string | null {
+    const grade = String(value || '').trim().toUpperCase();
+    return grade || null;
   }
 
   private normalizeTicker(value: any): string | null {
     const ticker = String(value || '').replace(/\s+/g, '').toUpperCase();
     return ticker || null;
+  }
+
+  private normalizeStringList(value: any): string[] {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(value.map((item) => String(item || '').trim()).filter(Boolean))].sort();
   }
 
   private finiteNumber(value: any): number | null {

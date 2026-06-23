@@ -95,7 +95,7 @@ Bug check:
 - Restore generated `backend/dist` before commit.
 - Commit message: `Add signal decision snapshots`.
 
-## Task 6: Snapshot-Based Replay And Drift Report
+## Completed Task 6: Snapshot-Based Replay And Drift Report
 
 Goal: rerun historical scoring from saved decision snapshots and compare the original decision with current scoring code.
 
@@ -113,6 +113,8 @@ Bug check:
 - Run `git diff --check`.
 - Restore generated `backend/dist` before commit.
 - Commit message: `Add snapshot replay drift report`.
+
+Status: completed in current work.
 
 ## Task 7: Central Pre-Submit Risk Engine
 
