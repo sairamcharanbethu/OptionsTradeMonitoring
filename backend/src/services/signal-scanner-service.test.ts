@@ -583,6 +583,76 @@ async function testScannerCandlesPreferAlpacaBarsWhenCredentialsExist() {
   assert(yahooCalled === false, 'Yahoo fallback should not run when Alpaca bars are usable');
 }
 
+async function testScannerCandlesUseAlpacaEnvCredentialsFallback() {
+  const scanner = createScanner();
+  const previousKey = process.env.ALPACA_KEY;
+  const previousSecret = process.env.ALPACA_SECRET;
+  process.env.ALPACA_KEY = 'env-key';
+  process.env.ALPACA_SECRET = 'env-secret';
+
+  try {
+    let receivedKey = '';
+    let receivedSecret = '';
+    const result = await scanner.fetchScannerCandles({
+      symbol: 'QQQ',
+      now: new Date('2026-06-22T14:00:00.000Z'),
+      settings: {},
+      alpacaGet: async (_url: string, options: any) => {
+        receivedKey = options.headers['APCA-API-KEY-ID'];
+        receivedSecret = options.headers['APCA-API-SECRET-KEY'];
+        return {
+          data: {
+            bars: {
+              QQQ: [{
+                t: '2026-06-22T13:55:00Z',
+                o: 741,
+                h: 742,
+                l: 740.5,
+                c: 741.5,
+                v: 1000
+              }]
+            }
+          }
+        };
+      },
+      yahooChart: async () => ({ quotes: [] })
+    });
+
+    assert(result.source === 'alpaca', `Expected Alpaca env candle source, got ${result.source}`);
+    assert(receivedKey === 'env-key', `Expected env Alpaca key, got ${receivedKey}`);
+    assert(receivedSecret === 'env-secret', `Expected env Alpaca secret, got ${receivedSecret}`);
+  } finally {
+    if (previousKey === undefined) delete process.env.ALPACA_KEY;
+    else process.env.ALPACA_KEY = previousKey;
+    if (previousSecret === undefined) delete process.env.ALPACA_SECRET;
+    else process.env.ALPACA_SECRET = previousSecret;
+  }
+}
+
+async function testScannerAlpacaSettingsCredentialsBeatEnvCredentials() {
+  const scanner = createScanner();
+  const previousKey = process.env.ALPACA_KEY;
+  const previousSecret = process.env.ALPACA_SECRET;
+  process.env.ALPACA_KEY = 'env-key';
+  process.env.ALPACA_SECRET = 'env-secret';
+
+  try {
+    const credentials = scanner.getAlpacaMarketDataCredentials({
+      alpaca_key_id: 'settings-key',
+      alpaca_secret_key: 'settings-secret'
+    });
+
+    assert(credentials.source === 'settings', `Expected settings credential source, got ${credentials.source}`);
+    assert(credentials.keyId === 'settings-key', `Expected settings key, got ${credentials.keyId}`);
+    assert(credentials.secretKey === 'settings-secret', `Expected settings secret, got ${credentials.secretKey}`);
+  } finally {
+    if (previousKey === undefined) delete process.env.ALPACA_KEY;
+    else process.env.ALPACA_KEY = previousKey;
+    if (previousSecret === undefined) delete process.env.ALPACA_SECRET;
+    else process.env.ALPACA_SECRET = previousSecret;
+  }
+}
+
 async function testScannerCandlesFallbackToYahooWhenAlpacaFails() {
   const scanner = createScanner();
   const result = await scanner.fetchScannerCandles({
@@ -1038,6 +1108,8 @@ async function runTests() {
   await testOptionChainCacheBypassesSnapshotOnForceRefresh();
   await testScannerUsesOnlyCompletedCandles();
   await testScannerCandlesPreferAlpacaBarsWhenCredentialsExist();
+  await testScannerCandlesUseAlpacaEnvCredentialsFallback();
+  await testScannerAlpacaSettingsCredentialsBeatEnvCredentials();
   await testScannerCandlesFallbackToYahooWhenAlpacaFails();
   await testStaleScannerCandlesProduceBlocker();
   await testScannerCycleContextUsesFixedClock();

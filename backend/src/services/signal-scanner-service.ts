@@ -1045,18 +1045,17 @@ Rules:
     let nvidiaPct: number | null = null;
 
     let fetchedFromAlpaca = false;
-    const alpacaKeyId = settings.alpaca_key_id?.trim();
-    const alpacaSecretKey = settings.alpaca_secret_key?.trim();
+    const alpacaCredentials = this.getAlpacaMarketDataCredentials(settings);
 
     await this.timeScannerPhase(cycle, `${symbol}.internals`, async () => {
-      if (alpacaKeyId && alpacaSecretKey) {
+      if (alpacaCredentials.keyId && alpacaCredentials.secretKey) {
         try {
           this.fastify.log.info('[SignalScannerService] Fetching mega-caps snapshots from Alpaca...');
           const stockUrl = 'https://data.alpaca.markets/v2/stocks/snapshots?symbols=AAPL,MSFT,NVDA';
           const stockRes = await axios.get(stockUrl, {
             headers: {
-              'APCA-API-KEY-ID': alpacaKeyId,
-              'APCA-API-SECRET-KEY': alpacaSecretKey
+              'APCA-API-KEY-ID': alpacaCredentials.keyId,
+              'APCA-API-SECRET-KEY': alpacaCredentials.secretKey
             },
             timeout: 5000
           });
@@ -2187,6 +2186,22 @@ Rules:
     return dynamicMinScore;
   }
 
+  private getAlpacaMarketDataCredentials(settings: any): { keyId: string; secretKey: string; source: 'settings' | 'env' | 'missing' } {
+    const settingsKeyId = settings.alpaca_key_id?.trim();
+    const settingsSecretKey = settings.alpaca_secret_key?.trim();
+    if (settingsKeyId && settingsSecretKey) {
+      return { keyId: settingsKeyId, secretKey: settingsSecretKey, source: 'settings' };
+    }
+
+    const envKeyId = process.env.ALPACA_KEY?.trim() || process.env.APCA_API_KEY_ID?.trim() || '';
+    const envSecretKey = process.env.ALPACA_SECRET?.trim() || process.env.APCA_API_SECRET_KEY?.trim() || '';
+    if (envKeyId && envSecretKey) {
+      return { keyId: envKeyId, secretKey: envSecretKey, source: 'env' };
+    }
+
+    return { keyId: '', secretKey: '', source: 'missing' };
+  }
+
   private normalizeCandleQuote(quote: any, dateValue: any): Candle | null {
     const open = this.toNumber(quote.open ?? quote.o);
     const high = this.toNumber(quote.high ?? quote.h);
@@ -2237,18 +2252,17 @@ Rules:
   }): Promise<CandleFetchResult> {
     const fiveDaysAgo = new Date(input.now);
     fiveDaysAgo.setDate(input.now.getDate() - 5);
-    const alpacaKeyId = input.settings.alpaca_key_id?.trim();
-    const alpacaSecretKey = input.settings.alpaca_secret_key?.trim();
+    const alpacaCredentials = this.getAlpacaMarketDataCredentials(input.settings);
     const alpacaGet = input.alpacaGet || axios.get;
     const yahooChart = input.yahooChart || ((symbol: string, options: any) => (yahooFinance as any).chart(symbol, options));
     let fallbackReason: string | null = null;
 
-    if (alpacaKeyId && alpacaSecretKey) {
+    if (alpacaCredentials.keyId && alpacaCredentials.secretKey) {
       try {
         const response = await alpacaGet('https://data.alpaca.markets/v2/stocks/bars', {
           headers: {
-            'APCA-API-KEY-ID': alpacaKeyId,
-            'APCA-API-SECRET-KEY': alpacaSecretKey
+            'APCA-API-KEY-ID': alpacaCredentials.keyId,
+            'APCA-API-SECRET-KEY': alpacaCredentials.secretKey
           },
           params: {
             symbols: input.symbol,
@@ -2274,7 +2288,7 @@ Rules:
         this.fastify.log.warn(`[SignalScannerService] ${fallbackReason}`);
       }
     } else {
-      fallbackReason = 'Alpaca credentials unavailable';
+      fallbackReason = 'Alpaca market data credentials unavailable';
     }
 
     const chartData = await yahooChart(input.symbol, {
