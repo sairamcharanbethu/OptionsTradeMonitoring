@@ -109,6 +109,15 @@ interface Candle {
   timestamp: number;
 }
 
+type CandleSource = 'alpaca' | 'yahoo';
+
+type CandleFetchResult = {
+  candles: Candle[];
+  source: CandleSource;
+  fetchedAt: string;
+  fallbackReason: string | null;
+};
+
 type TradePlanMode = 'HOLD_FOR_TP2' | 'BOOK_GREEN_FAST';
 
 type TradeManagementPlan = {
@@ -891,53 +900,16 @@ Rules:
       }
     });
 
-    // 3. Fetch Yahoo Finance Price Candles (5-minute for 5 days)
-    let sortedCandles: Candle[] = [];
+    // 3. Fetch price candles (prefer Alpaca official bars, Yahoo fallback)
+    let candleFetch: CandleFetchResult;
     try {
-      await this.timeScannerPhase(cycle, `${symbol}.candles`, async () => {
-        const fiveDaysAgo = new Date(now);
-        fiveDaysAgo.setDate(now.getDate() - 5);
-
-        const chartData = await (yahooFinance as any).chart(symbol, {
-          interval: '5m',
-          period1: fiveDaysAgo,
-          period2: now,
-          includePrePost: true
-        });
-
-        const result = chartData?.quotes || [];
-
-        for (let i = 0; i < result.length; i++) {
-          const quote = result[i];
-          const open = this.toNumber(quote.open);
-          const high = this.toNumber(quote.high);
-          const low = this.toNumber(quote.low);
-          const close = this.toNumber(quote.close);
-          const volume = this.toNumber(quote.volume ?? 0) ?? 0;
-
-          if (quote.date && open !== null && high !== null && low !== null && close !== null) {
-            const dateObj = quote.date instanceof Date ? quote.date : new Date(quote.date);
-            const datetime = dateObj.toISOString();
-            const nyCandleParts = this.getNyDateParts(dateObj);
-            const isRTH = nyCandleParts.minutes >= (9 * 60 + 30) && nyCandleParts.minutes < (16 * 60);
-            const timestamp = Math.floor(dateObj.getTime() / 1000);
-
-            sortedCandles.push({
-              datetime,
-              nyDateStr: nyCandleParts.dateStr,
-              isRTH,
-              open,
-              high,
-              low,
-              close,
-              volume,
-              timestamp
-            });
-          }
-        }
-      });
+      candleFetch = await this.timeScannerPhase(cycle, `${symbol}.candles`, () => this.fetchScannerCandles({
+        symbol,
+        now,
+        settings
+      }));
     } catch (err: any) {
-      this.fastify.log.error(`[SignalScannerService] Yahoo Finance fetch failed for ${symbol}: ${err.message}`);
+      this.fastify.log.error(`[SignalScannerService] Candle fetch failed for ${symbol}: ${err.message}`);
       return;
     }
 
@@ -946,6 +918,7 @@ Rules:
       noTradeReasons.push('GEX data unavailable — regime unknown, skipping to prevent silent strategy flip');
     }
 
+    let sortedCandles = candleFetch.candles;
     const rawCandleCount = sortedCandles.length;
     sortedCandles = this.getCompletedCandles(sortedCandles, now, 5);
     if (sortedCandles.length < rawCandleCount) {
@@ -1004,6 +977,14 @@ Rules:
     const closes = rthCandles.map(c => c.close);
 
     const currentPrice = latest.close;
+    const candleFreshnessMs = this.getCandleFreshnessMs(latest, now);
+    const candleFreshnessBlocker = this.getCandleFreshnessBlocker({
+      source: candleFetch.source,
+      freshnessMs: candleFreshnessMs
+    });
+    if (candleFreshnessBlocker) {
+      noTradeReasons.push(candleFreshnessBlocker);
+    }
 
     // Technical calculations
     const rsi5 = this.computeRsi(closes, 5) || 50;
@@ -1379,6 +1360,12 @@ Rules:
       symbol,
       marketDate: nyParts.marketDate,
       candle: {
+        source: candleFetch.source,
+        fetchedAt: candleFetch.fetchedAt,
+        fallbackReason: candleFetch.fallbackReason,
+        rawCount: rawCandleCount,
+        completedCount: sortedCandles.length,
+        freshnessMs: candleFreshnessMs,
         timestamp: latest.datetime,
         open: latest.open,
         high: latest.high,
@@ -2198,6 +2185,125 @@ Rules:
     }
     dynamicMinScore += macroRegime.thresholdAdjustment;
     return dynamicMinScore;
+  }
+
+  private normalizeCandleQuote(quote: any, dateValue: any): Candle | null {
+    const open = this.toNumber(quote.open ?? quote.o);
+    const high = this.toNumber(quote.high ?? quote.h);
+    const low = this.toNumber(quote.low ?? quote.l);
+    const close = this.toNumber(quote.close ?? quote.c);
+    const volume = this.toNumber(quote.volume ?? quote.v ?? 0) ?? 0;
+    if (!dateValue || open === null || high === null || low === null || close === null) return null;
+
+    const dateObj = dateValue instanceof Date ? dateValue : new Date(dateValue);
+    if (!Number.isFinite(dateObj.getTime())) return null;
+    const datetime = dateObj.toISOString();
+    const nyCandleParts = this.getNyDateParts(dateObj);
+    const isRTH = nyCandleParts.minutes >= (9 * 60 + 30) && nyCandleParts.minutes < (16 * 60);
+
+    return {
+      datetime,
+      nyDateStr: nyCandleParts.dateStr,
+      isRTH,
+      open,
+      high,
+      low,
+      close,
+      volume,
+      timestamp: Math.floor(dateObj.getTime() / 1000)
+    };
+  }
+
+  private parseAlpacaBars(data: any, symbol: string): Candle[] {
+    const bars = data?.bars?.[symbol] || data?.bars?.[symbol.toUpperCase()] || [];
+    if (!Array.isArray(bars)) return [];
+    return bars
+      .map((bar: any) => this.normalizeCandleQuote(bar, bar.t))
+      .filter((candle: Candle | null): candle is Candle => candle !== null);
+  }
+
+  private parseYahooChartQuotes(quotes: any[]): Candle[] {
+    return quotes
+      .map((quote: any) => this.normalizeCandleQuote(quote, quote.date))
+      .filter((candle: Candle | null): candle is Candle => candle !== null);
+  }
+
+  private async fetchScannerCandles(input: {
+    symbol: string;
+    now: Date;
+    settings: any;
+    alpacaGet?: typeof axios.get;
+    yahooChart?: (symbol: string, options: any) => Promise<any>;
+  }): Promise<CandleFetchResult> {
+    const fiveDaysAgo = new Date(input.now);
+    fiveDaysAgo.setDate(input.now.getDate() - 5);
+    const alpacaKeyId = input.settings.alpaca_key_id?.trim();
+    const alpacaSecretKey = input.settings.alpaca_secret_key?.trim();
+    const alpacaGet = input.alpacaGet || axios.get;
+    const yahooChart = input.yahooChart || ((symbol: string, options: any) => (yahooFinance as any).chart(symbol, options));
+    let fallbackReason: string | null = null;
+
+    if (alpacaKeyId && alpacaSecretKey) {
+      try {
+        const response = await alpacaGet('https://data.alpaca.markets/v2/stocks/bars', {
+          headers: {
+            'APCA-API-KEY-ID': alpacaKeyId,
+            'APCA-API-SECRET-KEY': alpacaSecretKey
+          },
+          params: {
+            symbols: input.symbol,
+            timeframe: '5Min',
+            start: fiveDaysAgo.toISOString(),
+            end: input.now.toISOString(),
+            adjustment: 'raw'
+          },
+          timeout: 8000
+        });
+        const candles = this.parseAlpacaBars(response.data, input.symbol);
+        if (candles.length > 0) {
+          return {
+            candles,
+            source: 'alpaca',
+            fetchedAt: input.now.toISOString(),
+            fallbackReason: null
+          };
+        }
+        fallbackReason = 'Alpaca returned no usable bars';
+      } catch (err: any) {
+        fallbackReason = `Alpaca bars failed: ${err.message || String(err)}`;
+        this.fastify.log.warn(`[SignalScannerService] ${fallbackReason}`);
+      }
+    } else {
+      fallbackReason = 'Alpaca credentials unavailable';
+    }
+
+    const chartData = await yahooChart(input.symbol, {
+      interval: '5m',
+      period1: fiveDaysAgo,
+      period2: input.now,
+      includePrePost: true
+    });
+    const candles = this.parseYahooChartQuotes(chartData?.quotes || []);
+    if (candles.length === 0) {
+      throw new Error(`No usable Yahoo candles for ${input.symbol}`);
+    }
+
+    return {
+      candles,
+      source: 'yahoo',
+      fetchedAt: input.now.toISOString(),
+      fallbackReason
+    };
+  }
+
+  private getCandleFreshnessMs(candle: Candle, now: Date): number {
+    return Math.max(0, now.getTime() - candle.timestamp * 1000);
+  }
+
+  private getCandleFreshnessBlocker(input: { source: CandleSource; freshnessMs: number }): string | null {
+    const maxFreshnessMs = 20 * 60 * 1000;
+    if (input.freshnessMs <= maxFreshnessMs) return null;
+    return `Candle data stale from ${input.source}: latest completed candle is ${Math.round(input.freshnessMs / 60000)}m old`;
   }
 
   private buildExecutionRealismDiagnostics(input: {

@@ -547,6 +547,91 @@ async function testScannerUsesOnlyCompletedCandles() {
   assert(afterClose.length === 2, `Expected 2 completed candles after 13:45 bar close, got ${afterClose.length}`);
 }
 
+async function testScannerCandlesPreferAlpacaBarsWhenCredentialsExist() {
+  const scanner = createScanner();
+  let yahooCalled = false;
+  const result = await scanner.fetchScannerCandles({
+    symbol: 'QQQ',
+    now: new Date('2026-06-22T14:00:00.000Z'),
+    settings: {
+      alpaca_key_id: 'key',
+      alpaca_secret_key: 'secret'
+    },
+    alpacaGet: async () => ({
+      data: {
+        bars: {
+          QQQ: [{
+            t: '2026-06-22T13:55:00Z',
+            o: 741,
+            h: 742,
+            l: 740.5,
+            c: 741.5,
+            v: 1000
+          }]
+        }
+      }
+    }),
+    yahooChart: async () => {
+      yahooCalled = true;
+      return { quotes: [] };
+    }
+  });
+
+  assert(result.source === 'alpaca', `Expected Alpaca candle source, got ${result.source}`);
+  assert(result.candles.length === 1, `Expected one Alpaca candle, got ${result.candles.length}`);
+  assert(result.candles[0].close === 741.5, `Expected Alpaca close 741.5, got ${result.candles[0].close}`);
+  assert(yahooCalled === false, 'Yahoo fallback should not run when Alpaca bars are usable');
+}
+
+async function testScannerCandlesFallbackToYahooWhenAlpacaFails() {
+  const scanner = createScanner();
+  const result = await scanner.fetchScannerCandles({
+    symbol: 'QQQ',
+    now: new Date('2026-06-22T14:00:00.000Z'),
+    settings: {
+      alpaca_key_id: 'key',
+      alpaca_secret_key: 'secret'
+    },
+    alpacaGet: async () => {
+      throw new Error('alpaca unavailable');
+    },
+    yahooChart: async () => ({
+      quotes: [{
+        date: new Date('2026-06-22T13:55:00.000Z'),
+        open: 741,
+        high: 742,
+        low: 740.5,
+        close: 741.4,
+        volume: 1000
+      }]
+    })
+  });
+
+  assert(result.source === 'yahoo', `Expected Yahoo fallback source, got ${result.source}`);
+  assert(result.fallbackReason.includes('alpaca unavailable'), `Expected Alpaca failure reason, got ${result.fallbackReason}`);
+  assert(result.candles[0].close === 741.4, `Expected Yahoo close 741.4, got ${result.candles[0].close}`);
+}
+
+async function testStaleScannerCandlesProduceBlocker() {
+  const scanner = createScanner();
+  const candle = {
+    datetime: '2026-06-22T13:30:00.000Z',
+    nyDateStr: '2026-06-22',
+    isRTH: true,
+    open: 100,
+    high: 101,
+    low: 99,
+    close: 100.5,
+    volume: 1000,
+    timestamp: Date.parse('2026-06-22T13:30:00.000Z') / 1000
+  };
+  const freshnessMs = scanner.getCandleFreshnessMs(candle, new Date('2026-06-22T14:00:00.000Z'));
+  const blocker = scanner.getCandleFreshnessBlocker({ source: 'yahoo', freshnessMs });
+
+  assert(freshnessMs === 30 * 60 * 1000, `Expected 30m candle freshness, got ${freshnessMs}`);
+  assert(blocker?.includes('Candle data stale from yahoo'), `Expected stale candle blocker, got ${blocker}`);
+}
+
 async function testScannerCycleContextUsesFixedClock() {
   const scanner = createScanner();
   const cycle = scanner.buildScannerCycleContext({
@@ -952,6 +1037,9 @@ async function runTests() {
   await testOptionChainCacheIgnoresStaleSnapshotAfterTtl();
   await testOptionChainCacheBypassesSnapshotOnForceRefresh();
   await testScannerUsesOnlyCompletedCandles();
+  await testScannerCandlesPreferAlpacaBarsWhenCredentialsExist();
+  await testScannerCandlesFallbackToYahooWhenAlpacaFails();
+  await testStaleScannerCandlesProduceBlocker();
   await testScannerCycleContextUsesFixedClock();
   await testFixedClockDrivesExpiryAndAfternoonThreshold();
   await testFixedClockMacroAssessmentIsDeterministic();
