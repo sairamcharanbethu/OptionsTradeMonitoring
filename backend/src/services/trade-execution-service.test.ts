@@ -2,6 +2,7 @@ import '@fastify/postgres';
 import { redis } from '../lib/redis';
 import { TradeExecutionService } from './trade-execution-service';
 import { TradeRedisService } from './trade-redis-service';
+import { RiskDecisionService } from './risk-decision-service';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -186,6 +187,35 @@ async function testTheoreticalPricingDetectionCoversStoredShapes() {
   assert(!(service as any).hasTheoreticalPricing({ decision: { quote: { usingTheoreticalPricing: false }, grade: { pricingWarnings: [] } } }), 'Should not flag clean decision');
 }
 
+async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
+  const existing = RiskDecisionService.forExistingSignalExecution(42, {
+    execution_status: 'PENDING',
+    broker_order_id: null,
+    status: 'PENDING'
+  });
+  const grade = RiskDecisionService.forSetupGrade(42, 'B / LOTTO');
+  const duplicate = RiskDecisionService.forDuplicateOpenEntry('QQQ 2026-06-16 PUT 738', {
+    id: 679,
+    status: 'OPEN',
+    execution_status: 'PENDING'
+  });
+  const dailyLimit = RiskDecisionService.forDailyTradeLimit(3, 3);
+  const theoretical = RiskDecisionService.forTheoreticalPricing({
+    decision: {
+      quote: { usingTheoreticalPricing: true },
+      grade: { pricingWarnings: [] }
+    }
+  });
+
+  assert(existing.allowed === false && existing.code === 'EXISTING_SIGNAL_EXECUTION', 'Should block existing signal execution');
+  assert(grade.allowed === false && grade.code === 'SETUP_GRADE_NOT_EXECUTABLE', 'Should block non-executable setup grade');
+  assert(duplicate.allowed === false && duplicate.metadata?.duplicatePositionId === 679, 'Should block duplicate open entry with metadata');
+  assert(dailyLimit.allowed === false && dailyLimit.code === 'DAILY_TRADE_LIMIT', 'Should block daily trade limit');
+  assert(theoretical.allowed === false && theoretical.code === 'THEORETICAL_PRICING', 'Should block theoretical pricing');
+  assert(RiskDecisionService.forSetupGrade(42, 'A+ / FULL').allowed === true, 'Should allow A+ setup grade');
+  assert(RiskDecisionService.forDailyTradeLimit(2, 3).allowed === true, 'Should allow under daily trade limit');
+}
+
 async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
   const service = new TradeExecutionService(createFastifyMock());
   const input = createSignalInput();
@@ -247,6 +277,7 @@ async function runTests() {
   await testEntryValidationRejectsQuoteSourceSwitch();
   await testLiveExecutionSkipsTheoreticalPricingSignal();
   await testTheoreticalPricingDetectionCoversStoredShapes();
+  await testRiskDecisionServiceCentralizesPreTradeBlocks();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   console.log('All TradeExecutionService broker lifecycle tests passed!');
 }

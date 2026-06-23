@@ -7,6 +7,7 @@ import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { ThetaDataService } from './thetadata-service';
 import { tradingEventBus } from '../lib/trading-events';
+import { RiskDecisionService } from './risk-decision-service';
 
 type ExecutionBroker = 'none' | 'wealthsimple_snaptrade' | 'simulated';
 
@@ -94,28 +95,24 @@ export class TradeExecutionService {
     const maxTradesPerDay = this.parsePositiveInt(settings.max_trades_per_day, 2, 100);
 
     const existingExecution = await this.getExistingSignalExecution(input.userId, input.signalId);
-    if (existingExecution && (existingExecution.broker_order_id || existingExecution.execution_status === 'PENDING' || existingExecution.execution_status === 'EXECUTED')) {
-      return {
-        success: false,
-        skipped: true,
-        broker,
-        message: `Signal #${input.signalId} already has execution status ${existingExecution.execution_status || existingExecution.status}`
-      };
+    const existingExecutionDecision = RiskDecisionService.forExistingSignalExecution(input.signalId, existingExecution);
+    if (!existingExecutionDecision.allowed) {
+      return { success: false, skipped: existingExecutionDecision.skipped, broker, message: existingExecutionDecision.message };
     }
 
     const setupGrade = await this.getSignalSetupGrade(input.signalId);
-    if (!this.isExecutableSetupGrade(setupGrade)) {
-      const message = `Signal #${input.signalId} skipped: setup grade ${setupGrade || 'N/A'} is below A/A+`;
-      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+    const setupGradeDecision = RiskDecisionService.forSetupGrade(input.signalId, setupGrade);
+    if (!setupGradeDecision.allowed) {
+      await this.markSignalExecutionFailure(input.userId, input.signalId, setupGradeDecision.message, setupGradeDecision.skipped);
       tradingEventBus.publish({
         type: 'EXECUTION_SKIPPED',
         createdAt: new Date().toISOString(),
         signalId: input.signalId,
         userId: input.userId,
-        reason: message
+        reason: setupGradeDecision.message
       });
-      this.fastify.log.info(`[TradeExecutionService] ${message}`);
-      return { success: false, skipped: true, broker, message };
+      this.fastify.log.info(`[TradeExecutionService] ${setupGradeDecision.message}`);
+      return { success: false, skipped: setupGradeDecision.skipped, broker, message: setupGradeDecision.message };
     }
 
     const entryLockKey = TradeRedisService.keys.entryLock(
@@ -147,11 +144,11 @@ export class TradeExecutionService {
     }
 
     const duplicate = await this.findDuplicateOpenEntry(input);
-    if (duplicate) {
-      const message = `Skipped duplicate entry: ${this.contractLabel(input)} already exists as position #${duplicate.id} (${duplicate.status}${duplicate.execution_status ? `/${duplicate.execution_status}` : ''})`;
-      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
-      this.fastify.log.info(`[TradeExecutionService] ${message}`);
-      return { success: false, skipped: true, broker, message, duplicatePositionId: duplicate.id };
+    const duplicateDecision = RiskDecisionService.forDuplicateOpenEntry(this.contractLabel(input), duplicate);
+    if (!duplicateDecision.allowed) {
+      await this.markSignalExecutionFailure(input.userId, input.signalId, duplicateDecision.message, duplicateDecision.skipped);
+      this.fastify.log.info(`[TradeExecutionService] ${duplicateDecision.message}`);
+      return { success: false, skipped: duplicateDecision.skipped, broker, message: duplicateDecision.message, duplicatePositionId: duplicateDecision.metadata?.duplicatePositionId };
     }
 
     const supersededSummary = await this.closeSupersededPositions(input, settings, broker);
@@ -165,10 +162,10 @@ export class TradeExecutionService {
     }
 
     const currentTradeCount = await this.countTradesToday(input.userId);
-    if (currentTradeCount >= maxTradesPerDay) {
-      const message = `Daily trade limit reached (${currentTradeCount}/${maxTradesPerDay})`;
-      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
-      return { success: false, skipped: true, broker, message };
+    const dailyLimitDecision = RiskDecisionService.forDailyTradeLimit(currentTradeCount, maxTradesPerDay);
+    if (!dailyLimitDecision.allowed) {
+      await this.markSignalExecutionFailure(input.userId, input.signalId, dailyLimitDecision.message, dailyLimitDecision.skipped);
+      return { success: false, skipped: dailyLimitDecision.skipped, broker, message: dailyLimitDecision.message };
     }
 
     tradingEventBus.publish({
@@ -243,9 +240,7 @@ export class TradeExecutionService {
   }
 
   private isExecutableSetupGrade(setupGrade: string | null | undefined): boolean {
-    const normalized = String(setupGrade || '').toUpperCase();
-    if (normalized.includes('A+')) return true;
-    return /(^|[^A-Z])A([^A-Z+]|$)/.test(normalized);
+    return RiskDecisionService.isExecutableSetupGrade(setupGrade);
   }
 
   private async findDuplicateOpenEntry(input: ExecuteSignalInput) {
@@ -536,16 +531,7 @@ export class TradeExecutionService {
   }
 
   private hasTheoreticalPricing(optionDetails: any): boolean {
-    if (!optionDetails || typeof optionDetails !== 'object') return false;
-    if (optionDetails.usingTheoreticalPricing || optionDetails.using_theoretical_pricing) return true;
-    if (optionDetails.decision?.quote?.usingTheoreticalPricing) return true;
-
-    const warnings = [
-      ...(Array.isArray(optionDetails.pricingWarnings) ? optionDetails.pricingWarnings : []),
-      ...(Array.isArray(optionDetails.gradeDiagnostics?.pricingWarnings) ? optionDetails.gradeDiagnostics.pricingWarnings : []),
-      ...(Array.isArray(optionDetails.decision?.grade?.pricingWarnings) ? optionDetails.decision.grade.pricingWarnings : [])
-    ];
-    return warnings.some((warning) => String(warning || '').toLowerCase().includes('theoretical'));
+    return RiskDecisionService.hasTheoreticalPricing(optionDetails);
   }
 
   private assertEntryQuote(quote: EntryQuoteSnapshot, intendedEntry: number, baselineMark: number | null, stabilityMovePct: number | null) {
@@ -633,11 +619,11 @@ export class TradeExecutionService {
 
     const osiTicker = this.constructOSITicker(input.symbol, input.chosenStrike, input.winningSide, input.chosenExpiry);
     const optionDetails = await this.getSignalOptionDetails(input.signalId);
-    if (this.hasTheoreticalPricing(optionDetails)) {
-      const message = 'Entry skipped: signal used theoretical option pricing fallback';
-      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
-      this.fastify.log.info(`[TradeExecutionService] ${message}`);
-      return { success: false, skipped: true, broker: 'wealthsimple_snaptrade', message };
+    const theoreticalPricingDecision = RiskDecisionService.forTheoreticalPricing(optionDetails);
+    if (!theoreticalPricingDecision.allowed) {
+      await this.markSignalExecutionFailure(input.userId, input.signalId, theoreticalPricingDecision.message, theoreticalPricingDecision.skipped);
+      this.fastify.log.info(`[TradeExecutionService] ${theoreticalPricingDecision.message}`);
+      return { success: false, skipped: theoreticalPricingDecision.skipped, broker: 'wealthsimple_snaptrade', message: theoreticalPricingDecision.message };
     }
 
     const slippagePct = Math.max(0, Number(settings.entry_slippage_pct || 3));
