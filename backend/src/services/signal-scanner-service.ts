@@ -152,6 +152,8 @@ type OptionQuoteCandidate = OptionContractCandidate & {
   gamma?: number | null;
   theta?: number | null;
   impliedVolatility?: number | null;
+  quoteAgeMs?: number | null;
+  markLastDivergencePct?: number | null;
   score: number;
   reasons: string[];
 };
@@ -2336,11 +2338,15 @@ Rules:
 
     const mark = Number(candidate.mark || 0);
     const spreadPct = candidate.spreadPct === null ? null : Number(candidate.spreadPct);
+    const spread = candidate.spread === null ? null : Number(candidate.spread);
     const volume = candidate.volume === null ? null : Number(candidate.volume || 0);
     const openInterest = candidate.openInterest === null ? null : Number(candidate.openInterest || 0);
     const bid = Number(candidate.bid || 0);
     const ask = Number(candidate.ask || 0);
     const absDelta = candidate.delta === null || candidate.delta === undefined ? null : Math.abs(Number(candidate.delta));
+    const absTheta = candidate.theta === null || candidate.theta === undefined ? null : Math.abs(Number(candidate.theta));
+    const quoteAgeMs = candidate.quoteAgeMs === undefined ? null : candidate.quoteAgeMs;
+    const markLastDivergencePct = candidate.markLastDivergencePct === undefined ? null : candidate.markLastDivergencePct;
 
     if (mark <= 0) {
       score -= 80;
@@ -2369,6 +2375,17 @@ Rules:
       reasons.push(`wide spread ${spreadPct.toFixed(1)}%`);
     } else {
       score += Math.max(0, maxBidAskSpreadPct - spreadPct);
+    }
+
+    if (spread !== null && mark > 0) {
+      const spreadCostDollars = spread * 100;
+      if (spreadCostDollars > 25) {
+        score -= Math.min(20, (spreadCostDollars - 25) / 2);
+        reasons.push(`spread cost $${spreadCostDollars.toFixed(0)}/contract`);
+      } else if (spreadCostDollars <= 10) {
+        score += 4;
+        reasons.push('low spread cost');
+      }
     }
 
     if (volume === null) {
@@ -2404,9 +2421,56 @@ Rules:
       if (absDelta >= 0.35 && absDelta <= 0.6) reasons.push('delta in quick-profit band');
     }
 
+    if (quoteAgeMs !== null) {
+      if (quoteAgeMs > 10_000) {
+        score -= Math.min(50, Math.max(15, (quoteAgeMs - 10_000) / 1_000));
+        reasons.push(`stale quote ${Math.round(quoteAgeMs / 1000)}s`);
+      } else if (quoteAgeMs <= 2_000) {
+        score += 5;
+        reasons.push('fresh quote');
+      }
+    }
+
+    if (markLastDivergencePct !== null) {
+      if (markLastDivergencePct > 12) {
+        score -= Math.min(35, markLastDivergencePct * 2);
+        reasons.push(`unstable mark/last ${markLastDivergencePct.toFixed(1)}%`);
+      } else if (markLastDivergencePct <= 3) {
+        score += 4;
+        reasons.push('stable mark/last');
+      }
+    }
+
+    if (absTheta !== null && mark > 0) {
+      const thetaDragPct = Math.abs(absTheta / mark) * 100;
+      if (thetaDragPct > 35) {
+        score -= Math.min(35, (thetaDragPct - 35) * 0.8);
+        reasons.push(`theta drag ${thetaDragPct.toFixed(1)}%`);
+      } else if (thetaDragPct <= 18) {
+        score += 3;
+        reasons.push('controlled theta drag');
+      }
+    }
+
     score -= Math.abs(candidate.strike - preferredStrike) * 2;
 
     return { score: Number(score.toFixed(2)), reasons };
+  }
+
+  private getOptionQuoteAgeMs(quote: any): number | null {
+    const rawTimestamp = quote?.timestamp ?? quote?.time ?? quote?.datetime ?? quote?.date ?? quote?.raw?.timestamp ?? quote?.raw?.time ?? quote?.raw?.datetime ?? quote?.raw?.date;
+    if (rawTimestamp === null || rawTimestamp === undefined || rawTimestamp === '') return null;
+    const numeric = Number(rawTimestamp);
+    const timestampMs = Number.isFinite(numeric)
+      ? numeric > 1_000_000_000_000 ? numeric : numeric * 1000
+      : new Date(rawTimestamp).getTime();
+    if (!Number.isFinite(timestampMs)) return null;
+    return Math.max(0, Date.now() - timestampMs);
+  }
+
+  private getMarkLastDivergencePct(mark: number | null, last: number | null): number | null {
+    if (mark === null || last === null || mark <= 0 || last <= 0) return null;
+    return Number((Math.abs(mark - last) / mark * 100).toFixed(2));
   }
 
   private fetchBestThetaDataOptionCandidate(input: {
@@ -2441,7 +2505,9 @@ Rules:
         delta: quote?.delta ?? null,
         gamma: quote?.gamma ?? null,
         theta: quote?.theta ?? null,
-        impliedVolatility: quote?.impliedVolatility ?? null
+        impliedVolatility: quote?.impliedVolatility ?? null,
+        quoteAgeMs: this.getOptionQuoteAgeMs(quote),
+        markLastDivergencePct: this.getMarkLastDivergencePct(quote?.mark ?? null, quote?.last ?? null)
       };
       const scored = this.scoreOptionCandidate(
         base,
@@ -2463,6 +2529,10 @@ Rules:
       candidate.ask > 0 &&
       candidate.spreadPct !== null &&
       candidate.spreadPct <= input.maxBidAskSpreadPct &&
+      (candidate.spread === null || Number(candidate.spread) * 100 <= 35) &&
+      (candidate.quoteAgeMs === null || candidate.quoteAgeMs <= 15_000) &&
+      (candidate.markLastDivergencePct === null || candidate.markLastDivergencePct <= 15) &&
+      (candidate.theta === null || candidate.mark === null || candidate.mark <= 0 || Math.abs(Number(candidate.theta) / Number(candidate.mark)) * 100 <= 45) &&
       (candidate.volume === null || Number(candidate.volume) >= input.minOptionVolume) &&
       candidate.openInterest !== null &&
       Number(candidate.openInterest) >= input.minOpenInterest

@@ -61,7 +61,7 @@ async function testThetaDataMissingVolumeDoesNotRejectLiquidCandidate() {
       gamma: null,
       theta: -0.543,
       impliedVolatility: 0.132,
-      timestamp: '2026-06-18T16:15:00.082Z'
+      timestamp: new Date().toISOString()
     }],
     candidates: [{
       ticker: 'QQQ260622C00741000',
@@ -102,7 +102,7 @@ async function testThetaDataKnownLowVolumeStillRejectsCandidate() {
       gamma: null,
       theta: -0.543,
       impliedVolatility: 0.132,
-      timestamp: '2026-06-18T16:15:00.082Z'
+      timestamp: new Date().toISOString()
     }],
     candidates: [{
       ticker: 'QQQ260622C00741000',
@@ -143,7 +143,7 @@ async function testThetaDataPrefersUsefulDeltaOverExactOffset() {
         gamma: null,
         theta: -0.28,
         impliedVolatility: 0.18,
-        timestamp: '2026-06-18T16:15:00.082Z'
+        timestamp: new Date().toISOString()
       },
       {
         ticker: 'QQQ260622C00742000',
@@ -163,7 +163,7 @@ async function testThetaDataPrefersUsefulDeltaOverExactOffset() {
         gamma: null,
         theta: -0.31,
         impliedVolatility: 0.18,
-        timestamp: '2026-06-18T16:15:00.082Z'
+        timestamp: new Date().toISOString()
       }
     ],
     candidates: [
@@ -188,6 +188,166 @@ async function testThetaDataPrefersUsefulDeltaOverExactOffset() {
   assert(result.selected?.ticker === 'QQQ260622C00742000', `Expected useful-delta contract, got ${result.selected?.ticker}`);
   assert(result.ranked[0].reasons.includes('delta in quick-profit band'), 'Selected candidate should explain useful delta');
   assert(result.ranked[1].reasons.includes('delta too low 0.12'), 'Rejected candidate should explain weak delta');
+}
+
+async function testThetaDataRejectsStaleOptionQuoteCandidate() {
+  const scanner = createScanner();
+
+  const result = scanner.fetchBestThetaDataOptionCandidate({
+    chain: [{
+      ticker: 'QQQ260622C00741000',
+      symbol: 'QQQ',
+      expiration: '2026-06-22',
+      right: 'CALL',
+      strike: 741,
+      bid: 1.18,
+      ask: 1.22,
+      mark: 1.20,
+      spread: 0.04,
+      spreadPct: 3.3,
+      volume: 1400,
+      openInterest: 2500,
+      last: 1.19,
+      delta: 0.45,
+      gamma: null,
+      theta: -0.2,
+      impliedVolatility: 0.18,
+      timestamp: new Date(Date.now() - 20_000).toISOString()
+    }],
+    candidates: [{
+      ticker: 'QQQ260622C00741000',
+      strike: 741,
+      expiry: '2026-06-22'
+    }],
+    preferredStrike: 741,
+    minOptionMark: 0.5,
+    maxBidAskSpreadPct: 8,
+    minOptionVolume: 200,
+    minOpenInterest: 200
+  });
+
+  assert(result.selected === null, 'Stale option quote should not be auto-selected');
+  assert(result.ranked[0].reasons.some((reason: string) => reason.includes('stale quote')), 'Ranked candidate should explain stale quote');
+}
+
+async function testThetaDataRejectsUnstableMarkLastCandidate() {
+  const scanner = createScanner();
+
+  const result = scanner.fetchBestThetaDataOptionCandidate({
+    chain: [{
+      ticker: 'QQQ260622C00741000',
+      symbol: 'QQQ',
+      expiration: '2026-06-22',
+      right: 'CALL',
+      strike: 741,
+      bid: 1.18,
+      ask: 1.22,
+      mark: 1.20,
+      spread: 0.04,
+      spreadPct: 3.3,
+      volume: 1400,
+      openInterest: 2500,
+      last: 0.95,
+      delta: 0.45,
+      gamma: null,
+      theta: -0.2,
+      impliedVolatility: 0.18,
+      timestamp: new Date().toISOString()
+    }],
+    candidates: [{
+      ticker: 'QQQ260622C00741000',
+      strike: 741,
+      expiry: '2026-06-22'
+    }],
+    preferredStrike: 741,
+    minOptionMark: 0.5,
+    maxBidAskSpreadPct: 8,
+    minOptionVolume: 200,
+    minOpenInterest: 200
+  });
+
+  assert(result.selected === null, 'Unstable mark/last quote should not be auto-selected');
+  assert(result.ranked[0].reasons.some((reason: string) => reason.includes('unstable mark/last')), 'Ranked candidate should explain mark/last instability');
+}
+
+async function testThetaDataRejectsHighSpreadCostCandidate() {
+  const scanner = createScanner();
+
+  const result = scanner.fetchBestThetaDataOptionCandidate({
+    chain: [{
+      ticker: 'QQQ260622C00741000',
+      symbol: 'QQQ',
+      expiration: '2026-06-22',
+      right: 'CALL',
+      strike: 741,
+      bid: 4.8,
+      ask: 5.2,
+      mark: 5,
+      spread: 0.4,
+      spreadPct: 8,
+      volume: 1400,
+      openInterest: 2500,
+      last: 5,
+      delta: 0.45,
+      gamma: null,
+      theta: -0.4,
+      impliedVolatility: 0.18,
+      timestamp: new Date().toISOString()
+    }],
+    candidates: [{
+      ticker: 'QQQ260622C00741000',
+      strike: 741,
+      expiry: '2026-06-22'
+    }],
+    preferredStrike: 741,
+    minOptionMark: 0.5,
+    maxBidAskSpreadPct: 8,
+    minOptionVolume: 200,
+    minOpenInterest: 200
+  });
+
+  assert(result.selected === null, 'High dollar spread cost should not be auto-selected');
+  assert(result.ranked[0].reasons.some((reason: string) => reason.includes('spread cost')), 'Ranked candidate should explain spread cost');
+}
+
+async function testThetaDataRejectsHighThetaDragCandidate() {
+  const scanner = createScanner();
+
+  const result = scanner.fetchBestThetaDataOptionCandidate({
+    chain: [{
+      ticker: 'QQQ260622C00741000',
+      symbol: 'QQQ',
+      expiration: '2026-06-22',
+      right: 'CALL',
+      strike: 741,
+      bid: 1.18,
+      ask: 1.22,
+      mark: 1.20,
+      spread: 0.04,
+      spreadPct: 3.3,
+      volume: 1400,
+      openInterest: 2500,
+      last: 1.20,
+      delta: 0.45,
+      gamma: null,
+      theta: -0.6,
+      impliedVolatility: 0.18,
+      timestamp: new Date().toISOString()
+    }],
+    candidates: [{
+      ticker: 'QQQ260622C00741000',
+      strike: 741,
+      expiry: '2026-06-22'
+    }],
+    preferredStrike: 741,
+    minOptionMark: 0.5,
+    maxBidAskSpreadPct: 8,
+    minOptionVolume: 200,
+    minOpenInterest: 200
+  });
+
+  assert(result.selected === null, 'High theta drag should not be auto-selected');
+  assert(result.ranked[0].reasons.some((reason: string) => reason.includes('theta drag')), 'Ranked candidate should explain theta drag');
 }
 
 async function testMacroBlocksCallsWhenVixIsTooHighOrSpiking() {
@@ -282,6 +442,10 @@ async function runTests() {
   await testThetaDataMissingVolumeDoesNotRejectLiquidCandidate();
   await testThetaDataKnownLowVolumeStillRejectsCandidate();
   await testThetaDataPrefersUsefulDeltaOverExactOffset();
+  await testThetaDataRejectsStaleOptionQuoteCandidate();
+  await testThetaDataRejectsUnstableMarkLastCandidate();
+  await testThetaDataRejectsHighSpreadCostCandidate();
+  await testThetaDataRejectsHighThetaDragCandidate();
   await testMacroBlocksCallsWhenVixIsTooHighOrSpiking();
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
   await testMacroRewardsRiskOnCallSetups();
