@@ -65,8 +65,12 @@ type ReplayTradeDecision = {
   executable: boolean | null;
   usingTheoreticalPricing: boolean;
   spreadPct: number | null;
+  spreadBucket: string;
+  delta: number | null;
+  deltaBucket: string;
   quoteQuality: ReplayQuoteQualityBucket;
   pricingWarnings: string[];
+  warningTypes: string[];
   blockers: string[];
 };
 
@@ -148,6 +152,19 @@ type ReplayCalibrationReport = {
   };
 };
 
+type ReplayAttributionReport = {
+  scenario: 'baseline';
+  totalTrades: number;
+  dimensions: {
+    grade: ReplayCalibrationBucket[];
+    regime: ReplayCalibrationBucket[];
+    warningType: ReplayCalibrationBucket[];
+    deltaBucket: ReplayCalibrationBucket[];
+    spreadBucket: ReplayCalibrationBucket[];
+    timeOfDay: ReplayCalibrationBucket[];
+  };
+};
+
 type ReplaySummary = {
   trades: number;
   wins: number;
@@ -179,6 +196,7 @@ export class SignalReplayBacktester {
     missingOptionData: number;
     parity: ReplayParitySummary;
     calibration: ReplayCalibrationReport;
+    attribution: ReplayAttributionReport;
     scenarios: ReplayScenario[];
   }> {
     const config = this.normalizeConfig(input);
@@ -266,6 +284,7 @@ export class SignalReplayBacktester {
     }
     const baseline = scenarios.find((scenario) => scenario.name === 'baseline') as ReplayScenario;
     const calibration = this.buildCalibrationReport(baseline.trades);
+    const attribution = this.buildAttributionReport(baseline.trades);
 
     return {
       config,
@@ -274,6 +293,7 @@ export class SignalReplayBacktester {
       missingOptionData,
       parity,
       calibration,
+      attribution,
       scenarios
     };
   }
@@ -411,7 +431,7 @@ export class SignalReplayBacktester {
       roiPct: Number((((exitPrice - entryPrice) / entryPrice) * 100).toFixed(2)),
       exitReason,
       skippedBy: [],
-      signalDecision: this.toReplayTradeDecision(decision)
+      signalDecision: this.toReplayTradeDecision(signal, decision)
     };
   }
 
@@ -510,16 +530,25 @@ export class SignalReplayBacktester {
     return decision && typeof decision === 'object' ? decision as SignalDecision : null;
   }
 
-  private toReplayTradeDecision(decision: SignalDecision | null): ReplayTradeDecision | null {
+  private toReplayTradeDecision(signal: ReplaySignal, decision: SignalDecision | null): ReplayTradeDecision | null {
     if (!decision) return null;
+    const spreadPct = this.finiteNumber(decision.quote?.spreadPct);
+    const delta = this.getDecisionDelta(signal, decision);
+    const pricingWarnings = Array.isArray(decision.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [];
+    const blockers = Array.isArray(decision.grade?.blockers) ? decision.grade.blockers : [];
+    const warnings = Array.isArray(decision.grade?.warnings) ? decision.grade.warnings : [];
     return {
       gradeKey: decision.grade?.gradeKey || null,
       executable: typeof decision.grade?.executable === 'boolean' ? decision.grade.executable : null,
       usingTheoreticalPricing: Boolean(decision.quote?.usingTheoreticalPricing),
-      spreadPct: this.finiteNumber(decision.quote?.spreadPct),
+      spreadPct,
+      spreadBucket: this.getSpreadBucket(spreadPct),
+      delta,
+      deltaBucket: this.getDeltaBucket(delta),
       quoteQuality: this.getQuoteQualityBucket(decision),
-      pricingWarnings: Array.isArray(decision.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [],
-      blockers: Array.isArray(decision.grade?.blockers) ? decision.grade.blockers : []
+      pricingWarnings,
+      warningTypes: this.getWarningTypes(pricingWarnings, warnings, blockers),
+      blockers
     };
   }
 
@@ -536,6 +565,21 @@ export class SignalReplayBacktester {
     };
   }
 
+  private buildAttributionReport(trades: ReplayTrade[]): ReplayAttributionReport {
+    return {
+      scenario: 'baseline',
+      totalTrades: trades.length,
+      dimensions: {
+        grade: this.buildCalibrationBuckets(trades, (trade) => this.getGradeKey(trade)),
+        regime: this.buildCalibrationBuckets(trades, (trade) => this.getCalibrationRegimeKey(trade)),
+        warningType: this.buildMultiKeyBuckets(trades, (trade) => trade.signalDecision?.warningTypes || ['no_warning']),
+        deltaBucket: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.deltaBucket || 'delta_unknown'),
+        spreadBucket: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.spreadBucket || 'spread_unknown'),
+        timeOfDay: this.buildCalibrationBuckets(trades, (trade) => this.getTimeWindowKey(trade.entryTime))
+      }
+    };
+  }
+
   private buildCalibrationBuckets(trades: ReplayTrade[], getKey: (trade: ReplayTrade) => string): ReplayCalibrationBucket[] {
     const groups = new Map<string, ReplayTrade[]>();
     for (const trade of trades) {
@@ -543,6 +587,21 @@ export class SignalReplayBacktester {
       const group = groups.get(key) || [];
       group.push(trade);
       groups.set(key, group);
+    }
+    return [...groups.entries()]
+      .map(([key, groupTrades]) => this.summarizeCalibrationBucket(key, groupTrades))
+      .sort((a, b) => b.trades - a.trades || a.key.localeCompare(b.key));
+  }
+
+  private buildMultiKeyBuckets(trades: ReplayTrade[], getKeys: (trade: ReplayTrade) => string[]): ReplayCalibrationBucket[] {
+    const groups = new Map<string, ReplayTrade[]>();
+    for (const trade of trades) {
+      const keys = getKeys(trade).filter(Boolean);
+      for (const key of keys.length > 0 ? keys : ['unknown']) {
+        const group = groups.get(key) || [];
+        group.push(trade);
+        groups.set(key, group);
+      }
     }
     return [...groups.entries()]
       .map(([key, groupTrades]) => this.summarizeCalibrationBucket(key, groupTrades))
@@ -631,6 +690,47 @@ export class SignalReplayBacktester {
 
   private getGradeKey(trade: ReplayTrade): string {
     return trade.signalDecision?.gradeKey || String(trade.setupGrade || 'unknown').toUpperCase();
+  }
+
+  private getDecisionDelta(signal: ReplaySignal, decision: SignalDecision): number | null {
+    const decisionTicker = this.normalizeTicker(decision.contract?.ticker);
+    const candidates = Array.isArray(signal.option_details?.candidateSelection?.candidates)
+      ? signal.option_details.candidateSelection.candidates
+      : [];
+    const selected = candidates.find((candidate: any) => this.normalizeTicker(candidate?.ticker) === decisionTicker);
+    return this.finiteNumber(selected?.delta);
+  }
+
+  private getDeltaBucket(delta: number | null): string {
+    if (delta === null) return 'delta_unknown';
+    const absDelta = Math.abs(delta);
+    if (absDelta < 0.25) return 'delta_low_lt_25';
+    if (absDelta < 0.35) return 'delta_25_35';
+    if (absDelta <= 0.6) return 'delta_core_35_60';
+    if (absDelta <= 0.7) return 'delta_high_60_70';
+    return 'delta_too_high_gt_70';
+  }
+
+  private getSpreadBucket(spreadPct: number | null): string {
+    if (spreadPct === null) return 'spread_unknown';
+    if (spreadPct <= 5) return 'spread_tight_lte_5';
+    if (spreadPct <= 8) return 'spread_ok_5_8';
+    if (spreadPct <= 12) return 'spread_wide_8_12';
+    if (spreadPct <= 20) return 'spread_very_wide_12_20';
+    return 'spread_extreme_gt_20';
+  }
+
+  private getWarningTypes(pricingWarnings: string[], warnings: string[], blockers: string[]): string[] {
+    const warningText = [...pricingWarnings, ...warnings, ...blockers].join(' ').toLowerCase();
+    const types = new Set<string>();
+    if (warningText.includes('theoretical')) types.add('theoretical_pricing');
+    if (warningText.includes('spread')) types.add('spread_warning');
+    if (warningText.includes('volume')) types.add('volume_warning');
+    if (warningText.includes('open interest') || /\boi\b/.test(warningText)) types.add('open_interest_warning');
+    if (warningText.includes('premium')) types.add('premium_warning');
+    if (warningText.includes('quote') || warningText.includes('bid') || warningText.includes('ask')) types.add('quote_warning');
+    if (warningText.includes('macro') || warningText.includes('vix') || warningText.includes('dxy') || warningText.includes('10y')) types.add('macro_warning');
+    return types.size > 0 ? [...types].sort() : ['no_warning'];
   }
 
   private profitFactor(trades: ReplayTrade[]): number {

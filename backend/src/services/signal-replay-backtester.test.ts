@@ -134,8 +134,12 @@ function createReplayTrade(overrides: Record<string, any> = {}) {
       executable: true,
       usingTheoreticalPricing: false,
       spreadPct: 2,
+      spreadBucket: 'spread_tight_lte_5',
+      delta: 0.45,
+      deltaBucket: 'delta_core_35_60',
       quoteQuality: 'clean',
       pricingWarnings: [],
+      warningTypes: ['no_warning'],
       blockers: []
     },
     ...overrides
@@ -351,6 +355,125 @@ async function testCalibrationReportGroupsReplayOutcomes() {
   assert(qqq?.thresholds.find((threshold: any) => threshold.minConfidence === 85)?.trades === 2, 'Expected both QQQ trades at confidence >= 85');
 }
 
+async function testReplayDecisionAddsAttributionBuckets() {
+  const backtester = createBacktester();
+  const signal = createSignal({
+    option_details: {
+      ticker: 'QQQ260622C00741000',
+      mark: 1,
+      candidateSelection: {
+        candidates: [
+          {
+            ticker: 'QQQ260622C00741000',
+            delta: -0.44
+          }
+        ]
+      },
+      decision: createDecision({
+        quote: {
+          mark: 1.25,
+          bid: 1.15,
+          ask: 1.35,
+          spreadPct: 16,
+          volume: 700,
+          openInterest: 1200,
+          usingTheoreticalPricing: false
+        },
+        grade: {
+          ...createDecision().grade,
+          pricingWarnings: ['Spread 16% exceeds ceiling 12%']
+        }
+      })
+    }
+  });
+  const contract = backtester.resolveContract(signal);
+  const bars = [
+    { start: '2026-06-22T13:45:00.000Z', open: 1.25, high: 1.41, low: 1.2, close: 1.35, volume: 100 }
+  ];
+
+  const trade = backtester.simulateTrade(signal, contract, bars, createConfig());
+
+  assert(trade !== null, 'Trade should simulate');
+  assert(trade.signalDecision?.delta === -0.44, `Expected selected contract delta, got ${trade.signalDecision?.delta}`);
+  assert(trade.signalDecision?.deltaBucket === 'delta_core_35_60', `Expected core delta bucket, got ${trade.signalDecision?.deltaBucket}`);
+  assert(trade.signalDecision?.spreadBucket === 'spread_very_wide_12_20', `Expected spread bucket, got ${trade.signalDecision?.spreadBucket}`);
+  assert(trade.signalDecision?.warningTypes.includes('spread_warning'), `Expected spread warning type, got ${trade.signalDecision?.warningTypes}`);
+}
+
+async function testAttributionReportGroupsPostTradeBuckets() {
+  const backtester = createBacktester();
+  const report = backtester.buildAttributionReport([
+    createReplayTrade(),
+    createReplayTrade({
+      signalId: 302,
+      confidenceScore: 82,
+      setupGrade: 'B',
+      macroRegime: {
+        regime: 'RISK_OFF',
+        directionBias: 'PUT'
+      },
+      entryTime: '2026-06-22T18:30:00.000Z',
+      pnl: -100,
+      roiPct: -20,
+      signalDecision: {
+        gradeKey: 'B',
+        executable: true,
+        usingTheoreticalPricing: false,
+        spreadPct: 18,
+        spreadBucket: 'spread_very_wide_12_20',
+        delta: 0.22,
+        deltaBucket: 'delta_low_lt_25',
+        quoteQuality: 'wide_spread',
+        pricingWarnings: ['Spread 18% exceeds ceiling 12%'],
+        warningTypes: ['spread_warning'],
+        blockers: []
+      }
+    }),
+    createReplayTrade({
+      signalId: 303,
+      confidenceScore: 78,
+      setupGrade: 'B',
+      macroRegime: {
+        regime: 'RISK_OFF',
+        directionBias: 'PUT'
+      },
+      entryTime: '2026-06-22T19:45:00.000Z',
+      pnl: -50,
+      roiPct: -10,
+      signalDecision: {
+        gradeKey: 'B',
+        executable: true,
+        usingTheoreticalPricing: true,
+        spreadPct: 30,
+        spreadBucket: 'spread_extreme_gt_20',
+        delta: null,
+        deltaBucket: 'delta_unknown',
+        quoteQuality: 'theoretical_pricing',
+        pricingWarnings: ['Using theoretical option price fallback'],
+        warningTypes: ['theoretical_pricing'],
+        blockers: []
+      }
+    })
+  ]);
+
+  const gradeB = report.dimensions.grade.find((bucket: any) => bucket.key === 'B');
+  const spreadWarning = report.dimensions.warningType.find((bucket: any) => bucket.key === 'spread_warning');
+  const theoretical = report.dimensions.warningType.find((bucket: any) => bucket.key === 'theoretical_pricing');
+  const lowDelta = report.dimensions.deltaBucket.find((bucket: any) => bucket.key === 'delta_low_lt_25');
+  const extremeSpread = report.dimensions.spreadBucket.find((bucket: any) => bucket.key === 'spread_extreme_gt_20');
+  const afternoon = report.dimensions.timeOfDay.find((bucket: any) => bucket.key === 'afternoon_1400_1530');
+
+  assert(report.totalTrades === 3, `Expected 3 attribution trades, got ${report.totalTrades}`);
+  assert(gradeB?.trades === 2, `Expected 2 B trades, got ${gradeB?.trades}`);
+  assert(gradeB?.winRate === 0, `Expected B trades to have 0% win rate, got ${gradeB?.winRate}`);
+  assert(gradeB?.totalPnl === -150, `Expected B total PnL -150, got ${gradeB?.totalPnl}`);
+  assert(spreadWarning?.trades === 1, `Expected 1 spread warning trade, got ${spreadWarning?.trades}`);
+  assert(theoretical?.trades === 1, `Expected 1 theoretical pricing trade, got ${theoretical?.trades}`);
+  assert(lowDelta?.trades === 1, `Expected 1 low delta trade, got ${lowDelta?.trades}`);
+  assert(extremeSpread?.trades === 1, `Expected 1 extreme spread trade, got ${extremeSpread?.trades}`);
+  assert(afternoon?.trades === 1, `Expected 1 afternoon trade, got ${afternoon?.trades}`);
+}
+
 async function testQuoteQualityBuckets() {
   const backtester = createBacktester();
 
@@ -386,6 +509,8 @@ async function runTests() {
   await testStoredSignalDecisionDrivesReplayMetadata();
   await testParitySummaryReportsDecisionGaps();
   await testCalibrationReportGroupsReplayOutcomes();
+  await testReplayDecisionAddsAttributionBuckets();
+  await testAttributionReportGroupsPostTradeBuckets();
   await testQuoteQualityBuckets();
   await testNaiveThetaDataBarsParseAsEasternTime();
   await testEasternDateHelperHandlesStandardTime();
