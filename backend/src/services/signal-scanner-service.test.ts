@@ -835,6 +835,7 @@ async function testScoringDiagnosticsStableForSameNormalizedInputs() {
     baseScore: 92,
     macroRegime,
     pricingWarnings: [],
+    pricingPenalty: 0,
     executionRealism: {
       score: 94,
       executable: true,
@@ -928,6 +929,7 @@ async function testLottoDiagnosticsExplainScoreAndPricingPenalty() {
     baseScore: 82,
     macroRegime,
     pricingWarnings: ['Spread 14% exceeds ceiling 8%'],
+    pricingPenalty: scanner.getPricingWarningPenalty(['Spread 14% exceeds ceiling 8%']),
     executionRealism: scanner.buildExecutionRealismDiagnostics({
       mark: 1.1,
       spreadPct: 14,
@@ -947,6 +949,45 @@ async function testLottoDiagnosticsExplainScoreAndPricingPenalty() {
   assert(diagnostics.pricingWarnings[0].includes('Spread'), 'Should preserve pricing warning detail');
   assert(diagnostics.executionRealism.score < diagnostics.executionRealism.threshold, 'Poor spread/liquidity should lower execution realism below threshold');
   assert(diagnostics.executionRealism.executable === false, 'Poor execution realism should be non-executable for live entry');
+}
+
+async function testRelatedMissingQuoteWarningsUseSingleCappedPenalty() {
+  const scanner = createScanner();
+
+  const penalty = scanner.getPricingWarningPenalty([
+    'No usable live option quote selected',
+    'No ThetaData option candidate passed liquidity/spread filters'
+  ]);
+
+  assert(penalty === 20, `Expected missing live quote warnings to cap at 20, got ${penalty}`);
+}
+
+async function testLiveQuoteFallbackAfterChainRejectionUsesSmallPenalty() {
+  const scanner = createScanner();
+
+  const penalty = scanner.getPricingWarningPenalty([
+    'No ThetaData option candidate passed liquidity/spread filters'
+  ]);
+
+  assert(penalty === 5, `Expected live quote fallback after chain rejection to subtract 5, got ${penalty}`);
+}
+
+async function testGexProximityDeduplicatesCallWallAndKingNodeAtSameStrike() {
+  const scanner = createScanner();
+
+  const blockers = scanner.buildGexProximityBlockers({
+    winningSide: 'CALL',
+    currentPrice: 739.66,
+    callWall: 740,
+    putWall: null,
+    kingNode: 740,
+    floor: null,
+    ceiling: null,
+    regime: 'MEAN_REVERSION'
+  });
+
+  assert(blockers.length === 1, `Expected one combined GEX blocker, got ${blockers.length}`);
+  assert(blockers[0].includes('Call Wall / King Node'), `Expected combined wall/node reason, got ${blockers[0]}`);
 }
 
 async function testExecutionRealismScoresCleanQuoteAsExecutable() {
@@ -1121,6 +1162,9 @@ async function runTests() {
   await testMacroBlocksCallsWhenDxyAndTenYearRiseTogether();
   await testMacroRewardsRiskOnCallSetups();
   await testLottoDiagnosticsExplainScoreAndPricingPenalty();
+  await testRelatedMissingQuoteWarningsUseSingleCappedPenalty();
+  await testLiveQuoteFallbackAfterChainRejectionUsesSmallPenalty();
+  await testGexProximityDeduplicatesCallWallAndKingNodeAtSameStrike();
   await testExecutionRealismScoresCleanQuoteAsExecutable();
   await testSignalConfigSnapshotCapturesReplayAndExecutionSettings();
   await testGeneratedDecisionSnapshotCapturesInputsImmutably();

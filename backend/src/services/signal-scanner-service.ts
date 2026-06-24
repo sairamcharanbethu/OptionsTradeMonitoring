@@ -1234,27 +1234,16 @@ Rules:
       volatilityBlockers.push(blocker);
     }
 
-    // GEX proximity blockers
-    if (winningSide === 'CALL' && qqqCallWall !== null && currentPrice < qqqCallWall) {
-      if (qqqCallWall - currentPrice <= 0.50) {
-        volatilityBlockers.push(`Blocked: Spot ($${currentPrice.toFixed(2)}) is too close to Call Wall ($${qqqCallWall.toFixed(2)})`);
-      }
-    }
-    if (winningSide === 'PUT' && qqqPutWall !== null && currentPrice > qqqPutWall) {
-      if (currentPrice - qqqPutWall <= 0.50) {
-        volatilityBlockers.push(`Blocked: Spot ($${currentPrice.toFixed(2)}) is too close to Put Wall ($${qqqPutWall.toFixed(2)})`);
-      }
-    }
-
-    if (regime === 'BREAKOUT' && qqqFloor !== null && qqqCeiling !== null) {
-      if (qqqCeiling - qqqFloor <= 2.0) {
-        volatilityBlockers.push(`Blocked: Pinned in tight GEX range ($${qqqFloor}–$${qqqCeiling}), breakout unlikely.`);
-      }
-    }
-
-    if (qqqKingNode !== null && Math.abs(currentPrice - qqqKingNode) <= 0.50) {
-      volatilityBlockers.push(`Blocked: Spot ($${currentPrice.toFixed(2)}) is pinned to King Node ($${qqqKingNode.toFixed(2)})`);
-    }
+    volatilityBlockers.push(...this.buildGexProximityBlockers({
+      winningSide,
+      currentPrice,
+      callWall: qqqCallWall,
+      putWall: qqqPutWall,
+      kingNode: qqqKingNode,
+      floor: qqqFloor,
+      ceiling: qqqCeiling,
+      regime
+    }));
 
     // Append blockers to reasons
     for (const blocker of volatilityBlockers) {
@@ -1549,7 +1538,7 @@ Rules:
         this.fastify.log.warn(`[SignalScannerService] ThetaData option chain selection failed: ${thetaErr.message}`);
       }
 
-      if (usingTheoreticalPricing && chosenContract && !chainSelectionRejected) {
+      if (usingTheoreticalPricing && chosenContract) {
         try {
           const thetaData = new ThetaDataService(this.fastify);
           const quote = await thetaData.getOptionQuote(userId, {
@@ -1619,14 +1608,15 @@ Rules:
       const pricingWarnings: string[] = [];
       if (mark === null || bid === null || ask === null) pricingWarnings.push('No usable live option quote selected');
       if (chainSelectionRejected) pricingWarnings.push('No ThetaData option candidate passed liquidity/spread filters');
-      if (usingTheoreticalPricing) pricingWarnings.push('Using theoretical option price fallback');
+      if (usingTheoreticalPricing && mark !== null && bid !== null && ask !== null) pricingWarnings.push('Using theoretical option price fallback');
       if (mark !== null && mark < minOptionMark) pricingWarnings.push(`Option premium $${mark} below limit $${minOptionMark}`);
       if (spreadPct !== null && spreadPct > maxBidAskSpreadPct) pricingWarnings.push(`Spread ${spreadPct}% exceeds ceiling ${maxBidAskSpreadPct}%`);
       if (volume !== null && volume < minOptionVolume) pricingWarnings.push(`Volume ${volume} below minimum ${minOptionVolume}`);
       if (openInterest !== null && openInterest < minOpenInterest) pricingWarnings.push(`Open interest ${openInterest} below minimum ${minOpenInterest}`);
 
       // Apply score adjustments for macro regime and pricing warnings.
-      let finalConfidence = Math.max(0, Math.min(100, winningScore + macroRegime.confidenceAdjustment - pricingWarnings.length * 10));
+      const pricingPenalty = this.getPricingWarningPenalty(pricingWarnings);
+      let finalConfidence = Math.max(0, Math.min(100, winningScore + macroRegime.confidenceAdjustment - pricingPenalty));
 
       let setupGrade = '🎲 B / LOTTO';
       if (finalConfidence >= 92 && macroRegime.score >= 70 && pricingWarnings.length === 0) {
@@ -1639,6 +1629,7 @@ Rules:
         baseScore: winningScore,
         macroRegime,
         pricingWarnings,
+        pricingPenalty,
         executionRealism: this.buildExecutionRealismDiagnostics({
           mark,
           spreadPct,
@@ -2128,6 +2119,7 @@ Rules:
     baseScore: number;
     macroRegime: MacroRegimeAssessment;
     pricingWarnings: string[];
+    pricingPenalty: number;
     executionRealism: SignalGradeDiagnostics['executionRealism'];
     finalConfidence: number;
     setupGrade: string;
@@ -2152,7 +2144,7 @@ Rules:
         reasons.push(`Macro reduced confidence by ${Math.abs(input.macroRegime.confidenceAdjustment)} point(s)`);
       }
       if (input.pricingWarnings.length > 0) {
-        reasons.push(`Pricing warnings subtracted ${input.pricingWarnings.length * 10} point(s)`);
+        reasons.push(`Pricing warnings subtracted ${input.pricingPenalty} point(s)`);
       }
     }
 
@@ -2160,7 +2152,7 @@ Rules:
       baseScore: input.baseScore,
       macroScore: input.macroRegime.score,
       macroConfidenceAdjustment: input.macroRegime.confidenceAdjustment,
-      pricingPenalty: input.pricingWarnings.length * -10,
+      pricingPenalty: input.pricingPenalty * -1,
       finalConfidence: input.finalConfidence,
       setupGrade: input.setupGrade,
       gradeKey,
@@ -2172,6 +2164,78 @@ Rules:
       pricingWarnings: input.pricingWarnings,
       executionRealism: input.executionRealism
     };
+  }
+
+  private getPricingWarningPenalty(pricingWarnings: string[]): number {
+    const missingLiveQuote = pricingWarnings.includes('No usable live option quote selected');
+    const chainRejected = pricingWarnings.includes('No ThetaData option candidate passed liquidity/spread filters');
+    const theoreticalFallback = pricingWarnings.includes('Using theoretical option price fallback');
+    const groupedWarnings = new Set([
+      'No usable live option quote selected',
+      'No ThetaData option candidate passed liquidity/spread filters',
+      'Using theoretical option price fallback'
+    ]);
+    let penalty = 0;
+
+    if (missingLiveQuote || theoreticalFallback) {
+      penalty += 20;
+    } else if (chainRejected) {
+      penalty += 5;
+    }
+
+    for (const warning of pricingWarnings) {
+      if (!groupedWarnings.has(warning)) {
+        penalty += 10;
+      }
+    }
+
+    return penalty;
+  }
+
+  private buildGexProximityBlockers(input: {
+    winningSide: 'CALL' | 'PUT';
+    currentPrice: number;
+    callWall: number | null;
+    putWall: number | null;
+    kingNode: number | null;
+    floor: number | null;
+    ceiling: number | null;
+    regime: string;
+  }): string[] {
+    const blockers: string[] = [];
+    const proximity = 0.50;
+    const sameStrikeTolerance = 0.01;
+    const kingNodePinned = input.kingNode !== null && Math.abs(input.currentPrice - input.kingNode) <= proximity;
+    const callWallPinned = input.winningSide === 'CALL' &&
+      input.callWall !== null &&
+      input.currentPrice < input.callWall &&
+      input.callWall - input.currentPrice <= proximity;
+    const putWallPinned = input.winningSide === 'PUT' &&
+      input.putWall !== null &&
+      input.currentPrice > input.putWall &&
+      input.currentPrice - input.putWall <= proximity;
+
+    if (callWallPinned && kingNodePinned && input.callWall !== null && input.kingNode !== null && Math.abs(input.callWall - input.kingNode) <= sameStrikeTolerance) {
+      blockers.push(`Blocked: Spot ($${input.currentPrice.toFixed(2)}) is pinned near Call Wall / King Node ($${input.callWall.toFixed(2)})`);
+    } else if (putWallPinned && kingNodePinned && input.putWall !== null && input.kingNode !== null && Math.abs(input.putWall - input.kingNode) <= sameStrikeTolerance) {
+      blockers.push(`Blocked: Spot ($${input.currentPrice.toFixed(2)}) is pinned near Put Wall / King Node ($${input.putWall.toFixed(2)})`);
+    } else {
+      if (callWallPinned && input.callWall !== null) {
+        blockers.push(`Blocked: Spot ($${input.currentPrice.toFixed(2)}) is too close to Call Wall ($${input.callWall.toFixed(2)})`);
+      }
+      if (putWallPinned && input.putWall !== null) {
+        blockers.push(`Blocked: Spot ($${input.currentPrice.toFixed(2)}) is too close to Put Wall ($${input.putWall.toFixed(2)})`);
+      }
+      if (kingNodePinned && input.kingNode !== null) {
+        blockers.push(`Blocked: Spot ($${input.currentPrice.toFixed(2)}) is pinned to King Node ($${input.kingNode.toFixed(2)})`);
+      }
+    }
+
+    if (input.regime === 'BREAKOUT' && input.floor !== null && input.ceiling !== null && input.ceiling - input.floor <= 2.0) {
+      blockers.push(`Blocked: Pinned in tight GEX range ($${input.floor}-$${input.ceiling}), breakout unlikely.`);
+    }
+
+    return blockers;
   }
 
   private getDynamicMinimumScore(settings: any, currentMinutes: number, macroRegime: Pick<MacroRegimeAssessment, 'thresholdAdjustment'>): number {

@@ -751,7 +751,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </div>
 
                                         <div className="grid gap-2">
-                                            <Label htmlFor="dtMinScore">Minimum Signal Confidence</Label>
+                                            <Label htmlFor="dtMinScore">Minimum Setup Score</Label>
                                             <Input
                                                 id="dtMinScore"
                                                 type="number"
