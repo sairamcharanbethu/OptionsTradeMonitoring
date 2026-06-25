@@ -81,6 +81,21 @@ function tradingDaysBetween(from: Date, to: Date): number {
     return count;
 }
 
+function parseGoalDate(value: string): Date {
+    const d = new Date(value);
+    return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
+function toDateKey(date: Date): string {
+    return format(date, 'yyyy-MM-dd');
+}
+
+function addDays(date: Date, days: number): Date {
+    const next = new Date(date);
+    next.setDate(next.getDate() + days);
+    return next;
+}
+
 // ─── Status Badge Component ───
 function StatusBadge({ status }: { status: string }) {
     const config: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
@@ -412,6 +427,7 @@ export default function GoalTracker() {
 
     const handleDeleteEntry = async (entryId: number) => {
         if (!activeGoalId) return;
+        if (!confirm('Delete this earning entry?')) return;
         try {
             await api.deleteGoalEntry(activeGoalId, entryId);
             invalidateAll();
@@ -422,13 +438,18 @@ export default function GoalTracker() {
 
     const handleInlineSave = async (entryId: number) => {
         if (!activeGoalId) return;
+        const parsedInlineAmount = parseFloat(inlineAmount);
+        if (inlineAmount.trim() === '' || !Number.isFinite(parsedInlineAmount)) {
+            alert('Enter a valid amount before saving.');
+            return;
+        }
         setInlineSaving(true);
         try {
             const entry = entries.find(e => e.id === entryId);
             if (!entry) throw new Error("Entry not found");
             await api.updateGoalEntry(activeGoalId, entryId, {
                 entry_date: entry.entry_date.split('T')[0],
-                amount: parseFloat(inlineAmount),
+                amount: parsedInlineAmount,
                 notes: inlineNotes || undefined
             });
             setInlineEditId(null);
@@ -457,9 +478,7 @@ export default function GoalTracker() {
         let cumulative = 0;
         return sorted.map(entry => {
             cumulative += Number(entry.amount);
-            // Fix: Parse UTC date components to Local to prevent timezone shift
-            const d = new Date(entry.entry_date);
-            const entryDate = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+            const entryDate = parseGoalDate(entry.entry_date);
 
             const tradingDaysElapsed = tradingDaysBetween(startDate, entryDate);
             const idealAtDay = dailyIdeal * tradingDaysElapsed;
@@ -488,8 +507,7 @@ export default function GoalTracker() {
         else if (timeframe === 'YTD') cutoff = new Date(now.getFullYear(), 0, 1);
 
         const fEntries = entries.filter(e => {
-            const d = new Date(e.entry_date);
-            const localDate = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+            const localDate = parseGoalDate(e.entry_date);
             return localDate >= cutoff;
         });
 
@@ -498,8 +516,109 @@ export default function GoalTracker() {
         return { filteredChartData: fChart, filteredEntries: fEntries };
     }, [chartData, entries, timeframe]);
 
+    const dailySummaries = useMemo(() => {
+        const byDate = new Map<string, { date: Date; amount: number; count: number }>();
+        for (const entry of entries) {
+            const date = parseGoalDate(entry.entry_date);
+            const key = toDateKey(date);
+            const current = byDate.get(key) || { date, amount: 0, count: 0 };
+            current.amount += Number(entry.amount);
+            current.count += 1;
+            byDate.set(key, current);
+        }
+        return [...byDate.values()].sort((a, b) => a.date.getTime() - b.date.getTime());
+    }, [entries]);
+
+    const bestWorstDays = useMemo(() => {
+        if (dailySummaries.length === 0) return { best: null, worst: null };
+        return {
+            best: dailySummaries.reduce((best, day) => day.amount > best.amount ? day : best, dailySummaries[0]),
+            worst: dailySummaries.reduce((worst, day) => day.amount < worst.amount ? day : worst, dailySummaries[0])
+        };
+    }, [dailySummaries]);
+
+    const monthlyBreakdown = useMemo(() => {
+        if (!activeGoal) return [];
+        const targetAmount = Number(activeGoal.target_amount);
+        const goalStart = parseGoalDate(activeGoal.start_date);
+        const goalEnd = parseGoalDate(activeGoal.end_date);
+        const totalTradingDays = Math.max(1, tradingDaysBetween(goalStart, addDays(goalEnd, 1)));
+        const amountsByMonth = new Map<string, number>();
+
+        for (const entry of entries) {
+            const date = parseGoalDate(entry.entry_date);
+            const key = format(date, 'yyyy-MM');
+            amountsByMonth.set(key, (amountsByMonth.get(key) || 0) + Number(entry.amount));
+        }
+
+        const months: Array<{ key: string; label: string; earned: number; pace: number; delta: number }> = [];
+        const cursor = new Date(goalStart.getFullYear(), goalStart.getMonth(), 1);
+        const lastMonth = new Date(goalEnd.getFullYear(), goalEnd.getMonth(), 1);
+
+        while (cursor <= lastMonth) {
+            const monthStart = new Date(cursor);
+            const monthEndExclusive = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+            const overlapStart = monthStart < goalStart ? goalStart : monthStart;
+            const overlapEnd = monthEndExclusive > addDays(goalEnd, 1) ? addDays(goalEnd, 1) : monthEndExclusive;
+            const tradingDays = Math.max(0, tradingDaysBetween(overlapStart, overlapEnd));
+            const pace = (targetAmount / totalTradingDays) * tradingDays;
+            const key = format(monthStart, 'yyyy-MM');
+            const earned = amountsByMonth.get(key) || 0;
+            months.push({
+                key,
+                label: format(monthStart, 'MMM yyyy'),
+                earned,
+                pace,
+                delta: earned - pace
+            });
+            cursor.setMonth(cursor.getMonth() + 1);
+        }
+
+        return months;
+    }, [entries, activeGoal]);
+
+    const heatmapWeeks = useMemo(() => {
+        const amountsByDate = new Map(dailySummaries.map(day => [toDateKey(day.date), day.amount]));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const start = addDays(today, -55);
+        const weeks: Array<Array<{ key: string; date: Date; amount: number }>> = [];
+
+        for (let week = 0; week < 8; week++) {
+            const days = [];
+            for (let day = 0; day < 7; day++) {
+                const date = addDays(start, week * 7 + day);
+                const key = toDateKey(date);
+                days.push({ key, date, amount: amountsByDate.get(key) || 0 });
+            }
+            weeks.push(days);
+        }
+
+        return weeks;
+    }, [dailySummaries]);
+
+    const heatmapMaxAmount = Math.max(1, ...dailySummaries.map(day => Math.abs(day.amount)));
+    const paceDeltaAmount = insights
+        ? insights.totalEarned - (insights.targetAmount * (insights.expectedPercent / 100))
+        : 0;
+    const paceDeltaIsAhead = paceDeltaAmount >= 0;
+    const getHeatmapCellClass = (amount: number) => {
+        if (amount === 0) return 'bg-muted border-border/60';
+        const intensity = Math.min(1, Math.abs(amount) / heatmapMaxAmount);
+        if (amount > 0) {
+            if (intensity >= 0.75) return 'bg-green-500 border-green-400';
+            if (intensity >= 0.4) return 'bg-green-500/70 border-green-500/50';
+            return 'bg-green-500/35 border-green-500/30';
+        }
+        if (intensity >= 0.75) return 'bg-red-500 border-red-400';
+        if (intensity >= 0.4) return 'bg-red-500/70 border-red-500/50';
+        return 'bg-red-500/35 border-red-500/30';
+    };
+
     // ─── Progress percentage for slider ───
     const progressPercent = insights?.percentComplete ?? 0;
+    const clampedProgressPercent = Math.max(0, Math.min(100, progressPercent));
+    const clampedExpectedPercent = Math.max(0, Math.min(100, insights?.expectedPercent ?? 0));
     const progressColor = insights?.status === 'COMPLETED' ? '#10b981'
         : insights?.status === 'AHEAD' ? '#22c55e'
             : insights?.status === 'ON_TRACK' ? '#3b82f6'
@@ -632,7 +751,7 @@ export default function GoalTracker() {
                                                 <div
                                                     className="h-full w-full origin-left rounded-full transition-transform duration-300 ease-out relative"
                                                     style={{
-                                                        transform: `scaleX(${Math.min(100, progressPercent) / 100})`,
+                                                        transform: `scaleX(${clampedProgressPercent / 100})`,
                                                         background: `linear-gradient(90deg, ${progressColor}cc, ${progressColor})`,
                                                     }}
                                                 >
@@ -644,16 +763,16 @@ export default function GoalTracker() {
                                                     <div
                                                         key={marker}
                                                         className="absolute top-0 bottom-0 border-l-[1.5px] border-background z-10"
-                                                        style={{ left: `${marker}%`, opacity: progressPercent > marker ? 0.3 : 0.6 }}
+                                                        style={{ left: `${marker}%`, opacity: clampedProgressPercent > marker ? 0.3 : 0.6 }}
                                                     >
-                                                        <span className={`absolute -bottom-5 -translate-x-1/2 text-[10px] font-bold ${progressPercent >= marker ? 'text-foreground' : 'text-muted-foreground'}`}>{marker}%</span>
+                                                        <span className={`absolute -bottom-5 -translate-x-1/2 text-[10px] font-bold ${clampedProgressPercent >= marker ? 'text-foreground' : 'text-muted-foreground'}`}>{marker}%</span>
                                                     </div>
                                                 ))}
                                             </div>
                                             {/* Expected position marker */}
                                             <div
                                                 className="absolute top-0 h-4 w-0.5 bg-foreground/40"
-                                                style={{ left: `${Math.min(100, insights.expectedPercent)}%` }}
+                                                style={{ left: `${clampedExpectedPercent}%` }}
                                                 title={`Expected: ${insights.expectedPercent.toFixed(1)}%`}
                                             />
                                         </div>
@@ -664,6 +783,21 @@ export default function GoalTracker() {
                                                 <div className="w-3 h-0.5 bg-foreground/40" /> Expected pace marker
                                             </span>
                                             <span>{format(parseISO(activeGoal.end_date), 'MMM d, yyyy')}</span>
+                                        </div>
+
+                                        <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+                                            <div className="flex items-center gap-2 text-sm">
+                                                <ArrowRight className={`h-4 w-4 ${paceDeltaIsAhead ? 'text-green-500' : 'text-red-500'}`} />
+                                                <span className="font-medium">
+                                                    {paceDeltaIsAhead ? 'Ahead by ' : 'Behind by '}
+                                                    <span className={paceDeltaIsAhead ? 'text-green-500' : 'text-red-500'}>
+                                                        {formatCurrency(Math.abs(paceDeltaAmount), true, 2)}
+                                                    </span>
+                                                </span>
+                                            </div>
+                                            <span className="text-xs text-muted-foreground">
+                                                Expected now: {formatCurrency(insights.targetAmount * (insights.expectedPercent / 100), true, 2)}
+                                            </span>
                                         </div>
                                     </>
                                 ) : null}
@@ -729,7 +863,7 @@ export default function GoalTracker() {
 
                     {/* Streak Counter + Win Rate Row */}
                     {insights && insights.totalEntries > 0 && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                             {/* Streak Counter */}
                             <Card className="border-orange-500/20">
                                 <CardContent className="py-5">
@@ -821,6 +955,44 @@ export default function GoalTracker() {
                                     </div>
                                 </CardContent>
                             </Card>
+
+                            <Card className="border-green-500/20">
+                                <CardContent className="py-5">
+                                    <div className="flex items-start gap-4">
+                                        <div className="p-3 rounded-xl bg-green-500/10">
+                                            <TrendingUp className="h-7 w-7 text-green-500" />
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Best Day</p>
+                                            <p className="text-2xl sm:text-3xl font-bold text-green-500">
+                                                {bestWorstDays.best ? formatCurrency(bestWorstDays.best.amount, true, 2, true) : '$0.00'}
+                                            </p>
+                                            <p className="mt-2 text-xs text-muted-foreground">
+                                                {bestWorstDays.best ? `${format(bestWorstDays.best.date, 'MMM d, yyyy')} - ${bestWorstDays.best.count} entr${bestWorstDays.best.count === 1 ? 'y' : 'ies'}` : 'No profitable day yet'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+
+                            <Card className="border-red-500/20">
+                                <CardContent className="py-5">
+                                    <div className="flex items-start gap-4">
+                                        <div className="p-3 rounded-xl bg-red-500/10">
+                                            <TrendingDown className="h-7 w-7 text-red-500" />
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Worst Day</p>
+                                            <p className={`text-2xl sm:text-3xl font-bold ${(bestWorstDays.worst?.amount ?? 0) < 0 ? 'text-red-500' : 'text-muted-foreground'}`}>
+                                                {bestWorstDays.worst ? formatCurrency(bestWorstDays.worst.amount, true, 2, bestWorstDays.worst.amount > 0) : '$0.00'}
+                                            </p>
+                                            <p className="mt-2 text-xs text-muted-foreground">
+                                                {bestWorstDays.worst ? `${format(bestWorstDays.worst.date, 'MMM d, yyyy')} - ${bestWorstDays.worst.count} entr${bestWorstDays.worst.count === 1 ? 'y' : 'ies'}` : 'No loss day yet'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
                         </div>
                     )}
 
@@ -847,76 +1019,166 @@ export default function GoalTracker() {
                                 </div>
                             </CardHeader>
                             <CardContent className="h-[250px] sm:h-[300px]">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <ComposedChart data={filteredChartData}>
-                                        <defs>
-                                            <linearGradient id="earnedGradient" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor={progressColor} stopOpacity={0.3} />
-                                                <stop offset="95%" stopColor={progressColor} stopOpacity={0} />
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                                        <YAxis
-                                            tick={{ fontSize: 11 }}
-                                            domain={[dataMin => Math.min(0, dataMin), 'auto']}
-                                            tickFormatter={v => {
-                                                const isNegative = v < 0;
-                                                const absV = Math.abs(v);
-                                                if (absV >= 1000) {
-                                                    return `${isNegative ? '-' : ''}$${(absV / 1000).toFixed(0)}k`;
-                                                }
-                                                return `${isNegative ? '-' : ''}$${absV}`;
-                                            }}
-                                        />
-                                        <RechartsTooltip
-                                            contentStyle={{
-                                                backgroundColor: 'hsl(var(--card))',
-                                                border: '1px solid hsl(var(--border))',
-                                                borderRadius: '8px',
-                                                fontSize: '12px'
-                                            }}
-                                            formatter={((value: number, name: string) => [
-                                                formatCurrency(value, true, 2),
-                                                name === 'earned' ? 'Actual' : 'Ideal Pace'
-                                            ]) as any}
-                                        />
-                                        <ReferenceLine y={0} stroke="hsl(var(--border))" strokeWidth={1} />
-                                        <Bar dataKey="earned" radius={[4, 4, 0, 0]} maxBarSize={40}>
-                                            {filteredChartData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={(entry.dailyAmount < 0 || entry.earned < entry.ideal) ? '#ef4444' : '#22c55e'} />
-                                            ))}
-                                        </Bar>
-                                        <Line
-                                            type="monotone"
-                                            dataKey="ideal"
-                                            stroke="#94a3b8"
-                                            strokeWidth={1.5}
-                                            strokeDasharray="6 3"
-                                            dot={false}
-                                        />
-                                    </ComposedChart>
-                                </ResponsiveContainer>
+                                {filteredChartData.length === 0 ? (
+                                    <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+                                        No entries in the selected timeframe.
+                                    </div>
+                                ) : (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <ComposedChart data={filteredChartData}>
+                                            <defs>
+                                                <linearGradient id="earnedGradient" x1="0" y1="0" x2="0" y2="1">
+                                                    <stop offset="5%" stopColor={progressColor} stopOpacity={0.3} />
+                                                    <stop offset="95%" stopColor={progressColor} stopOpacity={0} />
+                                                </linearGradient>
+                                            </defs>
+                                            <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                                            <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                                            <YAxis
+                                                tick={{ fontSize: 11 }}
+                                                domain={[dataMin => Math.min(0, dataMin), 'auto']}
+                                                tickFormatter={v => {
+                                                    const isNegative = v < 0;
+                                                    const absV = Math.abs(v);
+                                                    if (absV >= 1000) {
+                                                        return `${isNegative ? '-' : ''}$${(absV / 1000).toFixed(0)}k`;
+                                                    }
+                                                    return `${isNegative ? '-' : ''}$${absV}`;
+                                                }}
+                                            />
+                                            <RechartsTooltip
+                                                contentStyle={{
+                                                    backgroundColor: 'hsl(var(--card))',
+                                                    border: '1px solid hsl(var(--border))',
+                                                    borderRadius: '8px',
+                                                    fontSize: '12px'
+                                                }}
+                                                formatter={((value: number, name: string) => [
+                                                    formatCurrency(value, true, 2),
+                                                    name === 'earned' ? 'Actual' : 'Ideal Pace'
+                                                ]) as any}
+                                            />
+                                            <ReferenceLine y={0} stroke="hsl(var(--border))" strokeWidth={1} />
+                                            <Bar dataKey="earned" radius={[4, 4, 0, 0]} maxBarSize={40}>
+                                                {filteredChartData.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={(entry.dailyAmount < 0 || entry.earned < entry.ideal) ? '#ef4444' : '#22c55e'} />
+                                                ))}
+                                            </Bar>
+                                            <Line
+                                                type="monotone"
+                                                dataKey="ideal"
+                                                stroke="#94a3b8"
+                                                strokeWidth={1.5}
+                                                strokeDasharray="6 3"
+                                                dot={false}
+                                            />
+                                        </ComposedChart>
+                                    </ResponsiveContainer>
+                                )}
                             </CardContent>
                         </Card>
+                    )}
+
+                    {entries.length > 0 && (
+                        <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
+                            <Card className="xl:col-span-3">
+                                <CardHeader className="pb-2">
+                                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                        <BarChart3 className="h-4 w-4 text-primary" />
+                                        Monthly Breakdown
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="p-0 sm:p-6 sm:pt-0">
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm text-left">
+                                            <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
+                                                <tr>
+                                                    <th className="px-4 py-3">Month</th>
+                                                    <th className="px-4 py-3 text-right">Earned</th>
+                                                    <th className="px-4 py-3 text-right">Pace</th>
+                                                    <th className="px-4 py-3 text-right">Delta</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {monthlyBreakdown.map(month => (
+                                                    <tr key={month.key} className="border-b last:border-0 hover:bg-muted/40">
+                                                        <td className="px-4 py-3 font-medium">{month.label}</td>
+                                                        <td className={`px-4 py-3 text-right font-semibold ${month.earned >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                            {formatCurrency(month.earned, false, 2, month.earned > 0)}
+                                                        </td>
+                                                        <td className="px-4 py-3 text-right text-muted-foreground">
+                                                            {formatCurrency(month.pace, false, 2)}
+                                                        </td>
+                                                        <td className={`px-4 py-3 text-right font-semibold ${month.delta >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                            {formatCurrency(month.delta, false, 2, month.delta > 0)}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </CardContent>
+                            </Card>
+
+                            <Card className="xl:col-span-2">
+                                <CardHeader className="pb-2">
+                                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                        <Calendar className="h-4 w-4 text-primary" />
+                                        Earnings Heatmap
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                    <div className="flex gap-1 overflow-x-auto pb-1">
+                                        {heatmapWeeks.map((week, weekIndex) => (
+                                            <div key={weekIndex} className="grid grid-rows-7 gap-1">
+                                                {week.map(day => (
+                                                    <div
+                                                        key={day.key}
+                                                        className={`h-5 w-5 rounded border ${getHeatmapCellClass(day.amount)}`}
+                                                        title={`${format(day.date, 'MMM d, yyyy')}: ${day.amount >= 0 ? '+' : ''}$${day.amount.toFixed(2)}`}
+                                                    />
+                                                ))}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                        <span>8 weeks</span>
+                                        <div className="flex items-center gap-1">
+                                            <span>Loss</span>
+                                            <span className="h-3 w-3 rounded bg-red-500/70" />
+                                            <span className="h-3 w-3 rounded bg-muted border" />
+                                            <span className="h-3 w-3 rounded bg-green-500/70" />
+                                            <span>Profit</span>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </div>
                     )}
 
                     {/* Entry Log */}
                     <Card>
                         <CardHeader>
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                 <CardTitle className="text-lg flex items-center gap-2">
                                     <Calendar className="h-5 w-5 text-primary" />
                                     Earnings Log
                                 </CardTitle>
-                                <Button
-                                    size="sm"
-                                    onClick={() => { setEditingEntry(undefined); setEntryDialogOpen(true); }}
-                                    className="gap-1 text-xs"
-                                >
-                                    <Plus className="h-3 w-3" />
-                                    Log Entry
-                                </Button>
+                                <div className="flex items-center gap-3">
+                                    {entries.length > 0 && timeframe !== 'ALL' && (
+                                        <span className="text-xs text-muted-foreground">
+                                            Showing {filteredEntries.length} of {entries.length}
+                                        </span>
+                                    )}
+                                    <Button
+                                        size="sm"
+                                        onClick={() => { setEditingEntry(undefined); setEntryDialogOpen(true); }}
+                                        className="gap-1 text-xs"
+                                    >
+                                        <Plus className="h-3 w-3" />
+                                        Log Entry
+                                    </Button>
+                                </div>
                             </div>
                         </CardHeader>
                         <CardContent className="p-0 sm:p-6">
@@ -941,16 +1203,35 @@ export default function GoalTracker() {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {filteredEntries.map(entry => {
+                                            {filteredEntries.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan={4} className="px-4 py-10 text-center text-sm text-muted-foreground">
+                                                        No entries in the selected timeframe.
+                                                    </td>
+                                                </tr>
+                                            ) : filteredEntries.map(entry => {
                                                 const isEditing = inlineEditId === entry.id;
+                                                const inlineAmountNumber = parseFloat(inlineAmount);
+                                                const inlineAmountIsValid = inlineAmount.trim() !== '' && Number.isFinite(inlineAmountNumber);
                                                 return (
                                                     <tr key={entry.id} className={`border-b hover:bg-muted/50 transition-colors ${isEditing ? 'bg-muted/30' : ''}`}>
                                                         <td className="px-4 py-3 font-medium">
                                                             {(() => {
-                                                                const d = new Date(entry.entry_date);
-                                                                const localDate = new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+                                                                const localDate = parseGoalDate(entry.entry_date);
                                                                 return format(localDate, 'MMM d, yyyy');
                                                             })()}
+                                                            {isEditing ? (
+                                                                <Input
+                                                                    value={inlineNotes}
+                                                                    onChange={e => setInlineNotes(e.target.value)}
+                                                                    className="mt-2 h-8 text-xs sm:hidden"
+                                                                    placeholder="Notes"
+                                                                />
+                                                            ) : entry.notes ? (
+                                                                <div className="mt-1 max-w-[180px] truncate text-xs font-normal text-muted-foreground sm:hidden">
+                                                                    {entry.notes}
+                                                                </div>
+                                                            ) : null}
                                                         </td>
                                                         <td className="px-4 py-3">
                                                             {isEditing ? (
@@ -971,10 +1252,10 @@ export default function GoalTracker() {
                                                         <td className="px-4 py-3 text-right">
                                                             {isEditing ? (
                                                                 <div className="flex items-center justify-end gap-1">
-                                                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-green-500 hover:bg-green-500/10 hover:text-green-600" onClick={() => handleInlineSave(entry.id)} disabled={inlineSaving}>
+                                                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-green-500 hover:bg-green-500/10 hover:text-green-600" onClick={() => handleInlineSave(entry.id)} disabled={inlineSaving || !inlineAmountIsValid} title="Save entry">
                                                                         {inlineSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                                                                     </Button>
-                                                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-500/10 hover:text-red-600" onClick={() => setInlineEditId(null)} disabled={inlineSaving}>
+                                                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-500/10 hover:text-red-600" onClick={() => setInlineEditId(null)} disabled={inlineSaving} title="Cancel edit">
                                                                         <X className="h-3 w-3" />
                                                                     </Button>
                                                                 </div>
@@ -984,6 +1265,7 @@ export default function GoalTracker() {
                                                                         variant="ghost"
                                                                         size="icon"
                                                                         className="h-7 w-7"
+                                                                        title="Edit entry"
                                                                         onClick={() => {
                                                                             setInlineEditId(entry.id);
                                                                             setInlineAmount(entry.amount.toString());
@@ -996,6 +1278,7 @@ export default function GoalTracker() {
                                                                         variant="ghost"
                                                                         size="icon"
                                                                         className="h-7 w-7 text-red-500 hover:text-red-700"
+                                                                        title="Delete entry"
                                                                         onClick={() => handleDeleteEntry(entry.id)}
                                                                     >
                                                                         <Trash2 className="h-3 w-3" />
