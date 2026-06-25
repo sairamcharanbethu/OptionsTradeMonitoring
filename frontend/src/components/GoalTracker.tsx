@@ -96,6 +96,25 @@ function addDays(date: Date, days: number): Date {
     return next;
 }
 
+function addTradingDays(date: Date, days: number): Date {
+    const holidays = new Set<string>();
+    const startYear = date.getFullYear();
+    for (let y = startYear; y <= startYear + 5; y++)
+        getUSMarketHolidays(y).forEach(h => holidays.add(h));
+
+    const cursor = new Date(date);
+    cursor.setHours(0, 0, 0, 0);
+    let added = 0;
+    while (added < days) {
+        cursor.setDate(cursor.getDate() + 1);
+        const dow = cursor.getDay();
+        if (dow !== 0 && dow !== 6 && !holidays.has(toDateKey(cursor))) {
+            added++;
+        }
+    }
+    return cursor;
+}
+
 // ─── Status Badge Component ───
 function StatusBadge({ status }: { status: string }) {
     const config: Record<string, { label: string; className: string; icon: React.ReactNode }> = {
@@ -598,10 +617,45 @@ export default function GoalTracker() {
         return weeks;
     }, [dailySummaries]);
 
+    const milestoneProgress = useMemo(() => {
+        if (!activeGoal) return [];
+        const targetAmount = Number(activeGoal.target_amount);
+        const milestones = [25, 50, 75, 100];
+        const reached = new Map<number, { date: Date; amount: number }>();
+        let cumulative = 0;
+
+        for (const day of dailySummaries) {
+            cumulative += day.amount;
+            for (const marker of milestones) {
+                if (!reached.has(marker) && cumulative >= targetAmount * (marker / 100)) {
+                    reached.set(marker, { date: day.date, amount: cumulative });
+                }
+            }
+        }
+
+        return milestones.map(marker => ({
+            marker,
+            target: targetAmount * (marker / 100),
+            reached: reached.get(marker) || null
+        }));
+    }, [dailySummaries, activeGoal]);
+
     const heatmapMaxAmount = Math.max(1, ...dailySummaries.map(day => Math.abs(day.amount)));
     const paceDeltaAmount = insights
         ? insights.totalEarned - (insights.targetAmount * (insights.expectedPercent / 100))
         : 0;
+    const remainingAmount = insights ? Math.max(0, insights.targetAmount - insights.totalEarned) : 0;
+    const requiredMonthlyPace = insights ? Math.max(0, insights.remainingPerDay * 21) : 0;
+    const forecastText = useMemo(() => {
+        if (!insights) return null;
+        if (insights.totalEarned >= insights.targetAmount) return 'Goal reached';
+        if (insights.dailyAverage <= 0) return 'Forecast unavailable until average turns positive';
+        const tradingDaysNeeded = Math.ceil((insights.targetAmount - insights.totalEarned) / insights.dailyAverage);
+        const forecastDate = addTradingDays(new Date(), Math.max(1, tradingDaysNeeded));
+        const goalEnd = parseGoalDate(activeGoal?.end_date || new Date().toISOString());
+        const timing = forecastDate <= goalEnd ? 'Projected finish' : 'Projected after target date';
+        return `${timing}: ${format(forecastDate, 'MMM d, yyyy')}`;
+    }, [insights, activeGoal]);
     const paceDeltaIsAhead = paceDeltaAmount >= 0;
     const getHeatmapCellClass = (amount: number) => {
         if (amount === 0) return 'bg-muted border-border/60';
@@ -713,8 +767,8 @@ export default function GoalTracker() {
                 </Card>
             ) : (
                 <>
-                    {/* Progress Bar + Insights Row */}
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                        {/* Progress Bar + Insights Row */}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                         {/* Big Progress Card */}
                         <Card className="lg:col-span-2">
                             <CardHeader className="pb-3">
@@ -859,10 +913,67 @@ export default function GoalTracker() {
                                     </>
                                 ) : null}
                             </CardContent>
-                        </Card>
-                    </div>
+                            </Card>
+                        </div>
 
-                    {/* Streak Counter + Win Rate Row */}
+                        {insights && (
+                            <Card>
+                                <CardContent className="py-4">
+                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                        <div className="rounded-md border bg-background p-3">
+                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Remaining</p>
+                                            <p className="mt-1 text-lg font-bold">{formatCurrency(remainingAmount, true, 2)}</p>
+                                        </div>
+                                        <div className="rounded-md border bg-background p-3">
+                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need / Trading Day</p>
+                                            <p className="mt-1 text-lg font-bold text-orange-500">{formatCurrency(insights.remainingPerDay, true, 2)}</p>
+                                        </div>
+                                        <div className="rounded-md border bg-background p-3">
+                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Required Monthly Pace</p>
+                                            <p className="mt-1 text-lg font-bold">{formatCurrency(requiredMonthlyPace, true, 2)}</p>
+                                        </div>
+                                        <div className="rounded-md border bg-background p-3">
+                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Forecast</p>
+                                            <p className="mt-1 text-sm font-semibold leading-snug">{forecastText}</p>
+                                        </div>
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {milestoneProgress.length > 0 && (
+                            <Card>
+                                <CardHeader className="pb-2">
+                                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                        <Trophy className="h-4 w-4 text-yellow-500" />
+                                        Milestones
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                                        {milestoneProgress.map(item => {
+                                            const isReached = item.reached !== null;
+                                            return (
+                                                <div key={item.marker} className={`rounded-md border p-3 ${isReached ? 'bg-green-500/10 border-green-500/25' : 'bg-muted/30'}`}>
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className={`text-sm font-bold ${isReached ? 'text-green-500' : 'text-muted-foreground'}`}>{item.marker}%</span>
+                                                        {isReached ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Target className="h-4 w-4 text-muted-foreground" />}
+                                                    </div>
+                                                    <p className="mt-1 text-xs text-muted-foreground">
+                                                        {formatCurrency(item.target, false, 0)}
+                                                    </p>
+                                                    <p className="mt-2 text-xs font-medium">
+                                                        {item.reached ? format(item.reached.date, 'MMM d, yyyy') : 'Not reached yet'}
+                                                    </p>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        )}
+
+                        {/* Streak Counter + Win Rate Row */}
                     {insights && insights.totalEntries > 0 && (
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                             {/* Streak Counter */}
@@ -1192,108 +1303,171 @@ export default function GoalTracker() {
                                     <DollarSign className="h-8 w-8 mx-auto mb-2 opacity-30" />
                                     <p className="text-sm">No entries yet. Start logging your daily earnings!</p>
                                 </div>
-                            ) : (
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
-                                            <tr>
-                                                <th className="px-4 py-3">Date</th>
-                                                <th className="px-4 py-3">Amount</th>
-                                                <th className="px-4 py-3 hidden sm:table-cell">Notes</th>
-                                                <th className="px-4 py-3 text-right">Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {filteredEntries.length === 0 ? (
-                                                <tr>
-                                                    <td colSpan={4} className="px-4 py-10 text-center text-sm text-muted-foreground">
-                                                        No entries in the selected timeframe.
-                                                    </td>
-                                                </tr>
-                                            ) : filteredEntries.map(entry => {
+                                ) : filteredEntries.length === 0 ? (
+                                    <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+                                        No entries in the selected timeframe.
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="space-y-3 p-3 sm:hidden">
+                                            {filteredEntries.map(entry => {
                                                 const isEditing = inlineEditId === entry.id;
                                                 const inlineAmountNumber = parseFloat(inlineAmount);
                                                 const inlineAmountIsValid = inlineAmount.trim() !== '' && Number.isFinite(inlineAmountNumber);
+                                                const entryAmount = Number(entry.amount);
                                                 return (
-                                                    <tr key={entry.id} className={`border-b hover:bg-muted/50 transition-colors ${isEditing ? 'bg-muted/30' : ''}`}>
-                                                        <td className="px-4 py-3 font-medium">
-                                                            {(() => {
-                                                                const localDate = parseGoalDate(entry.entry_date);
-                                                                return format(localDate, 'MMM d, yyyy');
-                                                            })()}
-                                                            {isEditing ? (
-                                                                <Input
-                                                                    value={inlineNotes}
-                                                                    onChange={e => setInlineNotes(e.target.value)}
-                                                                    className="mt-2 h-8 text-xs sm:hidden"
-                                                                    placeholder="Notes"
-                                                                />
-                                                            ) : entry.notes ? (
-                                                                <div className="mt-1 max-w-[180px] truncate text-xs font-normal text-muted-foreground sm:hidden">
-                                                                    {entry.notes}
-                                                                </div>
-                                                            ) : null}
-                                                        </td>
-                                                        <td className="px-4 py-3">
-                                                            {isEditing ? (
-                                                                <Input type="number" step="0.01" value={inlineAmount} onChange={e => setInlineAmount(e.target.value)} className="h-8 w-[100px] text-xs" />
-                                                            ) : (
-                                                                <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                                                    {formatCurrency(Number(entry.amount), true, 2, Number(entry.amount) >= 0)}
-                                                                </span>
-                                                            )}
-                                                        </td>
-                                                        <td className="px-4 py-3 hidden sm:table-cell text-xs text-muted-foreground truncate max-w-[200px]">
-                                                            {isEditing ? (
-                                                                <Input value={inlineNotes} onChange={e => setInlineNotes(e.target.value)} className="h-8 text-xs" />
-                                                            ) : (
-                                                                entry.notes || '—'
-                                                            )}
-                                                        </td>
-                                                        <td className="px-4 py-3 text-right">
-                                                            {isEditing ? (
-                                                                <div className="flex items-center justify-end gap-1">
-                                                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-green-500 hover:bg-green-500/10 hover:text-green-600" onClick={() => handleInlineSave(entry.id)} disabled={inlineSaving || !inlineAmountIsValid} title="Save entry">
-                                                                        {inlineSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-                                                                    </Button>
-                                                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-500/10 hover:text-red-600" onClick={() => setInlineEditId(null)} disabled={inlineSaving} title="Cancel edit">
-                                                                        <X className="h-3 w-3" />
-                                                                    </Button>
-                                                                </div>
-                                                            ) : (
-                                                                <div className="flex items-center justify-end gap-1">
-                                                                    <Button
-                                                                        variant="ghost"
-                                                                        size="icon"
-                                                                        className="h-7 w-7"
-                                                                        title="Edit entry"
-                                                                        onClick={() => {
-                                                                            setInlineEditId(entry.id);
-                                                                            setInlineAmount(entry.amount.toString());
-                                                                            setInlineNotes(entry.notes || '');
-                                                                        }}
-                                                                    >
-                                                                        <Edit3 className="h-3 w-3" />
-                                                                    </Button>
-                                                                    <Button
-                                                                        variant="ghost"
-                                                                        size="icon"
-                                                                        className="h-7 w-7 text-red-500 hover:text-red-700"
-                                                                        title="Delete entry"
-                                                                        onClick={() => handleDeleteEntry(entry.id)}
-                                                                    >
-                                                                        <Trash2 className="h-3 w-3" />
-                                                                    </Button>
-                                                                </div>
-                                                            )}
-                                                        </td>
-                                                    </tr>
+                                                    <div key={entry.id} className={`rounded-md border bg-background p-3 ${isEditing ? 'border-primary/40 bg-muted/30' : ''}`}>
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <div className="min-w-0">
+                                                                <p className="text-xs font-semibold text-muted-foreground">{format(parseGoalDate(entry.entry_date), 'MMM d, yyyy')}</p>
+                                                                {isEditing ? (
+                                                                    <Input
+                                                                        type="number"
+                                                                        step="0.01"
+                                                                        value={inlineAmount}
+                                                                        onChange={e => setInlineAmount(e.target.value)}
+                                                                        className="mt-2 h-8 text-sm"
+                                                                    />
+                                                                ) : (
+                                                                    <p className={`mt-1 text-lg font-bold ${entryAmount >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                                        {formatCurrency(entryAmount, true, 2, entryAmount >= 0)}
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                            <div className="flex items-center gap-1">
+                                                                {isEditing ? (
+                                                                    <>
+                                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-green-500 hover:bg-green-500/10 hover:text-green-600" onClick={() => handleInlineSave(entry.id)} disabled={inlineSaving || !inlineAmountIsValid} title="Save entry">
+                                                                            {inlineSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                                                                        </Button>
+                                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-500/10 hover:text-red-600" onClick={() => setInlineEditId(null)} disabled={inlineSaving} title="Cancel edit">
+                                                                            <X className="h-3.5 w-3.5" />
+                                                                        </Button>
+                                                                    </>
+                                                                ) : (
+                                                                    <>
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="icon"
+                                                                            className="h-8 w-8"
+                                                                            title="Edit entry"
+                                                                            onClick={() => {
+                                                                                setInlineEditId(entry.id);
+                                                                                setInlineAmount(entry.amount.toString());
+                                                                                setInlineNotes(entry.notes || '');
+                                                                            }}
+                                                                        >
+                                                                            <Edit3 className="h-3.5 w-3.5" />
+                                                                        </Button>
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="icon"
+                                                                            className="h-8 w-8 text-red-500 hover:text-red-700"
+                                                                            title="Delete entry"
+                                                                            onClick={() => handleDeleteEntry(entry.id)}
+                                                                        >
+                                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                                        </Button>
+                                                                    </>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        {isEditing ? (
+                                                            <Input
+                                                                value={inlineNotes}
+                                                                onChange={e => setInlineNotes(e.target.value)}
+                                                                className="mt-3 h-8 text-xs"
+                                                                placeholder="Notes"
+                                                            />
+                                                        ) : entry.notes ? (
+                                                            <p className="mt-2 break-words text-xs text-muted-foreground">{entry.notes}</p>
+                                                        ) : null}
+                                                    </div>
                                                 );
                                             })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
+                                        </div>
+
+                                        <div className="hidden overflow-x-auto sm:block">
+                                            <table className="w-full text-sm text-left">
+                                                <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
+                                                    <tr>
+                                                        <th className="px-4 py-3">Date</th>
+                                                        <th className="px-4 py-3">Amount</th>
+                                                        <th className="px-4 py-3">Notes</th>
+                                                        <th className="px-4 py-3 text-right">Actions</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {filteredEntries.map(entry => {
+                                                        const isEditing = inlineEditId === entry.id;
+                                                        const inlineAmountNumber = parseFloat(inlineAmount);
+                                                        const inlineAmountIsValid = inlineAmount.trim() !== '' && Number.isFinite(inlineAmountNumber);
+                                                        return (
+                                                            <tr key={entry.id} className={`border-b hover:bg-muted/50 transition-colors ${isEditing ? 'bg-muted/30' : ''}`}>
+                                                                <td className="px-4 py-3 font-medium">
+                                                                    {format(parseGoalDate(entry.entry_date), 'MMM d, yyyy')}
+                                                                </td>
+                                                                <td className="px-4 py-3">
+                                                                    {isEditing ? (
+                                                                        <Input type="number" step="0.01" value={inlineAmount} onChange={e => setInlineAmount(e.target.value)} className="h-8 w-[100px] text-xs" />
+                                                                    ) : (
+                                                                        <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                                            {formatCurrency(Number(entry.amount), true, 2, Number(entry.amount) >= 0)}
+                                                                        </span>
+                                                                    )}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-xs text-muted-foreground truncate max-w-[200px]">
+                                                                    {isEditing ? (
+                                                                        <Input value={inlineNotes} onChange={e => setInlineNotes(e.target.value)} className="h-8 text-xs" />
+                                                                    ) : (
+                                                                        entry.notes || '-'
+                                                                    )}
+                                                                </td>
+                                                                <td className="px-4 py-3 text-right">
+                                                                    {isEditing ? (
+                                                                        <div className="flex items-center justify-end gap-1">
+                                                                            <Button variant="ghost" size="icon" className="h-7 w-7 text-green-500 hover:bg-green-500/10 hover:text-green-600" onClick={() => handleInlineSave(entry.id)} disabled={inlineSaving || !inlineAmountIsValid} title="Save entry">
+                                                                                {inlineSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                                                                            </Button>
+                                                                            <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 hover:bg-red-500/10 hover:text-red-600" onClick={() => setInlineEditId(null)} disabled={inlineSaving} title="Cancel edit">
+                                                                                <X className="h-3 w-3" />
+                                                                            </Button>
+                                                                        </div>
+                                                                    ) : (
+                                                                        <div className="flex items-center justify-end gap-1">
+                                                                            <Button
+                                                                                variant="ghost"
+                                                                                size="icon"
+                                                                                className="h-7 w-7"
+                                                                                title="Edit entry"
+                                                                                onClick={() => {
+                                                                                    setInlineEditId(entry.id);
+                                                                                    setInlineAmount(entry.amount.toString());
+                                                                                    setInlineNotes(entry.notes || '');
+                                                                                }}
+                                                                            >
+                                                                                <Edit3 className="h-3 w-3" />
+                                                                            </Button>
+                                                                            <Button
+                                                                                variant="ghost"
+                                                                                size="icon"
+                                                                                className="h-7 w-7 text-red-500 hover:text-red-700"
+                                                                                title="Delete entry"
+                                                                                onClick={() => handleDeleteEntry(entry.id)}
+                                                                            >
+                                                                                <Trash2 className="h-3 w-3" />
+                                                                            </Button>
+                                                                        </div>
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </>
+                                )}
                         </CardContent>
                     </Card>
                 </>
