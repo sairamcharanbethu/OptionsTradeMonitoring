@@ -195,6 +195,7 @@ type OptionQuoteCandidate = OptionContractCandidate & {
   impliedVolatility?: number | null;
   quoteAgeMs?: number | null;
   markLastDivergencePct?: number | null;
+  failedFilters: string[];
   score: number;
   reasons: string[];
 };
@@ -1421,6 +1422,7 @@ Rules:
       let usingTheoreticalPricing = true;
       let candidateSelection: any = null;
       let chainSelectionRejected = false;
+      let chainRejectionDetail: string | null = null;
 
       const defaultContractName = this.buildOsiTicker(symbol, targetExpiryDateStr, winningSide, Math.round(currentPrice));
       optionTicker = defaultContractName;
@@ -1505,6 +1507,7 @@ Rules:
               gamma: candidate.gamma ?? null,
               theta: candidate.theta ?? null,
               impliedVolatility: candidate.impliedVolatility ?? null,
+              failedFilters: candidate.failedFilters,
               score: candidate.score,
               reasons: candidate.reasons
             }))
@@ -1531,7 +1534,9 @@ Rules:
           } else if (selection.ranked.length > 0) {
             chainSelectionRejected = true;
             const bestRejected = selection.ranked[0];
-            this.fastify.log.warn(`[SignalScannerService] No ThetaData ${symbol} contract passed liquidity filters. Best rejected ${bestRejected.ticker}: mark=${bestRejected.mark}, spread=${bestRejected.spreadPct}%, volume=${bestRejected.volume}, OI=${bestRejected.openInterest}, score=${bestRejected.score}, reasons=${bestRejected.reasons.join('; ')}.`);
+            const bestRejectedReasons = bestRejected.failedFilters.length > 0 ? bestRejected.failedFilters : bestRejected.reasons;
+            chainRejectionDetail = `Best rejected ${bestRejected.ticker}: ${bestRejectedReasons.join('; ')}`;
+            this.fastify.log.warn(`[SignalScannerService] No ThetaData ${symbol} contract passed liquidity filters. Best rejected ${bestRejected.ticker}: mark=${bestRejected.mark}, spread=${bestRejected.spreadPct}%, volume=${bestRejected.volume}, OI=${bestRejected.openInterest}, score=${bestRejected.score}, failedFilters=${bestRejected.failedFilters.join('; ') || 'none'}, reasons=${bestRejected.reasons.join('; ')}.`);
           }
         }
       } catch (thetaErr: any) {
@@ -1608,6 +1613,7 @@ Rules:
       const pricingWarnings: string[] = [];
       if (mark === null || bid === null || ask === null) pricingWarnings.push('No usable live option quote selected');
       if (chainSelectionRejected) pricingWarnings.push('No ThetaData option candidate passed liquidity/spread filters');
+      if (chainRejectionDetail) pricingWarnings.push(chainRejectionDetail);
       if (usingTheoreticalPricing && mark !== null && bid !== null && ask !== null) pricingWarnings.push('Using theoretical option price fallback');
       if (mark !== null && mark < minOptionMark) pricingWarnings.push(`Option premium $${mark} below limit $${minOptionMark}`);
       if (spreadPct !== null && spreadPct > maxBidAskSpreadPct) pricingWarnings.push(`Spread ${spreadPct}% exceeds ceiling ${maxBidAskSpreadPct}%`);
@@ -2184,7 +2190,7 @@ Rules:
     }
 
     for (const warning of pricingWarnings) {
-      if (!groupedWarnings.has(warning)) {
+      if (!groupedWarnings.has(warning) && !warning.startsWith('Best rejected ')) {
         penalty += 10;
       }
     }
@@ -3025,7 +3031,7 @@ Rules:
     };
   }
 
-  private scoreOptionCandidate(candidate: Omit<OptionQuoteCandidate, 'score' | 'reasons'>, preferredStrike: number, minOptionMark: number, maxBidAskSpreadPct: number, minOptionVolume: number, minOpenInterest: number): { score: number; reasons: string[] } {
+  private scoreOptionCandidate(candidate: Omit<OptionQuoteCandidate, 'score' | 'reasons' | 'failedFilters'>, preferredStrike: number, minOptionMark: number, maxBidAskSpreadPct: number, minOptionVolume: number, minOpenInterest: number): { score: number; reasons: string[] } {
     const reasons: string[] = [];
     let score = 100;
 
@@ -3166,6 +3172,64 @@ Rules:
     return Number((Math.abs(mark - last) / mark * 100).toFixed(2));
   }
 
+  private getOptionCandidateFailedFilters(candidate: Omit<OptionQuoteCandidate, 'score' | 'reasons' | 'failedFilters'>, input: {
+    minOptionMark: number;
+    maxBidAskSpreadPct: number;
+    minOptionVolume: number;
+    minOpenInterest: number;
+  }): string[] {
+    const failedFilters: string[] = [];
+    const mark = candidate.mark === null ? null : Number(candidate.mark);
+    const bid = candidate.bid === null ? null : Number(candidate.bid);
+    const ask = candidate.ask === null ? null : Number(candidate.ask);
+    const spread = candidate.spread === null ? null : Number(candidate.spread);
+    const spreadPct = candidate.spreadPct === null ? null : Number(candidate.spreadPct);
+    const volume = candidate.volume === null ? null : Number(candidate.volume);
+    const openInterest = candidate.openInterest === null ? null : Number(candidate.openInterest);
+    const quoteAgeMs = candidate.quoteAgeMs === undefined ? null : candidate.quoteAgeMs;
+    const markLastDivergencePct = candidate.markLastDivergencePct === undefined ? null : candidate.markLastDivergencePct;
+    const theta = candidate.theta === null || candidate.theta === undefined ? null : Number(candidate.theta);
+    const strongVolumeThreshold = Math.max(input.minOptionVolume * 3, 500);
+    const hasStrongVolume = volume !== null && Number.isFinite(volume) && volume >= strongVolumeThreshold;
+
+    if (mark === null || !Number.isFinite(mark) || mark < input.minOptionMark) {
+      failedFilters.push(mark === null || !Number.isFinite(mark)
+        ? 'missing usable mark'
+        : `premium below ${input.minOptionMark}`);
+    }
+    if (bid === null || ask === null || !Number.isFinite(bid) || !Number.isFinite(ask) || bid <= 0 || ask <= 0) {
+      failedFilters.push('missing usable bid/ask');
+    }
+    if (spreadPct === null || !Number.isFinite(spreadPct)) {
+      failedFilters.push('missing spread');
+    } else if (spreadPct > input.maxBidAskSpreadPct) {
+      failedFilters.push(`wide spread ${spreadPct.toFixed(1)}%`);
+    }
+    if (spread !== null && Number.isFinite(spread) && spread * 100 > 35) {
+      failedFilters.push(`spread cost $${(spread * 100).toFixed(0)}/contract`);
+    }
+    if (quoteAgeMs !== null && quoteAgeMs > 15_000) {
+      failedFilters.push(`stale quote ${Math.round(quoteAgeMs / 1000)}s`);
+    }
+    if (markLastDivergencePct !== null && markLastDivergencePct > 15) {
+      failedFilters.push(`unstable mark/last ${markLastDivergencePct.toFixed(1)}%`);
+    }
+    if (theta !== null && Number.isFinite(theta) && mark !== null && Number.isFinite(mark) && mark > 0) {
+      const thetaDragPct = Math.abs(theta / mark) * 100;
+      if (thetaDragPct > 45) failedFilters.push(`theta drag ${thetaDragPct.toFixed(1)}%`);
+    }
+    if (volume !== null && Number.isFinite(volume) && volume < input.minOptionVolume) {
+      failedFilters.push(`volume below ${input.minOptionVolume}`);
+    }
+    if (openInterest === null || !Number.isFinite(openInterest)) {
+      if (!hasStrongVolume) failedFilters.push(`OI unavailable and volume below ${strongVolumeThreshold}`);
+    } else if (openInterest < input.minOpenInterest && !hasStrongVolume) {
+      failedFilters.push(`OI below ${input.minOpenInterest}`);
+    }
+
+    return failedFilters;
+  }
+
   private getCompletedCandles(candles: Candle[], now = new Date(), intervalMinutes = 5): Candle[] {
     const cutoffSeconds = Math.floor((now.getTime() - intervalMinutes * 60 * 1000) / 1000);
     return candles.filter((candle) => candle.timestamp <= cutoffSeconds);
@@ -3215,26 +3279,24 @@ Rules:
         input.minOptionVolume,
         input.minOpenInterest
       );
-      return { ...base, ...scored };
+      const failedFilters = this.getOptionCandidateFailedFilters(base, {
+        minOptionMark: input.minOptionMark,
+        maxBidAskSpreadPct: input.maxBidAskSpreadPct,
+        minOptionVolume: input.minOptionVolume,
+        minOpenInterest: input.minOpenInterest
+      });
+      if (
+        failedFilters.every((reason) => !reason.startsWith('OI ')) &&
+        (base.openInterest === null || Number(base.openInterest) < input.minOpenInterest) &&
+        base.volume !== null &&
+        Number(base.volume) >= Math.max(input.minOptionVolume * 3, 500)
+      ) {
+        scored.reasons.push('strong volume offsets open interest gap');
+      }
+      return { ...base, ...scored, failedFilters };
     }).sort((a, b) => b.score - a.score);
 
-    const selected = ranked.find((candidate) =>
-      candidate.mark !== null &&
-      candidate.mark >= input.minOptionMark &&
-      candidate.bid !== null &&
-      candidate.ask !== null &&
-      candidate.bid > 0 &&
-      candidate.ask > 0 &&
-      candidate.spreadPct !== null &&
-      candidate.spreadPct <= input.maxBidAskSpreadPct &&
-      (candidate.spread === null || Number(candidate.spread) * 100 <= 35) &&
-      (candidate.quoteAgeMs === null || candidate.quoteAgeMs <= 15_000) &&
-      (candidate.markLastDivergencePct === null || candidate.markLastDivergencePct <= 15) &&
-      (candidate.theta === null || candidate.mark === null || candidate.mark <= 0 || Math.abs(Number(candidate.theta) / Number(candidate.mark)) * 100 <= 45) &&
-      (candidate.volume === null || Number(candidate.volume) >= input.minOptionVolume) &&
-      candidate.openInterest !== null &&
-      Number(candidate.openInterest) >= input.minOpenInterest
-    ) || null;
+    const selected = ranked.find((candidate) => candidate.failedFilters.length === 0) || null;
 
     return { selected, ranked };
   }

@@ -118,6 +118,88 @@ async function testThetaDataKnownLowVolumeStillRejectsCandidate() {
 
   assert(result.selected === null, 'Known low volume should still reject the candidate');
   assert(result.ranked[0].reasons.includes('volume below 200'), 'Ranked candidate should explain low volume');
+  assert(result.ranked[0].failedFilters.includes('volume below 200'), 'Failed filters should include low volume');
+}
+
+async function testThetaDataStrongVolumeOffsetsMissingOpenInterest() {
+  const scanner = createScanner();
+
+  const result = scanner.fetchBestThetaDataOptionCandidate({
+    chain: [{
+      ticker: 'QQQ260622C00741000',
+      symbol: 'QQQ',
+      expiration: '2026-06-22',
+      right: 'CALL',
+      strike: 741,
+      bid: 1.18,
+      ask: 1.22,
+      mark: 1.2,
+      spread: 0.04,
+      spreadPct: 3.3,
+      volume: 900,
+      openInterest: null,
+      last: 1.2,
+      delta: 0.45,
+      gamma: null,
+      theta: -0.2,
+      impliedVolatility: 0.18,
+      timestamp: new Date().toISOString()
+    }],
+    candidates: [{
+      ticker: 'QQQ260622C00741000',
+      strike: 741,
+      expiry: '2026-06-22'
+    }],
+    preferredStrike: 741,
+    minOptionMark: 0.5,
+    maxBidAskSpreadPct: 8,
+    minOptionVolume: 200,
+    minOpenInterest: 500
+  });
+
+  assert(result.selected?.ticker === 'QQQ260622C00741000', `Expected strong-volume candidate, got ${result.selected?.ticker}`);
+  assert(result.ranked[0].failedFilters.length === 0, `Expected no failed filters, got ${result.ranked[0].failedFilters.join(', ')}`);
+  assert(result.ranked[0].reasons.includes('strong volume offsets open interest gap'), 'Ranked candidate should explain OI override');
+}
+
+async function testThetaDataMissingOpenInterestRequiresStrongVolume() {
+  const scanner = createScanner();
+
+  const result = scanner.fetchBestThetaDataOptionCandidate({
+    chain: [{
+      ticker: 'QQQ260622C00741000',
+      symbol: 'QQQ',
+      expiration: '2026-06-22',
+      right: 'CALL',
+      strike: 741,
+      bid: 1.18,
+      ask: 1.22,
+      mark: 1.2,
+      spread: 0.04,
+      spreadPct: 3.3,
+      volume: 250,
+      openInterest: null,
+      last: 1.2,
+      delta: 0.45,
+      gamma: null,
+      theta: -0.2,
+      impliedVolatility: 0.18,
+      timestamp: new Date().toISOString()
+    }],
+    candidates: [{
+      ticker: 'QQQ260622C00741000',
+      strike: 741,
+      expiry: '2026-06-22'
+    }],
+    preferredStrike: 741,
+    minOptionMark: 0.5,
+    maxBidAskSpreadPct: 8,
+    minOptionVolume: 200,
+    minOpenInterest: 500
+  });
+
+  assert(result.selected === null, 'Missing OI with ordinary volume should reject the candidate');
+  assert(result.ranked[0].failedFilters.some((reason: string) => reason.includes('OI unavailable')), 'Failed filters should explain missing OI');
 }
 
 async function testThetaDataPrefersUsefulDeltaOverExactOffset() {
@@ -1139,6 +1221,8 @@ async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
   await testThetaDataMissingVolumeDoesNotRejectLiquidCandidate();
   await testThetaDataKnownLowVolumeStillRejectsCandidate();
+  await testThetaDataStrongVolumeOffsetsMissingOpenInterest();
+  await testThetaDataMissingOpenInterestRequiresStrongVolume();
   await testThetaDataPrefersUsefulDeltaOverExactOffset();
   await testThetaDataRejectsStaleOptionQuoteCandidate();
   await testThetaDataRejectsUnstableMarkLastCandidate();
