@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, useTradeUsage, useLiveMacroMetrics, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
@@ -461,6 +461,17 @@ const formatAccountBalance = (account: any) => {
   }).format(numericBalance);
 };
 
+const DAY_TRADING_SYMBOLS = ['QQQ', 'SPY'] as const;
+type DayTradingSymbol = typeof DAY_TRADING_SYMBOLS[number];
+
+function parseEnabledDayTradingSymbols(value?: string): DayTradingSymbol[] {
+  const parsed = String(value || '')
+    .split(',')
+    .map(symbol => symbol.trim().toUpperCase())
+    .filter((symbol): symbol is DayTradingSymbol => DAY_TRADING_SYMBOLS.includes(symbol as DayTradingSymbol));
+  return parsed.length > 0 ? Array.from(new Set(parsed)) : [...DAY_TRADING_SYMBOLS];
+}
+
 function SymbolLane({
   symbol,
   signal,
@@ -777,6 +788,8 @@ export default function DayTradingTerminal() {
   const { data: snaptradePortfolio } = useSnaptradePortfolio();
   const { data: tradeUsage, refetch: refetchTradeUsage } = useTradeUsage();
   const isDayTradingEnabled = settings.day_trading_enabled !== 'false';
+  const enabledSymbols = useMemo(() => parseEnabledDayTradingSymbols(settings.day_trading_symbols), [settings.day_trading_symbols]);
+  const enabledSymbolSet = useMemo(() => new Set(enabledSymbols), [enabledSymbols]);
 
   // Live real-time WebSocket signals updates integration
   const { isConnected, lastMessage } = useWebSocket();
@@ -820,6 +833,15 @@ export default function DayTradingTerminal() {
   const [healthLoading, setHealthLoading] = useState(false);
   const [executeDialogSignal, setExecuteDialogSignal] = useState<Signal | null>(null);
   const [executingSignalId, setExecutingSignalId] = useState<number | null>(null);
+  useEffect(() => {
+    if (selectedSymbol === 'BOTH' && enabledSymbols.length === 1) {
+      setSelectedSymbol(enabledSymbols[0]);
+      return;
+    }
+    if (selectedSymbol !== 'BOTH' && !enabledSymbolSet.has(selectedSymbol)) {
+      setSelectedSymbol(enabledSymbols[0] || 'QQQ');
+    }
+  }, [enabledSymbols, enabledSymbolSet, selectedSymbol]);
   const scannerRuntimeStatus = serviceHealth.scanner.status;
   const isScannerMarketClosed = scannerRuntimeStatus === 'MARKET_CLOSED';
   const scannerStatusLabel = !isDayTradingEnabled
@@ -906,8 +928,9 @@ export default function DayTradingTerminal() {
     }
   };
 
-  // Filter signals: by symbol tab, then status and grade filters
-  const symbolSignals = signals
+  // Filter signals: enabled symbols first, then selected symbol tab, then status and grade filters
+  const enabledSignals = signals.filter(s => enabledSymbolSet.has(s.symbol as DayTradingSymbol));
+  const symbolSignals = enabledSignals
     .filter(s => selectedSymbol === 'BOTH' || s.symbol === selectedSymbol);
 
   const filteredSignals = symbolSignals
@@ -917,7 +940,8 @@ export default function DayTradingTerminal() {
       return getSetupGradeKey(s.setup_grade) === filterGrade;
     });
 
-  const filteredLogs = logs
+  const enabledLogs = logs.filter(l => enabledSymbolSet.has(l.symbol as DayTradingSymbol));
+  const filteredLogs = enabledLogs
     .filter(l => selectedSymbol === 'BOTH' || l.symbol === selectedSymbol);
 
   // Get currently selected signal object
@@ -958,7 +982,7 @@ export default function DayTradingTerminal() {
     } else {
       setSelectedSignalId(null);
     }
-  }, [selectedSymbol, signals, latestActionableSignal?.id, tableSignals[0]?.id]);
+  }, [selectedSymbol, signals, enabledSymbols, latestActionableSignal?.id, tableSignals[0]?.id]);
 
   // Set default selected log
   useEffect(() => {
@@ -1071,12 +1095,12 @@ export default function DayTradingTerminal() {
     };
   };
 
-  const latestQQQSignal = signals.find(s => s.symbol === 'QQQ') || null;
-  const latestSPYSignal = signals.find(s => s.symbol === 'SPY') || null;
-  const bestQQQSignal = getBestSignal(signals.filter(s => s.symbol === 'QQQ'));
-  const bestSPYSignal = getBestSignal(signals.filter(s => s.symbol === 'SPY'));
-  const latestQQQLog = logs.find(l => l.symbol === 'QQQ') || null;
-  const latestSPYLog = logs.find(l => l.symbol === 'SPY') || null;
+  const latestQQQSignal = enabledSymbolSet.has('QQQ') ? enabledSignals.find(s => s.symbol === 'QQQ') || null : null;
+  const latestSPYSignal = enabledSymbolSet.has('SPY') ? enabledSignals.find(s => s.symbol === 'SPY') || null : null;
+  const bestQQQSignal = enabledSymbolSet.has('QQQ') ? getBestSignal(enabledSignals.filter(s => s.symbol === 'QQQ')) : null;
+  const bestSPYSignal = enabledSymbolSet.has('SPY') ? getBestSignal(enabledSignals.filter(s => s.symbol === 'SPY')) : null;
+  const latestQQQLog = enabledSymbolSet.has('QQQ') ? enabledLogs.find(l => l.symbol === 'QQQ') || null : null;
+  const latestSPYLog = enabledSymbolSet.has('SPY') ? enabledLogs.find(l => l.symbol === 'SPY') || null : null;
 
   const qqqDetails = getRegimeDetails(latestQQQLog, latestQQQSignal);
   const spyDetails = getRegimeDetails(latestSPYLog, latestSPYSignal);
@@ -1172,7 +1196,7 @@ export default function DayTradingTerminal() {
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="outline" className="text-[9px] bg-zinc-950/70 border-emerald-500/25 text-emerald-300 font-mono">
-                {selectedSymbol === 'BOTH' ? 'QQQ + SPY' : selectedSymbol}
+                {selectedSymbol === 'BOTH' ? enabledSymbols.join(' + ') : selectedSymbol}
               </Badge>
               <span className="text-[9px] text-zinc-600 font-mono">
                 v{import.meta.env.VITE_APP_VERSION || '1.4.1'}
@@ -1197,31 +1221,28 @@ export default function DayTradingTerminal() {
 
         {/* Ticker switcher Tabs & Sync Timer */}
         <div className="flex w-full min-w-0 flex-col flex-wrap items-stretch justify-between gap-2 sm:flex-row sm:items-center xl:w-auto xl:justify-end">
-          <div className="motion-panel grid w-full min-w-0 grid-cols-3 rounded border border-emerald-500/20 bg-zinc-900 p-1 animate-in fade-in duration-200 sm:w-auto sm:min-w-[210px]">
-            <button
-              onClick={() => setSelectedSymbol('QQQ')}
-              className={`rounded px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 ${
-                selectedSymbol === 'QQQ' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
-              }`}
-            >
-              QQQ
-            </button>
-            <button
-              onClick={() => setSelectedSymbol('SPY')}
-              className={`rounded px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 ${
-                selectedSymbol === 'SPY' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
-              }`}
-            >
-              SPY
-            </button>
-            <button
-              onClick={() => setSelectedSymbol('BOTH')}
-              className={`rounded px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 ${
-                selectedSymbol === 'BOTH' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
-              }`}
-            >
-              BOTH
-            </button>
+          <div className={`motion-panel grid w-full min-w-0 rounded border border-emerald-500/20 bg-zinc-900 p-1 animate-in fade-in duration-200 sm:w-auto ${enabledSymbols.length > 1 ? 'grid-cols-3 sm:min-w-[210px]' : 'grid-cols-1 sm:min-w-[92px]'}`}>
+            {enabledSymbols.map(symbol => (
+              <button
+                key={symbol}
+                onClick={() => setSelectedSymbol(symbol)}
+                className={`rounded px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 ${
+                  selectedSymbol === symbol ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
+                }`}
+              >
+                {symbol}
+              </button>
+            ))}
+            {enabledSymbols.length > 1 && (
+              <button
+                onClick={() => setSelectedSymbol('BOTH')}
+                className={`rounded px-2 py-1.5 text-xs font-bold transition-colors sm:px-3 ${
+                  selectedSymbol === 'BOTH' ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'text-emerald-500/60 hover:text-emerald-400'
+                }`}
+              >
+                BOTH
+              </button>
+            )}
           </div>
 
           {isDayTradingEnabled && !isScannerMarketClosed ? (
@@ -1281,27 +1302,31 @@ export default function DayTradingTerminal() {
       </div>
 
       {/* QQQ/SPY lanes */}
-      <div className="grid gap-3 lg:grid-cols-2">
-        <SymbolLane
-          symbol="QQQ"
-          signal={bestQQQSignal}
-          regime={qqqDetails}
-          blockers={qqqBlockers}
-          onSelect={() => {
-            setSelectedSymbol('QQQ');
-            if (bestQQQSignal) setSelectedSignalId(bestQQQSignal.id);
-          }}
-        />
-        <SymbolLane
-          symbol="SPY"
-          signal={bestSPYSignal}
-          regime={spyDetails}
-          blockers={spyBlockers}
-          onSelect={() => {
-            setSelectedSymbol('SPY');
-            if (bestSPYSignal) setSelectedSignalId(bestSPYSignal.id);
-          }}
-        />
+      <div className={`grid gap-3 ${enabledSymbols.length > 1 ? 'lg:grid-cols-2' : ''}`}>
+        {enabledSymbolSet.has('QQQ') && (
+          <SymbolLane
+            symbol="QQQ"
+            signal={bestQQQSignal}
+            regime={qqqDetails}
+            blockers={qqqBlockers}
+            onSelect={() => {
+              setSelectedSymbol('QQQ');
+              if (bestQQQSignal) setSelectedSignalId(bestQQQSignal.id);
+            }}
+          />
+        )}
+        {enabledSymbolSet.has('SPY') && (
+          <SymbolLane
+            symbol="SPY"
+            signal={bestSPYSignal}
+            regime={spyDetails}
+            blockers={spyBlockers}
+            onSelect={() => {
+              setSelectedSymbol('SPY');
+              if (bestSPYSignal) setSelectedSignalId(bestSPYSignal.id);
+            }}
+          />
+        )}
       </div>
 
       <MacroMetricsStrip
@@ -1332,7 +1357,7 @@ export default function DayTradingTerminal() {
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
         
         {/* Widget 1: Glowing Market Regime Gauge */}
-        {selectedSymbol === 'BOTH' ? (
+        {selectedSymbol === 'BOTH' && enabledSymbols.length > 1 ? (
           <div className="motion-panel flex min-h-[64px] flex-row items-center justify-between rounded border border-zinc-800 bg-zinc-900/35 p-2.5 shadow-inner shadow-[0_0_20px_rgba(16,185,129,0.02)]">
             <div className="grid w-full grid-cols-1 gap-2 font-mono sm:grid-cols-2">
               {/* QQQ Side */}

@@ -10,24 +10,27 @@ const GLOBAL_SETTING_KEYS = [
   'sscgex_password',
   'discord_webhook_url',
   'discord_alerts_enabled',
+  'day_trading_symbols',
   'day_trading_ai_provider',
   'day_trading_ai_model',
   'day_trading_coach_model'
 ];
+const ADMIN_ONLY_GLOBAL_SETTING_KEYS = ['day_trading_symbols'];
 
 export async function getGlobalSettings(pg: any): Promise<Record<string, string>> {
   const { rows } = await pg.query(
-    `SELECT DISTINCT ON (s.key) s.key, s.value
-     FROM settings s
-     LEFT JOIN users u ON u.id = s.user_id
-     WHERE s.key = ANY($1)
-       AND s.value IS NOT NULL
-       AND s.value != ''
-     ORDER BY
+     `SELECT DISTINCT ON (s.key) s.key, s.value
+      FROM settings s
+      LEFT JOIN users u ON u.id = s.user_id
+      WHERE s.key = ANY($1)
+        AND s.value IS NOT NULL
+        AND s.value != ''
+        AND (s.key != ALL($2) OR u.role = 'ADMIN')
+      ORDER BY
        s.key,
        CASE WHEN u.role = 'ADMIN' THEN 0 ELSE 1 END,
        s.updated_at DESC`,
-    [GLOBAL_SETTING_KEYS]
+    [GLOBAL_SETTING_KEYS, ADMIN_ONLY_GLOBAL_SETTING_KEYS]
   );
 
   return rows.reduce((acc: Record<string, string>, row: any) => {
@@ -57,4 +60,8 @@ export async function getSettingsWithGlobalFallback(pg: any, userId: number): Pr
 
 export function isGlobalSettingKey(key: string): boolean {
   return GLOBAL_SETTING_KEYS.includes(key);
+}
+
+export function isPublicGlobalSettingKey(key: string): boolean {
+  return key === 'day_trading_symbols';
 }

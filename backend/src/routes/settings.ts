@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
-import { getSettingsWithGlobalFallback, isGlobalSettingKey } from '../lib/settings-utils';
+import { getSettingsWithGlobalFallback, isGlobalSettingKey, isPublicGlobalSettingKey } from '../lib/settings-utils';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
 type RuntimeConfigStatus = 'configured' | 'missing' | 'default' | 'attention';
@@ -21,7 +21,7 @@ function redactGlobalSettingsForUser(settings: Record<string, string>, role?: st
 
     const redacted = { ...settings };
     for (const key of Object.keys(redacted)) {
-        if (isGlobalSettingKey(key)) {
+        if (isGlobalSettingKey(key) && !isPublicGlobalSettingKey(key)) {
             delete redacted[key];
         }
     }

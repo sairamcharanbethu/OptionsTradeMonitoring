@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw, Server, ShieldCheck } from 'lucide-react';
+import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw, Server, ShieldCheck, ChevronDown } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { api } from '@/lib/api';
 
@@ -21,6 +21,8 @@ interface SettingsDialogProps {
 
 const DEFAULT_AI_PROVIDER = 'openrouter';
 const DEFAULT_AI_MODEL = 'deepseek/deepseek-chat';
+const SUPPORTED_DAY_TRADING_SYMBOLS = ['QQQ', 'SPY'] as const;
+type DayTradingSymbol = typeof SUPPORTED_DAY_TRADING_SYMBOLS[number];
 
 function formatAccountBalance(account: any) {
     const fallbackBalance = Array.isArray(account?.balances)
@@ -56,6 +58,22 @@ function normalizeThetaDataStreamUrl(streamUrl: string) {
     return cleaned.replace(/^ws:\/\/thetadata:/i, 'ws://127.0.0.1:');
 }
 
+function parseDayTradingSymbols(value?: string): DayTradingSymbol[] {
+    const normalized = String(value || '')
+        .split(',')
+        .map(symbol => symbol.trim().toUpperCase())
+        .filter((symbol): symbol is DayTradingSymbol => SUPPORTED_DAY_TRADING_SYMBOLS.includes(symbol as DayTradingSymbol));
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : [...SUPPORTED_DAY_TRADING_SYMBOLS];
+}
+
+function formatDayTradingSymbols(symbols: DayTradingSymbol[]) {
+    return symbols.join(',');
+}
+
+function configNeedsAttention(status: RuntimeConfigItem['status']) {
+    return status === 'missing' || status === 'attention';
+}
+
 function runtimeStatusBadgeVariant(status: RuntimeConfigItem['status']) {
     if (status === 'configured') return 'default';
     if (status === 'missing' || status === 'attention') return 'destructive';
@@ -88,84 +106,90 @@ function RuntimeConfigPanel({
     onRefresh: () => void;
 }) {
     const groups: RuntimeConfigItem['group'][] = ['Market Data', 'AI Service', 'Broker Execution', 'Alerts', 'Deployment'];
+    const missingCount = runtimeConfig?.items.filter(item => configNeedsAttention(item.status)).length || 0;
 
     return (
-        <div className="rounded-lg border bg-card p-6 space-y-4">
-            <div className="flex flex-col gap-3 border-b pb-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                    <div className="flex items-center gap-2">
+        <details className={`group rounded-lg border bg-card ${missingCount > 0 ? 'border-destructive/40' : ''}`}>
+            <summary className="flex cursor-pointer list-none flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
                         <Server className="h-4 w-4 text-muted-foreground" />
-                        <h4 className="font-semibold text-sm">Environment and runtime config</h4>
+                        <h4 className="text-sm font-semibold">Environment and runtime config</h4>
+                        <Badge variant={missingCount > 0 ? 'destructive' : 'secondary'} className="text-[10px]">
+                            {missingCount > 0 ? `${missingCount} missing` : 'OK'}
+                        </Badge>
                     </div>
                     <p className="mt-1 text-[10px] text-muted-foreground">
-                        Admin-only view of safe runtime config. Secrets are redacted and deployment env remains managed outside the app.
+                        Admin-only runtime status. Updated {formatRuntimeConfigTime(runtimeConfig?.generatedAt)}.
                     </p>
                 </div>
-                <div className="flex gap-2">
-                    <Button type="button" variant="outline" size="sm" className="h-8 gap-2" onClick={onRefresh} disabled={loading}>
+                <div className="flex items-center gap-2">
+                    <Button type="button" variant="outline" size="sm" className="h-8 gap-2" onClick={(event) => { event.preventDefault(); onRefresh(); }} disabled={loading}>
                         <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                         Refresh
                     </Button>
-                    <Button type="button" variant="outline" size="sm" className="h-8 gap-2" onClick={() => window.location.assign('/system-health')}>
+                    <Button type="button" variant="outline" size="sm" className="h-8 gap-2" onClick={(event) => { event.preventDefault(); window.location.assign('/system-health'); }}>
                         <ShieldCheck className="h-3.5 w-3.5" />
                         Health
                     </Button>
+                    <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
                 </div>
-            </div>
+            </summary>
 
-            <div className="text-[10px] text-muted-foreground">
-                Updated {formatRuntimeConfigTime(runtimeConfig?.generatedAt)}
-            </div>
+            <div className="space-y-4 border-t p-4 pt-3">
+                {error && (
+                    <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                        {error}
+                    </div>
+                )}
 
-            {error && (
-                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    {error}
-                </div>
-            )}
+                {!error && !runtimeConfig && (
+                    <div className="rounded-md border bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
+                        {loading ? 'Loading runtime config...' : 'Runtime config has not been loaded yet.'}
+                    </div>
+                )}
 
-            {!error && !runtimeConfig && (
-                <div className="rounded-md border bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
-                    {loading ? 'Loading runtime config...' : 'Runtime config has not been loaded yet.'}
-                </div>
-            )}
-
-            <div className="grid gap-3 xl:grid-cols-2">
-                {groups.map((group) => {
-                    const items = runtimeConfig?.items.filter((item) => item.group === group) || [];
-                    if (!items.length) return null;
-                    return (
-                        <div key={group} className="rounded-md border bg-muted/20 p-3">
-                            <div className="mb-3 flex items-center justify-between gap-3">
-                                <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</h5>
-                                <Badge variant="outline" className="text-[9px]">{items.length} checks</Badge>
-                            </div>
-                            <div className="space-y-2">
-                                {items.map((item) => (
-                                    <div key={item.id} className="rounded border bg-background/80 p-3">
-                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                            <div className="min-w-0">
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    <span className="text-sm font-medium">{item.label}</span>
-                                                    <Badge variant="outline" className="text-[9px] uppercase">{item.source}</Badge>
-                                                    {item.secret && <Badge variant="secondary" className="text-[9px]">Redacted</Badge>}
+                <div className="grid gap-3 xl:grid-cols-2">
+                    {groups.map((group) => {
+                        const items = runtimeConfig?.items.filter((item) => item.group === group) || [];
+                        const groupMissingCount = items.filter(item => configNeedsAttention(item.status)).length;
+                        if (!items.length) return null;
+                        return (
+                            <div key={group} className="rounded-md border bg-muted/20 p-3">
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                    <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</h5>
+                                    <Badge variant={groupMissingCount > 0 ? 'destructive' : 'outline'} className="text-[9px]">
+                                        {groupMissingCount > 0 ? `${groupMissingCount} missing` : `${items.length} checks`}
+                                    </Badge>
+                                </div>
+                                <div className="space-y-2">
+                                    {items.map((item) => (
+                                        <div key={item.id} className="rounded border bg-background/80 p-3">
+                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                                <div className="min-w-0">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <span className="text-sm font-medium">{item.label}</span>
+                                                        <Badge variant="outline" className="text-[9px] uppercase">{item.source}</Badge>
+                                                        {item.secret && <Badge variant="secondary" className="text-[9px]">Redacted</Badge>}
+                                                    </div>
+                                                    <p className="mt-1 text-[10px] leading-normal text-muted-foreground">{item.detail}</p>
                                                 </div>
-                                                <p className="mt-1 text-[10px] leading-normal text-muted-foreground">{item.detail}</p>
+                                                <Badge variant={runtimeStatusBadgeVariant(item.status)} className="w-fit text-[10px]">
+                                                    {runtimeStatusLabel(item.status)}
+                                                </Badge>
                                             </div>
-                                            <Badge variant={runtimeStatusBadgeVariant(item.status)} className="w-fit text-[10px]">
-                                                {runtimeStatusLabel(item.status)}
-                                            </Badge>
+                                            <div className="mt-2 break-all rounded bg-muted/50 px-2 py-1.5 text-[11px] font-medium text-foreground">
+                                                {item.value || 'Not set'}
+                                            </div>
                                         </div>
-                                        <div className="mt-2 rounded bg-muted/50 px-2 py-1.5 text-[11px] font-medium text-foreground break-all">
-                                            {item.value || 'Not set'}
-                                        </div>
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
                             </div>
-                        </div>
-                    );
-                })}
+                        );
+                    })}
+                </div>
             </div>
-        </div>
+        </details>
     );
 }
 
@@ -233,6 +257,14 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [snaptradeCheckingAccess, setSnaptradeCheckingAccess] = useState(false);
     const [snaptradeResettingAccess, setSnaptradeResettingAccess] = useState(false);
     const selectedSnaptradeAccount = snaptradeAccounts.find((account: any) => account.id === snaptradeTradingAccountId);
+    const enabledDayTradingSymbols = parseDayTradingSymbols(dayTradingSymbols);
+    const wealthsimpleMissingItems = [
+        snaptradeClientId ? null : 'SnapTrade client ID',
+        snaptradeConsumerKey ? null : 'SnapTrade consumer key',
+        snaptradeConnectionStatus && !snaptradeConnectionStatus.hasTradeConnection ? 'Trade-enabled Wealthsimple connection' : null,
+        snaptradeAutoTrade && !snaptradeTradingAccountId ? 'Trading account' : null,
+        snaptradeAutoTrade && !liveTradingAcknowledged ? 'Live trading acknowledgement' : null
+    ].filter(Boolean) as string[];
 
     // Admin runtime config state
     const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigResponse | null>(null);
@@ -362,6 +394,19 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
         } else {
             setSnaptradeAutoTrade(false);
         }
+    }
+
+    function handleDayTradingSymbolToggle(symbol: DayTradingSymbol, checked: boolean) {
+        const current = parseDayTradingSymbols(dayTradingSymbols);
+        const next = checked
+            ? Array.from(new Set([...current, symbol]))
+            : current.filter(item => item !== symbol);
+        if (next.length === 0) {
+            alert('Enable at least one day-trading symbol.');
+            return;
+        }
+        const sorted = SUPPORTED_DAY_TRADING_SYMBOLS.filter(item => next.includes(item));
+        setDayTradingSymbols(formatDayTradingSymbols(sorted));
     }
 
     async function saveSnaptradeCredentials() {
@@ -496,6 +541,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     }
 
     async function handleSaveSettings() {
+        const normalizedSymbols = SUPPORTED_DAY_TRADING_SYMBOLS.filter(symbol => parseDayTradingSymbols(dayTradingSymbols).includes(symbol));
+        if (normalizedSymbols.length === 0) {
+            alert('Enable at least one day-trading symbol.');
+            return;
+        }
         setSaving(true);
         try {
             await api.updateSettings({
@@ -522,7 +572,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 stop_loss_engine_enabled: stopLossEngineEnabled ? 'true' : 'false',
                 live_trading_acknowledged: liveTradingAcknowledged ? 'true' : 'false',
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
-                day_trading_symbols: dayTradingSymbols,
+                day_trading_symbols: formatDayTradingSymbols(normalizedSymbols),
                 strike_offset: strikeOffset,
                 min_signal_score: minSignalScore,
                 trading_start_time: tradingStartTime,
@@ -740,14 +790,29 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="grid gap-2">
-                                            <Label htmlFor="dtSymbols">Tracked Symbols</Label>
-                                            <Input
-                                                id="dtSymbols"
-                                                value={dayTradingSymbols}
-                                                onChange={(e) => setDayTradingSymbols(e.target.value)}
-                                                placeholder="QQQ, SPY"
-                                            />
+                                        <div className="grid gap-2 rounded-md border border-border/70 bg-muted/10 p-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <Label>Trading Symbols</Label>
+                                                    <p className="mt-1 text-[10px] text-muted-foreground">
+                                                        Admin-only global scanner universe.
+                                                    </p>
+                                                </div>
+                                                {!isAdmin && <Badge variant="secondary" className="text-[10px]">Read-only</Badge>}
+                                            </div>
+                                            <div className="grid gap-2 sm:grid-cols-2">
+                                                {SUPPORTED_DAY_TRADING_SYMBOLS.map(symbol => (
+                                                    <div key={symbol} className="flex items-center justify-between rounded-md border bg-background/70 px-3 py-2">
+                                                        <Label htmlFor={`dt-symbol-${symbol}`} className="text-sm font-semibold">{symbol}</Label>
+                                                        <Switch
+                                                            id={`dt-symbol-${symbol}`}
+                                                            checked={enabledDayTradingSymbols.includes(symbol)}
+                                                            onCheckedChange={(checked) => handleDayTradingSymbolToggle(symbol, checked)}
+                                                            disabled={!isAdmin}
+                                                        />
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
 
                                         <div className="grid gap-2">
@@ -1115,14 +1180,27 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     )}
 
                                     {/* SnapTrade */}
-                                    <div className={`space-y-3 ${isAdmin ? 'pt-4 border-t' : ''}`}>
-                                        <div className="flex items-center justify-between">
-                                            <h5 className="font-medium text-sm">Wealthsimple (via SnapTrade)</h5>
-                                            <Badge variant={snaptradeClientId && snaptradeConsumerKey ? "default" : "secondary"}>
-                                                {snaptradeClientId && snaptradeConsumerKey ? "Configured" : "Not Linked"}
-                                            </Badge>
-                                        </div>
-                                        <div className="grid gap-3 p-4 border rounded-md bg-muted/30">
+                                    <details className={`group rounded-lg border bg-card ${isAdmin ? 'mt-4' : ''} ${wealthsimpleMissingItems.length > 0 ? 'border-destructive/40' : ''}`}>
+                                        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4">
+                                            <div className="min-w-0">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <h5 className="font-medium text-sm">Wealthsimple (via SnapTrade)</h5>
+                                                    <Badge variant={wealthsimpleMissingItems.length > 0 ? "destructive" : "default"} className="text-[10px]">
+                                                        {wealthsimpleMissingItems.length > 0 ? `${wealthsimpleMissingItems.length} missing` : "Configured"}
+                                                    </Badge>
+                                                </div>
+                                                <p className="mt-1 text-[10px] text-muted-foreground">
+                                                    Broker connection, trading access, and live execution controls.
+                                                </p>
+                                            </div>
+                                            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+                                        </summary>
+                                        <div className="grid gap-3 border-t p-4">
+                                            {wealthsimpleMissingItems.length > 0 && (
+                                                <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                                                    Missing: {wealthsimpleMissingItems.join(', ')}
+                                                </div>
+                                            )}
                                             <div className="grid gap-1">
                                                 <Label htmlFor="st-client">SnapTrade Client ID</Label>
                                                 <Input
@@ -1293,7 +1371,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
+                                    </details>
 
                                 </div>
                             </div>

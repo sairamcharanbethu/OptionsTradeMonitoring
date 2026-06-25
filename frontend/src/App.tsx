@@ -76,22 +76,6 @@ function App() {
               </div>
 
               <div className="flex items-center gap-2">
-                <nav className="hidden items-center gap-1 rounded-full border border-black/[0.03] bg-black/[0.02] p-1 dark:border-white/[0.05] dark:bg-white/[0.03] md:flex">
-                  <Button
-                    variant="ghost"
-                    className="h-7 rounded-full px-3 text-xs font-semibold hover:bg-black/5 dark:hover:bg-white/5"
-                    onClick={() => { window.location.href = '/?tab=day-trading'; }}
-                  >
-                    Day Trading
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    className="h-7 rounded-full px-3 text-xs font-semibold hover:bg-black/5 dark:hover:bg-white/5"
-                    onClick={() => { window.location.href = '/covered-calls'; }}
-                  >
-                    Covered Calls
-                  </Button>
-                </nav>
                 {devTradeTestsEnabled && (
                   <Button
                     variant="ghost"

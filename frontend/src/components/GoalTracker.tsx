@@ -200,11 +200,11 @@ function GoalFormDialog({
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Start Date</label>
-                            <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required />
+                            <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="[color-scheme:light] dark:[color-scheme:dark]" required />
                         </div>
                         <div className="space-y-2">
                             <label className="text-sm font-medium">End Date</label>
-                            <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} required />
+                            <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="[color-scheme:light] dark:[color-scheme:dark]" required />
                         </div>
                     </div>
                     <Button type="submit" className="w-full" disabled={saving}>
