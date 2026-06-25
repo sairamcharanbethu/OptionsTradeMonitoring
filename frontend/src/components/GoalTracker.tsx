@@ -530,10 +530,11 @@ export default function GoalTracker() {
     }, [entries]);
 
     const bestWorstDays = useMemo(() => {
-        if (dailySummaries.length === 0) return { best: null, worst: null };
+        const profitDays = dailySummaries.filter(day => day.amount > 0);
+        const lossDays = dailySummaries.filter(day => day.amount < 0);
         return {
-            best: dailySummaries.reduce((best, day) => day.amount > best.amount ? day : best, dailySummaries[0]),
-            worst: dailySummaries.reduce((worst, day) => day.amount < worst.amount ? day : worst, dailySummaries[0])
+            best: profitDays.length > 0 ? profitDays.reduce((best, day) => day.amount > best.amount ? day : best, profitDays[0]) : null,
+            worst: lossDays.length > 0 ? lossDays.reduce((worst, day) => day.amount < worst.amount ? day : worst, lossDays[0]) : null
         };
     }, [dailySummaries]);
 
@@ -983,8 +984,8 @@ export default function GoalTracker() {
                                         </div>
                                         <div className="min-w-0 flex-1">
                                             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Worst Day</p>
-                                            <p className={`text-2xl sm:text-3xl font-bold ${(bestWorstDays.worst?.amount ?? 0) < 0 ? 'text-red-500' : 'text-muted-foreground'}`}>
-                                                {bestWorstDays.worst ? formatCurrency(bestWorstDays.worst.amount, true, 2, bestWorstDays.worst.amount > 0) : '$0.00'}
+                                            <p className={`text-2xl sm:text-3xl font-bold ${bestWorstDays.worst ? 'text-red-500' : 'text-muted-foreground'}`}>
+                                                {bestWorstDays.worst ? formatCurrency(bestWorstDays.worst.amount, true, 2) : 'No losses'}
                                             </p>
                                             <p className="mt-2 text-xs text-muted-foreground">
                                                 {bestWorstDays.worst ? `${format(bestWorstDays.worst.date, 'MMM d, yyyy')} - ${bestWorstDays.worst.count} entr${bestWorstDays.worst.count === 1 ? 'y' : 'ies'}` : 'No loss day yet'}
