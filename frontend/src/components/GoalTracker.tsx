@@ -197,7 +197,7 @@ function GoalFormDialog({
                         <label className="text-sm font-medium">Target Amount ($)</label>
                         <Input type="number" step="0.01" min="1" placeholder="75000" value={targetAmount} onChange={e => setTargetAmount(e.target.value)} required />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div className="space-y-2">
                             <label className="text-sm font-medium">Start Date</label>
                             <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} required />
@@ -689,23 +689,23 @@ export default function GoalTracker() {
     }
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-4 sm:space-y-6">
             {/* Goal Selector Bar */}
             <Card className="border-primary/20">
                 <CardContent className="py-4">
-                    <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                        <div className="flex min-w-0 flex-1 items-center gap-2">
                             <Target className="h-5 w-5 text-primary shrink-0" />
                             <h2 className="text-lg font-bold truncate">Goal Tracker</h2>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
                             {goals.length > 0 && (
                                 <Select
                                     value={activeGoalId?.toString() || ''}
                                     onValueChange={v => setSelectedGoalId(parseInt(v))}
                                 >
-                                    <SelectTrigger className="flex-1 sm:w-[200px] h-9 text-xs">
+                                    <SelectTrigger className="h-9 min-w-0 flex-1 text-xs sm:w-[200px] sm:flex-none">
                                         <SelectValue placeholder="Select a goal" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -722,7 +722,7 @@ export default function GoalTracker() {
                                 variant="outline"
                                 size="sm"
                                 onClick={() => { setEditingGoal(undefined); setGoalDialogOpen(true); }}
-                                className="gap-1 text-xs sm:flex-none flex-1"
+                                className="flex-1 gap-1 text-xs sm:flex-none"
                             >
                                 <Plus className="h-3 w-3" />
                                 New Goal
@@ -767,13 +767,13 @@ export default function GoalTracker() {
                 </Card>
             ) : (
                 <>
-                        {/* Progress Bar + Insights Row */}
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    {/* Progress Bar + Insights Row */}
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                         {/* Big Progress Card */}
                         <Card className="lg:col-span-2">
                             <CardHeader className="pb-3">
-                                <div className="flex items-center justify-between">
-                                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                    <CardTitle className="min-w-0 text-sm font-medium text-muted-foreground">
                                         Progress to {activeGoal.name}
                                     </CardTitle>
                                     {insights && <StatusBadge status={insights.status} />}
@@ -786,16 +786,16 @@ export default function GoalTracker() {
                                     </div>
                                 ) : insights ? (
                                     <>
-                                        <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 sm:gap-4">
-                                            <div>
-                                                <span className="text-2xl sm:text-3xl font-bold" style={{ color: progressColor }}>
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
+                                            <div className="min-w-0">
+                                                <span className="break-words text-xl font-bold sm:text-3xl" style={{ color: progressColor }}>
                                                     {formatCurrency(insights.totalEarned, true, 2)}
                                                 </span>
                                                 <span className="text-xs sm:text-sm text-muted-foreground ml-0 sm:ml-2 block sm:inline">
                                                     of {formatCurrency(insights.targetAmount, true, 0)}
                                                 </span>
                                             </div>
-                                            <span className="text-xl sm:text-2xl font-bold self-start sm:self-auto" style={{ color: progressColor }}>
+                                            <span className="self-start text-xl font-bold sm:self-auto sm:text-2xl" style={{ color: progressColor }}>
                                                 {insights.percentComplete.toFixed(1)}%
                                             </span>
                                         </div>
@@ -832,9 +832,9 @@ export default function GoalTracker() {
                                             />
                                         </div>
 
-                                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                        <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
                                             <span>{format(parseISO(activeGoal.start_date), 'MMM d, yyyy')}</span>
-                                            <span className="flex items-center gap-1">
+                                            <span className="hidden items-center gap-1 sm:flex">
                                                 <div className="w-3 h-0.5 bg-foreground/40" /> Expected pace marker
                                             </span>
                                             <span>{format(parseISO(activeGoal.end_date), 'MMM d, yyyy')}</span>
@@ -874,18 +874,18 @@ export default function GoalTracker() {
                                     </div>
                                 ) : insights ? (
                                     <>
-                                        <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
                                             <div className="p-2.5 rounded-lg bg-background border">
                                                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Daily Avg</p>
-                                                <p className="text-sm font-bold">{formatCurrency(insights.dailyAverage, true, 2)}</p>
+                                                <p className="break-words text-sm font-bold">{formatCurrency(insights.dailyAverage, true, 2)}</p>
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
                                                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need/Day</p>
-                                                <p className="text-sm font-bold text-orange-500">{formatCurrency(insights.remainingPerDay, true, 2)}</p>
+                                                <p className="break-words text-sm font-bold text-orange-500">{formatCurrency(insights.remainingPerDay, true, 2)}</p>
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
                                                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Projected</p>
-                                                <p className={`text-sm font-bold ${insights.projectedTotal >= insights.targetAmount ? 'text-green-500' : 'text-red-500'}`}>
+                                                <p className={`break-words text-sm font-bold ${insights.projectedTotal >= insights.targetAmount ? 'text-green-500' : 'text-red-500'}`}>
                                                     {formatCurrency(insights.projectedTotal, true, 2)}
                                                 </p>
                                             </div>
@@ -913,67 +913,67 @@ export default function GoalTracker() {
                                     </>
                                 ) : null}
                             </CardContent>
-                            </Card>
-                        </div>
+                        </Card>
+                    </div>
 
-                        {insights && (
-                            <Card>
-                                <CardContent className="py-4">
-                                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                                        <div className="rounded-md border bg-background p-3">
-                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Remaining</p>
-                                            <p className="mt-1 text-lg font-bold">{formatCurrency(remainingAmount, true, 2)}</p>
-                                        </div>
-                                        <div className="rounded-md border bg-background p-3">
-                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need / Trading Day</p>
-                                            <p className="mt-1 text-lg font-bold text-orange-500">{formatCurrency(insights.remainingPerDay, true, 2)}</p>
-                                        </div>
-                                        <div className="rounded-md border bg-background p-3">
-                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Required Monthly Pace</p>
-                                            <p className="mt-1 text-lg font-bold">{formatCurrency(requiredMonthlyPace, true, 2)}</p>
-                                        </div>
-                                        <div className="rounded-md border bg-background p-3">
-                                            <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Forecast</p>
-                                            <p className="mt-1 text-sm font-semibold leading-snug">{forecastText}</p>
-                                        </div>
+                    {insights && (
+                        <Card>
+                            <CardContent className="py-4">
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                                    <div className="rounded-md border bg-background p-3">
+                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Remaining</p>
+                                        <p className="mt-1 break-words text-lg font-bold">{formatCurrency(remainingAmount, true, 2)}</p>
                                     </div>
-                                </CardContent>
-                            </Card>
-                        )}
+                                    <div className="rounded-md border bg-background p-3">
+                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need / Trading Day</p>
+                                        <p className="mt-1 break-words text-lg font-bold text-orange-500">{formatCurrency(insights.remainingPerDay, true, 2)}</p>
+                                    </div>
+                                    <div className="rounded-md border bg-background p-3">
+                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Required Monthly Pace</p>
+                                        <p className="mt-1 break-words text-lg font-bold">{formatCurrency(requiredMonthlyPace, true, 2)}</p>
+                                    </div>
+                                    <div className="rounded-md border bg-background p-3">
+                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Forecast</p>
+                                        <p className="mt-1 text-sm font-semibold leading-snug">{forecastText}</p>
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
 
-                        {milestoneProgress.length > 0 && (
-                            <Card>
-                                <CardHeader className="pb-2">
-                                    <CardTitle className="text-sm font-medium flex items-center gap-2">
-                                        <Trophy className="h-4 w-4 text-yellow-500" />
-                                        Milestones
-                                    </CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                                        {milestoneProgress.map(item => {
-                                            const isReached = item.reached !== null;
-                                            return (
-                                                <div key={item.marker} className={`rounded-md border p-3 ${isReached ? 'bg-green-500/10 border-green-500/25' : 'bg-muted/30'}`}>
-                                                    <div className="flex items-center justify-between gap-2">
-                                                        <span className={`text-sm font-bold ${isReached ? 'text-green-500' : 'text-muted-foreground'}`}>{item.marker}%</span>
-                                                        {isReached ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Target className="h-4 w-4 text-muted-foreground" />}
-                                                    </div>
-                                                    <p className="mt-1 text-xs text-muted-foreground">
-                                                        {formatCurrency(item.target, false, 0)}
-                                                    </p>
-                                                    <p className="mt-2 text-xs font-medium">
-                                                        {item.reached ? format(item.reached.date, 'MMM d, yyyy') : 'Not reached yet'}
-                                                    </p>
+                    {milestoneProgress.length > 0 && (
+                        <Card>
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                    <Trophy className="h-4 w-4 text-yellow-500" />
+                                    Milestones
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                                    {milestoneProgress.map(item => {
+                                        const isReached = item.reached !== null;
+                                        return (
+                                            <div key={item.marker} className={`rounded-md border p-3 ${isReached ? 'bg-green-500/10 border-green-500/25' : 'bg-muted/30'}`}>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className={`text-sm font-bold ${isReached ? 'text-green-500' : 'text-muted-foreground'}`}>{item.marker}%</span>
+                                                    {isReached ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Target className="h-4 w-4 text-muted-foreground" />}
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        )}
+                                                <p className="mt-1 text-xs text-muted-foreground">
+                                                    {formatCurrency(item.target, false, 0)}
+                                                </p>
+                                                <p className="mt-2 text-xs font-medium">
+                                                    {item.reached ? format(item.reached.date, 'MMM d, yyyy') : 'Not reached yet'}
+                                                </p>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
 
-                        {/* Streak Counter + Win Rate Row */}
+                    {/* Streak Counter + Win Rate Row */}
                     {insights && insights.totalEntries > 0 && (
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                             {/* Streak Counter */}
@@ -1112,17 +1112,17 @@ export default function GoalTracker() {
                     {chartData.length > 0 && (
                         <Card>
                             <CardHeader className="pb-2">
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                                     <CardTitle className="text-sm font-medium flex items-center gap-2">
                                         <TrendingUp className="h-4 w-4 text-primary" />
                                         Cumulative Earnings vs. Ideal Pace
                                     </CardTitle>
-                                    <div className="flex bg-muted/50 p-1 rounded-md">
+                                    <div className="flex w-full overflow-x-auto rounded-md bg-muted/50 p-1 sm:w-auto">
                                         {(['1W', '1M', '3M', 'YTD', 'ALL'] as const).map(t => (
                                             <button
                                                 key={t}
                                                 onClick={() => setTimeframe(t)}
-                                                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${timeframe === t ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                                                className={`min-w-12 flex-1 rounded px-3 py-1 text-xs font-medium transition-colors sm:flex-none ${timeframe === t ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                                             >
                                                 {t}
                                             </button>
@@ -1201,7 +1201,31 @@ export default function GoalTracker() {
                                     </CardTitle>
                                 </CardHeader>
                                 <CardContent className="p-0 sm:p-6 sm:pt-0">
-                                    <div className="overflow-x-auto">
+                                    <div className="space-y-2 p-3 sm:hidden">
+                                        {monthlyBreakdown.map(month => (
+                                            <div key={month.key} className="rounded-md border bg-background p-3">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <span className="font-medium">{month.label}</span>
+                                                    <span className={`font-semibold ${month.delta >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                        {formatCurrency(month.delta, false, 2, month.delta > 0)}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                                                    <div>
+                                                        <p className="text-muted-foreground">Earned</p>
+                                                        <p className={`font-semibold ${month.earned >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                            {formatCurrency(month.earned, false, 2, month.earned > 0)}
+                                                        </p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-muted-foreground">Pace</p>
+                                                        <p className="font-semibold">{formatCurrency(month.pace, false, 2)}</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="hidden overflow-x-auto sm:block">
                                         <table className="w-full text-sm text-left">
                                             <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
                                                 <tr>
@@ -1240,7 +1264,7 @@ export default function GoalTracker() {
                                     </CardTitle>
                                 </CardHeader>
                                 <CardContent className="space-y-3">
-                                    <div className="flex gap-1 overflow-x-auto pb-1">
+                                    <div className="flex justify-center gap-1 overflow-x-auto pb-1 sm:justify-start">
                                         {heatmapWeeks.map((week, weekIndex) => (
                                             <div key={weekIndex} className="grid grid-rows-7 gap-1">
                                                 {week.map(day => (
@@ -1253,7 +1277,7 @@ export default function GoalTracker() {
                                             </div>
                                         ))}
                                     </div>
-                                    <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                                    <div className="flex flex-col gap-2 text-[10px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
                                         <span>8 weeks</span>
                                         <div className="flex items-center gap-1">
                                             <span>Loss</span>
@@ -1276,7 +1300,7 @@ export default function GoalTracker() {
                                     <Calendar className="h-5 w-5 text-primary" />
                                     Earnings Log
                                 </CardTitle>
-                                <div className="flex items-center gap-3">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                                     {entries.length > 0 && timeframe !== 'ALL' && (
                                         <span className="text-xs text-muted-foreground">
                                             Showing {filteredEntries.length} of {entries.length}
@@ -1285,7 +1309,7 @@ export default function GoalTracker() {
                                     <Button
                                         size="sm"
                                         onClick={() => { setEditingEntry(undefined); setEntryDialogOpen(true); }}
-                                        className="gap-1 text-xs"
+                                        className="w-full gap-1 text-xs sm:w-auto"
                                     >
                                         <Plus className="h-3 w-3" />
                                         Log Entry
@@ -1303,14 +1327,14 @@ export default function GoalTracker() {
                                     <DollarSign className="h-8 w-8 mx-auto mb-2 opacity-30" />
                                     <p className="text-sm">No entries yet. Start logging your daily earnings!</p>
                                 </div>
-                                ) : filteredEntries.length === 0 ? (
-                                    <div className="px-4 py-10 text-center text-sm text-muted-foreground">
-                                        No entries in the selected timeframe.
-                                    </div>
-                                ) : (
-                                    <>
-                                        <div className="space-y-3 p-3 sm:hidden">
-                                            {filteredEntries.map(entry => {
+                            ) : filteredEntries.length === 0 ? (
+                                <div className="px-4 py-10 text-center text-sm text-muted-foreground">
+                                    No entries in the selected timeframe.
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="space-y-3 p-3 sm:hidden">
+                                        {filteredEntries.map(entry => {
                                                 const isEditing = inlineEditId === entry.id;
                                                 const inlineAmountNumber = parseFloat(inlineAmount);
                                                 const inlineAmountIsValid = inlineAmount.trim() !== '' && Number.isFinite(inlineAmountNumber);
@@ -1384,10 +1408,10 @@ export default function GoalTracker() {
                                                         ) : null}
                                                     </div>
                                                 );
-                                            })}
-                                        </div>
+                                        })}
+                                    </div>
 
-                                        <div className="hidden overflow-x-auto sm:block">
+                                    <div className="hidden overflow-x-auto sm:block">
                                             <table className="w-full text-sm text-left">
                                                 <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
                                                     <tr>
