@@ -16,6 +16,7 @@ const TradeCommandCenterPage = lazy(() => import('./pages/TradeCommandCenterPage
 const StrategyGuidePage = lazy(() => import('./pages/StrategyGuidePage'));
 const TradeIntelligencePage = lazy(() => import('./pages/TradeIntelligencePage'));
 const CoveredCallsPage = lazy(() => import('./pages/CoveredCallsPage'));
+const ManualEntryPage = lazy(() => import('./pages/ManualEntryPage'));
 
 function RouteLoader() {
   return (
@@ -141,6 +142,7 @@ function App() {
               <Routes>
                 <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
                 <Route path="/trades" element={<TradesPage />} />
+                <Route path="/manual-entry" element={<ManualEntryPage />} />
                 <Route path="/covered-calls" element={<CoveredCallsPage />} />
                 <Route path="/trade-intelligence" element={<TradeIntelligencePage />} />
                 <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />

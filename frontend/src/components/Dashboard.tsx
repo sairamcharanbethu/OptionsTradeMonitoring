@@ -139,8 +139,8 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   const { lastMessage } = useWebSocket();
 
   const handleTabChange = (tab: string) => {
-    if (tab === 'covered-calls') {
-      window.location.href = '/covered-calls';
+    if (tab === 'covered-calls' || tab === 'manual-entry') {
+      window.location.href = tab === 'manual-entry' ? '/manual-entry' : '/covered-calls';
       return;
     }
 
@@ -405,6 +405,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               <TabsTrigger value="wealthsimple">Wealthsimple</TabsTrigger>
               <TabsTrigger value="goals">Goals</TabsTrigger>
               <TabsTrigger value="day-trading">Day Trading</TabsTrigger>
+              <TabsTrigger value="manual-entry">Manual Entry</TabsTrigger>
               <TabsTrigger value="covered-calls">Covered Calls</TabsTrigger>
               {user.role === 'ADMIN' && (
                 <TabsTrigger value="users">Users</TabsTrigger>
@@ -423,6 +424,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   <SelectItem value="wealthsimple">Wealthsimple</SelectItem>
                   <SelectItem value="goals">Goals</SelectItem>
                   <SelectItem value="day-trading">Day Trading</SelectItem>
+                  <SelectItem value="manual-entry">Manual Entry</SelectItem>
                   <SelectItem value="covered-calls">Covered Calls</SelectItem>
                   {user.role === 'ADMIN' && (
                     <SelectItem value="users">Users</SelectItem>

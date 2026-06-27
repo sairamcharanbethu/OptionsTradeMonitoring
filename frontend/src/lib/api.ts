@@ -301,6 +301,45 @@ export interface CoveredCallAnalysis {
   };
 }
 
+export interface ManualEntrySettings {
+  defaultTicker: string;
+  contracts: number;
+  slippagePct: number;
+  orderType: 'MARKET' | 'LIMIT';
+  takeProfitPct: number | null;
+  stopLossPct: number | null;
+}
+
+export interface ManualEntryQuote {
+  ticker: string | null;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  mark: number | null;
+  spreadPct: number | null;
+  quoteAgeMs?: number | null;
+  timestamp: string | null;
+}
+
+export interface ManualEntryChain {
+  symbol: string;
+  optionType: 'CALL' | 'PUT';
+  dte: 0 | 1;
+  expiration: string;
+  underlyingPrice: number | null;
+  strikes: Array<{
+    strike: number;
+    ticker: string;
+    bid: number | null;
+    ask: number | null;
+    mark: number | null;
+    spreadPct: number | null;
+    volume: number | null;
+    openInterest: number | null;
+    delta: number | null;
+  }>;
+}
+
 const API_BASE = '/api';
 
 const getToken = () => localStorage.getItem('token');
@@ -811,6 +850,84 @@ export const api = {
   async getSettings(): Promise<Record<string, string>> {
     const res = await authFetch(`${API_BASE}/settings`);
     if (!res.ok) throw new Error('Failed to fetch settings');
+    return res.json();
+  },
+
+  async getManualEntrySettings(): Promise<ManualEntrySettings> {
+    const res = await authFetch(`${API_BASE}/manual-entry/settings`);
+    if (!res.ok) throw new Error('Failed to fetch manual entry settings');
+    return res.json();
+  },
+
+  async updateManualEntrySettings(settings: ManualEntrySettings): Promise<ManualEntrySettings> {
+    const res = await authFetch(`${API_BASE}/manual-entry/settings`, {
+      method: 'POST',
+      body: JSON.stringify(settings)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update manual entry settings');
+    }
+    return res.json();
+  },
+
+  async getManualEntryChain(params: {
+    symbol: string;
+    optionType: 'CALL' | 'PUT';
+    dte: 0 | 1;
+  }): Promise<ManualEntryChain> {
+    const query = new URLSearchParams({
+      symbol: params.symbol,
+      optionType: params.optionType,
+      dte: String(params.dte),
+      t: String(Date.now())
+    });
+    const res = await authFetch(`${API_BASE}/manual-entry/chain?${query.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch manual entry chain');
+    }
+    return res.json();
+  },
+
+  async getManualEntryQuote(params: {
+    symbol: string;
+    optionType: 'CALL' | 'PUT';
+    strike: number;
+    expiration: string;
+  }): Promise<ManualEntryQuote> {
+    const query = new URLSearchParams({
+      symbol: params.symbol,
+      optionType: params.optionType,
+      strike: String(params.strike),
+      expiration: params.expiration,
+      t: String(Date.now())
+    });
+    const res = await authFetch(`${API_BASE}/manual-entry/quote?${query.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch manual entry quote');
+    }
+    return res.json();
+  },
+
+  async submitManualEntryOrder(payload: {
+    symbol: string;
+    optionType: 'CALL' | 'PUT';
+    strike: number;
+    expiration: string;
+    quantity: number;
+    orderType: 'MARKET' | 'LIMIT';
+    limitPrice?: number | null;
+  }): Promise<any> {
+    const res = await authFetch(`${API_BASE}/manual-entry/orders`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to submit manual entry order');
+    }
     return res.json();
   },
 

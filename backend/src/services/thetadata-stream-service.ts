@@ -13,6 +13,8 @@ export class ThetaDataStreamService extends EventEmitter {
   private ws: WebSocket | null = null;
   private baseWsUrl = process.env.THETADATA_STREAM_URL || '';
   private activeContracts: Map<string, ThetaContract> = new Map();
+  private positionContracts: Map<string, ThetaContract> = new Map();
+  private temporaryContracts: Map<string, ThetaContract> = new Map();
   private isConnected = false;
   private lastMessageAt: string | null = null;
   private lastError: string | null = null;
@@ -43,6 +45,30 @@ export class ThetaDataStreamService extends EventEmitter {
       return;
     }
     this.subscribeAll();
+  }
+
+  public async addTemporarySubscription(key: string, input: { symbol: string; strike: number; optionType: 'CALL' | 'PUT'; expiration: string | Date }) {
+    if (!this.baseWsUrl) {
+      const configured = await this.loadConfig();
+      if (!configured) return;
+    }
+    const contract = this.toThetaContract(input.symbol, input.strike, input.optionType, input.expiration);
+    this.temporaryContracts.set(key, contract);
+    this.activeContracts.set(this.contractKey(contract), contract);
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      this.connect();
+      return;
+    }
+    this.sendSubscription(contract, true);
+  }
+
+  public removeTemporarySubscription(key: string) {
+    const contract = this.temporaryContracts.get(key);
+    this.temporaryContracts.delete(key);
+    if (contract && !this.isContractStillNeeded(contract)) {
+      this.activeContracts.delete(this.contractKey(contract));
+      this.sendSubscription(contract, false);
+    }
   }
 
   private async loadConfig(): Promise<boolean> {
@@ -84,7 +110,7 @@ export class ThetaDataStreamService extends EventEmitter {
       "SELECT symbol, option_type, strike_price, expiration_date FROM positions WHERE status = 'OPEN'"
     );
 
-    this.activeContracts = new Map(rows.map((position: any) => {
+    this.positionContracts = new Map(rows.map((position: any) => {
       const contract = this.toThetaContract(
         position.symbol,
         Number(position.strike_price),
@@ -93,6 +119,7 @@ export class ThetaDataStreamService extends EventEmitter {
       );
       return [this.contractKey(contract), contract];
     }));
+    this.activeContracts = new Map([...this.positionContracts, ...this.temporaryContracts]);
   }
 
   private connect() {
@@ -132,16 +159,30 @@ export class ThetaDataStreamService extends EventEmitter {
     }
 
     for (const contract of this.activeContracts.values()) {
-      this.ws.send(JSON.stringify({
-        msg_type: 'STREAM',
-        sec_type: 'OPTION',
-        req_type: 'QUOTE',
-        add: true,
-        id: this.nextRequestId++,
-        contract
-      }));
+      this.sendSubscription(contract, true);
     }
     this.fastify.log.info(`[ThetaDataStream] Subscribed to ${this.activeContracts.size} option quote stream(s).`);
+  }
+
+  private sendSubscription(contract: ThetaContract, add: boolean) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({
+      msg_type: 'STREAM',
+      sec_type: 'OPTION',
+      req_type: 'QUOTE',
+      add,
+      id: this.nextRequestId++,
+      contract
+    }));
+  }
+
+  private isContractStillNeeded(contract: ThetaContract): boolean {
+    const key = this.contractKey(contract);
+    if (this.positionContracts.has(key)) return true;
+    for (const temp of this.temporaryContracts.values()) {
+      if (this.contractKey(temp) === key) return true;
+    }
+    return false;
   }
 
   private onMessage(data: WebSocket.Data) {

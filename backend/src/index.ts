@@ -17,6 +17,7 @@ import { signalRoutes } from './routes/signals';
 import { tradeRoutes } from './routes/trades';
 import { backtestRoutes } from './routes/backtests';
 import { coveredCallRoutes } from './routes/covered-calls';
+import { manualEntryRoutes } from './routes/manual-entry';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -57,6 +58,30 @@ const fastify = Fastify({
   },
   disableRequestLogging: false
 });
+
+function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
+  const dateStr = expiration instanceof Date ? expiration.toISOString().split('T')[0] : String(expiration).split('T')[0];
+  const [year, month, day] = dateStr.split('-');
+  const side = type === 'CALL' ? 'C' : 'P';
+  return `${symbol.toUpperCase()}${year.slice(-2)}${month}${day}${side}${Math.round(strike * 1000).toString().padStart(8, '0')}`;
+}
+
+function streamQuotePayload(quote: any) {
+  const bid = Number(quote.bidPrice ?? quote.bid ?? 0);
+  const ask = Number(quote.askPrice ?? quote.ask ?? 0);
+  const last = Number(quote.lastTradePrice ?? quote.last ?? quote.price ?? 0);
+  const mid = bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : 0;
+  const mark = mid > 0 ? mid : last > 0 ? Number(last.toFixed(2)) : bid > 0 ? Number(bid.toFixed(2)) : ask > 0 ? Number(ask.toFixed(2)) : null;
+  return {
+    ticker: quote.symbol || null,
+    bid: bid > 0 ? bid : null,
+    ask: ask > 0 ? ask : null,
+    last: last > 0 ? last : null,
+    mark,
+    spreadPct: bid > 0 && ask > 0 && mid > 0 ? Number((((ask - bid) / mid) * 100).toFixed(2)) : null,
+    timestamp: new Date().toISOString()
+  };
+}
 
 const testConnection = async (connectionString: string, label: string): Promise<boolean> => {
   const isCloud = connectionString.includes('aivencloud');
@@ -480,6 +505,7 @@ const start = async () => {
     fastify.register(signalRoutes, { prefix: '/api/signals' });
     fastify.register(backtestRoutes, { prefix: '/api/backtests' });
     fastify.register(coveredCallRoutes, { prefix: '/api/covered-calls' });
+    fastify.register(manualEntryRoutes, { prefix: '/api/manual-entry' });
 
     fastify.get('/health', async () => {
       return { status: 'ok' };
@@ -604,6 +630,39 @@ const start = async () => {
       }
     };
 
+    const manualQuoteSubscriptions = new Map<any, Set<string>>();
+    const manualQuoteSubscriptionKeys = new Map<any, Map<string, string>>();
+
+    const removeManualQuoteSubscriptions = (socket: any) => {
+      const keys = manualQuoteSubscriptionKeys.get(socket);
+      if (keys) {
+        for (const key of keys.values()) {
+          thetaDataStreamer.removeTemporarySubscription(key);
+        }
+      }
+      manualQuoteSubscriptionKeys.delete(socket);
+      manualQuoteSubscriptions.delete(socket);
+    };
+
+    const subscribeManualQuote = async (socket: any, clientId: string, payload: any) => {
+      const symbol = String(payload?.symbol || '').trim().toUpperCase();
+      const optionType = payload?.optionType === 'PUT' ? 'PUT' : 'CALL';
+      const strike = Number(payload?.strike);
+      const expiration = String(payload?.expiration || '').trim();
+      if (!symbol || !Number.isFinite(strike) || strike <= 0 || !expiration) {
+        socket.send(JSON.stringify({ type: 'MANUAL_ENTRY_QUOTE_ERROR', error: 'symbol, optionType, strike, and expiration are required' }));
+        return;
+      }
+
+      removeManualQuoteSubscriptions(socket);
+      const ticker = constructOSITicker(symbol, strike, optionType, expiration);
+      const subscriptionKey = `manual-entry:${clientId}:${ticker}:${Date.now()}`;
+      manualQuoteSubscriptions.set(socket, new Set([ticker]));
+      manualQuoteSubscriptionKeys.set(socket, new Map([[ticker, subscriptionKey]]));
+      await thetaDataStreamer.addTemporarySubscription(subscriptionKey, { symbol, strike, optionType, expiration });
+      socket.send(JSON.stringify({ type: 'MANUAL_ENTRY_QUOTE_SUBSCRIBED', data: { ticker, symbol, optionType, strike, expiration } }));
+    };
+
     // Broadcast real-time quotes to all connected frontend clients
     const handleStreamQuote = async (quote: any) => {
       // Enrich with Symbol if missing
@@ -618,6 +677,15 @@ const start = async () => {
             client.send(JSON.stringify({ type: 'PRICE_UPDATE', data: quote }));
           }
         });
+      }
+
+      if (quote.symbol) {
+        const payload = streamQuotePayload(quote);
+        for (const [client, subscriptions] of manualQuoteSubscriptions.entries()) {
+          if (client.readyState === 1 && subscriptions.has(quote.symbol)) {
+            client.send(JSON.stringify({ type: 'MANUAL_ENTRY_QUOTE_UPDATE', data: payload }));
+          }
+        }
       }
 
       // Feed data into the dedicated live exit monitor without waiting for the next poll cycle.
@@ -734,6 +802,7 @@ const start = async () => {
     });
 
     const wsClients = new Map<any, string>();
+    const wsUserIds = new Map<any, number>();
 
     const getLegacyWsClientId = (req: any) => {
       const fingerprint = [
@@ -777,6 +846,37 @@ const start = async () => {
             socket.send(JSON.stringify({ type: 'pong' }));
             return;
           }
+          if (data && data.type === 'auth') {
+            try {
+              const verified = fastify.jwt.verify(data.token || '') as any;
+              const verifiedUserId = Number(verified?.id);
+              if (Number.isFinite(verifiedUserId) && verifiedUserId > 0) {
+                wsUserIds.set(socket, verifiedUserId);
+                socket.send(JSON.stringify({ type: 'auth_ok' }));
+                return;
+              }
+            } catch {
+              // Fall through to auth error.
+            }
+            socket.send(JSON.stringify({ type: 'auth_error' }));
+            return;
+          }
+          if (data && data.type === 'MANUAL_ENTRY_SUBSCRIBE_QUOTE') {
+            if (!wsUserIds.has(socket)) {
+              socket.send(JSON.stringify({ type: 'MANUAL_ENTRY_QUOTE_ERROR', error: 'Authentication is required for manual quote streaming' }));
+              return;
+            }
+            subscribeManualQuote(socket, clientId, data.data).catch((err: any) => {
+              fastify.log.warn(`[WebSocket] Manual quote subscribe failed id=${clientId}: ${err.message}`);
+              socket.send(JSON.stringify({ type: 'MANUAL_ENTRY_QUOTE_ERROR', error: err.message || 'Manual quote subscribe failed' }));
+            });
+            return;
+          }
+          if (data && data.type === 'MANUAL_ENTRY_UNSUBSCRIBE_QUOTE') {
+            removeManualQuoteSubscriptions(socket);
+            socket.send(JSON.stringify({ type: 'MANUAL_ENTRY_QUOTE_UNSUBSCRIBED' }));
+            return;
+          }
           fastify.log.info(`[WebSocket] Received: ${JSON.stringify(data)}`);
         } catch (e) {
           // Non-JSON message, ignore
@@ -784,7 +884,9 @@ const start = async () => {
       });
 
       socket.on('close', () => {
+        removeManualQuoteSubscriptions(socket);
         wsClients.delete(socket);
+        wsUserIds.delete(socket);
         fastify.log.info(`[WebSocket] Client disconnected id=${clientId} active=${wsClients.size} activeForClient=${getActiveWsCountForClient(clientId)}`);
       });
 

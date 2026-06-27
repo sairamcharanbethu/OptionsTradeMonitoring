@@ -61,6 +61,11 @@ const connectGlobal = (url: string) => {
         wsState.isConnected = true;
         wsState.statusSubscribers.forEach(cb => cb(true));
 
+        const token = localStorage.getItem('token');
+        if (token) {
+            socket.send(JSON.stringify({ type: 'auth', token }));
+        }
+
         // Start heartbeat ping every 30 seconds to keep the connection alive (avoid reverse proxy timeouts)
         if (wsState.pingInterval) clearInterval(wsState.pingInterval);
         wsState.pingInterval = setInterval(() => {

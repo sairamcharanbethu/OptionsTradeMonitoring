@@ -4,6 +4,7 @@ import { redis } from '../lib/redis';
 import crypto from 'crypto';
 import { TradeRedisService } from './trade-redis-service';
 import { DiscordAlertService } from './discord-alert-service';
+import { TradeLifecycleService } from './trade-lifecycle-service';
 
 export class SnaptradeService {
     private fastify: FastifyInstance;
@@ -730,8 +731,11 @@ export class SnaptradeService {
                             });
                         }
                     } else {
-                        const stopLoss = Number((fillPrice * 0.8).toFixed(2));
-                        const takeProfit = takeProfitPct !== null
+                        const manualEntry = this.getManualEntryConfig(position);
+                        const stopLoss = manualEntry ? null : Number((fillPrice * 0.8).toFixed(2));
+                        const takeProfit = manualEntry?.takeProfitPct
+                            ? Number((fillPrice * (1 + manualEntry.takeProfitPct / 100)).toFixed(2))
+                            : takeProfitPct !== null
                             ? Number((fillPrice * (1 + takeProfitPct / 100)).toFixed(2))
                             : null;
                         await this.fastify.pg.query(
@@ -758,6 +762,9 @@ export class SnaptradeService {
                             message: `SnapTrade entry fill confirmed: ${status}`,
                             metadata: { status, fillPrice }
                         });
+                        if (manualEntry?.takeProfitPct && takeProfit) {
+                            await this.submitManualTakeProfit(position, accountId, takeProfit, status);
+                        }
                     }
                     summary.orders.push({
                         positionId: position.id,
@@ -918,6 +925,70 @@ export class SnaptradeService {
         return summary;
         } finally {
             await TradeRedisService.releaseLock(brokerSyncLock);
+        }
+    }
+
+    private getManualEntryConfig(position: any): { takeProfitPct: number | null; stopLossPct: number | null } | null {
+        const raw = position?.analysis_data;
+        const analysisData = typeof raw === 'string'
+            ? (() => {
+                try { return JSON.parse(raw); } catch { return null; }
+            })()
+            : raw;
+        const manualEntry = analysisData?.manualEntry;
+        if (!manualEntry?.enabled) return null;
+        const takeProfitPct = Number(manualEntry.takeProfitPct || 0);
+        const stopLossPct = Number(manualEntry.stopLossPct || 0);
+        return {
+            takeProfitPct: Number.isFinite(takeProfitPct) && takeProfitPct > 0 ? takeProfitPct : null,
+            stopLossPct: Number.isFinite(stopLossPct) && stopLossPct > 0 ? stopLossPct : null
+        };
+    }
+
+    private async submitManualTakeProfit(position: any, accountId: string, takeProfit: number, fillStatus: string) {
+        const userId = Number(position.user_id);
+        const quantity = Number(position.quantity || 1);
+        if (!Number.isFinite(userId) || userId <= 0 || !Number.isFinite(quantity) || quantity <= 0) return;
+
+        try {
+            const optionSymbol = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+            const order = await this.placeOptionOrder(
+                userId,
+                accountId,
+                optionSymbol,
+                'SELL_TO_CLOSE',
+                quantity,
+                'LIMIT',
+                takeProfit.toFixed(2)
+            );
+            await TradeLifecycleService.markExitSubmitted(this.fastify.pg, position.id, order, {
+                reason: 'MANUAL_TAKE_PROFIT',
+                orderType: 'LIMIT',
+                note: ` [Manual Entry take-profit LIMIT submitted at $${takeProfit}${order.orderId ? `: ${order.orderId}` : ''}]`
+            });
+            await TradeRedisService.recordEvent(this.fastify.pg, {
+                userId,
+                positionId: position.id,
+                eventType: 'MANUAL_TAKE_PROFIT_SUBMITTED',
+                message: `Manual Entry take-profit limit submitted at $${takeProfit}`,
+                metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity, limitPrice: takeProfit, fillStatus }
+            });
+        } catch (err: any) {
+            await this.fastify.pg.query(
+                `UPDATE positions
+                 SET execution_error = $1,
+                     notes = COALESCE(notes, '') || $2,
+                     updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $3`,
+                [err.message || String(err), ` [Manual Entry take-profit submit failed: ${err.message || String(err)}]`, position.id]
+            );
+            await TradeRedisService.recordEvent(this.fastify.pg, {
+                userId,
+                positionId: position.id,
+                eventType: 'MANUAL_TAKE_PROFIT_FAILED',
+                message: err.message || String(err),
+                metadata: { limitPrice: takeProfit, fillStatus }
+            });
         }
     }
 
