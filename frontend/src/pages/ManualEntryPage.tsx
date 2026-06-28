@@ -72,7 +72,7 @@ export default function ManualEntryPage() {
   const [showEntry, setShowEntry] = useState(false);
   const [symbol, setSymbol] = useState('QQQ');
   const [optionType, setOptionType] = useState<'CALL' | 'PUT'>('CALL');
-  const [dte, setDte] = useState<0 | 1>(0);
+  const [dte, setDte] = useState<0 | 1 | 2>(0);
   const [chain, setChain] = useState<ManualEntryChain | null>(null);
   const [selectedStrike, setSelectedStrike] = useState<number | null>(null);
   const [quote, setQuote] = useState<ManualEntryQuote | null>(null);
@@ -99,19 +99,21 @@ export default function ManualEntryPage() {
     [openTrades]
   );
 
-  const refreshTrades = async () => {
-    setLoadingTrades(true);
+  const refreshTrades = async (syncBroker = false, showSpinner = true) => {
+    if (showSpinner) setLoadingTrades(true);
     try {
-      try {
-        await api.syncSnaptradePendingOrders();
-      } catch (err: any) {
-        setError(err.message || 'Failed to sync Wealthsimple pending orders');
+      if (syncBroker) {
+        try {
+          await api.syncSnaptradePendingOrders();
+        } catch (err: any) {
+          setError(err.message || 'Failed to sync Wealthsimple pending orders');
+        }
       }
       setOpenTrades(await api.getOpenTrades());
     } catch (err: any) {
       setError(err.message || 'Failed to load manual entries');
     } finally {
-      setLoadingTrades(false);
+      if (showSpinner) setLoadingTrades(false);
     }
   };
 
@@ -195,7 +197,7 @@ export default function ManualEntryPage() {
       setQuoteState('Snapshot');
     }
     if (lastMessage.type === 'TRADES_UPDATED') {
-      refreshTrades();
+      refreshTrades(false, false);
     }
   }, [lastMessage, selectedTicker]);
 
@@ -242,7 +244,7 @@ export default function ManualEntryPage() {
         limitPrice: orderType === 'LIMIT' ? Number(limitPrice) : null
       });
       setShowEntry(false);
-      await refreshTrades();
+      await refreshTrades(true);
     } catch (err: any) {
       setError(err.message || 'Failed to submit order');
     } finally {
@@ -255,7 +257,7 @@ export default function ManualEntryPage() {
     setError(null);
     try {
       await api.closeWealthsimpleTrade(trade.id, trade.quantity);
-      await refreshTrades();
+      await refreshTrades(true);
     } catch (err: any) {
       setError(err.message || 'Failed to submit sell order');
     } finally {
@@ -281,7 +283,7 @@ export default function ManualEntryPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" className="gap-2" onClick={refreshTrades} disabled={loadingTrades}>
+          <Button variant="outline" className="gap-2" onClick={() => refreshTrades(true)} disabled={loadingTrades}>
             <RefreshCw className={`h-4 w-4 ${loadingTrades ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -371,11 +373,12 @@ export default function ManualEntryPage() {
                 </div>
                 <div>
                   <Label className="text-xs">DTE</Label>
-                  <Select value={String(dte)} onValueChange={(value) => setDte(Number(value) as 0 | 1)}>
+                  <Select value={String(dte)} onValueChange={(value) => setDte(Number(value) as 0 | 1 | 2)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="0">0</SelectItem>
                       <SelectItem value="1">1</SelectItem>
+                      <SelectItem value="2">2</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

@@ -324,7 +324,7 @@ export interface ManualEntryQuote {
 export interface ManualEntryChain {
   symbol: string;
   optionType: 'CALL' | 'PUT';
-  dte: 0 | 1;
+  dte: 0 | 1 | 2;
   expiration: string;
   underlyingPrice: number | null;
   strikes: Array<{
@@ -874,7 +874,7 @@ export const api = {
   async getManualEntryChain(params: {
     symbol: string;
     optionType: 'CALL' | 'PUT';
-    dte: 0 | 1;
+    dte: 0 | 1 | 2;
   }): Promise<ManualEntryChain> {
     const query = new URLSearchParams({
       symbol: params.symbol,

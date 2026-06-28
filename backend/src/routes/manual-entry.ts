@@ -19,7 +19,7 @@ const ManualEntrySettingsSchema = z.object({
 const ChainQuerySchema = z.object({
   symbol: z.string().trim().min(1).max(12),
   optionType: z.enum(['CALL', 'PUT']),
-  dte: z.coerce.number().int().min(0).max(1)
+  dte: z.coerce.number().int().min(0).max(2)
 });
 
 const QuoteQuerySchema = z.object({
