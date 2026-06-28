@@ -79,15 +79,35 @@ function normalizeSettings(settings: Record<string, string>): ManualEntrySetting
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function assertUsableEntryQuote(quote: any, intendedEntry: number | null) {
+function isRegularUsMarketSession(now = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    hourCycle: 'h23'
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || '';
+  if (['Sat', 'Sun'].includes(get('weekday'))) return false;
+  const minutes = Number(get('hour')) * 60 + Number(get('minute'));
+  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
+}
+
+function assertUsableEntryQuote(quote: any, intendedEntry: number | null, orderType: 'MARKET' | 'LIMIT') {
   if (!quote || Number(quote.mark || 0) <= 0) {
     throw new Error('A live ThetaData quote is required before submitting the order.');
   }
   if (Number(quote.bid || 0) <= 0 || Number(quote.ask || 0) <= 0) {
     throw new Error('Manual entry blocked: selected contract is missing live bid/ask.');
   }
-  if (quote.quoteAgeMs !== null && quote.quoteAgeMs !== undefined && Number(quote.quoteAgeMs) > MAX_ENTRY_QUOTE_AGE_MS) {
-    throw new Error(`Manual entry blocked: selected contract quote is stale (${Math.round(Number(quote.quoteAgeMs) / 1000)}s old).`);
+  const quoteAgeMs = quote.quoteAgeMs === null || quote.quoteAgeMs === undefined ? null : Number(quote.quoteAgeMs);
+  if (quoteAgeMs !== null && quoteAgeMs > MAX_ENTRY_QUOTE_AGE_MS && (isRegularUsMarketSession() || orderType === 'MARKET')) {
+    const ageSeconds = Math.round(quoteAgeMs / 1000);
+    const reason = orderType === 'MARKET'
+      ? 'market orders require a fresh quote'
+      : 'market is open and quote is stale';
+    throw new Error(`Manual entry blocked: selected contract quote is stale (${ageSeconds}s old; ${reason}).`);
   }
   if (quote.spreadPct !== null && quote.spreadPct !== undefined && Number(quote.spreadPct) > 15) {
     throw new Error(`Manual entry blocked: bid/ask spread ${Number(quote.spreadPct).toFixed(1)}% is too wide.`);
@@ -318,7 +338,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
         right: input.optionType === 'CALL' ? 'call' : 'put',
         strike: input.strike
       });
-      assertUsableEntryQuote(firstQuote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(firstQuote?.mark || 0));
+      assertUsableEntryQuote(firstQuote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(firstQuote?.mark || 0), input.orderType);
 
       await wait(750);
       const quote = await thetaData.getOptionQuote(userId, {
@@ -327,7 +347,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
         right: input.optionType === 'CALL' ? 'call' : 'put',
         strike: input.strike
       });
-      assertUsableEntryQuote(quote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(quote?.mark || 0));
+      assertUsableEntryQuote(quote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(quote?.mark || 0), input.orderType);
 
       const movePct = Number(firstQuote?.mark || 0) > 0
         ? Number((((Number(quote!.mark) - Number(firstQuote!.mark)) / Number(firstQuote!.mark)) * 100).toFixed(2))
