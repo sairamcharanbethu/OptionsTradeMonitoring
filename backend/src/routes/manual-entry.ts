@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
-import yahooFinance from 'yahoo-finance2';
+import YahooFinance from 'yahoo-finance2';
 import { z } from 'zod';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { ThetaDataService } from '../services/thetadata-service';
@@ -56,6 +56,8 @@ const SETTING_KEYS = {
   takeProfitPct: 'manual_entry_take_profit_pct',
   stopLossPct: 'manual_entry_stop_loss_pct'
 };
+
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 function normalizeSettings(settings: Record<string, string>): ManualEntrySettings {
   const contracts = Number(settings[SETTING_KEYS.contracts] || 1);
@@ -125,13 +127,31 @@ function toQuotePayload(quote: any) {
   };
 }
 
+function finitePrice(value: any): number | null {
+  const raw = value && typeof value === 'object' && 'raw' in value ? value.raw : value;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 async function fetchUnderlyingPrice(symbol: string): Promise<number | null> {
   try {
-    const quote = await (yahooFinance as any).quoteSummary(symbol, { modules: ['price'] });
-    const price = Number(quote?.price?.regularMarketPrice ?? quote?.price?.postMarketPrice ?? quote?.price?.preMarketPrice ?? 0);
-    return Number.isFinite(price) && price > 0 ? price : null;
+    const quote = await (yahooFinance as any).quote(symbol);
+    return (
+      finitePrice(quote?.regularMarketPrice) ??
+      finitePrice(quote?.postMarketPrice) ??
+      finitePrice(quote?.preMarketPrice)
+    );
   } catch {
-    return null;
+    try {
+      const quote = await (yahooFinance as any).quoteSummary(symbol, { modules: ['price'] });
+      return (
+        finitePrice(quote?.price?.regularMarketPrice) ??
+        finitePrice(quote?.price?.postMarketPrice) ??
+        finitePrice(quote?.price?.preMarketPrice)
+      );
+    } catch {
+      return null;
+    }
   }
 }
 
