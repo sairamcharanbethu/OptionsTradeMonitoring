@@ -58,6 +58,7 @@ const SETTING_KEYS = {
 };
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+const MAX_ENTRY_QUOTE_AGE_MS = 60_000;
 
 function normalizeSettings(settings: Record<string, string>): ManualEntrySettings {
   const contracts = Number(settings[SETTING_KEYS.contracts] || 1);
@@ -85,8 +86,8 @@ function assertUsableEntryQuote(quote: any, intendedEntry: number | null) {
   if (Number(quote.bid || 0) <= 0 || Number(quote.ask || 0) <= 0) {
     throw new Error('Manual entry blocked: selected contract is missing live bid/ask.');
   }
-  if (quote.quoteAgeMs !== null && quote.quoteAgeMs !== undefined && Number(quote.quoteAgeMs) > 2_000) {
-    throw new Error('Manual entry blocked: selected contract quote is stale.');
+  if (quote.quoteAgeMs !== null && quote.quoteAgeMs !== undefined && Number(quote.quoteAgeMs) > MAX_ENTRY_QUOTE_AGE_MS) {
+    throw new Error(`Manual entry blocked: selected contract quote is stale (${Math.round(Number(quote.quoteAgeMs) / 1000)}s old).`);
   }
   if (quote.spreadPct !== null && quote.spreadPct !== undefined && Number(quote.spreadPct) > 15) {
     throw new Error(`Manual entry blocked: bid/ask spread ${Number(quote.spreadPct).toFixed(1)}% is too wide.`);
