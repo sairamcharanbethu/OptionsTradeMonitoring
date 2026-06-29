@@ -67,9 +67,6 @@ export class TradeExecutionService {
   private readonly ENTRY_MAX_QUOTE_AGE_MS = 2_000;
   private readonly ENTRY_MAX_SPREAD_PCT = 15;
   private readonly ENTRY_MIN_BID_TO_ENTRY_RATIO = 0.90;
-  private readonly ENTRY_MAX_PREMIUM_JUMP_PCT = 8;
-  private readonly ENTRY_MAX_STABILITY_MOVE_PCT = 8;
-  private readonly ENTRY_STABILITY_DELAY_MS = 1_500;
   private readonly ENTRY_PROTECTED_LIMIT_OVER_MID_PCT = 3;
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
@@ -587,9 +584,7 @@ export class TradeExecutionService {
       quoteThresholds: {
         maxQuoteAgeMs: this.ENTRY_MAX_QUOTE_AGE_MS,
         maxSpreadPct: this.ENTRY_MAX_SPREAD_PCT,
-        minBidToEntryRatio: this.ENTRY_MIN_BID_TO_ENTRY_RATIO,
-        maxPremiumJumpPct: this.ENTRY_MAX_PREMIUM_JUMP_PCT,
-        maxStabilityMovePct: this.ENTRY_MAX_STABILITY_MOVE_PCT
+        minBidToEntryRatio: this.ENTRY_MIN_BID_TO_ENTRY_RATIO
       },
       intendedEntry
     });
@@ -605,33 +600,23 @@ export class TradeExecutionService {
     const baselineMark = Number(optionDetails?.mark || input.mark || 0) > 0 ? Number(optionDetails?.mark || input.mark) : null;
     const intendedEntry = Number(plannedLimit || baselineMark || input.mark || 0);
 
-    const firstQuote = await this.fetchEntryQuoteSnapshot(input, settings, osiTicker);
-    if (!firstQuote) {
+    const quote = await this.fetchEntryQuoteSnapshot(input, settings, osiTicker);
+    if (!quote) {
       throw new Error('Entry skipped: live option quote validation is unavailable');
     }
-    await this.wait(this.ENTRY_STABILITY_DELAY_MS);
-    const finalQuote = await this.fetchEntryQuoteSnapshot(input, settings, osiTicker);
-    if (!finalQuote) {
-      throw new Error('Entry skipped: final live option quote validation is unavailable');
-    }
-    if (firstQuote.source !== finalQuote.source) {
-      throw new Error(`Entry skipped: quote source changed from ${firstQuote.source} to ${finalQuote.source} during stability check`);
-    }
 
-    const stabilityMovePct = firstQuote.mark > 0
-      ? Number((((finalQuote.mark - firstQuote.mark) / firstQuote.mark) * 100).toFixed(2))
-      : null;
-    const movePct = baselineMark ? Number((((finalQuote.mark - baselineMark) / baselineMark) * 100).toFixed(2)) : null;
-    const effectiveIntendedEntry = intendedEntry > 0 ? intendedEntry : finalQuote.mark;
-    this.assertEntryQuote(input, finalQuote, effectiveIntendedEntry, baselineMark, movePct, stabilityMovePct);
+    const stabilityMovePct = null;
+    const movePct = baselineMark ? Number((((quote.mark - baselineMark) / baselineMark) * 100).toFixed(2)) : null;
+    const effectiveIntendedEntry = intendedEntry > 0 ? intendedEntry : quote.mark;
+    this.assertEntryQuote(input, quote, effectiveIntendedEntry, baselineMark, movePct, stabilityMovePct);
 
     const protectedLimit = Number(Math.min(
-      finalQuote.ask,
-      finalQuote.mid * (1 + this.ENTRY_PROTECTED_LIMIT_OVER_MID_PCT / 100)
+      quote.ask,
+      quote.mid * (1 + this.ENTRY_PROTECTED_LIMIT_OVER_MID_PCT / 100)
     ).toFixed(2));
 
     return {
-      quote: finalQuote,
+      quote,
       protectedLimit,
       baselineMark,
       movePct,

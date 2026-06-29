@@ -12,8 +12,6 @@ export type RiskDecisionCode =
   | 'MISSING_BID_ASK'
   | 'SPREAD_TOO_WIDE'
   | 'SELLABLE_BID_TOO_LOW'
-  | 'PREMIUM_JUMP'
-  | 'QUOTE_STABILITY_MOVE'
   | 'MACRO_CONTRADICTION';
 
 export type RiskDecision = {
@@ -49,8 +47,6 @@ export type PreSubmitRiskInput = {
     maxQuoteAgeMs: number;
     maxSpreadPct: number;
     minBidToEntryRatio: number;
-    maxPremiumJumpPct: number;
-    maxStabilityMovePct: number;
   };
   intendedEntry?: number | null;
 };
@@ -262,24 +258,6 @@ export class RiskDecisionService {
         code: 'SELLABLE_BID_TOO_LOW',
         message: `Entry skipped: immediate sellable bid $${quote.bid.toFixed(2)} is ${underwaterPct}% below intended entry $${intendedEntry.toFixed(2)}`,
         metadata: { bid: quote.bid, intendedEntry, underwaterPct }
-      };
-    }
-    if (validation.baselineMark && validation.baselineMark > 0 && validation.movePct !== null && validation.movePct > thresholds.maxPremiumJumpPct) {
-      return {
-        allowed: false,
-        skipped: true,
-        code: 'PREMIUM_JUMP',
-        message: `Entry skipped: premium jumped ${validation.movePct.toFixed(1)}% from signal mark $${validation.baselineMark.toFixed(2)} to $${quote.mark.toFixed(2)}`,
-        metadata: { movePct: validation.movePct, maxPremiumJumpPct: thresholds.maxPremiumJumpPct }
-      };
-    }
-    if (validation.stabilityMovePct !== null && Math.abs(validation.stabilityMovePct) > thresholds.maxStabilityMovePct) {
-      return {
-        allowed: false,
-        skipped: true,
-        code: 'QUOTE_STABILITY_MOVE',
-        message: `Entry skipped: premium moved ${Math.abs(validation.stabilityMovePct).toFixed(1)}% during quote stability check`,
-        metadata: { stabilityMovePct: validation.stabilityMovePct, maxStabilityMovePct: thresholds.maxStabilityMovePct }
       };
     }
     return this.allow();

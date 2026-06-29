@@ -59,9 +59,13 @@ function createEntryQuote(overrides: Partial<any> = {}) {
 async function testThetaDataQuoteAllowsProtectedLimit() {
   const service = new TradeExecutionService(createFastifyMock());
   const input = createSignalInput();
+  let quoteFetchCount = 0;
 
   (service as any).getSignalOptionDetails = async () => ({ mark: 2 });
-  (service as any).fetchThetaDataOptionQuote = async () => createEntryQuote();
+  (service as any).fetchThetaDataOptionQuote = async () => {
+    quoteFetchCount += 1;
+    return createEntryQuote();
+  };
   (service as any).wait = async () => {};
 
   const validation = await (service as any).validateEntryQuote(
@@ -75,7 +79,8 @@ async function testThetaDataQuoteAllowsProtectedLimit() {
   assert(validation.quote.source === 'thetadata', 'Should use ThetaData quote validation');
   assert(validation.quote.syntheticOnly === false, 'Should require non-synthetic bid/ask data');
   assert(validation.protectedLimit === 2.08, `Should cap protected limit with live ask, got ${validation.protectedLimit}`);
-  assert(validation.stabilityMovePct === 0, `Stable repeated live quotes should have 0% move, got ${validation.stabilityMovePct}`);
+  assert(validation.stabilityMovePct === null, `Single live quote validation should not compute stability move, got ${validation.stabilityMovePct}`);
+  assert(quoteFetchCount === 1, `Should fetch one quote for speed execution, got ${quoteFetchCount}`);
 }
 
 async function testSnapTradeQuoteIsNotUsedForEntryValidation() {
@@ -101,42 +106,30 @@ async function testSnapTradeQuoteIsNotUsedForEntryValidation() {
   assert(snapTradeQuoteCalled === false, 'Should not call SnapTrade option quote endpoint during entry validation');
 }
 
-async function testEntryValidationRejectsQuoteSourceSwitch() {
+async function testEntryValidationDoesNotWaitForSecondQuote() {
   const service = new TradeExecutionService(createFastifyMock());
-  const quotes = [
-    createEntryQuote({ source: 'thetadata' }),
-    {
-      ...createEntryQuote({
-        source: 'alpaca',
-        bid: 2,
-        ask: 2.1,
-        mid: 2.05,
-        mark: 2.05,
-        spreadPct: 4.88,
-        syntheticOnly: false,
-        quoteAgeMs: 500
-      })
-    }
-  ];
+  let quoteFetchCount = 0;
+  let waited = false;
 
   (service as any).getSignalOptionDetails = async () => ({ mark: 2 });
-  (service as any).fetchEntryQuoteSnapshot = async () => quotes.shift();
-  (service as any).wait = async () => {};
+  (service as any).fetchEntryQuoteSnapshot = async () => {
+    quoteFetchCount += 1;
+    return createEntryQuote({ source: 'thetadata' });
+  };
+  (service as any).wait = async () => {
+    waited = true;
+  };
 
-  let rejected = false;
-  try {
-    await (service as any).validateEntryQuote(
-      createSignalInput(),
-      {},
-      'QQQ260616P00738000',
-      2.05,
-      '7:wealthsimple-account'
-    );
-  } catch (err: any) {
-    rejected = /quote source changed/.test(err.message);
-  }
+  await (service as any).validateEntryQuote(
+    createSignalInput(),
+    {},
+    'QQQ260616P00738000',
+    2.05,
+    '7:wealthsimple-account'
+  );
 
-  assert(rejected, 'Should reject entry when quote source changes during stability check');
+  assert(quoteFetchCount === 1, `Should not run a second quote stability check, got ${quoteFetchCount} quote fetches`);
+  assert(waited === false, 'Should not wait during entry quote validation');
 }
 
 async function testLiveExecutionSkipsTheoreticalPricingSignal() {
@@ -275,7 +268,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
     broker: 'wealthsimple_snaptrade',
     settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
     quoteValidation: { quote: createEntryQuote({ quoteAgeMs: 5_000 }), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
-    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9 },
     intendedEntry: 2.05
   });
   const missingBidAsk = RiskDecisionService.evaluatePreSubmit({
@@ -283,7 +276,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
     broker: 'wealthsimple_snaptrade',
     settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
     quoteValidation: { quote: createEntryQuote({ bid: 0, ask: 0, spreadPct: null }), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
-    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9 },
     intendedEntry: 2.05
   });
   const wideSpread = RiskDecisionService.evaluatePreSubmit({
@@ -291,7 +284,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
     broker: 'wealthsimple_snaptrade',
     settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
     quoteValidation: { quote: createEntryQuote({ spreadPct: 18 }), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
-    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9 },
     intendedEntry: 2.05
   });
   const premiumJump = RiskDecisionService.evaluatePreSubmit({
@@ -299,7 +292,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
     broker: 'wealthsimple_snaptrade',
     settings: { live_trading_acknowledged: 'true', snaptrade_trading_account_id: 'acct-1' },
     quoteValidation: { quote: createEntryQuote({ mark: 2.4 }), baselineMark: 2, movePct: 20, stabilityMovePct: 0 },
-    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9 },
     intendedEntry: 2.05
   });
   const macro = RiskDecisionService.evaluatePreSubmit({
@@ -335,7 +328,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
       }
     },
     quoteValidation: { quote: createEntryQuote(), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
-    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9, maxPremiumJumpPct: 8, maxStabilityMovePct: 8 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9 },
     intendedEntry: 2.05
   });
 
@@ -350,7 +343,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(staleQuote.denials[0]?.code === 'STALE_QUOTE', 'Should block stale option quote');
   assert(missingBidAsk.denials[0]?.code === 'MISSING_BID_ASK', 'Should block missing bid/ask');
   assert(wideSpread.denials[0]?.code === 'SPREAD_TOO_WIDE', 'Should block wide spread');
-  assert(premiumJump.denials[0]?.code === 'PREMIUM_JUMP', 'Should block premium jump');
+  assert(premiumJump.approved === true && premiumJump.evidence.movePct === 20, 'Premium jump should remain evidence, not block momentum entry');
   assert(macro.denials[0]?.code === 'MACRO_CONTRADICTION', 'Should block macro contradiction');
   assert(clean.approved === true && clean.denials.length === 0, `Clean pre-submit risk should approve, got ${JSON.stringify(clean.denials)}`);
   assert(RiskDecisionService.forSetupGrade(42, 'A+ / FULL').allowed === true, 'Should allow A+ setup grade');
@@ -449,7 +442,7 @@ async function runTests() {
   console.log('Running TradeExecutionService broker lifecycle tests...');
   await testThetaDataQuoteAllowsProtectedLimit();
   await testSnapTradeQuoteIsNotUsedForEntryValidation();
-  await testEntryValidationRejectsQuoteSourceSwitch();
+  await testEntryValidationDoesNotWaitForSecondQuote();
   await testLiveExecutionSkipsTheoreticalPricingSignal();
   await testLiveExecutionSkipsLowExecutionRealismSignal();
   await testTheoreticalPricingDetectionCoversStoredShapes();
