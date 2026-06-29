@@ -1191,8 +1191,8 @@ export class SnaptradeService {
     ) {
         const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
         const snaptradeOptionSymbol = this.toSnaptradeOccSymbol(optionSymbol);
-        const priceEffect = action.startsWith('BUY') ? 'DEBIT' : 'CREDIT';
         const snaptradeAccountId = this.toSnaptradeAccountId(accountId);
+        const snaptradeOrderType = orderType === 'LIMIT' ? 'Limit' : 'Market';
 
         this.fastify.log.info(`[SnaptradeService] Placing option order: ${action} ${units} contracts of ${snaptradeOptionSymbol} on account ${accountId} (Mode: ${orderType})`);
 
@@ -1200,36 +1200,29 @@ export class SnaptradeService {
             const orderPayload: any = {
                 userId: userIdStr,
                 userSecret: userSecret,
-                accountId: snaptradeAccountId,
-                order_type: orderType,
+                account_id: snaptradeAccountId,
+                action,
+                universal_symbol_id: null,
+                symbol: snaptradeOptionSymbol,
+                order_type: snaptradeOrderType,
                 time_in_force: 'Day',
-                limit_price: orderType === 'LIMIT' ? limitPrice : '',
-                stop_price: '',
-                price_effect: priceEffect,
-                legs: [
-                    {
-                        instrument: {
-                            symbol: snaptradeOptionSymbol,
-                            instrument_type: 'OPTION'
-                        },
-                        action: action,
-                        units: units
-                    }
-                ]
+                trading_session: 'REGULAR',
+                units
             };
 
             if (orderType === 'LIMIT') {
                 if (!limitPrice) {
                     throw new Error('Limit price is required for LIMIT orders.');
                 }
+                orderPayload.price = Number(limitPrice);
             }
 
             let impactData: any = null;
             let impactWarning: string | null = null;
             if (!options.skipImpact) {
                 try {
-                    this.fastify.log.info(`[SnaptradeService] Getting option impact for ${snaptradeOptionSymbol}...`);
-                    const impactRes = await snaptrade.trading.getOptionImpact(orderPayload, this.snaptradeRequestOptions(SNAPTRADE_IMPACT_TIMEOUT_MS));
+                    this.fastify.log.info(`[SnaptradeService] Getting single-leg option impact for ${snaptradeOptionSymbol}...`);
+                    const impactRes = await snaptrade.trading.getOrderImpact(orderPayload, this.snaptradeRequestOptions(SNAPTRADE_IMPACT_TIMEOUT_MS));
                     impactData = impactRes.data;
                 } catch (impactErr: any) {
                     const detail = impactErr.responseBody?.detail || impactErr.message || '';
@@ -1244,8 +1237,8 @@ export class SnaptradeService {
                 impactWarning = 'Impact preview skipped for speed-sensitive manual entry.';
             }
 
-            this.fastify.log.info(`[SnaptradeService] Placing multi-leg option order for ${snaptradeOptionSymbol}...`);
-            const placeRes = await snaptrade.trading.placeMlegOrder(orderPayload, this.snaptradeRequestOptions());
+            this.fastify.log.info(`[SnaptradeService] Placing single-leg option order for ${snaptradeOptionSymbol}...`);
+            const placeRes = await snaptrade.trading.placeForceOrder(orderPayload, this.snaptradeRequestOptions());
             const brokerageOrderId = placeRes.data?.brokerage_order_id
                 || placeRes.data?.orders?.[0]?.brokerage_order_id
                 || (placeRes.data as any)?.id
