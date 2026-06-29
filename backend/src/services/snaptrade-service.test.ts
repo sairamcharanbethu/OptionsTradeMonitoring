@@ -69,13 +69,17 @@ async function testPlaceOptionOrderUsesSingleLegForceOrderPayload() {
 async function testPlaceOptionOrderUsesLimitPriceForForceOrder() {
   const service = new SnaptradeService(createFastifyMock());
   let forcePayload: any = null;
+  let impactCalled = false;
 
   (service as any).getSnaptradeClient = async () => ({
     userIdStr: 'snap-user',
     userSecret: 'snap-secret',
     snaptrade: {
       trading: {
-        getOrderImpact: async () => ({ data: { ok: true } }),
+        getOrderImpact: async () => {
+          impactCalled = true;
+          throw new Error('Impact preview should not run for OCC option symbol orders');
+        },
         placeForceOrder: async (payload: any) => {
           forcePayload = payload;
           return { data: { brokerage_order_id: 'broker-order-2' } };
@@ -97,12 +101,50 @@ async function testPlaceOptionOrderUsesLimitPriceForForceOrder() {
   assert(forcePayload.order_type === 'Limit', 'Should use SnapTrade force-order casing for limit orders');
   assert(forcePayload.price === 1.23, `Should send numeric limit price, got ${forcePayload.price}`);
   assert(forcePayload.symbol === 'QQQ   260629P00738000', `Should send OCC padded option symbol, got ${forcePayload.symbol}`);
+  assert(impactCalled === false, 'Should skip impact preview for OCC option symbol orders');
+}
+
+async function testPlaceOptionOrderRejectsInvalidLimitPriceBeforeBrokerCall() {
+  const service = new SnaptradeService(createFastifyMock());
+  let forceCalled = false;
+
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: {
+      trading: {
+        placeForceOrder: async () => {
+          forceCalled = true;
+          return { data: { brokerage_order_id: 'broker-order-3' } };
+        }
+      }
+    }
+  });
+
+  let rejected = false;
+  try {
+    await service.placeOptionOrder(
+      7,
+      'snaptrade-account',
+      'QQQ260629P00738000',
+      'SELL_TO_CLOSE',
+      2,
+      'LIMIT',
+      'not-a-price'
+    );
+  } catch (err: any) {
+    rejected = /Limit price is required/.test(err.message || '');
+  }
+
+  assert(rejected, 'Should reject invalid limit price');
+  assert(forceCalled === false, 'Should not call broker with invalid limit price');
 }
 
 async function runTests() {
   console.log('Running SnaptradeService order payload tests...');
   await testPlaceOptionOrderUsesSingleLegForceOrderPayload();
   await testPlaceOptionOrderUsesLimitPriceForForceOrder();
+  await testPlaceOptionOrderRejectsInvalidLimitPriceBeforeBrokerCall();
   console.log('All SnaptradeService order payload tests passed!');
 }
 

@@ -7,7 +7,6 @@ import { DiscordAlertService } from './discord-alert-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 
 const SNAPTRADE_API_TIMEOUT_MS = Number(process.env.SNAPTRADE_API_TIMEOUT_MS || 8000);
-const SNAPTRADE_IMPACT_TIMEOUT_MS = Number(process.env.SNAPTRADE_IMPACT_TIMEOUT_MS || 3000);
 
 export class SnaptradeService {
     private fastify: FastifyInstance;
@@ -1211,31 +1210,17 @@ export class SnaptradeService {
             };
 
             if (orderType === 'LIMIT') {
-                if (!limitPrice) {
+                const parsedLimitPrice = Number(limitPrice);
+                if (!Number.isFinite(parsedLimitPrice) || parsedLimitPrice <= 0) {
                     throw new Error('Limit price is required for LIMIT orders.');
                 }
-                orderPayload.price = Number(limitPrice);
+                orderPayload.price = parsedLimitPrice;
             }
 
-            let impactData: any = null;
-            let impactWarning: string | null = null;
-            if (!options.skipImpact) {
-                try {
-                    this.fastify.log.info(`[SnaptradeService] Getting single-leg option impact for ${snaptradeOptionSymbol}...`);
-                    const impactRes = await snaptrade.trading.getOrderImpact(orderPayload, this.snaptradeRequestOptions(SNAPTRADE_IMPACT_TIMEOUT_MS));
-                    impactData = impactRes.data;
-                } catch (impactErr: any) {
-                    const detail = impactErr.responseBody?.detail || impactErr.message || '';
-                    const unsupportedImpact = /impact is not supported|not supported for this brokerage/i.test(detail);
-                    if (!unsupportedImpact) {
-                        throw impactErr;
-                    }
-                    impactWarning = detail;
-                    this.fastify.log.warn(`[SnaptradeService] Option impact preview skipped for ${snaptradeOptionSymbol}: ${detail}`);
-                }
-            } else {
-                impactWarning = 'Impact preview skipped for speed-sensitive manual entry.';
-            }
+            const impactData = null;
+            const impactWarning = options.skipImpact
+                ? 'Impact preview skipped for speed-sensitive manual entry.'
+                : 'Impact preview skipped for single-leg OCC option order.';
 
             this.fastify.log.info(`[SnaptradeService] Placing single-leg option order for ${snaptradeOptionSymbol}...`);
             const placeRes = await snaptrade.trading.placeForceOrder(orderPayload, this.snaptradeRequestOptions());
