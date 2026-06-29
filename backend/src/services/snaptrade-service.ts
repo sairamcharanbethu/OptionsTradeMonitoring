@@ -6,6 +6,9 @@ import { TradeRedisService } from './trade-redis-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 
+const SNAPTRADE_API_TIMEOUT_MS = Number(process.env.SNAPTRADE_API_TIMEOUT_MS || 8000);
+const SNAPTRADE_IMPACT_TIMEOUT_MS = Number(process.env.SNAPTRADE_IMPACT_TIMEOUT_MS || 3000);
+
 export class SnaptradeService {
     private fastify: FastifyInstance;
 
@@ -80,6 +83,10 @@ export class SnaptradeService {
         }
 
         return { snaptrade, userIdStr: snaptradeUserId, userSecret };
+    }
+
+    private snaptradeRequestOptions(timeoutMs = SNAPTRADE_API_TIMEOUT_MS) {
+        return { timeout: timeoutMs };
     }
 
     async generateConnectionUrl(userId: number) {
@@ -591,7 +598,7 @@ export class SnaptradeService {
                 userSecret,
                 accountId: snaptradeAccountId,
                 onlyExecuted: false
-            });
+            }, this.snaptradeRequestOptions());
             const orders = this.extractRecentOrders(response.data);
             ordersByAccount.set(accountId, orders);
             return orders;
@@ -1179,7 +1186,8 @@ export class SnaptradeService {
         action: 'BUY_TO_OPEN' | 'SELL_TO_CLOSE' | 'BUY_TO_CLOSE' | 'SELL_TO_OPEN',
         units: number,
         orderType: 'LIMIT' | 'MARKET' = 'MARKET',
-        limitPrice?: string
+        limitPrice?: string,
+        options: { skipImpact?: boolean } = {}
     ) {
         const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
         const snaptradeOptionSymbol = this.toSnaptradeOccSymbol(optionSymbol);
@@ -1218,22 +1226,26 @@ export class SnaptradeService {
 
             let impactData: any = null;
             let impactWarning: string | null = null;
-            try {
-                this.fastify.log.info(`[SnaptradeService] Getting option impact for ${snaptradeOptionSymbol}...`);
-                const impactRes = await snaptrade.trading.getOptionImpact(orderPayload);
-                impactData = impactRes.data;
-            } catch (impactErr: any) {
-                const detail = impactErr.responseBody?.detail || impactErr.message || '';
-                const unsupportedImpact = /impact is not supported|not supported for this brokerage/i.test(detail);
-                if (!unsupportedImpact) {
-                    throw impactErr;
+            if (!options.skipImpact) {
+                try {
+                    this.fastify.log.info(`[SnaptradeService] Getting option impact for ${snaptradeOptionSymbol}...`);
+                    const impactRes = await snaptrade.trading.getOptionImpact(orderPayload, this.snaptradeRequestOptions(SNAPTRADE_IMPACT_TIMEOUT_MS));
+                    impactData = impactRes.data;
+                } catch (impactErr: any) {
+                    const detail = impactErr.responseBody?.detail || impactErr.message || '';
+                    const unsupportedImpact = /impact is not supported|not supported for this brokerage/i.test(detail);
+                    if (!unsupportedImpact) {
+                        throw impactErr;
+                    }
+                    impactWarning = detail;
+                    this.fastify.log.warn(`[SnaptradeService] Option impact preview skipped for ${snaptradeOptionSymbol}: ${detail}`);
                 }
-                impactWarning = detail;
-                this.fastify.log.warn(`[SnaptradeService] Option impact preview skipped for ${snaptradeOptionSymbol}: ${detail}`);
+            } else {
+                impactWarning = 'Impact preview skipped for speed-sensitive manual entry.';
             }
 
             this.fastify.log.info(`[SnaptradeService] Placing multi-leg option order for ${snaptradeOptionSymbol}...`);
-            const placeRes = await snaptrade.trading.placeMlegOrder(orderPayload);
+            const placeRes = await snaptrade.trading.placeMlegOrder(orderPayload, this.snaptradeRequestOptions());
             const brokerageOrderId = placeRes.data?.brokerage_order_id
                 || placeRes.data?.orders?.[0]?.brokerage_order_id
                 || (placeRes.data as any)?.id

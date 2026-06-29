@@ -200,25 +200,22 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
       [SETTING_KEYS.stopLossPct]: parsed.data.stopLossPct ? String(parsed.data.stopLossPct) : ''
     };
 
-    const client = await (fastify as any).pg.connect();
     try {
-      await client.query('BEGIN');
-      for (const [key, value] of Object.entries(values)) {
-        await client.query(
-          `INSERT INTO settings (user_id, key, value, updated_at)
-           VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-           ON CONFLICT (user_id, key) DO UPDATE
-           SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-          [userId, key, value]
-        );
-      }
-      await client.query('COMMIT');
+      const entries = Object.entries(values);
+      const placeholders = entries.map((_, index) => {
+        const offset = index * 2;
+        return `($1, $${offset + 2}, $${offset + 3}, CURRENT_TIMESTAMP)`;
+      }).join(', ');
+      await (fastify as any).pg.query(
+        `INSERT INTO settings (user_id, key, value, updated_at)
+         VALUES ${placeholders}
+         ON CONFLICT (user_id, key) DO UPDATE
+         SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+        [userId, ...entries.flatMap(([key, value]) => [key, value])]
+      );
       return normalizeSettings(values as Record<string, string>);
     } catch (err) {
-      await client.query('ROLLBACK');
       throw err;
-    } finally {
-      client.release();
     }
   });
 
@@ -428,7 +425,8 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
           'BUY_TO_OPEN',
           input.quantity,
           input.orderType,
-          input.orderType === 'LIMIT' ? Number(input.limitPrice).toFixed(2) : undefined
+          input.orderType === 'LIMIT' ? Number(input.limitPrice).toFixed(2) : undefined,
+          { skipImpact: true }
         );
       } catch (err: any) {
         await (fastify as any).pg.query(

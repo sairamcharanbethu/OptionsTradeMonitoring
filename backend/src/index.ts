@@ -420,11 +420,16 @@ const start = async () => {
     // Log final choice (masking creds)
     fastify.log.info(`[System] Active Database Host: ${activeDbUrl.includes('@') ? activeDbUrl.split('@')[1] : 'localhost'}`);
 
+    const dbQueryTimeoutMs = Number(process.env.DB_QUERY_TIMEOUT_MS || 5000);
     await fastify.register(postgres, {
       connectionString: activeDbUrl,
       ssl: activeDbUrl.includes('aivencloud') ? { rejectUnauthorized: false } : undefined,
       max: 20,
-      idleTimeoutMillis: 30000
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: Number(process.env.DB_CONNECTION_TIMEOUT_MS || 5000),
+      query_timeout: dbQueryTimeoutMs,
+      statement_timeout: dbQueryTimeoutMs,
+      idle_in_transaction_session_timeout: Number(process.env.DB_IDLE_TRANSACTION_TIMEOUT_MS || 10000)
     });
 
     // Verify and ensure all required database schema elements exist
