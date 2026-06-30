@@ -27,13 +27,17 @@ import {
 } from 'recharts';
 
 // ─── US Trading-Day Helpers (matches backend) ───
+function marketDateKey(date: Date): string {
+    return format(date, 'yyyy-MM-dd');
+}
+
 function getUSMarketHolidays(year: number): Set<string> {
     const holidays = new Set<string>();
     const add = (m: number, d: number) => {
         let dt = new Date(year, m - 1, d);
         if (dt.getDay() === 6) dt = new Date(year, m - 1, d - 1);
         if (dt.getDay() === 0) dt = new Date(year, m - 1, d + 1);
-        holidays.add(dt.toISOString().split('T')[0]);
+        holidays.add(marketDateKey(dt));
     };
     add(1, 1); add(6, 19); add(7, 4); add(12, 25);
 
@@ -49,7 +53,7 @@ function getUSMarketHolidays(year: number): Set<string> {
 
     [nthWeekday(1, 1, 3), nthWeekday(2, 1, 3), lastWeekday(5, 1),
     nthWeekday(9, 1, 1), nthWeekday(11, 4, 4)].forEach(d =>
-        holidays.add(d.toISOString().split('T')[0])
+        holidays.add(marketDateKey(d))
     );
 
     // Good Friday
@@ -60,7 +64,7 @@ function getUSMarketHolidays(year: number): Set<string> {
     const l = (32 + 2 * e + 2 * i - h - k) % 7, mm = Math.floor((a + 11 * h + 22 * l) / 451);
     const mo = Math.floor((h + l - 7 * mm + 114) / 31), dy = ((h + l - 7 * mm + 114) % 31) + 1;
     const gf = new Date(year, mo - 1, dy); gf.setDate(gf.getDate() - 2);
-    holidays.add(gf.toISOString().split('T')[0]);
+    holidays.add(marketDateKey(gf));
 
     return holidays;
 }
@@ -75,7 +79,7 @@ function tradingDaysBetween(from: Date, to: Date): number {
     const end = new Date(to); end.setHours(0, 0, 0, 0);
     while (cursor < end) {
         const dow = cursor.getDay();
-        if (dow !== 0 && dow !== 6 && !holidays.has(cursor.toISOString().split('T')[0])) count++;
+        if (dow !== 0 && dow !== 6 && !holidays.has(marketDateKey(cursor))) count++;
         cursor.setDate(cursor.getDate() + 1);
     }
     return count;
@@ -87,7 +91,7 @@ function parseGoalDate(value: string): Date {
 }
 
 function toDateKey(date: Date): string {
-    return format(date, 'yyyy-MM-dd');
+    return marketDateKey(date);
 }
 
 function addDays(date: Date, days: number): Date {
@@ -489,9 +493,9 @@ export default function GoalTracker() {
         );
 
         const targetAmount = Number(activeGoal.target_amount);
-        const startDate = new Date(activeGoal.start_date);
-        const endDate = new Date(activeGoal.end_date);
-        const totalTradingDays = Math.max(1, tradingDaysBetween(startDate, endDate));
+        const startDate = parseGoalDate(activeGoal.start_date);
+        const endDate = parseGoalDate(activeGoal.end_date);
+        const totalTradingDays = Math.max(1, tradingDaysBetween(startDate, addDays(endDate, 1)));
         const dailyIdeal = targetAmount / totalTradingDays;
 
         let cumulative = 0;

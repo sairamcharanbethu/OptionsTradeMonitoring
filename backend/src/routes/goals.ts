@@ -2,7 +2,26 @@ import { FastifyInstance } from 'fastify';
 
 // ─── US Trading-Day Helpers ───
 // Returns true if a date is a US market holiday (NYSE observed calendar).
-function getUSMarketHolidays(year: number): Set<string> {
+function toDateKey(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+export function parseMarketDate(value: string | Date): Date {
+    if (value instanceof Date) {
+        return new Date(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+    }
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+        return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    }
+    const parsed = new Date(value);
+    return new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
+}
+
+export function getUSMarketHolidays(year: number): Set<string> {
     const holidays = new Set<string>();
 
     const add = (m: number, d: number) => {
@@ -10,7 +29,7 @@ function getUSMarketHolidays(year: number): Set<string> {
         // If Saturday, observe Friday; if Sunday, observe Monday
         if (dt.getDay() === 6) dt = new Date(year, m - 1, d - 1);
         if (dt.getDay() === 0) dt = new Date(year, m - 1, d + 1);
-        holidays.add(dt.toISOString().split('T')[0]);
+        holidays.add(toDateKey(dt));
     };
 
     // Fixed-date holidays
@@ -36,29 +55,29 @@ function getUSMarketHolidays(year: number): Set<string> {
 
     // MLK Day: 3rd Monday of January
     const mlk = nthWeekday(1, 1, 3);
-    holidays.add(mlk.toISOString().split('T')[0]);
+    holidays.add(toDateKey(mlk));
 
     // Presidents' Day: 3rd Monday of February
     const pres = nthWeekday(2, 1, 3);
-    holidays.add(pres.toISOString().split('T')[0]);
+    holidays.add(toDateKey(pres));
 
     // Memorial Day: Last Monday of May
     const mem = lastWeekday(5, 1);
-    holidays.add(mem.toISOString().split('T')[0]);
+    holidays.add(toDateKey(mem));
 
     // Labor Day: 1st Monday of September
     const labor = nthWeekday(9, 1, 1);
-    holidays.add(labor.toISOString().split('T')[0]);
+    holidays.add(toDateKey(labor));
 
     // Thanksgiving: 4th Thursday of November
     const thanks = nthWeekday(11, 4, 4);
-    holidays.add(thanks.toISOString().split('T')[0]);
+    holidays.add(toDateKey(thanks));
 
     // Good Friday: 2 days before Easter Sunday
     const easterSunday = computeEaster(year);
     const goodFriday = new Date(easterSunday);
     goodFriday.setDate(goodFriday.getDate() - 2);
-    holidays.add(goodFriday.toISOString().split('T')[0]);
+    holidays.add(toDateKey(goodFriday));
 
     return holidays;
 }
@@ -83,7 +102,7 @@ function computeEaster(year: number): Date {
 }
 
 // Count trading days between two dates (inclusive of start, exclusive of end)
-function tradingDaysBetween(from: Date, to: Date): number {
+export function tradingDaysBetween(from: Date, to: Date): number {
     if (to <= from) return 0;
 
     // Collect holidays for all years in range
@@ -101,7 +120,7 @@ function tradingDaysBetween(from: Date, to: Date): number {
     while (cursor < end) {
         const dow = cursor.getDay();
         if (dow !== 0 && dow !== 6) {
-            const key = cursor.toISOString().split('T')[0];
+            const key = toDateKey(cursor);
             if (!holidays.has(key)) count++;
         }
         cursor.setDate(cursor.getDate() + 1);
@@ -110,7 +129,7 @@ function tradingDaysBetween(from: Date, to: Date): number {
 }
 
 export async function goalRoutes(fastify: FastifyInstance) {
-    fastify.addHook('onRequest', fastify.authenticate);
+    fastify.addHook('onRequest', (fastify as any).authenticate);
 
     // ─── GET all goals for current user ───
     fastify.get('/', async (request, reply) => {
@@ -362,8 +381,8 @@ export async function goalRoutes(fastify: FastifyInstance) {
             const profitFactor = avgLoss > 0 ? (avgWin * wins) / (avgLoss * losses) : wins > 0 ? Infinity : 0;
 
             const now = new Date();
-            const startDate = new Date(goal.start_date);
-            const endDate = new Date(goal.end_date);
+            const startDate = parseMarketDate(goal.start_date);
+            const endDate = parseMarketDate(goal.end_date);
 
             // Use US trading days instead of calendar days
             // We want inclusive of start and end for total duration
