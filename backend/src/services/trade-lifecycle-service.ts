@@ -120,10 +120,13 @@ export class TradeLifecycleService {
     orderType: 'MARKET' | 'LIMIT';
     note: string;
     incrementRetry?: boolean;
+    trimQuantity?: number | null;
   }) {
+    const trimQuantity = Number(options.trimQuantity || 0);
+    const hasTrimQuantity = Number.isFinite(trimQuantity) && trimQuantity > 0;
     const { rows } = await db.query(
       `UPDATE positions
-       SET execution_status = 'PENDING_EXIT',
+       SET execution_status = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN 'PENDING_TRIM' ELSE 'PENDING_EXIT' END,
            execution_error = NULL,
            broker_exit_order_id = $1,
            broker_exit_trade_id = $2,
@@ -131,6 +134,10 @@ export class TradeLifecycleService {
            exit_order_type = $4,
            exit_requested_at = CURRENT_TIMESTAMP,
            exit_retry_count = COALESCE(exit_retry_count, 0) + $5,
+           profit_trim_status = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN 'PENDING' ELSE profit_trim_status END,
+           profit_trim_quantity = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $8::integer ELSE profit_trim_quantity END,
+           profit_trim_order_id = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $1 ELSE profit_trim_order_id END,
+           profit_trim_trade_id = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $2 ELSE profit_trim_trade_id END,
            notes = COALESCE(notes, '') || $6,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $7
@@ -144,7 +151,8 @@ export class TradeLifecycleService {
         options.orderType,
         options.incrementRetry ? 1 : 0,
         options.note,
-        positionId
+        positionId,
+        hasTrimQuantity ? Math.floor(trimQuantity) : null
       ]
     );
     if (!rows[0]) throw new Error('Position state changed before the exit order could be recorded');

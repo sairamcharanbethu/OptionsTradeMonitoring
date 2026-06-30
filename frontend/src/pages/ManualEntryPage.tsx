@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, BadgeDollarSign, RefreshCw, Radio, Save, Send, XCircle } from 'lucide-react';
+import { ArrowLeft, BadgeDollarSign, RefreshCw, Radio, Save, Scissors, Send, XCircle } from 'lucide-react';
 import { api, ManualEntryChain, ManualEntryQuote, ManualEntrySettings, Position } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 const DEFAULT_SETTINGS: ManualEntrySettings = {
   defaultTicker: 'QQQ',
   contracts: 1,
+  trimCount: 1,
   slippagePct: 3,
   orderType: 'LIMIT',
   takeProfitPct: null,
@@ -87,6 +88,7 @@ export default function ManualEntryPage() {
   const [loadingTrades, setLoadingTrades] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [closingId, setClosingId] = useState<number | null>(null);
+  const [trimmingId, setTrimmingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const expiration = chain?.expiration || '';
@@ -265,6 +267,19 @@ export default function ManualEntryPage() {
     }
   };
 
+  const submitTrim = async (trade: Position) => {
+    setTrimmingId(trade.id);
+    setError(null);
+    try {
+      await api.trimManualEntryPosition(trade.id, settings.trimCount);
+      await refreshTrades(false);
+    } catch (err: any) {
+      setError(err.message || 'Failed to submit trim order');
+    } finally {
+      setTrimmingId(null);
+    }
+  };
+
   return (
     <div className="mx-auto w-[95%] max-w-[1600px] py-4">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -320,19 +335,25 @@ export default function ManualEntryPage() {
                 <Input type="number" min={1} value={settingsDraft.contracts} onChange={(e) => setSettingsDraft({ ...settingsDraft, contracts: Number(e.target.value) })} />
               </div>
               <div>
+                <Label className="text-xs">Trim Count</Label>
+                <Input type="number" min={1} value={settingsDraft.trimCount} onChange={(e) => setSettingsDraft({ ...settingsDraft, trimCount: Number(e.target.value) })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
                 <Label className="text-xs">Slippage %</Label>
                 <Input type="number" min={0} value={settingsDraft.slippagePct} onChange={(e) => setSettingsDraft({ ...settingsDraft, slippagePct: Number(e.target.value) })} />
               </div>
-            </div>
-            <div>
-              <Label className="text-xs">Order Type</Label>
-              <Select value={settingsDraft.orderType} onValueChange={(value: 'MARKET' | 'LIMIT') => setSettingsDraft({ ...settingsDraft, orderType: value })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="MARKET">Market</SelectItem>
-                  <SelectItem value="LIMIT">Limit</SelectItem>
-                </SelectContent>
-              </Select>
+              <div>
+                <Label className="text-xs">Order Type</Label>
+                <Select value={settingsDraft.orderType} onValueChange={(value: 'MARKET' | 'LIMIT') => setSettingsDraft({ ...settingsDraft, orderType: value })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MARKET">Market</SelectItem>
+                    <SelectItem value="LIMIT">Limit</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -460,7 +481,7 @@ export default function ManualEntryPage() {
               <Badge variant="outline">{manualTrades.length} active</Badge>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1040px] text-sm">
+              <table className="w-full min-w-[1120px] text-sm">
                 <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
                   <tr>
                     <th className="px-3 py-3 text-left">Contract</th>
@@ -481,6 +502,8 @@ export default function ManualEntryPage() {
                     <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No active manual entries.</td></tr>
                   ) : manualTrades.map((trade) => {
                     const canSell = trade.status === 'OPEN' && !isExitPending(trade);
+                    const trimCount = Math.max(1, Math.floor(Number(settings.trimCount || 1)));
+                    const canTrim = canSell && Number(trade.quantity || 0) > 0 && Number.isFinite(trimCount);
                     const manualEntry = getManualEntryData(trade);
                     return (
                       <tr key={trade.id} className="border-t border-border/70">
@@ -508,7 +531,11 @@ export default function ManualEntryPage() {
                             <Button asChild variant="outline" size="sm">
                               <Link to={`/trades/${trade.id}/command`}>Command</Link>
                             </Button>
-                            <Button variant="destructive" size="sm" disabled={!canSell || closingId === trade.id} onClick={() => submitSell(trade)}>
+                            <Button variant="outline" size="sm" className="gap-1" disabled={!canTrim || trimmingId === trade.id || closingId === trade.id} onClick={() => submitTrim(trade)}>
+                              <Scissors className="h-3.5 w-3.5" />
+                              {trimmingId === trade.id ? 'Trimming' : `TRIM ${Math.min(trimCount, Number(trade.quantity || 0))}`}
+                            </Button>
+                            <Button variant="destructive" size="sm" disabled={!canSell || closingId === trade.id || trimmingId === trade.id} onClick={() => submitSell(trade)}>
                               {closingId === trade.id ? 'Selling' : 'SELL'}
                             </Button>
                           </div>

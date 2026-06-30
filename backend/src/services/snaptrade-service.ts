@@ -677,6 +677,7 @@ export class SnaptradeService {
                 );
                 if (openStatuses.has(status)) {
                     const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
+                    let orderAction = phase === 'EXIT' ? 'closed' : 'opened';
                     if (phase === 'EXIT') {
                         const isTrim = executionStatus === 'PENDING_TRIM' || position.exit_reason === 'PROFIT_TRIM';
                         const requestedQty = Number(position.profit_trim_quantity || position.quantity || 1);
@@ -684,6 +685,8 @@ export class SnaptradeService {
                         const filledQty = Math.min(this.getFilledQuantity(order) || requestedQty, currentQty);
                         const realizedPnl = (fillPrice - Number(position.entry_price || 0)) * filledQty * 100;
                         if (isTrim && filledQty < currentQty) {
+                            const isManualTrim = String(position.exit_reason || '').startsWith('MANUAL_TRIM');
+                            const trimLabel = isManualTrim ? 'manual trim' : 'profit trim';
                             await this.fastify.pg.query(
                                 `UPDATE positions
                                  SET quantity = quantity - $1,
@@ -702,14 +705,15 @@ export class SnaptradeService {
                                      notes = COALESCE(notes, '') || $5,
                                      updated_at = CURRENT_TIMESTAMP
                                  WHERE id = $6`,
-                                [filledQty, status, fillPrice, realizedPnl, ` [SnapTrade profit trim fill confirmed: sold ${filledQty}/${currentQty} @ $${fillPrice}]`, position.id]
+                                [filledQty, status, fillPrice, realizedPnl, ` [SnapTrade ${trimLabel} fill confirmed: sold ${filledQty}/${currentQty} @ $${fillPrice}]`, position.id]
                             );
                             summary.trimmed += 1;
+                            orderAction = 'trimmed';
                             await TradeRedisService.recordEvent(this.fastify.pg, {
                                 userId,
                                 positionId: position.id,
-                                eventType: 'PROFIT_TRIM_CONFIRMED',
-                                message: `SnapTrade trim fill confirmed at $${fillPrice}`,
+                                eventType: isManualTrim ? 'MANUAL_ENTRY_TRIM_CONFIRMED' : 'PROFIT_TRIM_CONFIRMED',
+                                message: `SnapTrade ${trimLabel} fill confirmed at $${fillPrice}`,
                                 metadata: { status, filledQty, currentQty, fillPrice }
                             });
                         } else {
@@ -775,7 +779,7 @@ export class SnaptradeService {
                     summary.orders.push({
                         positionId: position.id,
                         status,
-                        action: phase === 'EXIT' ? 'closed' : 'opened',
+                        action: orderAction,
                         brokerOrderId: phase === 'EXIT' ? position.broker_exit_order_id : position.broker_order_id,
                         brokerTradeId: phase === 'EXIT' ? position.broker_exit_trade_id : position.broker_trade_id,
                         fillPrice

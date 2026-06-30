@@ -10,6 +10,7 @@ import { TradeRedisService } from '../services/trade-redis-service';
 const ManualEntrySettingsSchema = z.object({
   defaultTicker: z.string().trim().max(12).optional(),
   contracts: z.coerce.number().int().min(1).max(100).optional(),
+  trimCount: z.coerce.number().int().min(1).max(100).optional(),
   slippagePct: z.coerce.number().min(0).max(100).optional(),
   orderType: z.enum(['MARKET', 'LIMIT']).optional(),
   takeProfitPct: z.coerce.number().min(0).max(1000).optional().nullable(),
@@ -39,9 +40,14 @@ const OrderSchema = z.object({
   limitPrice: z.coerce.number().positive().optional().nullable()
 });
 
+const TrimSchema = z.object({
+  quantity: z.coerce.number().int().min(1).max(100).optional()
+});
+
 type ManualEntrySettings = {
   defaultTicker: string;
   contracts: number;
+  trimCount: number;
   slippagePct: number;
   orderType: 'MARKET' | 'LIMIT';
   takeProfitPct: number | null;
@@ -51,6 +57,7 @@ type ManualEntrySettings = {
 const SETTING_KEYS = {
   defaultTicker: 'manual_entry_default_ticker',
   contracts: 'manual_entry_contracts',
+  trimCount: 'manual_entry_trim_count',
   slippagePct: 'manual_entry_slippage_pct',
   orderType: 'manual_entry_order_type',
   takeProfitPct: 'manual_entry_take_profit_pct',
@@ -62,6 +69,7 @@ const MAX_ENTRY_QUOTE_AGE_MS = 60_000;
 
 function normalizeSettings(settings: Record<string, string>): ManualEntrySettings {
   const contracts = Number(settings[SETTING_KEYS.contracts] || 1);
+  const trimCount = Number(settings[SETTING_KEYS.trimCount] || 1);
   const slippagePct = Number(settings[SETTING_KEYS.slippagePct] || 3);
   const takeProfitPct = Number(settings[SETTING_KEYS.takeProfitPct] || 0);
   const stopLossPct = Number(settings[SETTING_KEYS.stopLossPct] || 0);
@@ -70,6 +78,7 @@ function normalizeSettings(settings: Record<string, string>): ManualEntrySetting
   return {
     defaultTicker: String(settings[SETTING_KEYS.defaultTicker] || 'QQQ').trim().toUpperCase(),
     contracts: Number.isFinite(contracts) && contracts > 0 ? Math.min(Math.floor(contracts), 100) : 1,
+    trimCount: Number.isFinite(trimCount) && trimCount > 0 ? Math.min(Math.floor(trimCount), 100) : 1,
     slippagePct: Number.isFinite(slippagePct) && slippagePct >= 0 ? slippagePct : 3,
     orderType,
     takeProfitPct: Number.isFinite(takeProfitPct) && takeProfitPct > 0 ? takeProfitPct : null,
@@ -194,6 +203,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
     const values = {
       [SETTING_KEYS.defaultTicker]: String(parsed.data.defaultTicker || 'QQQ').trim().toUpperCase(),
       [SETTING_KEYS.contracts]: String(parsed.data.contracts || 1),
+      [SETTING_KEYS.trimCount]: String(parsed.data.trimCount || 1),
       [SETTING_KEYS.slippagePct]: String(parsed.data.slippagePct ?? 3),
       [SETTING_KEYS.orderType]: parsed.data.orderType || 'LIMIT',
       [SETTING_KEYS.takeProfitPct]: parsed.data.takeProfitPct ? String(parsed.data.takeProfitPct) : '',
@@ -500,6 +510,130 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
       return reply.code(400).send({ error: err.message || 'Failed to submit manual entry order' });
     } finally {
       await TradeRedisService.releaseLock(entryLock);
+    }
+  });
+
+  fastify.post('/positions/:id/trim', async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    const { id } = request.params as { id: string };
+    const parsed = TrimSchema.safeParse(request.body || {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid manual entry trim request' });
+
+    const settings = await getSettingsWithGlobalFallback((fastify as any).pg, userId);
+    const manualSettings = normalizeSettings(settings);
+    const requestedQuantity = parsed.data.quantity || manualSettings.trimCount;
+    const exitLock = await TradeRedisService.acquireLock(TradeRedisService.keys.exitLock(id));
+    if (!exitLock.acquired) return reply.code(409).send({ error: 'A trim request is already in progress for this trade' });
+
+    try {
+      const client = await (fastify as any).pg.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `SELECT *
+           FROM positions
+           WHERE id = $1
+             AND user_id = $2
+             AND execution_broker = 'wealthsimple_snaptrade'
+           FOR UPDATE`,
+          [id, userId]
+        );
+        const position = rows[0];
+        if (!position) {
+          await client.query('ROLLBACK');
+          return reply.code(404).send({ error: 'Manual entry trade not found' });
+        }
+
+        const analysisData = typeof position.analysis_data === 'string'
+          ? (() => {
+              try { return JSON.parse(position.analysis_data); } catch { return null; }
+            })()
+          : position.analysis_data;
+        const isManualEntry = Boolean(analysisData?.manualEntry?.enabled) || String(position.notes || '').includes('[Manual Entry]');
+        if (!isManualEntry) {
+          await client.query('ROLLBACK');
+          return reply.code(404).send({ error: 'Manual entry trade not found' });
+        }
+
+        try {
+          TradeLifecycleService.assertCanRequestExit(position);
+        } catch (err: any) {
+          await client.query('ROLLBACK');
+          return reply.code(TradeLifecycleService.isBrokerExitReviewStatus(position.execution_status) ? 409 : 400).send({ error: err.message });
+        }
+
+        const currentQty = Number(position.quantity || 0);
+        const trimQty = Math.min(Number(requestedQuantity), currentQty);
+        if (!Number.isFinite(trimQty) || trimQty <= 0 || !Number.isFinite(currentQty) || currentQty <= 0) {
+          await client.query('ROLLBACK');
+          return reply.code(400).send({ error: 'Invalid trim quantity' });
+        }
+
+        const accountId = String(position.execution_account_id || position.account_id || '').trim();
+        if (!accountId) {
+          await client.query('ROLLBACK');
+          return reply.code(400).send({ error: 'No Wealthsimple account id is attached to this trade' });
+        }
+
+        try {
+          const osiTicker = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+          const snaptrade = new SnaptradeService(fastify);
+          const order = await snaptrade.placeOptionOrder(
+            userId,
+            accountId,
+            osiTicker,
+            'SELL_TO_CLOSE',
+            trimQty,
+            'MARKET',
+            undefined,
+            { skipImpact: true }
+          );
+
+          const fullClose = trimQty >= currentQty;
+          const updatedPosition = await TradeLifecycleService.markExitSubmitted(
+            client,
+            id,
+            order,
+            {
+              reason: fullClose ? 'MANUAL_TRIM_FULL' : 'MANUAL_TRIM',
+              orderType: 'MARKET',
+              trimQuantity: fullClose ? null : trimQty,
+              note: ` [Manual Entry MARKET trim submitted for ${trimQty}/${currentQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
+            }
+          );
+
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: fullClose ? 'MANUAL_ENTRY_TRIM_FULL_REQUESTED' : 'MANUAL_ENTRY_TRIM_REQUESTED',
+            message: fullClose ? 'Manual Entry full trim submitted' : 'Manual Entry trim submitted',
+            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: trimQty, currentQty, orderType: 'MARKET' }
+          });
+          await client.query('COMMIT');
+          await TradeRedisService.rebuildOpenTrades((fastify as any).pg, userId, fastify);
+          await TradeRedisService.requestBrokerSync(userId);
+          return updatedPosition;
+        } catch (err: any) {
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Entry trim failed');
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: id,
+            eventType: 'MANUAL_ENTRY_TRIM_FAILED',
+            message: err.message || String(err),
+            metadata: { requestedQuantity }
+          });
+          await client.query('COMMIT');
+          await TradeRedisService.rebuildOpenTrades((fastify as any).pg, userId, fastify);
+          return reply.code(400).send({ error: err.message || 'Failed to submit manual entry trim order' });
+        }
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+    } finally {
+      await TradeRedisService.releaseLock(exitLock);
     }
   });
 }

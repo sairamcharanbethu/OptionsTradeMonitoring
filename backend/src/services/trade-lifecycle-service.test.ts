@@ -32,11 +32,59 @@ async function testFinalEntryExecutionStatuses() {
   assert(!TradeLifecycleService.isFinalEntryExecutionStatus('PENDING_RECONCILE'), 'PENDING_RECONCILE should not be final');
 }
 
+async function testMarkExitSubmittedRecordsPendingTrimMetadata() {
+  const captured: Array<{ sql: string; params?: any[] }> = [];
+  const db = {
+    query: async (sql: string, params?: any[]) => {
+      captured.push({ sql, params });
+      return { rows: [{ id: 42, execution_status: 'PENDING_TRIM', profit_trim_quantity: params?.[7] }] };
+    }
+  };
+
+  const result = await TradeLifecycleService.markExitSubmitted(db, 42, { orderId: 'order-1', tradeId: 'trade-1' }, {
+    reason: 'MANUAL_TRIM',
+    orderType: 'MARKET',
+    note: ' trim note',
+    trimQuantity: 3
+  });
+
+  assert(result.execution_status === 'PENDING_TRIM', 'Mocked trim result should return PENDING_TRIM');
+  const query = captured[0];
+  assert(query.sql.includes("THEN 'PENDING_TRIM' ELSE 'PENDING_EXIT'"), 'Exit submission SQL should map partial trims to PENDING_TRIM');
+  assert(query.sql.includes("profit_trim_status = CASE"), 'Exit submission SQL should set trim metadata for partial trims');
+  assert(query.params?.[0] === 'order-1', 'Should store broker exit order id');
+  assert(query.params?.[2] === 'MANUAL_TRIM', 'Should store trim exit reason');
+  assert(query.params?.[7] === 3, `Should pass trim quantity param, got ${query.params?.[7]}`);
+}
+
+async function testMarkExitSubmittedDoesNotMarkTrimWithoutTrimQuantity() {
+  const captured: Array<{ params?: any[] }> = [];
+  const db = {
+    query: async (_sql: string, params?: any[]) => {
+      captured.push({ params });
+      return { rows: [{ id: 43, execution_status: 'PENDING_EXIT' }] };
+    }
+  };
+
+  await TradeLifecycleService.markExitSubmitted(db, 43, { orderId: 'order-2' }, {
+    reason: 'MANUAL_TRIM_FULL',
+    orderType: 'MARKET',
+    note: ' full trim note',
+    trimQuantity: null
+  });
+
+  const query = captured[0];
+  assert(query.params?.[2] === 'MANUAL_TRIM_FULL', 'Should preserve full trim reason');
+  assert(query.params?.[7] === null, 'Full trim should not pass partial trim quantity');
+}
+
 async function runTests() {
   console.log('Running TradeLifecycleService tests...');
   await testEntrySubmittedStatusMapsOrderTypes();
   await testStaleEntryDecisionMapsReviewAndStaleStates();
   await testFinalEntryExecutionStatuses();
+  await testMarkExitSubmittedRecordsPendingTrimMetadata();
+  await testMarkExitSubmittedDoesNotMarkTrimWithoutTrimQuantity();
   console.log('All TradeLifecycleService tests passed!');
 }
 

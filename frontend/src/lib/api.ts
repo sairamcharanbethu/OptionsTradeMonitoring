@@ -304,6 +304,7 @@ export interface CoveredCallAnalysis {
 export interface ManualEntrySettings {
   defaultTicker: string;
   contracts: number;
+  trimCount: number;
   slippagePct: number;
   orderType: 'MARKET' | 'LIMIT';
   takeProfitPct: number | null;
@@ -929,6 +930,18 @@ export const api = {
       throw new Error(err.error || 'Failed to submit manual entry order');
     }
     return res.json();
+  },
+
+  async trimManualEntryPosition(id: number, quantity?: number): Promise<Position> {
+    const res = await authFetch(`${API_BASE}/manual-entry/positions/${id}/trim`, {
+      method: 'POST',
+      body: JSON.stringify({ quantity })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to submit manual entry trim order');
+    }
+    return normalizePosition(await res.json());
   },
 
   async updateSettings(settings: Record<string, string>): Promise<void> {
