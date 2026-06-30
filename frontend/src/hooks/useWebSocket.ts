@@ -8,9 +8,11 @@ interface WebSocketMessage {
 type WebSocketState = {
     sharedSocket: WebSocket | null;
     isConnected: boolean;
+    isAuthenticated: boolean;
     clientId: string;
     subscribers: Set<(msg: WebSocketMessage) => void>;
     statusSubscribers: Set<(connected: boolean) => void>;
+    authSubscribers: Set<(authenticated: boolean) => void>;
     reconnectTimeout?: ReturnType<typeof setTimeout>;
     closeTimeout?: ReturnType<typeof setTimeout>;
     pingInterval?: ReturnType<typeof setInterval>;
@@ -26,10 +28,14 @@ declare global {
 const wsState = window.__optionsTradeWebSocketState ??= {
     sharedSocket: null,
     isConnected: false,
+    isAuthenticated: false,
     clientId: window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     subscribers: new Set<(msg: WebSocketMessage) => void>(),
     statusSubscribers: new Set<(connected: boolean) => void>(),
+    authSubscribers: new Set<(authenticated: boolean) => void>(),
 };
+wsState.isAuthenticated ??= false;
+wsState.authSubscribers ??= new Set<(authenticated: boolean) => void>();
 
 const withClientId = (rawUrl: string) => {
     const wsUrl = new URL(rawUrl, window.location.href);
@@ -59,7 +65,9 @@ const connectGlobal = (url: string) => {
     socket.onopen = () => {
         console.log('[WebSocket] Connected');
         wsState.isConnected = true;
+        wsState.isAuthenticated = false;
         wsState.statusSubscribers.forEach(cb => cb(true));
+        wsState.authSubscribers.forEach(cb => cb(false));
 
         const token = localStorage.getItem('token');
         if (token) {
@@ -81,6 +89,14 @@ const connectGlobal = (url: string) => {
             if (msg && msg.type === 'pong') {
                 return; // Heartbeat response, ignore
             }
+            if (msg && msg.type === 'auth_ok') {
+                wsState.isAuthenticated = true;
+                wsState.authSubscribers.forEach(cb => cb(true));
+            }
+            if (msg && msg.type === 'auth_error') {
+                wsState.isAuthenticated = false;
+                wsState.authSubscribers.forEach(cb => cb(false));
+            }
             wsState.subscribers.forEach(cb => cb(msg));
         } catch (e) {
             console.error('[WebSocket] Failed to parse message:', e);
@@ -90,7 +106,9 @@ const connectGlobal = (url: string) => {
     socket.onclose = () => {
         console.log('[WebSocket] Disconnected');
         wsState.isConnected = false;
+        wsState.isAuthenticated = false;
         wsState.statusSubscribers.forEach(cb => cb(false));
+        wsState.authSubscribers.forEach(cb => cb(false));
         wsState.sharedSocket = null;
 
         if (wsState.pingInterval) {
@@ -99,7 +117,7 @@ const connectGlobal = (url: string) => {
         }
 
         // Only reconnect if there are active subscribers
-        if (wsState.subscribers.size > 0 || wsState.statusSubscribers.size > 0) {
+        if (wsState.subscribers.size > 0 || wsState.statusSubscribers.size > 0 || wsState.authSubscribers.size > 0) {
             console.log('[WebSocket] Reconnecting in 3s...');
             wsState.reconnectTimeout = setTimeout(() => connectGlobal(url), 3000);
         }
@@ -119,7 +137,7 @@ const disconnectGlobal = () => {
     }
     // Delay closing to handle fast tab switching / React dev mode double-mounts
     wsState.closeTimeout = setTimeout(() => {
-        if (wsState.subscribers.size === 0 && wsState.statusSubscribers.size === 0 && wsState.sharedSocket) {
+        if (wsState.subscribers.size === 0 && wsState.statusSubscribers.size === 0 && wsState.authSubscribers.size === 0 && wsState.sharedSocket) {
             console.log('[WebSocket] No active subscribers. Closing connection.');
             wsState.sharedSocket.close();
             wsState.sharedSocket = null;
@@ -133,6 +151,7 @@ const disconnectGlobal = () => {
 
 export const useWebSocket = (url: string = '/api/ws') => {
     const [isConnected, setIsConnected] = useState(wsState.isConnected);
+    const [isAuthenticated, setIsAuthenticated] = useState(wsState.isAuthenticated);
     const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
 
     useEffect(() => {
@@ -144,11 +163,17 @@ export const useWebSocket = (url: string = '/api/ws') => {
             setIsConnected(connected);
         };
 
+        const handleAuth = (authenticated: boolean) => {
+            setIsAuthenticated(authenticated);
+        };
+
         wsState.subscribers.add(handleMessage);
         wsState.statusSubscribers.add(handleStatus);
+        wsState.authSubscribers.add(handleAuth);
         
         // Sync local connection state with global state on mount
         setIsConnected(wsState.isConnected);
+        setIsAuthenticated(wsState.isAuthenticated);
 
         // Initiate connection
         connectGlobal(url);
@@ -156,8 +181,9 @@ export const useWebSocket = (url: string = '/api/ws') => {
         return () => {
             wsState.subscribers.delete(handleMessage);
             wsState.statusSubscribers.delete(handleStatus);
+            wsState.authSubscribers.delete(handleAuth);
 
-            if (wsState.subscribers.size === 0 && wsState.statusSubscribers.size === 0) {
+            if (wsState.subscribers.size === 0 && wsState.statusSubscribers.size === 0 && wsState.authSubscribers.size === 0) {
                 disconnectGlobal();
             }
         };
@@ -171,5 +197,5 @@ export const useWebSocket = (url: string = '/api/ws') => {
         }
     }, []);
 
-    return { isConnected, lastMessage, sendMessage };
+    return { isConnected, isAuthenticated, lastMessage, sendMessage };
 };

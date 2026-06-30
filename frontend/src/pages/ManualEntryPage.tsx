@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, BadgeDollarSign, RefreshCw, Radio, Save, Scissors, Send, XCircle } from 'lucide-react';
+import { ArrowLeft, BadgeDollarSign, Gauge, RefreshCw, Radio, Save, Scissors, Send, XCircle } from 'lucide-react';
 import { api, ManualEntryChain, ManualEntryQuote, ManualEntrySettings, Position } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 
 const DEFAULT_SETTINGS: ManualEntrySettings = {
   defaultTicker: 'QQQ',
@@ -44,6 +45,14 @@ function quoteMark(quote: ManualEntryQuote | null) {
   return quote?.mark ?? null;
 }
 
+function formatAge(ms: number | null) {
+  if (ms === null || !Number.isFinite(ms)) return 'waiting';
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s ago`;
+}
+
 function quoteTicker(symbol: string, optionType: 'CALL' | 'PUT', strike: number | null, expiration: string) {
   if (!symbol || !strike || !expiration) return '';
   const [year, month, day] = expiration.split('-');
@@ -65,19 +74,36 @@ function isManualEntryTrade(trade: Position) {
   return Boolean(getManualEntryData(trade)?.enabled) || String(trade.notes || '').includes('[Manual Entry]');
 }
 
+function executionMessage(trade: Position) {
+  const status = String(trade.execution_status || trade.status || '');
+  if (status === 'PENDING_TRIM') return 'Trim submitted; waiting for broker fill.';
+  if (status === 'PENDING_EXIT') return 'Sell submitted; waiting for broker fill.';
+  if (status === 'PENDING_ORDER' || status === 'PENDING' || status === 'PENDING_RECONCILE') return 'Entry submitted; waiting for broker fill.';
+  if (status === 'FILLED' || status === 'FILLED_FULLY' || status === 'EXECUTED') return 'Broker fill confirmed.';
+  if (status.startsWith('EXIT_')) return 'Exit needs broker review.';
+  if (trade.status === 'OPEN') return 'Open and ready for action.';
+  return status || '-';
+}
+
 export default function ManualEntryPage() {
-  const { isConnected, lastMessage, sendMessage } = useWebSocket();
+  const { isConnected, isAuthenticated, lastMessage, sendMessage } = useWebSocket();
+  const lastLiveQuoteAtRef = useRef(0);
+  const quoteRequestInFlightRef = useRef(false);
+  const selectedTickerRef = useRef('');
   const [settings, setSettings] = useState<ManualEntrySettings>(DEFAULT_SETTINGS);
   const [settingsDraft, setSettingsDraft] = useState<ManualEntrySettings>(DEFAULT_SETTINGS);
   const [savingSettings, setSavingSettings] = useState(false);
   const [showEntry, setShowEntry] = useState(false);
+  const [speedMode, setSpeedMode] = useState(false);
   const [symbol, setSymbol] = useState('QQQ');
   const [optionType, setOptionType] = useState<'CALL' | 'PUT'>('CALL');
   const [dte, setDte] = useState<0 | 1 | 2>(0);
   const [chain, setChain] = useState<ManualEntryChain | null>(null);
   const [selectedStrike, setSelectedStrike] = useState<number | null>(null);
   const [quote, setQuote] = useState<ManualEntryQuote | null>(null);
-  const [quoteState, setQuoteState] = useState<'Snapshot' | 'Live' | 'Waiting'>('Snapshot');
+  const [quoteState, setQuoteState] = useState<'Snapshot' | 'Live' | 'Polling' | 'Waiting'>('Snapshot');
+  const [lastQuoteAt, setLastQuoteAt] = useState<number | null>(null);
+  const [clockTick, setClockTick] = useState(Date.now());
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('LIMIT');
   const [quantity, setQuantity] = useState(1);
   const [limitPrice, setLimitPrice] = useState('');
@@ -100,20 +126,45 @@ export default function ManualEntryPage() {
     () => openTrades.filter(isManualEntryTrade),
     [openTrades]
   );
+  const quoteFreshnessMs = lastQuoteAt ? clockTick - lastQuoteAt : null;
+  const marketQuoteStale = orderType === 'MARKET' && (!lastQuoteAt || quoteFreshnessMs === null || quoteFreshnessMs > 15_000);
+  const estimatedPremium = orderType === 'LIMIT' ? Number(limitPrice) : Number(quoteMark(quote) || 0);
+  const estimatedDebit = Number.isFinite(estimatedPremium) && estimatedPremium > 0 && Number.isFinite(quantity)
+    ? estimatedPremium * Number(quantity || 0) * 100
+    : null;
+  const marketDisabledReason = orderType === 'MARKET'
+    ? !selectedStrike
+      ? 'Choose a strike before sending a market order.'
+      : !quote?.mark
+        ? 'Waiting for a premium quote before sending a market order.'
+        : marketQuoteStale
+          ? `Market order disabled: quote last updated ${formatAge(quoteFreshnessMs)}.`
+          : ''
+    : '';
+  const submitDisabled = submitting
+    || !Number.isFinite(quantity)
+    || quantity < 1
+    || !selectedStrike
+    || !quote?.mark
+    || (orderType === 'LIMIT' && !Number(limitPrice))
+    || Boolean(marketDisabledReason);
+  const quoteStatusMessage = selectedTicker
+    ? `${quoteState} premium ${currency(quoteMark(quote))} · ${formatAge(quoteFreshnessMs)} · Bid/Ask ${currency(quote?.bid)} / ${currency(quote?.ask)}`
+    : 'Fetch strikes and choose a contract.';
 
-  const refreshTrades = async (syncBroker = false, showSpinner = true) => {
+  const refreshTrades = async (syncBroker = false, showSpinner = true, suppressError = false) => {
     if (showSpinner) setLoadingTrades(true);
     try {
       if (syncBroker) {
         try {
           await api.syncSnaptradePendingOrders();
         } catch (err: any) {
-          setError(err.message || 'Failed to sync Wealthsimple pending orders');
+          if (!suppressError) setError(err.message || 'Failed to sync Wealthsimple pending orders');
         }
       }
       setOpenTrades(await api.getOpenTrades());
     } catch (err: any) {
-      setError(err.message || 'Failed to load manual entries');
+      if (!suppressError) setError(err.message || 'Failed to load manual entries');
     } finally {
       if (showSpinner) setLoadingTrades(false);
     }
@@ -122,9 +173,12 @@ export default function ManualEntryPage() {
   const fetchChain = async () => {
     setLoadingChain(true);
     setError(null);
+    selectedTickerRef.current = '';
+    lastLiveQuoteAtRef.current = 0;
     setChain(null);
     setSelectedStrike(null);
     setQuote(null);
+    setLastQuoteAt(null);
     setQuoteState('Snapshot');
     try {
       const result = await api.getManualEntryChain({ symbol, optionType, dte });
@@ -139,18 +193,31 @@ export default function ManualEntryPage() {
     }
   };
 
-  const fetchQuote = async () => {
+  const fetchQuote = async (silent = false) => {
     if (!selectedStrike || !expiration) return;
-    setLoadingQuote(true);
-    setError(null);
+    const requestTicker = selectedTicker;
+    if (silent && quoteRequestInFlightRef.current) return;
+    if (silent) quoteRequestInFlightRef.current = true;
+    if (!silent) {
+      setLoadingQuote(true);
+      setError(null);
+    }
     try {
       const result = await api.getManualEntryQuote({ symbol, optionType, strike: selectedStrike, expiration });
+      if (requestTicker !== selectedTickerRef.current) return;
       setQuote(result);
-      setQuoteState('Snapshot');
+      setLastQuoteAt(Date.now());
+      if (silent) {
+        const liveAgeMs = lastLiveQuoteAtRef.current ? Date.now() - lastLiveQuoteAtRef.current : Number.POSITIVE_INFINITY;
+        if (liveAgeMs > 5000) setQuoteState('Polling');
+      } else {
+        setQuoteState('Snapshot');
+      }
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch quote');
+      if (!silent) setError(err.message || 'Failed to fetch quote');
     } finally {
-      setLoadingQuote(false);
+      if (silent) quoteRequestInFlightRef.current = false;
+      if (!silent) setLoadingQuote(false);
     }
   };
 
@@ -173,12 +240,48 @@ export default function ManualEntryPage() {
 
   useEffect(() => {
     if (!showEntry || !selectedStrike || !expiration) return;
+    lastLiveQuoteAtRef.current = 0;
+    selectedTickerRef.current = selectedTicker;
+    setLastQuoteAt(null);
     fetchQuote();
     setLimitEdited(false);
-  }, [showEntry, selectedStrike, expiration, optionType]);
+  }, [showEntry, selectedTicker, selectedStrike, expiration, optionType]);
+
+  useEffect(() => {
+    if (!showEntry) return;
+    const interval = window.setInterval(() => setClockTick(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [showEntry]);
 
   useEffect(() => {
     if (!showEntry || !selectedStrike || !expiration) return;
+    const interval = window.setInterval(() => {
+      if (!document.hidden) fetchQuote(true);
+    }, 3000);
+    return () => window.clearInterval(interval);
+  }, [showEntry, symbol, optionType, selectedStrike, expiration]);
+
+  useEffect(() => {
+    let inFlight = false;
+    const interval = window.setInterval(async () => {
+      if (document.hidden || inFlight) return;
+      inFlight = true;
+      try {
+        await refreshTrades(false, false, true);
+      } finally {
+        inFlight = false;
+      }
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    if (!showEntry || !selectedStrike || !expiration) return;
+    if (!isAuthenticated) {
+      setQuoteState('Polling');
+      return;
+    }
     setQuoteState(isConnected ? 'Waiting' : 'Snapshot');
     sendMessage({
       type: 'MANUAL_ENTRY_SUBSCRIBE_QUOTE',
@@ -187,19 +290,27 @@ export default function ManualEntryPage() {
     return () => {
       sendMessage({ type: 'MANUAL_ENTRY_UNSUBSCRIBE_QUOTE' });
     };
-  }, [showEntry, symbol, optionType, selectedStrike, expiration, isConnected, sendMessage]);
+  }, [showEntry, symbol, optionType, selectedStrike, expiration, isConnected, isAuthenticated, sendMessage]);
 
   useEffect(() => {
     if (!lastMessage) return;
+    if (lastMessage.type === 'auth_error') {
+      setQuoteState('Polling');
+    }
     if (lastMessage.type === 'MANUAL_ENTRY_QUOTE_UPDATE' && lastMessage.data?.ticker === selectedTicker) {
+      lastLiveQuoteAtRef.current = Date.now();
       setQuote(lastMessage.data);
+      setLastQuoteAt(Date.now());
       setQuoteState('Live');
     }
+    if (lastMessage.type === 'MANUAL_ENTRY_QUOTE_SUBSCRIBED' && lastMessage.data?.ticker === selectedTicker) {
+      setQuoteState('Waiting');
+    }
     if (lastMessage.type === 'MANUAL_ENTRY_QUOTE_ERROR') {
-      setQuoteState('Snapshot');
+      setQuoteState('Polling');
     }
     if (lastMessage.type === 'TRADES_UPDATED') {
-      refreshTrades(false, false);
+      refreshTrades(false, false, true);
     }
   }, [lastMessage, selectedTicker]);
 
@@ -232,7 +343,7 @@ export default function ManualEntryPage() {
   };
 
   const submitOrder = async () => {
-    if (!selectedStrike || !expiration) return;
+    if (!selectedStrike || !expiration || submitDisabled) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -280,29 +391,129 @@ export default function ManualEntryPage() {
     }
   };
 
+  const selectStrikePreset = (preset: 'ATM' | 'ITM1' | 'OTM1') => {
+    if (!chain?.strikes.length) return;
+    const strikes = chain.strikes.map((item) => Number(item.strike)).filter((strike) => Number.isFinite(strike)).sort((a, b) => a - b);
+    if (strikes.length === 0) return;
+    const anchor = chain.underlyingPrice || selectedStrike || strikes[Math.floor(strikes.length / 2)];
+    const atmIndex = strikes.reduce((bestIndex, strike, index) => (
+      Math.abs(strike - anchor) < Math.abs(strikes[bestIndex] - anchor) ? index : bestIndex
+    ), 0);
+    const direction = optionType === 'CALL' ? 1 : -1;
+    const offset = preset === 'ATM' ? 0 : preset === 'OTM1' ? direction : -direction;
+    const nextIndex = Math.min(strikes.length - 1, Math.max(0, atmIndex + offset));
+    setSelectedStrike(strikes[nextIndex]);
+  };
+
+  const loadDtePreset = async (value: 0 | 1 | 2) => {
+    setDte(value);
+    setLoadingChain(true);
+    setError(null);
+    selectedTickerRef.current = '';
+    lastLiveQuoteAtRef.current = 0;
+    setChain(null);
+    setSelectedStrike(null);
+    setQuote(null);
+    setLastQuoteAt(null);
+    setQuoteState('Snapshot');
+    try {
+      const result = await api.getManualEntryChain({ symbol, optionType, dte: value });
+      setChain(result);
+      const withMark = result.strikes.filter((item) => item.mark && item.mark > 0);
+      const center = withMark[Math.floor(withMark.length / 2)] || result.strikes[Math.floor(result.strikes.length / 2)];
+      if (center) setSelectedStrike(center.strike);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch strikes');
+    } finally {
+      setLoadingChain(false);
+    }
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!showEntry) return;
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName || '';
+      const targetRole = target?.getAttribute('role') || '';
+      const isTextInput = tagName === 'INPUT' || tagName === 'TEXTAREA' || target?.isContentEditable;
+      const isFocusedControl = tagName === 'BUTTON' || tagName === 'A' || ['combobox', 'listbox', 'option'].includes(targetRole);
+      if (event.key === 'Enter' && !isFocusedControl && !event.metaKey && !event.ctrlKey && !event.altKey && !submitDisabled) {
+        event.preventDefault();
+        submitOrder();
+        return;
+      }
+      if (isTextInput || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key.toLowerCase() === 'a') {
+        event.preventDefault();
+        selectStrikePreset('ATM');
+      } else if (event.key === '[') {
+        event.preventDefault();
+        if (!chain?.strikes.length || selectedStrike === null) return;
+        const strikes = chain.strikes.map((item) => Number(item.strike)).sort((a, b) => a - b);
+        const index = strikes.findIndex((strike) => strike === selectedStrike);
+        if (index > 0) setSelectedStrike(strikes[index - 1]);
+      } else if (event.key === ']') {
+        event.preventDefault();
+        if (!chain?.strikes.length || selectedStrike === null) return;
+        const strikes = chain.strikes.map((item) => Number(item.strike)).sort((a, b) => a - b);
+        const index = strikes.findIndex((strike) => strike === selectedStrike);
+        if (index >= 0 && index < strikes.length - 1) setSelectedStrike(strikes[index + 1]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showEntry, submitDisabled, chain, selectedStrike, expiration, symbol, optionType, quantity, orderType, limitPrice]);
+
+  const tradeActions = (trade: Position, compact = false) => {
+    const canSell = trade.status === 'OPEN' && !isExitPending(trade);
+    const trimCount = Math.max(1, Math.floor(Number(settings.trimCount || 1)));
+    const canTrim = canSell && Number(trade.quantity || 0) > 0 && Number.isFinite(trimCount);
+    const trimLabel = trimmingId === trade.id ? 'Trimming' : `TRIM ${Math.min(trimCount, Number(trade.quantity || 0))}`;
+
+    return (
+      <div className={`flex ${compact ? 'w-full flex-wrap' : 'justify-end'} gap-2`}>
+        <Button asChild variant="outline" size="sm" className={compact ? 'flex-1' : ''}>
+          <Link to={`/trades/${trade.id}/command`}>Command</Link>
+        </Button>
+        <Button variant="outline" size="sm" className={`gap-1 ${compact ? 'flex-1' : ''}`} disabled={!canTrim || trimmingId === trade.id || closingId === trade.id} onClick={() => submitTrim(trade)}>
+          <Scissors className="h-3.5 w-3.5" />
+          {trimLabel}
+        </Button>
+        <Button variant="destructive" size="sm" className={compact ? 'flex-1' : ''} disabled={!canSell || closingId === trade.id || trimmingId === trade.id} onClick={() => submitSell(trade)}>
+          {closingId === trade.id ? 'Selling' : 'SELL'}
+        </Button>
+      </div>
+    );
+  };
+
   return (
-    <div className="mx-auto w-[95%] max-w-[1600px] py-4">
+    <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-4">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
           <Button asChild variant="ghost" size="icon" className="rounded-full">
             <Link to="/">
               <ArrowLeft className="h-4 w-4" />
             </Link>
           </Button>
-          <div>
-            <div className="flex items-center gap-2">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-semibold tracking-tight">Manual Entry</h2>
               <Badge variant="outline">Wealthsimple</Badge>
             </div>
             <p className="text-sm text-muted-foreground">Live option entry with ThetaData quotes and SnapTrade execution.</p>
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" className="gap-2" onClick={() => refreshTrades(true)} disabled={loadingTrades}>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
+            <Gauge className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm">Speed</span>
+            <Switch checked={speedMode} onCheckedChange={setSpeedMode} aria-label="Speed mode" />
+          </div>
+          <Button variant="outline" className="flex-1 gap-2 sm:flex-none" onClick={() => refreshTrades(true)} disabled={loadingTrades}>
             <RefreshCw className={`h-4 w-4 ${loadingTrades ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button className="gap-2" onClick={() => { setShowEntry(true); setSymbol(settings.defaultTicker); setQuantity(settings.contracts); setOrderType(settings.orderType || 'LIMIT'); }}>
+          <Button className="flex-1 gap-2 sm:flex-none" onClick={() => { setShowEntry(true); setSymbol(settings.defaultTicker); setQuantity(settings.contracts); setOrderType(settings.orderType || 'LIMIT'); }}>
             <BadgeDollarSign className="h-4 w-4" />
             New Entry
           </Button>
@@ -315,7 +526,8 @@ export default function ManualEntryPage() {
         </div>
       )}
 
-      <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
+      <div className={`grid min-w-0 gap-4 ${speedMode ? '' : 'xl:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[360px_minmax(0,1fr)]'}`}>
+        {!speedMode && (
         <section className="rounded-md border border-border bg-card p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="font-semibold">Manual Defaults</h3>
@@ -329,7 +541,7 @@ export default function ManualEntryPage() {
               <Label className="text-xs">Ticker</Label>
               <Input value={settingsDraft.defaultTicker} onChange={(e) => setSettingsDraft({ ...settingsDraft, defaultTicker: e.target.value.toUpperCase() })} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Contracts</Label>
                 <Input type="number" min={1} value={settingsDraft.contracts} onChange={(e) => setSettingsDraft({ ...settingsDraft, contracts: Number(e.target.value) })} />
@@ -339,7 +551,7 @@ export default function ManualEntryPage() {
                 <Input type="number" min={1} value={settingsDraft.trimCount} onChange={(e) => setSettingsDraft({ ...settingsDraft, trimCount: Number(e.target.value) })} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Slippage %</Label>
                 <Input type="number" min={0} value={settingsDraft.slippagePct} onChange={(e) => setSettingsDraft({ ...settingsDraft, slippagePct: Number(e.target.value) })} />
@@ -355,7 +567,7 @@ export default function ManualEntryPage() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <Label className="text-xs">Take Profit %</Label>
                 <Input type="number" min={0} value={settingsDraft.takeProfitPct ?? ''} onChange={(e) => setSettingsDraft({ ...settingsDraft, takeProfitPct: e.target.value ? Number(e.target.value) : null })} />
@@ -367,17 +579,18 @@ export default function ManualEntryPage() {
             </div>
           </div>
         </section>
+        )}
 
-        <section className="space-y-4">
+        <section className="min-w-0 space-y-4">
           {showEntry && (
-            <div className="rounded-md border border-border bg-card p-4">
+            <div className="min-w-0 rounded-md border border-border bg-card p-4">
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="font-semibold">New Entry</h3>
                 <Button variant="ghost" size="icon" onClick={() => setShowEntry(false)}>
                   <XCircle className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="grid gap-3 lg:grid-cols-6">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
                 <div>
                   <Label className="text-xs">Ticker</Label>
                   <Input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
@@ -402,6 +615,13 @@ export default function ManualEntryPage() {
                       <SelectItem value="2">2</SelectItem>
                     </SelectContent>
                   </Select>
+                  <div className="mt-2 grid grid-cols-3 gap-1">
+                    {[0, 1, 2].map((value) => (
+                      <Button key={value} type="button" variant={dte === value ? 'secondary' : 'outline'} size="sm" className="h-7 px-2 text-xs" onClick={() => loadDtePreset(value as 0 | 1 | 2)} title={`Load ${value} DTE strikes`}>
+                        {value}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
                 <div className="flex items-end">
                   <Button variant="outline" className="w-full gap-2" onClick={fetchChain} disabled={loadingChain}>
@@ -426,8 +646,8 @@ export default function ManualEntryPage() {
               </div>
 
               {chain && (
-                <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_180px_180px_180px]">
-                  <div>
+                <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(220px,1fr)_140px_160px_140px]">
+                  <div className="min-w-0 sm:col-span-2 xl:col-span-1">
                     <Label className="text-xs">Strike</Label>
                     <Select value={selectedStrike ? String(selectedStrike) : ''} onValueChange={(value) => setSelectedStrike(Number(value))}>
                       <SelectTrigger><SelectValue placeholder="Choose strike" /></SelectTrigger>
@@ -439,6 +659,11 @@ export default function ManualEntryPage() {
                         ))}
                       </SelectContent>
                     </Select>
+                    <div className="mt-2 grid grid-cols-3 gap-1">
+                      <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => selectStrikePreset('ITM1')} title="Select one strike in-the-money">ITM</Button>
+                      <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => selectStrikePreset('ATM')} title="Select nearest at-the-money strike">ATM</Button>
+                      <Button type="button" variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => selectStrikePreset('OTM1')} title="Select one strike out-of-the-money">OTM</Button>
+                    </div>
                   </div>
                   <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -446,6 +671,7 @@ export default function ManualEntryPage() {
                       {quoteState}
                     </div>
                     <div className="mt-1 font-mono text-lg font-semibold">{currency(quoteMark(quote))}</div>
+                    <div className="mt-1 text-[11px] text-muted-foreground">{formatAge(quoteFreshnessMs)}</div>
                   </div>
                   <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
                     <div className="text-xs text-muted-foreground">Bid / Ask</div>
@@ -463,11 +689,15 @@ export default function ManualEntryPage() {
               )}
 
               <div className="mt-4 flex flex-col gap-2 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-xs text-muted-foreground">
-                  {selectedTicker || 'Fetch strikes and choose a contract.'}
+                <div className="min-w-0 text-xs text-muted-foreground">
+                  <div className="break-words">{quoteStatusMessage}</div>
+                  <div className="mt-1">
+                    Risk {estimatedDebit === null ? '-' : currency(estimatedDebit)} debit · {quantity || 0} contract(s) @ {estimatedPremium > 0 ? currency(estimatedPremium) : '-'}
+                  </div>
+                  {marketDisabledReason && <div className="mt-1 text-amber-600">{marketDisabledReason}</div>}
                   {loadingQuote && <span className="ml-2">Refreshing quote...</span>}
                 </div>
-                <Button className="gap-2" onClick={submitOrder} disabled={submitting || !Number.isFinite(quantity) || quantity < 1 || !selectedStrike || !quote?.mark || (orderType === 'LIMIT' && !Number(limitPrice))}>
+                <Button className="w-full gap-2 sm:w-auto" onClick={submitOrder} disabled={submitDisabled} title={marketDisabledReason || 'Submit entry'}>
                   <Send className="h-4 w-4" />
                   Submit Entry
                 </Button>
@@ -475,13 +705,56 @@ export default function ManualEntryPage() {
             </div>
           )}
 
-          <div className="overflow-hidden rounded-md border border-border">
+          <div className="min-w-0 overflow-hidden rounded-md border border-border">
             <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-2">
               <h3 className="font-semibold">Manual Entries</h3>
               <Badge variant="outline">{manualTrades.length} active</Badge>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1120px] text-sm">
+            <div className="grid gap-3 p-3 md:hidden">
+              {loadingTrades ? (
+                <div className="py-6 text-center text-sm text-muted-foreground">Loading manual entries...</div>
+              ) : manualTrades.length === 0 ? (
+                <div className="py-6 text-center text-sm text-muted-foreground">No active manual entries.</div>
+              ) : manualTrades.map((trade) => {
+                const manualEntry = getManualEntryData(trade);
+                return (
+                  <div key={trade.id} className="rounded-md border border-border bg-card p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="break-words font-medium">{contractLabel(trade)}</div>
+                        <div className="mt-1 break-all text-xs text-muted-foreground">Entry {trade.broker_order_id || '-'}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">{executionMessage(trade)}</div>
+                      </div>
+                      <Badge variant={isExitPending(trade) ? 'secondary' : trade.status === 'OPEN' ? 'default' : 'outline'}>
+                        {trade.execution_status || trade.status}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                      <div>
+                        <div className="text-xs text-muted-foreground">Qty</div>
+                        <div className="font-mono">{trade.quantity}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Live</div>
+                        <div className="font-mono">{currency(trade.current_price)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Entry</div>
+                        <div className="font-mono">{currency(trade.entry_price)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">TP / SL</div>
+                        <div className="font-mono">{currency(trade.take_profit_trigger)} / {currency(manualEntry?.stopLossDisplay)}</div>
+                      </div>
+                    </div>
+                    {trade.execution_error && <div className="mt-2 break-words text-xs text-amber-600">{trade.execution_error}</div>}
+                    <div className="mt-3">{tradeActions(trade, true)}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[960px] text-sm">
                 <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
                   <tr>
                     <th className="px-3 py-3 text-left">Contract</th>
@@ -501,15 +774,13 @@ export default function ManualEntryPage() {
                   ) : manualTrades.length === 0 ? (
                     <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No active manual entries.</td></tr>
                   ) : manualTrades.map((trade) => {
-                    const canSell = trade.status === 'OPEN' && !isExitPending(trade);
-                    const trimCount = Math.max(1, Math.floor(Number(settings.trimCount || 1)));
-                    const canTrim = canSell && Number(trade.quantity || 0) > 0 && Number.isFinite(trimCount);
                     const manualEntry = getManualEntryData(trade);
                     return (
                       <tr key={trade.id} className="border-t border-border/70">
                         <td className="px-3 py-3">
                           <div className="font-medium">{contractLabel(trade)}</div>
                           <div className="text-xs text-muted-foreground">Entry {trade.broker_order_id || '-'}</div>
+                          <div className="text-xs text-muted-foreground">{executionMessage(trade)}</div>
                         </td>
                         <td className="px-3 py-3 text-right font-mono">{trade.quantity}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.entry_price)}</td>
@@ -527,18 +798,7 @@ export default function ManualEntryPage() {
                           <div>{compactDate(trade.last_broker_sync_at)}</div>
                         </td>
                         <td className="px-3 py-3 text-right">
-                          <div className="flex justify-end gap-2">
-                            <Button asChild variant="outline" size="sm">
-                              <Link to={`/trades/${trade.id}/command`}>Command</Link>
-                            </Button>
-                            <Button variant="outline" size="sm" className="gap-1" disabled={!canTrim || trimmingId === trade.id || closingId === trade.id} onClick={() => submitTrim(trade)}>
-                              <Scissors className="h-3.5 w-3.5" />
-                              {trimmingId === trade.id ? 'Trimming' : `TRIM ${Math.min(trimCount, Number(trade.quantity || 0))}`}
-                            </Button>
-                            <Button variant="destructive" size="sm" disabled={!canSell || closingId === trade.id || trimmingId === trade.id} onClick={() => submitSell(trade)}>
-                              {closingId === trade.id ? 'Selling' : 'SELL'}
-                            </Button>
-                          </div>
+                          {tradeActions(trade)}
                         </td>
                       </tr>
                     );
