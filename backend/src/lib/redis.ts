@@ -162,6 +162,93 @@ class RedisClient {
             return null;
         }
     }
+
+    async sadd(key: string, value: string): Promise<void> {
+        if (!this.isConnected || !this.client) return;
+        try {
+            await this.client.sadd(key, value);
+        } catch (err) {
+            // Ignore
+        }
+    }
+
+    async smembers(key: string): Promise<string[]> {
+        if (!this.isConnected || !this.client) return [];
+        try {
+            return await this.client.smembers(key);
+        } catch (err) {
+            return [];
+        }
+    }
+
+    async srem(key: string, value: string): Promise<void> {
+        if (!this.isConnected || !this.client) return;
+        try {
+            await this.client.srem(key, value);
+        } catch (err) {
+            // Ignore
+        }
+    }
+
+    async hset(key: string, values: Record<string, string | number | null | undefined>): Promise<void> {
+        if (!this.isConnected || !this.client) return;
+        try {
+            const cleaned: Record<string, string> = {};
+            for (const [field, value] of Object.entries(values)) {
+                if (value !== undefined) cleaned[field] = value === null ? '' : String(value);
+            }
+            if (Object.keys(cleaned).length > 0) {
+                await this.client.hset(key, cleaned);
+            }
+        } catch (err) {
+            // Ignore
+        }
+    }
+
+    async hgetall(key: string): Promise<Record<string, string>> {
+        if (!this.isConnected || !this.client) return {};
+        try {
+            return await this.client.hgetall(key);
+        } catch (err) {
+            return {};
+        }
+    }
+
+    async zadd(key: string, score: number, value: string): Promise<void> {
+        if (!this.isConnected || !this.client) return;
+        try {
+            await this.client.zadd(key, score, value);
+        } catch (err) {
+            // Ignore
+        }
+    }
+
+    async zrange(key: string, start: number, stop: number): Promise<string[]> {
+        if (!this.isConnected || !this.client) return [];
+        try {
+            return await this.client.zrange(key, start, stop);
+        } catch (err) {
+            return [];
+        }
+    }
+
+    async zremrangebyscore(key: string, min: number | string, max: number | string): Promise<number | null> {
+        if (!this.isConnected || !this.client) return null;
+        try {
+            return await this.client.zremrangebyscore(key, min, max);
+        } catch (err) {
+            return null;
+        }
+    }
+
+    async zcard(key: string): Promise<number | null> {
+        if (!this.isConnected || !this.client) return null;
+        try {
+            return await this.client.zcard(key);
+        } catch (err) {
+            return null;
+        }
+    }
 }
 
 export const redis = new RedisClient();

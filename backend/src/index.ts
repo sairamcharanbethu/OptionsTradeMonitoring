@@ -800,6 +800,7 @@ const start = async () => {
           status: poller.isRunning() ? 'UP' : 'DOWN',
           running: poller.isRunning()
         }, generatedAt),
+        marketDataBuffer: normalizeAdapterHealth('marketDataBuffer', poller.getMarketDataBufferHealth(), generatedAt),
         scanner: normalizeAdapterHealth('signalScanner', scannerHealth, generatedAt),
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),

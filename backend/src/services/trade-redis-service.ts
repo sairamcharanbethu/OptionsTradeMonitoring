@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { redis } from '../lib/redis';
+import { MarketDataWriteBufferService } from './market-data-write-buffer-service';
 
 type Queryable = {
   query: (sql: string, params?: any[]) => Promise<any>;
@@ -86,15 +87,27 @@ export class TradeRedisService {
 
   static async getOpenTrades(userId: number) {
     const cached = await this.getReadModel<any[]>(this.keys.userOpenTrades(userId));
-    return cached?.data || null;
+    if (!cached?.data) return null;
+    return this.applyBufferedMarketData(cached.data);
   }
 
   static async getOpenTradesReadModel(userId: number): Promise<TradeReadModel<any[]> | null> {
-    return this.getReadModel<any[]>(this.keys.userOpenTrades(userId));
+    const cached = await this.getReadModel<any[]>(this.keys.userOpenTrades(userId));
+    if (!cached) return null;
+    return {
+      ...cached,
+      data: await this.applyBufferedMarketData(cached.data)
+    };
   }
 
   static async getTradeState(positionId: number | string): Promise<TradeReadModel<any> | null> {
-    return this.getReadModel<any>(this.keys.tradeState(positionId));
+    const cached = await this.getReadModel<any>(this.keys.tradeState(positionId));
+    if (!cached) return null;
+    const [trade] = await this.applyBufferedMarketData([cached.data]);
+    return {
+      ...cached,
+      data: trade
+    };
   }
 
   static async rebuildOpenTrades(db: Queryable, userId: number, broadcaster?: any) {
@@ -110,18 +123,19 @@ export class TradeRedisService {
       [userId]
     );
 
-    const working = rows.filter((trade: any) => this.isWorkingTrade(trade));
+    const rowsWithMarketData = await this.applyBufferedMarketData(rows);
+    const working = rowsWithMarketData.filter((trade: any) => this.isWorkingTrade(trade));
     const summary = {
-      openCount: rows.filter((trade: any) => trade.status === 'OPEN' && !this.isWorkingTrade(trade)).length,
+      openCount: rowsWithMarketData.filter((trade: any) => trade.status === 'OPEN' && !this.isWorkingTrade(trade)).length,
       workingCount: working.length,
       generatedAt: new Date().toISOString()
     };
 
     await Promise.all([
-      this.setReadModel(this.keys.userOpenTrades(userId), rows),
+      this.setReadModel(this.keys.userOpenTrades(userId), rowsWithMarketData),
       this.setReadModel(this.keys.userWorkingTrades(userId), working),
       this.setReadModel(this.keys.userTradeSummary(userId), summary),
-      ...rows.map((trade: any) => this.setReadModel(this.keys.tradeState(trade.id), trade, this.TRADE_STATE_TTL_SECONDS))
+      ...rowsWithMarketData.map((trade: any) => this.setReadModel(this.keys.tradeState(trade.id), trade, this.TRADE_STATE_TTL_SECONDS))
     ]);
 
     this.broadcast(broadcaster, {
@@ -132,7 +146,7 @@ export class TradeRedisService {
       workingCount: summary.workingCount
     });
 
-    return rows;
+    return rowsWithMarketData;
   }
 
   static async invalidateUser(userId: number) {
@@ -223,6 +237,32 @@ export class TradeRedisService {
       await redis.del(key);
       return null;
     }
+  }
+
+  private static async applyBufferedMarketData<T extends { id: number | string; status?: string }>(trades: T[]): Promise<T[]> {
+    if (!redis.isReady() || trades.length === 0) return trades;
+
+    return Promise.all(trades.map(async (trade) => {
+      if (String(trade.status || '').toUpperCase() === 'CLOSED') return trade;
+      const latest = await redis.hgetall(`${MarketDataWriteBufferService.currentPrefix}:${trade.id}`);
+      if (!latest?.price) return trade;
+      const next: any = { ...trade };
+      this.assignOptionalNumber(next, 'current_price', latest.price);
+      this.assignOptionalNumber(next, 'delta', latest.delta);
+      this.assignOptionalNumber(next, 'theta', latest.theta);
+      this.assignOptionalNumber(next, 'gamma', latest.gamma);
+      this.assignOptionalNumber(next, 'vega', latest.vega);
+      this.assignOptionalNumber(next, 'iv', latest.iv);
+      this.assignOptionalNumber(next, 'underlying_price', latest.underlyingPrice);
+      if (latest.updatedAt) next.updated_at = latest.updatedAt;
+      return next;
+    }));
+  }
+
+  private static assignOptionalNumber(target: any, key: string, value: string | undefined) {
+    if (!value) return;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) target[key] = parsed;
   }
 
   private static async setReadModel<T>(key: string, data: T, ttlSeconds = this.OPEN_TRADES_TTL_SECONDS) {

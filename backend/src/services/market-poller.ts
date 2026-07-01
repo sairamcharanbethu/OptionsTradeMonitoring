@@ -8,6 +8,7 @@ import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { ThetaDataService } from './thetadata-service';
+import { MarketDataWriteBufferService } from './market-data-write-buffer-service';
 
 type ExitQuoteContext = {
   bid?: number;
@@ -25,11 +26,13 @@ export class MarketPoller {
   private timerId: NodeJS.Timeout | null = null;
   private pollingEnabled: boolean = true;
   private redisClient: any;
+  private marketDataBuffer: MarketDataWriteBufferService;
 
   constructor(fastify: FastifyInstance, redisClient?: any) {
     this.fastify = fastify;
     this.aiService = new AIService(fastify);
     this.redisClient = redisClient || redis;
+    this.marketDataBuffer = new MarketDataWriteBufferService(fastify, this.redisClient);
   }
 
   private readonly LOCK_KEY = 'MARKET_POLLER_LEADER';
@@ -56,6 +59,7 @@ export class MarketPoller {
     // Start recursive loop
     this.scheduleNextPoll();
     this.startBriefingJob();
+    this.marketDataBuffer.startEodFlushJob();
 
   }
 
@@ -113,6 +117,10 @@ export class MarketPoller {
    */
   public isRunning(): boolean {
     return this.pollingEnabled;
+  }
+
+  public getMarketDataBufferHealth() {
+    return this.marketDataBuffer.getHealth();
   }
 
   private startBriefingJob() {
@@ -1024,29 +1032,29 @@ export class MarketPoller {
       }
     }
 
-    // Update Price AND Greeks
-    await (this.fastify as any).pg.query(
-      `UPDATE positions 
-       SET current_price = $1, 
-           updated_at = CURRENT_TIMESTAMP,
-           delta = $2,
-           theta = $3,
-           gamma = $4,
-           vega = $5,
-           iv = $6,
-           underlying_price = $7
-       WHERE id = $8`,
-      [
+    const quoteRecorded = await this.marketDataBuffer.recordQuote({
+      positionId: position.id,
+      price,
+      delta: greeks?.delta ?? null,
+      theta: greeks?.theta ?? null,
+      gamma: greeks?.gamma ?? null,
+      vega: greeks?.vega ?? null,
+      iv: iv ?? null,
+      underlyingPrice: underlyingPrice ?? null
+    });
+
+    if (!quoteRecorded) {
+      await this.marketDataBuffer.writeThrough({
+        positionId: position.id,
         price,
-        greeks?.delta ?? null,
-        greeks?.theta ?? null,
-        greeks?.gamma ?? null,
-        greeks?.vega ?? null,
-        iv ?? null,
-        underlyingPrice ?? null,
-        position.id
-      ]
-    );
+        delta: greeks?.delta ?? null,
+        theta: greeks?.theta ?? null,
+        gamma: greeks?.gamma ?? null,
+        vega: greeks?.vega ?? null,
+        iv: iv ?? null,
+        underlyingPrice: underlyingPrice ?? null
+      });
+    }
 
     if (analysisDirty) {
       await (this.fastify as any).pg.query(
@@ -1054,11 +1062,6 @@ export class MarketPoller {
         [JSON.stringify(analysis), position.id]
       );
     }
-
-    await (this.fastify as any).pg.query(
-      'INSERT INTO price_history (position_id, price) VALUES ($1, $2)',
-      [position.id, price]
-    );
 
     const currentExecutionStatus = String(position.execution_status || '');
     if (currentExecutionStatus.startsWith('EXIT_')) {

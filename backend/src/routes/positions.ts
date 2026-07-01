@@ -6,6 +6,7 @@ import { SnaptradeService } from '../services/snaptrade-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { MarketDataWriteBufferService } from '../services/market-data-write-buffer-service';
 
 function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
   const dateStr = expiration instanceof Date ? expiration.toISOString().split('T')[0] : String(expiration).split('T')[0];
@@ -111,6 +112,7 @@ const statsResponseSchema = {
 export async function positionRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
   const analysisService = new AnalysisService(fastify);
+  const marketDataBuffer = new MarketDataWriteBufferService(fastify);
 
   // GET all positions (including analytics if closed)
   fastify.get('/', {
@@ -132,14 +134,14 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
     // Try cache
     const cached = await redis.get(CACHE_KEY);
-    if (cached) return JSON.parse(cached);
+    if (cached) return marketDataBuffer.applyLatestToPositions(JSON.parse(cached));
 
     const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
 
     // Set cache (60 seconds)
     await redis.set(CACHE_KEY, JSON.stringify(rows), 60);
 
-    return rows;
+    return marketDataBuffer.applyLatestToPositions(rows);
   });
 
   // GET paginated closed positions (history)
@@ -219,9 +221,10 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     `;
 
     const { rows } = await fastify.pg.query(query, [userId]);
+    const latestRows = await marketDataBuffer.applyLatestToPositions(rows);
 
     // Transform to a map/dictionary for easier frontend patching
-    const updates = rows.reduce((acc: any, row: any) => {
+    const updates = latestRows.reduce((acc: any, row: any) => {
       acc[row.id] = row;
       return acc;
     }, {});
@@ -381,7 +384,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     if (rows.length === 0) {
       return reply.code(404).send({ error: 'Position not found' });
     }
-    return rows[0];
+    return marketDataBuffer.applyLatestToPosition(rows[0]);
   });
 
   // GET price history
@@ -423,7 +426,8 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
       'SELECT price, recorded_at FROM price_history WHERE position_id = $1 ORDER BY recorded_at ASC',
       [id]
     );
-    return rows;
+    const bufferedRows = await marketDataBuffer.getBufferedPriceHistory(id);
+    return [...rows, ...bufferedRows].sort((a: any, b: any) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
   });
 
   // CREATE position
