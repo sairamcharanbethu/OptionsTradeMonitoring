@@ -83,6 +83,24 @@ function streamQuotePayload(quote: any) {
   };
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: () => T
+): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback()), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const testConnection = async (connectionString: string, label: string): Promise<boolean> => {
   const isCloud = connectionString.includes('aivencloud');
   const client = new Client({
@@ -705,29 +723,69 @@ const start = async () => {
       const generatedAt = new Date().toISOString();
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
       const thetaDataHealth = thetaDataStreamer.getHealth();
-      const thetaDataTerminalHealth = await thetaData.getHealth(userId).catch((err: any) => ({
-        status: 'DOWN',
-        connected: false,
-        provider: 'thetadata',
-        baseUrl: process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503',
-        latencyMs: null,
-        lastError: err.message || String(err)
-      }));
       const liveExitHealth = liveExitMonitor.getHealth();
-      const scannerHealth = await scanner.getRuntimeStatus();
-      const tradeRedisHealth = await TradeRedisService.getHealth();
       const postgresStartedAt = Date.now();
-      const postgresHealth = await fastify.pg.query('SELECT 1')
-        .then(() => normalizeAdapterHealth('postgres', {
-          status: 'UP',
-          latencyMs: Date.now() - postgresStartedAt,
-          lastError: null
-        }, generatedAt))
-        .catch((err: any) => normalizeAdapterHealth('postgres', {
-          status: 'DOWN',
-          latencyMs: Date.now() - postgresStartedAt,
-          lastError: err.message || String(err)
-        }, generatedAt));
+      const [thetaDataTerminalHealth, scannerHealth, tradeRedisHealth, postgresHealth] = await Promise.all([
+        withTimeout(
+          thetaData.getHealth(userId).catch((err: any) => ({
+            status: 'DOWN',
+            connected: false,
+            provider: 'thetadata',
+            baseUrl: process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503',
+            latencyMs: null,
+            lastError: err.message || String(err)
+          })),
+          3000,
+          () => ({
+            status: 'DOWN',
+            connected: false,
+            provider: 'thetadata',
+            baseUrl: process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503',
+            latencyMs: null,
+            lastError: 'ThetaData health check timed out'
+          })
+        ),
+        withTimeout(
+          scanner.getRuntimeStatus(),
+          1500,
+          () => ({
+            status: 'DEGRADED',
+            enabled: false,
+            marketOpen: false,
+            error: 'Scanner health check timed out'
+          })
+        ),
+        withTimeout(
+          TradeRedisService.getHealth(),
+          1500,
+          () => ({
+            status: 'DEGRADED',
+            connected: false,
+            queueDepth: null,
+            metrics: {},
+            lastError: 'Redis health check timed out'
+          })
+        ),
+        withTimeout(
+          fastify.pg.query('SELECT 1')
+            .then(() => normalizeAdapterHealth('postgres', {
+              status: 'UP',
+              latencyMs: Date.now() - postgresStartedAt,
+              lastError: null
+            }, generatedAt))
+            .catch((err: any) => normalizeAdapterHealth('postgres', {
+              status: 'DOWN',
+              latencyMs: Date.now() - postgresStartedAt,
+              lastError: err.message || String(err)
+            }, generatedAt)),
+          1500,
+          () => normalizeAdapterHealth('postgres', {
+            status: 'DOWN',
+            latencyMs: Date.now() - postgresStartedAt,
+            lastError: 'Postgres health check timed out'
+          }, generatedAt)
+        )
+      ]);
 
       return {
         liveExitMonitor: normalizeAdapterHealth('liveExitMonitor', liveExitHealth, generatedAt),

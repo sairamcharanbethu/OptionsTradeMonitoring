@@ -10,6 +10,9 @@ type LiveExitHealth = {
   lastQuoteAt: string | null;
   lastMatchedAt: string | null;
   lastError: string | null;
+  positionCacheSize: number;
+  positionCacheAgeMs: number | null;
+  activeLocks: number;
 };
 
 export class LiveExitMonitorService {
@@ -22,6 +25,11 @@ export class LiveExitMonitorService {
   private lastError: string | null = null;
   private provider = 'none';
   private active = false;
+  private positionsByTicker: Map<string, any[]> = new Map();
+  private positionsCacheLoadedAtMs = 0;
+  private positionsCacheExpiresAtMs = 0;
+  private positionsRefreshPromise: Promise<Map<string, any[]>> | null = null;
+  private readonly POSITION_CACHE_TTL_MS = Number(process.env.LIVE_EXIT_POSITION_CACHE_MS || 2000);
 
   constructor(fastify: FastifyInstance) {
     this.fastify = fastify;
@@ -58,19 +66,7 @@ export class LiveExitMonitorService {
         return;
       }
 
-      const { rows: positions } = await (this.fastify as any).pg.query(
-        "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM') AND COALESCE(p.execution_status, '') NOT LIKE 'EXIT_%'"
-      );
-
-      const matchedPositions = positions.filter((position: any) => {
-        const positionTicker = this.constructOSITicker(
-          position.symbol,
-          Number(position.strike_price),
-          position.option_type,
-          position.expiration_date
-        );
-        return positionTicker === ticker;
-      });
+      const matchedPositions = await this.getMatchedPositions(ticker);
 
       if (matchedPositions.length === 0) return;
 
@@ -125,8 +121,65 @@ export class LiveExitMonitorService {
       matchedUpdates: this.matchedUpdates,
       lastQuoteAt: this.lastQuoteAt,
       lastMatchedAt: this.lastMatchedAt,
-      lastError: this.lastError
+      lastError: this.lastError,
+      positionCacheSize: this.positionsByTicker.size,
+      positionCacheAgeMs: this.positionsCacheLoadedAtMs > 0 ? Date.now() - this.positionsCacheLoadedAtMs : null,
+      activeLocks: this.streamUpdateLocks.size
     };
+  }
+
+  private async getMatchedPositions(ticker: string): Promise<any[]> {
+    const positionsByTicker = await this.getOpenPositionsByTicker();
+    return positionsByTicker.get(ticker) || [];
+  }
+
+  private async getOpenPositionsByTicker(): Promise<Map<string, any[]>> {
+    const now = Date.now();
+    if (this.positionsCacheExpiresAtMs > now) {
+      return this.positionsByTicker;
+    }
+
+    if (!this.positionsRefreshPromise) {
+      this.positionsRefreshPromise = this.refreshOpenPositionsByTicker()
+        .finally(() => {
+          this.positionsRefreshPromise = null;
+        });
+    }
+
+    return this.positionsRefreshPromise;
+  }
+
+  private async refreshOpenPositionsByTicker(): Promise<Map<string, any[]>> {
+    let positions: any[] = [];
+    try {
+      const result = await (this.fastify as any).pg.query(
+        "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM') AND COALESCE(p.execution_status, '') NOT LIKE 'EXIT_%'"
+      );
+      positions = result.rows;
+    } catch (err) {
+      this.positionsCacheExpiresAtMs = Date.now() + Math.max(1000, this.POSITION_CACHE_TTL_MS);
+      if (this.positionsByTicker.size > 0) return this.positionsByTicker;
+      throw err;
+    }
+
+    const nextPositionsByTicker = new Map<string, any[]>();
+
+    for (const position of positions) {
+      const positionTicker = this.constructOSITicker(
+        position.symbol,
+        Number(position.strike_price),
+        position.option_type,
+        position.expiration_date
+      );
+      const current = nextPositionsByTicker.get(positionTicker) || [];
+      current.push(position);
+      nextPositionsByTicker.set(positionTicker, current);
+    }
+
+    this.positionsByTicker = nextPositionsByTicker;
+    this.positionsCacheLoadedAtMs = Date.now();
+    this.positionsCacheExpiresAtMs = this.positionsCacheLoadedAtMs + Math.max(250, this.POSITION_CACHE_TTL_MS);
+    return this.positionsByTicker;
   }
 
   private getStreamHealth(): any {
