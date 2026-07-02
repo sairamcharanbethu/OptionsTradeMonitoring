@@ -70,6 +70,20 @@ function getManualEntryData(trade: Position) {
   return parsed?.manualEntry || null;
 }
 
+function getUnderlyingStopPrice(trade: Position) {
+  const manualEntry = getManualEntryData(trade);
+  const stop = trade.underlying_stop_price ?? manualEntry?.underlyingStopPrice;
+  const parsed = Number(stop);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isUnderlyingStopBreached(trade: Position) {
+  const stop = getUnderlyingStopPrice(trade);
+  const underlying = Number(trade.underlying_price);
+  if (!stop || !Number.isFinite(underlying) || trade.status !== 'OPEN') return false;
+  return trade.option_type === 'PUT' ? underlying >= stop : underlying <= stop;
+}
+
 function isManualEntryTrade(trade: Position) {
   return Boolean(getManualEntryData(trade)?.enabled) || String(trade.notes || '').includes('[Manual Entry]');
 }
@@ -107,6 +121,7 @@ export default function ManualEntryPage() {
   const [orderType, setOrderType] = useState<'MARKET' | 'LIMIT'>('LIMIT');
   const [quantity, setQuantity] = useState(1);
   const [limitPrice, setLimitPrice] = useState('');
+  const [underlyingStopPrice, setUnderlyingStopPrice] = useState('');
   const [limitEdited, setLimitEdited] = useState(false);
   const [openTrades, setOpenTrades] = useState<Position[]>([]);
   const [loadingChain, setLoadingChain] = useState(false);
@@ -354,7 +369,8 @@ export default function ManualEntryPage() {
         expiration,
         quantity,
         orderType,
-        limitPrice: orderType === 'LIMIT' ? Number(limitPrice) : null
+        limitPrice: orderType === 'LIMIT' ? Number(limitPrice) : null,
+        underlyingStopPrice: underlyingStopPrice ? Number(underlyingStopPrice) : null
       });
       setShowEntry(false);
       await refreshTrades(true);
@@ -513,7 +529,7 @@ export default function ManualEntryPage() {
             <RefreshCw className={`h-4 w-4 ${loadingTrades ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button className="flex-1 gap-2 sm:flex-none" onClick={() => { setShowEntry(true); setSymbol(settings.defaultTicker); setQuantity(settings.contracts); setOrderType(settings.orderType || 'LIMIT'); }}>
+          <Button className="flex-1 gap-2 sm:flex-none" onClick={() => { setShowEntry(true); setSymbol(settings.defaultTicker); setQuantity(settings.contracts); setOrderType(settings.orderType || 'LIMIT'); setUnderlyingStopPrice(''); }}>
             <BadgeDollarSign className="h-4 w-4" />
             New Entry
           </Button>
@@ -590,7 +606,7 @@ export default function ManualEntryPage() {
                   <XCircle className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-7">
                 <div>
                   <Label className="text-xs">Ticker</Label>
                   <Input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} />
@@ -643,6 +659,17 @@ export default function ManualEntryPage() {
                     </SelectContent>
                   </Select>
                 </div>
+                <div>
+                  <Label className="text-xs">{optionType === 'PUT' ? 'Stop Over' : 'Stop Under'}</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={underlyingStopPrice}
+                    onChange={(e) => setUnderlyingStopPrice(e.target.value)}
+                    placeholder={chain?.underlyingPrice ? currency(chain.underlyingPrice) : '$742.27'}
+                  />
+                </div>
               </div>
 
               {chain && (
@@ -694,6 +721,11 @@ export default function ManualEntryPage() {
                   <div className="mt-1">
                     Risk {estimatedDebit === null ? '-' : currency(estimatedDebit)} debit · {quantity || 0} contract(s) @ {estimatedPremium > 0 ? currency(estimatedPremium) : '-'}
                   </div>
+                  {underlyingStopPrice && (
+                    <div className="mt-1 text-red-500">
+                      Alert if {symbol || 'underlying'} {optionType === 'PUT' ? 'trades above' : 'trades below'} {currency(Number(underlyingStopPrice))}
+                    </div>
+                  )}
                   {marketDisabledReason && <div className="mt-1 text-amber-600">{marketDisabledReason}</div>}
                   {loadingQuote && <span className="ml-2">Refreshing quote...</span>}
                 </div>
@@ -717,17 +749,22 @@ export default function ManualEntryPage() {
                 <div className="py-6 text-center text-sm text-muted-foreground">No active manual entries.</div>
               ) : manualTrades.map((trade) => {
                 const manualEntry = getManualEntryData(trade);
+                const stopBreached = isUnderlyingStopBreached(trade);
+                const underlyingStop = getUnderlyingStopPrice(trade);
                 return (
-                  <div key={trade.id} className="rounded-md border border-border bg-card p-3">
+                  <div key={trade.id} className={`rounded-md border bg-card p-3 ${stopBreached ? 'manual-stop-breached border-red-500/70' : 'border-border'}`}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="break-words font-medium">{contractLabel(trade)}</div>
                         <div className="mt-1 break-all text-xs text-muted-foreground">Entry {trade.broker_order_id || '-'}</div>
                         <div className="mt-1 text-xs text-muted-foreground">{executionMessage(trade)}</div>
                       </div>
-                      <Badge variant={isExitPending(trade) ? 'secondary' : trade.status === 'OPEN' ? 'default' : 'outline'}>
-                        {trade.execution_status || trade.status}
-                      </Badge>
+                      <div className="flex flex-col items-end gap-1">
+                        {stopBreached && <Badge variant="destructive" className="animate-pulse">CLOSE</Badge>}
+                        <Badge variant={isExitPending(trade) ? 'secondary' : trade.status === 'OPEN' ? 'default' : 'outline'}>
+                          {trade.execution_status || trade.status}
+                        </Badge>
+                      </div>
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                       <div>
@@ -737,6 +774,14 @@ export default function ManualEntryPage() {
                       <div>
                         <div className="text-xs text-muted-foreground">Live</div>
                         <div className="font-mono">{currency(trade.current_price)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Underlying</div>
+                        <div className={`font-mono ${stopBreached ? 'font-semibold text-red-500' : ''}`}>{currency(trade.underlying_price)}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">{trade.option_type === 'PUT' ? 'Stop Over' : 'Stop Under'}</div>
+                        <div className={`font-mono ${stopBreached ? 'font-semibold text-red-500' : ''}`}>{currency(underlyingStop)}</div>
                       </div>
                       <div>
                         <div className="text-xs text-muted-foreground">Entry</div>
@@ -775,18 +820,29 @@ export default function ManualEntryPage() {
                     <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No active manual entries.</td></tr>
                   ) : manualTrades.map((trade) => {
                     const manualEntry = getManualEntryData(trade);
+                    const stopBreached = isUnderlyingStopBreached(trade);
+                    const underlyingStop = getUnderlyingStopPrice(trade);
                     return (
-                      <tr key={trade.id} className="border-t border-border/70">
+                      <tr key={trade.id} className={`border-t border-border/70 ${stopBreached ? 'manual-stop-breached' : ''}`}>
                         <td className="px-3 py-3">
                           <div className="font-medium">{contractLabel(trade)}</div>
                           <div className="text-xs text-muted-foreground">Entry {trade.broker_order_id || '-'}</div>
                           <div className="text-xs text-muted-foreground">{executionMessage(trade)}</div>
+                          {stopBreached && <Badge variant="destructive" className="mt-2 animate-pulse">CLOSE NOW</Badge>}
                         </td>
                         <td className="px-3 py-3 text-right font-mono">{trade.quantity}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.entry_price)}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.current_price)}</td>
                         <td className="px-3 py-3 text-right font-mono text-emerald-500">{currency(trade.take_profit_trigger)}</td>
-                        <td className="px-3 py-3 text-right font-mono text-muted-foreground">{currency(manualEntry?.stopLossDisplay)}</td>
+                        <td className="px-3 py-3 text-right">
+                          <div className="font-mono text-muted-foreground">{currency(manualEntry?.stopLossDisplay)}</div>
+                          <div className={`text-xs font-mono ${stopBreached ? 'font-semibold text-red-500' : 'text-muted-foreground'}`}>
+                            {trade.option_type === 'PUT' ? 'Over' : 'Under'} {currency(underlyingStop)}
+                          </div>
+                          <div className={`text-xs font-mono ${stopBreached ? 'font-semibold text-red-500' : 'text-muted-foreground'}`}>
+                            {currency(trade.underlying_price)}
+                          </div>
+                        </td>
                         <td className="px-3 py-3">
                           <Badge variant={isExitPending(trade) ? 'secondary' : trade.status === 'OPEN' ? 'default' : 'outline'}>
                             {trade.execution_status || trade.status}

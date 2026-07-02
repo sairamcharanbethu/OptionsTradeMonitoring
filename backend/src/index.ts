@@ -241,6 +241,7 @@ const ensureSchema = async (instance: any) => {
       { name: 'vega', type: 'DECIMAL(10, 4)' },
       { name: 'iv', type: 'DECIMAL(10, 4)' },
       { name: 'underlying_price', type: 'DECIMAL(10, 2)' },
+      { name: 'underlying_stop_price', type: 'DECIMAL(10, 2)' },
       { name: 'analyzed_support', type: 'DECIMAL(10, 2)' },
       { name: 'analyzed_resistance', type: 'DECIMAL(10, 2)' },
       { name: 'suggested_stop_loss', type: 'DECIMAL(10, 2)' },

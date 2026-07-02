@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS positions (
     exit_price DECIMAL(10, 2),
     current_price DECIMAL(10, 2),
     underlying_price DECIMAL(10, 2),
+    underlying_stop_price DECIMAL(10, 2),
     analyzed_support DECIMAL(10, 2),
     analyzed_resistance DECIMAL(10, 2),
     suggested_stop_loss DECIMAL(10, 2),

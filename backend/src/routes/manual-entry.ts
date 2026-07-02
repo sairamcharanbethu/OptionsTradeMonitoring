@@ -37,7 +37,8 @@ const OrderSchema = z.object({
   expiration: z.string().trim().min(8).max(20),
   quantity: z.coerce.number().int().min(1).max(100),
   orderType: z.enum(['MARKET', 'LIMIT']),
-  limitPrice: z.coerce.number().positive().optional().nullable()
+  limitPrice: z.coerce.number().positive().optional().nullable(),
+  underlyingStopPrice: z.coerce.number().positive().optional().nullable()
 });
 
 const TrimSchema = z.object({
@@ -380,19 +381,23 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
       const stopLossDisplay = manualSettings.stopLossPct
         ? Number((entryPrice * (1 - manualSettings.stopLossPct / 100)).toFixed(2))
         : null;
+      const underlyingStopPrice = input.underlyingStopPrice
+        ? Number(Number(input.underlyingStopPrice).toFixed(2))
+        : null;
+      const underlyingPrice = await fetchUnderlyingPrice(symbol);
 
       const insertResult = await (fastify as any).pg.query(
         `INSERT INTO positions (
           user_id, symbol, option_type, strike_price, expiration_date,
           entry_price, quantity, stop_loss_trigger, take_profit_trigger,
-          trailing_high_price, trailing_stop_loss_pct, current_price,
+          trailing_high_price, trailing_stop_loss_pct, current_price, underlying_price, underlying_stop_price,
           status, is_simulated, account_id, notes, execution_broker,
           broker_order_id, broker_trade_id, execution_account_id, execution_status, contracts_requested,
           analysis_data, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5,
           $6, $7, NULL, $8,
-          $6, NULL, $6,
+          $6, NULL, $6, $12, $13,
           'PENDING_ORDER', FALSE, $9, $10, 'wealthsimple_snaptrade',
           NULL, NULL, $9, 'ENTRY_SUBMITTING', $7,
           $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
@@ -408,7 +413,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
           input.quantity,
           takeProfitTrigger,
           accountId,
-          `[Manual Entry] ${input.orderType} BUY_TO_OPEN preparing. Stop loss display ${stopLossDisplay === null ? 'not set' : `$${stopLossDisplay}`}.`,
+          `[Manual Entry] ${input.orderType} BUY_TO_OPEN preparing. Stop loss display ${stopLossDisplay === null ? 'not set' : `$${stopLossDisplay}`}. Underlying stop ${underlyingStopPrice === null ? 'not set' : `$${underlyingStopPrice}`}.`,
           {
             manualEntry: {
               enabled: true,
@@ -418,9 +423,12 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
               stopLossPct: manualSettings.stopLossPct,
               initialTakeProfitTrigger: takeProfitTrigger,
               stopLossDisplay,
+              underlyingStopPrice,
               quote: toQuotePayload(quote)
             }
-          }
+          },
+          underlyingPrice,
+          underlyingStopPrice
         ]
       );
       const positionId = insertResult.rows[0]?.id;

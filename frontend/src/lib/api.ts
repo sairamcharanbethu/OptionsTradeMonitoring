@@ -19,6 +19,7 @@ export interface Position {
   realized_pnl?: number;
   loss_avoided?: number;
   current_price?: number;
+  underlying_stop_price?: number;
   status: 'PENDING_ORDER' | 'OPEN' | 'CLOSED' | 'STOP_TRIGGERED' | 'PROFIT_TRIGGERED';
   created_at: string;
   updated_at: string;
@@ -392,6 +393,7 @@ const normalizePosition = (pos: any): Position => ({
   take_profit_trigger: pos.take_profit_trigger != null ? Number(pos.take_profit_trigger) : undefined,
   trailing_high_price: pos.trailing_high_price != null ? Number(pos.trailing_high_price) : undefined,
   current_price: pos.current_price != null ? Number(pos.current_price) : undefined,
+  underlying_stop_price: pos.underlying_stop_price != null ? Number(pos.underlying_stop_price) : undefined,
   realized_pnl: pos.realized_pnl != null ? Number(pos.realized_pnl) : undefined,
   loss_avoided: pos.loss_avoided != null ? Number(pos.loss_avoided) : undefined,
   delta: pos.delta != null ? Number(pos.delta) : undefined,
@@ -920,6 +922,7 @@ export const api = {
     quantity: number;
     orderType: 'MARKET' | 'LIMIT';
     limitPrice?: number | null;
+    underlyingStopPrice?: number | null;
   }): Promise<any> {
     const res = await authFetch(`${API_BASE}/manual-entry/orders`, {
       method: 'POST',

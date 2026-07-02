@@ -19,6 +19,7 @@ const tradeResponseSchema = {
     quantity: { type: 'integer' },
     current_price: { type: 'number', nullable: true },
     underlying_price: { type: 'number', nullable: true },
+    underlying_stop_price: { type: 'number', nullable: true },
     stop_loss_trigger: { type: 'number', nullable: true },
     take_profit_trigger: { type: 'number', nullable: true },
     status: { type: 'string' },

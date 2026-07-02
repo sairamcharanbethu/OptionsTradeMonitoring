@@ -70,6 +70,7 @@ const positionResponseSchema = {
     vega: { type: 'number', nullable: true },
     iv: { type: 'number', nullable: true },
     underlying_price: { type: 'number', nullable: true },
+    underlying_stop_price: { type: 'number', nullable: true },
     created_at: { type: 'string', format: 'date-time' },
     updated_at: { type: 'string', format: 'date-time' },
     analyzed_support: { type: 'number', nullable: true },
