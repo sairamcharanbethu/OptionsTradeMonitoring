@@ -1177,10 +1177,12 @@ Rules:
     } else {
       // MEAN_REVERSION
       // CALL
-      addScore(callScoreParts, currentPrice >= openingRangeLow && currentPrice <= openingRangeLow * 1.002, weights.supportResistanceHold, 'Price holding Opening Range Low support');
+      const callHoldingSupport = currentPrice >= openingRangeLow && currentPrice <= openingRangeLow * 1.002;
+      const callReclaiming = latest.close > latest.open && latest.close >= previous.high;
+      addScore(callScoreParts, callHoldingSupport, weights.supportResistanceHold, 'Price holding Opening Range Low support');
       addScore(callScoreParts, rsi5 <= 30, weights.rsiReversal, 'Short-term RSI is oversold (RSI5 <= 30)');
       addScore(callScoreParts, latest.close > latest.open, weights.candleReversal, 'Latest candle closed green (reversal)');
-      addScore(callScoreParts, currentPrice < vwap, weights.oversoldDip, 'Price is below VWAP (oversold dip)');
+      addScore(callScoreParts, currentPrice < vwap && callHoldingSupport && callReclaiming, weights.oversoldDip, 'Price is below VWAP while holding support and reclaiming');
       addScore(callScoreParts, hasBullishInternals, weights.internals, 'Mega-Caps support reversal');
       addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqFlowDirection !== 'bearish', weights.flowDirection, 'Positive GEX and neutral/bullish flow');
       addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && qqqGexFlip !== null && currentPrice > qqqGexFlip && currentPrice < qqqKingNode, weights.gravityNode, 'Price between GEX Flip and King Node');
@@ -1423,6 +1425,8 @@ Rules:
       let candidateSelection: any = null;
       let chainSelectionRejected = false;
       let chainRejectionDetail: string | null = null;
+      let selectedQuoteAgeMs: number | null = null;
+      let selectedThetaDragPct: number | null = null;
 
       const defaultContractName = this.buildOsiTicker(symbol, targetExpiryDateStr, winningSide, Math.round(currentPrice));
       optionTicker = defaultContractName;
@@ -1529,6 +1533,8 @@ Rules:
             mark = selected.mark;
             volume = selected.volume;
             openInterest = selected.openInterest;
+            selectedQuoteAgeMs = selected.quoteAgeMs ?? null;
+            selectedThetaDragPct = this.getThetaDragPct(selected.theta ?? null, selected.mark);
             usingTheoreticalPricing = false;
             this.fastify.log.info(`[SignalScannerService] Selected ${selected.ticker} from ${selection.ranked.length} ThetaData candidates: strike=${selected.strike}, mark=$${mark}, spread=${spreadPct}%, volume=${volume}, OI=${openInterest}, score=${selected.score}.`);
           } else if (selection.ranked.length > 0) {
@@ -1561,6 +1567,8 @@ Rules:
             mark = quote.mark;
             volume = null;
             openInterest = null;
+            selectedQuoteAgeMs = quote.quoteAgeMs ?? null;
+            selectedThetaDragPct = null;
             usingTheoreticalPricing = false;
           }
         } catch (quoteErr: any) {
@@ -1617,6 +1625,8 @@ Rules:
       if (usingTheoreticalPricing && mark !== null && bid !== null && ask !== null) pricingWarnings.push('Using theoretical option price fallback');
       if (mark !== null && mark < minOptionMark) pricingWarnings.push(`Option premium $${mark} below limit $${minOptionMark}`);
       if (spreadPct !== null && spreadPct > maxBidAskSpreadPct) pricingWarnings.push(`Spread ${spreadPct}% exceeds ceiling ${maxBidAskSpreadPct}%`);
+      if (selectedQuoteAgeMs !== null && selectedQuoteAgeMs > 15_000) pricingWarnings.push(`Option quote stale ${Math.round(selectedQuoteAgeMs / 1000)}s`);
+      if (selectedThetaDragPct !== null && selectedThetaDragPct > 45) pricingWarnings.push(`Option theta drag ${selectedThetaDragPct.toFixed(1)}%`);
       if (volume !== null && volume < minOptionVolume) pricingWarnings.push(`Volume ${volume} below minimum ${minOptionVolume}`);
       if (openInterest !== null && openInterest < minOpenInterest) pricingWarnings.push(`Open interest ${openInterest} below minimum ${minOpenInterest}`);
 
@@ -1631,19 +1641,33 @@ Rules:
         setupGrade = '⚡ A / STANDARD';
       }
 
+      const executionRealism = this.buildExecutionRealismDiagnostics({
+        mark,
+        spreadPct,
+        volume,
+        openInterest,
+        usingTheoreticalPricing,
+        pricingWarnings
+      });
+      const executionBlockers = this.buildPricingExecutionBlockers({
+        chainSelectionRejected,
+        selectedQuoteAgeMs,
+        selectedThetaDragPct,
+        pricingWarnings,
+        executionRealism
+      });
+      if (executionBlockers.length > 0) {
+        finalConfidence = Math.min(finalConfidence, 84);
+        setupGrade = '🎲 B / LOTTO';
+      }
+
       const gradeDiagnostics = this.buildSignalGradeDiagnostics({
         baseScore: winningScore,
         macroRegime,
         pricingWarnings,
         pricingPenalty,
-        executionRealism: this.buildExecutionRealismDiagnostics({
-          mark,
-          spreadPct,
-          volume,
-          openInterest,
-          usingTheoreticalPricing,
-          pricingWarnings
-        }),
+        executionRealism,
+        executionBlockers,
         finalConfidence,
         setupGrade
       });
@@ -1698,6 +1722,13 @@ Rules:
       const stopUnderlying = winningSide === 'CALL'
         ? Number(Math.min(invalidationLevel - 0.05, currentPrice - minStopDistance).toFixed(2))
         : Number(Math.max(invalidationLevel + 0.05, currentPrice + minStopDistance).toFixed(2));
+      const autoExecutionBlockers = this.buildAutoExecutionBlockers({
+        tradeBias,
+        currentPrice,
+        entryTrigger,
+        executionBlockers
+      });
+      pricingData.autoExecutionBlockers = autoExecutionBlockers;
 
       planData = {
         entryTriggerUnderlying: Number(entryTrigger.toFixed(2)),
@@ -1723,9 +1754,10 @@ Rules:
           tradeBias,
           entryTriggerUnderlying: Number(entryTrigger.toFixed(2)),
           stopUnderlying,
-          targetUnderlying
+          targetUnderlying,
+          autoExecutionBlockers
         },
-        blockers: []
+        blockers: executionBlockers
       });
 
       // Extract features for ML predictor
@@ -1830,23 +1862,36 @@ Rules:
       // ── Broker Auto-Trade Execution (Instant Entry, pre-AI) ──
       const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
       if (this.isAutoExecutionEnabled(settings) && autoTradeMode === 'instant') {
-        setImmediate(() => {
-          this.executeSignalForEligibleUsers({
+        if (autoExecutionBlockers.length > 0) {
+          this.fastify.log.warn(`[SignalScannerService] Auto-execution blocked for signal #${signalId}: ${autoExecutionBlockers.join('; ')}`);
+          TradeRedisService.recordEvent(this.fastify.pg, {
             userId,
             signalId,
-            symbol,
-            winningSide: winningSide as 'CALL' | 'PUT',
-            chosenStrike: chosenStrike as number,
-            chosenExpiry: chosenExpiry || '',
-            stopUnderlying,
-            targetUnderlying,
-            mark,
-            settings,
-            autoTradeMode: 'instant'
+            eventType: 'SIGNAL_AUTO_EXECUTION_BLOCKED',
+            message: autoExecutionBlockers.join('; '),
+            metadata: { symbol, side: winningSide, tradeBias, entryTrigger, currentPrice }
           }).catch((err: any) => {
-            this.fastify.log.error(`[SignalScannerService] Instant auto-execution failed for signal #${signalId}: ${err.message}`);
+            this.fastify.log.warn(`[SignalScannerService] Failed to record auto-execution blocker for #${signalId}: ${err.message || String(err)}`);
           });
-        });
+        } else {
+          setImmediate(() => {
+            this.executeSignalForEligibleUsers({
+              userId,
+              signalId,
+              symbol,
+              winningSide: winningSide as 'CALL' | 'PUT',
+              chosenStrike: chosenStrike as number,
+              chosenExpiry: chosenExpiry || '',
+              stopUnderlying,
+              targetUnderlying,
+              mark,
+              settings,
+              autoTradeMode: 'instant'
+            }).catch((err: any) => {
+              this.fastify.log.error(`[SignalScannerService] Instant auto-execution failed for signal #${signalId}: ${err.message}`);
+            });
+          });
+        }
       }
 
       // ── STEP 2: Discord – signal alert fires immediately, no AI wait ──
@@ -2127,11 +2172,13 @@ Rules:
     pricingWarnings: string[];
     pricingPenalty: number;
     executionRealism: SignalGradeDiagnostics['executionRealism'];
+    executionBlockers?: string[];
     finalConfidence: number;
     setupGrade: string;
   }): SignalGradeDiagnostics {
     const thresholds = { standard: 85, full: 92, fullMacro: 70 };
     const gradeKey = this.getSetupGradeKey(input.setupGrade);
+    const blockers = [...input.macroRegime.blockers, ...(input.executionBlockers || [])];
     const reasons: string[] = [];
 
     if (gradeKey === 'A+') {
@@ -2162,11 +2209,11 @@ Rules:
       finalConfidence: input.finalConfidence,
       setupGrade: input.setupGrade,
       gradeKey,
-      executable: gradeKey === 'A+' || gradeKey === 'A',
+      executable: (gradeKey === 'A+' || gradeKey === 'A') && blockers.length === 0 && input.executionRealism.executable,
       thresholds,
       reasons,
       warnings: input.macroRegime.warnings,
-      blockers: input.macroRegime.blockers,
+      blockers,
       pricingWarnings: input.pricingWarnings,
       executionRealism: input.executionRealism
     };
@@ -2196,6 +2243,58 @@ Rules:
     }
 
     return penalty;
+  }
+
+  private buildPricingExecutionBlockers(input: {
+    chainSelectionRejected: boolean;
+    selectedQuoteAgeMs: number | null;
+    selectedThetaDragPct: number | null;
+    pricingWarnings: string[];
+    executionRealism: SignalGradeDiagnostics['executionRealism'];
+  }): string[] {
+    const blockers = new Set<string>();
+    if (input.chainSelectionRejected) {
+      blockers.add('Option chain selection rejected every candidate; live auto-trading blocked');
+    }
+    if (input.selectedQuoteAgeMs !== null && input.selectedQuoteAgeMs > 15_000) {
+      blockers.add(`Option quote is stale (${Math.round(input.selectedQuoteAgeMs / 1000)}s old)`);
+    }
+    if (input.selectedThetaDragPct !== null && input.selectedThetaDragPct > 45) {
+      blockers.add(`Option theta drag is extreme (${input.selectedThetaDragPct.toFixed(1)}%)`);
+    }
+    for (const warning of input.pricingWarnings) {
+      const normalized = warning.toLowerCase();
+      if (normalized.includes('stale quote')) {
+        blockers.add(warning);
+      }
+      if (normalized.includes('theta drag')) {
+        blockers.add(warning);
+      }
+    }
+    if (!input.executionRealism.executable) {
+      blockers.add(`Execution realism score ${input.executionRealism.score} is below ${input.executionRealism.threshold}`);
+    }
+    return Array.from(blockers);
+  }
+
+  private buildAutoExecutionBlockers(input: {
+    tradeBias: string;
+    currentPrice: number;
+    entryTrigger: number;
+    executionBlockers: string[];
+  }): string[] {
+    const blockers = [...input.executionBlockers];
+    if (input.tradeBias === 'BUY_CALL_ON_DIP' && input.currentPrice < input.entryTrigger) {
+      blockers.push(`Mean-reversion CALL has not reclaimed entry trigger ${input.entryTrigger.toFixed(2)}; current ${input.currentPrice.toFixed(2)}`);
+    }
+    return blockers;
+  }
+
+  private getThetaDragPct(theta: number | null | undefined, mark: number | null | undefined): number | null {
+    const numericTheta = Number(theta);
+    const numericMark = Number(mark);
+    if (!Number.isFinite(numericTheta) || !Number.isFinite(numericMark) || numericMark <= 0) return null;
+    return Math.abs(numericTheta / numericMark) * 100;
   }
 
   private buildGexProximityBlockers(input: {
@@ -2380,14 +2479,15 @@ Rules:
     };
   }
 
-  private getCandleFreshnessMs(candle: Candle, now: Date): number {
-    return Math.max(0, now.getTime() - candle.timestamp * 1000);
+  private getCandleFreshnessMs(candle: Candle, now: Date, intervalMinutes = 5): number {
+    const completedAtMs = candle.timestamp * 1000 + intervalMinutes * 60 * 1000;
+    return Math.max(0, now.getTime() - completedAtMs);
   }
 
   private getCandleFreshnessBlocker(input: { source: CandleSource; freshnessMs: number }): string | null {
-    const maxFreshnessMs = 20 * 60 * 1000;
+    const maxFreshnessMs = 2 * 60 * 1000;
     if (input.freshnessMs <= maxFreshnessMs) return null;
-    return `Candle data stale from ${input.source}: latest completed candle is ${Math.round(input.freshnessMs / 60000)}m old`;
+    return `Candle data stale from ${input.source}: latest completed candle closed ${Math.round(input.freshnessMs / 1000)}s ago`;
   }
 
   private buildExecutionRealismDiagnostics(input: {

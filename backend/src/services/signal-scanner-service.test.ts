@@ -780,7 +780,7 @@ async function testStaleScannerCandlesProduceBlocker() {
   const freshnessMs = scanner.getCandleFreshnessMs(candle, new Date('2026-06-22T14:00:00.000Z'));
   const blocker = scanner.getCandleFreshnessBlocker({ source: 'yahoo', freshnessMs });
 
-  assert(freshnessMs === 30 * 60 * 1000, `Expected 30m candle freshness, got ${freshnessMs}`);
+  assert(freshnessMs === 25 * 60 * 1000, `Expected 25m candle freshness after bar close, got ${freshnessMs}`);
   assert(blocker?.includes('Candle data stale from yahoo'), `Expected stale candle blocker, got ${blocker}`);
 }
 
@@ -1054,6 +1054,89 @@ async function testLiveQuoteFallbackAfterChainRejectionUsesSmallPenalty() {
   assert(penalty === 5, `Expected live quote fallback after chain rejection to subtract 5, got ${penalty}`);
 }
 
+async function testChainRejectionBlocksExecutionGrade() {
+  const scanner = createScanner();
+  const macroRegime = scanner.assessMacroRegime({
+    winningSide: 'CALL',
+    currentMinutes: 10 * 60,
+    vix: macroSnapshot({ symbol: '^VIX', label: 'VIX', value: 17.5, previousClose: 18.4, changePct: -4.89 }),
+    tenYear: macroSnapshot({ symbol: '^TNX', label: 'US 10Y', value: 42.8, previousClose: 43.2, changePct: -0.93, changeBps: -4 }),
+    dxy: macroSnapshot({ symbol: 'DX-Y.NYB', label: 'DXY', value: 103.7, previousClose: 104.1, changePct: -0.38 }),
+    oil: macroSnapshot({ symbol: 'CL=F', label: 'Oil', value: 77.6, previousClose: 77.8, changePct: -0.26 }),
+    gold: macroSnapshot({ symbol: 'GC=F', label: 'Gold', value: 2329, previousClose: 2335, changePct: -0.26 })
+  });
+  const executionRealism = scanner.buildExecutionRealismDiagnostics({
+    mark: 1.2,
+    spreadPct: 1,
+    volume: 5000,
+    openInterest: 8000,
+    usingTheoreticalPricing: false,
+    pricingWarnings: ['No ThetaData option candidate passed liquidity/spread filters']
+  });
+  const executionBlockers = scanner.buildPricingExecutionBlockers({
+    chainSelectionRejected: true,
+    selectedQuoteAgeMs: null,
+    selectedThetaDragPct: null,
+    pricingWarnings: ['No ThetaData option candidate passed liquidity/spread filters'],
+    executionRealism
+  });
+  const diagnostics = scanner.buildSignalGradeDiagnostics({
+    baseScore: 105,
+    macroRegime,
+    pricingWarnings: ['No ThetaData option candidate passed liquidity/spread filters'],
+    pricingPenalty: 5,
+    executionRealism,
+    executionBlockers,
+    finalConfidence: 84,
+    setupGrade: '🎲 B / LOTTO'
+  });
+
+  assert(executionBlockers.some((item: string) => item.includes('chain selection rejected')), `Expected chain rejection blocker, got ${executionBlockers.join(', ')}`);
+  assert(diagnostics.executable === false, 'Chain rejection should make the grade non-executable');
+  assert(diagnostics.blockers.some((item: string) => item.includes('auto-trading blocked')), `Expected grade blockers to include chain rejection, got ${diagnostics.blockers.join(', ')}`);
+}
+
+async function testStaleQuoteAndThetaDragBlockExecution() {
+  const scanner = createScanner();
+  const executionRealism = scanner.buildExecutionRealismDiagnostics({
+    mark: 1.69,
+    spreadPct: 0.59,
+    volume: 1000,
+    openInterest: 1000,
+    usingTheoreticalPricing: false,
+    pricingWarnings: ['Best rejected SPY260702C00750000: stale quote 14400s; theta drag 272.4%']
+  });
+  const blockers = scanner.buildPricingExecutionBlockers({
+    chainSelectionRejected: false,
+    selectedQuoteAgeMs: 16_000,
+    selectedThetaDragPct: 196.3,
+    pricingWarnings: ['Best rejected SPY260702C00750000: stale quote 14400s; theta drag 272.4%'],
+    executionRealism
+  });
+
+  assert(blockers.some((item: string) => item.includes('stale')), `Expected stale quote blocker, got ${blockers.join(', ')}`);
+  assert(blockers.some((item: string) => item.includes('theta drag')), `Expected theta drag blocker, got ${blockers.join(', ')}`);
+}
+
+async function testMeanReversionCallRequiresEntryReclaimForAutoExecution() {
+  const scanner = createScanner();
+  const blocked = scanner.buildAutoExecutionBlockers({
+    tradeBias: 'BUY_CALL_ON_DIP',
+    currentPrice: 747.93,
+    entryTrigger: 749.79,
+    executionBlockers: []
+  });
+  const reclaimed = scanner.buildAutoExecutionBlockers({
+    tradeBias: 'BUY_CALL_ON_DIP',
+    currentPrice: 750,
+    entryTrigger: 749.79,
+    executionBlockers: []
+  });
+
+  assert(blocked.some((item: string) => item.includes('has not reclaimed entry trigger')), `Expected reclaim blocker, got ${blocked.join(', ')}`);
+  assert(reclaimed.length === 0, `Expected no reclaim blocker after trigger reclaim, got ${reclaimed.join(', ')}`);
+}
+
 async function testGexProximityDeduplicatesCallWallAndKingNodeAtSameStrike() {
   const scanner = createScanner();
 
@@ -1248,6 +1331,9 @@ async function runTests() {
   await testLottoDiagnosticsExplainScoreAndPricingPenalty();
   await testRelatedMissingQuoteWarningsUseSingleCappedPenalty();
   await testLiveQuoteFallbackAfterChainRejectionUsesSmallPenalty();
+  await testChainRejectionBlocksExecutionGrade();
+  await testStaleQuoteAndThetaDragBlockExecution();
+  await testMeanReversionCallRequiresEntryReclaimForAutoExecution();
   await testGexProximityDeduplicatesCallWallAndKingNodeAtSameStrike();
   await testExecutionRealismScoresCleanQuoteAsExecutable();
   await testSignalConfigSnapshotCapturesReplayAndExecutionSettings();
