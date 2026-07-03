@@ -609,8 +609,8 @@ function MacroMetricsStrip({
   const updatedAt = liveMacro?.generatedAt || signal?.created_at || null;
 
   return (
-    <div className="motion-panel rounded border border-emerald-500/15 bg-zinc-900/25 p-2.5">
-      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+    <details className="smooth-details motion-panel overflow-hidden rounded border border-emerald-500/15 bg-zinc-900/25">
+      <summary className="flex cursor-pointer list-none flex-col gap-2 bg-zinc-950/45 px-3 py-2.5 transition-colors hover:bg-zinc-950/65 xl:flex-row xl:items-center xl:justify-between">
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500/70">Macro</div>
           <div className="mt-0.5 break-words text-[11px] text-zinc-400">
@@ -629,8 +629,8 @@ function MacroMetricsStrip({
             </span>
           </div>
         )}
-      </div>
-      <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-5">
+      </summary>
+      <div className="grid gap-1.5 border-t border-emerald-500/10 p-3 sm:grid-cols-2 xl:grid-cols-5">
         {metrics.map(metric => (
           <div key={metric.key} className={`rounded border px-2 py-1.5 ${getMacroToneClass(metric.impact)}`}>
             <div className="flex items-center justify-between gap-2">
@@ -648,7 +648,7 @@ function MacroMetricsStrip({
           </div>
         ))}
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -799,12 +799,12 @@ function LiveSpyLevelsPanel({
   const actionableChecks = checks.filter(check => check.status === 'pass').length;
 
   return (
-    <div className="motion-panel overflow-hidden rounded border border-sky-500/20 bg-zinc-900/25">
-      <div className="flex flex-col gap-2 border-b border-sky-500/10 bg-zinc-950/55 px-3 py-2.5 lg:flex-row lg:items-center lg:justify-between">
+    <details className="smooth-details motion-panel overflow-hidden rounded border border-sky-500/20 bg-zinc-900/25">
+      <summary className="flex cursor-pointer list-none flex-col gap-2 border-b border-sky-500/10 bg-zinc-950/55 px-3 py-2.5 transition-colors hover:bg-zinc-950/70 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Activity className="h-4 w-4 text-sky-300" />
-            <span className="text-xs font-semibold text-zinc-100">SPY live setup monitor</span>
+            <span className="text-xs font-semibold text-zinc-100">SPY setup monitor</span>
             {side && (
               <Badge variant="outline" className={`text-[10px] font-semibold ${getSignalSideTone(side)}`}>
                 {side}
@@ -819,13 +819,16 @@ function LiveSpyLevelsPanel({
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[10px]">
           <span className={`rounded border px-2 py-1 font-mono ${websocketConnected ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-300' : 'border-amber-500/25 bg-amber-950/20 text-amber-300'}`}>
-            {websocketConnected ? 'Browser WS live' : 'Browser WS offline'}
+            {websocketConnected ? 'App socket live' : 'App socket offline'}
           </span>
           <span className="rounded border border-zinc-700 bg-zinc-950/50 px-2 py-1 font-mono text-zinc-400">
-            View {selectedSymbol}
+            {selectedSymbol} view
+          </span>
+          <span className="rounded border border-sky-500/20 bg-sky-950/20 px-2 py-1 font-mono text-sky-200">
+            Open levels
           </span>
         </div>
-      </div>
+      </summary>
 
       <div className="grid gap-px bg-zinc-800/70 lg:grid-cols-[0.85fr_1.4fr]">
         <div className="bg-zinc-950/55 p-3">
@@ -884,7 +887,7 @@ function LiveSpyLevelsPanel({
           )}
         </div>
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -980,7 +983,7 @@ function EngineFlowPanel({
     },
     { label: 'OpenRouter', status: healthData.openRouter.status, detail: `${healthData.openRouter.latencyMs || 0}ms` },
     { label: 'Discord', status: healthData.discord.status, detail: `${healthData.discord.latencyMs || 0}ms` },
-    { label: 'Browser WS', status: websocketConnected ? 'CONNECTED' : 'DISCONNECTED', detail: websocketConnected ? 'live' : 'offline', connected: websocketConnected }
+    { label: 'App Socket', status: websocketConnected ? 'CONNECTED' : 'DISCONNECTED', detail: websocketConnected ? 'live' : 'offline', connected: websocketConnected }
   ];
 
   return (
@@ -1535,14 +1538,28 @@ export default function DayTradingTerminal() {
           <div className="text-[10px] font-semibold uppercase text-zinc-400">Best setup</div>
           {bestScopedSignal ? (
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className={`text-[10px] font-semibold ${getSignalSideTone(bestScopedSignal.signal_type)}`}>
-                {bestScopedSignal.symbol} {bestScopedSignal.signal_type}
-              </Badge>
-              <span className="font-mono text-sm font-semibold text-zinc-100">{bestScopedSignal.confidence_score}%</span>
-              <span className="text-xs text-zinc-300">{bestScopedSignal.setup_grade || 'ungraded'}</span>
-              <span className="font-mono text-xs text-zinc-400">
-                entry {formatCurrency(bestScopedSignal.entry_trigger)}
-              </span>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <Badge variant="outline" className={`text-[10px] font-semibold ${getSignalSideTone(bestScopedSignal.signal_type)}`}>
+                  {bestScopedSignal.symbol} {bestScopedSignal.signal_type}
+                </Badge>
+                <span className="font-mono text-sm font-semibold text-zinc-100">{bestScopedSignal.confidence_score}%</span>
+                <span className="text-xs text-zinc-300">{bestScopedSignal.setup_grade || 'ungraded'}</span>
+                <span className="font-mono text-xs text-zinc-400">
+                  entry {formatCurrency(bestScopedSignal.entry_trigger)}
+                </span>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 border-current bg-zinc-950/30 px-2 text-[10px]"
+                onClick={() => {
+                  setSelectedSignalId(bestScopedSignal.id);
+                  document.getElementById('latest-setup-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }}
+              >
+                Review setup
+              </Button>
             </div>
           ) : (
             <div className="mt-2 text-sm text-zinc-500">No pending directional setup in this view.</div>
@@ -1618,11 +1635,24 @@ export default function DayTradingTerminal() {
         brokerLabel={brokerLabel}
       />
 
-      {/* Compact context strip */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        
-        {/* Widget 1: Glowing Market Regime Gauge */}
-        {selectedSymbol === 'BOTH' && enabledSymbols.length > 1 ? (
+      {/* Secondary context */}
+      <details className="smooth-details motion-panel overflow-hidden rounded border border-zinc-800 bg-zinc-900/25">
+        <summary className="flex cursor-pointer list-none flex-col gap-1 border-b border-zinc-800 bg-zinc-950/45 px-3 py-2.5 transition-colors hover:bg-zinc-950/65 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-zinc-100">Market context</div>
+            <div className="mt-0.5 text-[10px] text-zinc-500">Regime, mega-caps, and system status</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[10px]">
+            <span className={`rounded border px-2 py-1 font-mono ${systemHealthSummary.tone}`}>
+              {systemHealthSummary.label}
+            </span>
+            <span className="rounded border border-zinc-700 bg-zinc-950/50 px-2 py-1 font-mono text-zinc-400">
+              {selectedSymbol === 'BOTH' ? 'QQQ + SPY' : marketRegime}
+            </span>
+          </div>
+        </summary>
+        <div className="grid grid-cols-1 gap-3 p-3 md:grid-cols-3">
+          {selectedSymbol === 'BOTH' && enabledSymbols.length > 1 ? (
           <div className="motion-panel flex min-h-[64px] flex-row items-center justify-between rounded border border-zinc-800 bg-zinc-900/35 p-2.5 shadow-inner shadow-[0_0_20px_rgba(16,185,129,0.02)]">
             <div className="grid w-full grid-cols-1 gap-2 font-mono sm:grid-cols-2">
               {/* QQQ Side */}
@@ -1680,10 +1710,9 @@ export default function DayTradingTerminal() {
               </span>
             </div>
           </div>
-        )}
+          )}
 
-        {/* Widget 2: Mega Caps Tracking Panel */}
-        <div className="motion-panel flex min-h-[64px] flex-col justify-center rounded border border-emerald-500/20 bg-zinc-900/25 p-2.5">
+          <div className="motion-panel flex min-h-[64px] flex-col justify-center rounded border border-emerald-500/20 bg-zinc-900/25 p-2.5">
           <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
             <span className="block text-[9px] font-semibold uppercase tracking-wider text-emerald-500/70">Mega-caps</span>
             <Badge variant="outline" className="text-[8px] px-1 py-0.5 border-emerald-500/20 text-emerald-400">NASDAQ Heavy</Badge>
@@ -1708,10 +1737,9 @@ export default function DayTradingTerminal() {
               </span>
             </div>
           </div>
-        </div>
+          </div>
 
-        {/* Widget 3: Aggregate system health */}
-        <div className={`motion-panel flex min-h-[64px] flex-col justify-center rounded border bg-zinc-900/25 p-2.5 ${systemHealthSummary.tone}`}>
+          <div className={`motion-panel flex min-h-[64px] flex-col justify-center rounded border bg-zinc-900/25 p-2.5 ${systemHealthSummary.tone}`}>
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <span className="block text-[9px] font-semibold uppercase tracking-wider opacity-80">System</span>
@@ -1727,13 +1755,13 @@ export default function DayTradingTerminal() {
               </Link>
             </Button>
           </div>
+          </div>
         </div>
+      </details>
 
-      </div>
-
-      {/* Execution Setup */}
-      <div className="motion-panel border border-emerald-500/15 rounded bg-zinc-900/30 overflow-hidden">
-        <div className="flex flex-col justify-between gap-2 border-b border-emerald-500/10 bg-zinc-900/75 px-3 py-2 sm:flex-row sm:items-center">
+      {/* Execution setup */}
+      <details className="smooth-details motion-panel overflow-hidden rounded border border-emerald-500/15 bg-zinc-900/30">
+        <summary className="flex cursor-pointer list-none flex-col justify-between gap-2 border-b border-emerald-500/10 bg-zinc-900/75 px-3 py-2 transition-colors hover:bg-zinc-900 sm:flex-row sm:items-center">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <ShieldAlert className={`h-4 w-4 ${isLiveBroker ? 'text-amber-400 animate-pulse' : 'text-emerald-400'}`} />
             <span className="text-xs font-bold text-emerald-300">Execution setup</span>
@@ -1749,9 +1777,9 @@ export default function DayTradingTerminal() {
             ))}
           </div>
           <span className="break-words text-[10px] text-zinc-500">
-            {isExecutionBlocked ? `${activeBlockers.length} blocker${activeBlockers.length === 1 ? '' : 's'}` : 'Ready for pending signals.'}
+            {isExecutionBlocked ? `${activeBlockers.length} blocker${activeBlockers.length === 1 ? '' : 's'}` : `${contractsPerTrade} contract${contractsPerTrade === 1 ? '' : 's'} · ${brokerLabel}`}
           </span>
-	        </div>
+        </summary>
 	        <div className="grid grid-cols-2 gap-px bg-emerald-500/10 sm:grid-cols-3 xl:grid-cols-6">
           {readinessItems.map(item => (
             <div key={item.label} className="motion-panel flex min-h-[44px] min-w-0 flex-col justify-center bg-zinc-950/70 px-3 py-1.5">
@@ -1774,10 +1802,11 @@ export default function DayTradingTerminal() {
 	            </div>
 	          </details>
 	        )}
-	      </div>
+	      </details>
 
       {/* Row 2: Separated Prominent latest setup notification */}
       <div 
+        id="latest-setup-card"
         onClick={() => latestActionableSignal && setSelectedSignalId(latestActionableSignal.id)}
         className={`motion-panel overflow-hidden rounded-lg border backdrop-blur-md ${
           latestActionableSignal 
