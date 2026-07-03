@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import ibPkg from '@stoqey/ib';
+import * as ibPkg from '@stoqey/ib';
 
 const { IBApi, EventName, SecType } = ibPkg as any;
 
