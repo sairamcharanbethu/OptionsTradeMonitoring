@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import * as ibPkg from '@stoqey/ib';
+import { getNewYorkMarketState } from '../lib/market-calendar';
 
 const { IBApi, EventName, SecType } = ibPkg as any;
 
@@ -79,6 +80,20 @@ export class IbkrMarketDataService {
     const startedAt = Date.now();
     try {
       await this.ensureConnected();
+      const marketState = getNewYorkMarketState();
+      if (!marketState.isOpen) {
+        return {
+          status: 'MARKET_CLOSED',
+          connected: true,
+          provider: 'ibkr',
+          host: this.host,
+          port: this.port,
+          marketDataType: this.marketDataType,
+          latencyMs: Date.now() - startedAt,
+          lastError: null,
+          marketState
+        };
+      }
       const quote = await this.getUnderlyingQuote('SPY');
       const connected = quote.mark > 0;
       return {
@@ -89,7 +104,8 @@ export class IbkrMarketDataService {
         port: this.port,
         marketDataType: this.marketDataType,
         latencyMs: Date.now() - startedAt,
-        lastError: connected ? null : 'IBKR connected but SPY quote did not return a usable mark'
+        lastError: connected ? null : 'IBKR connected but SPY quote did not return a usable mark',
+        marketState
       };
     } catch (err: any) {
       return {

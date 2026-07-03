@@ -14,6 +14,7 @@ import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { IbkrMarketDataService, IbkrOptionChainQuote } from './ibkr-market-data-service';
 import { SignalDecision, SignalGradeDiagnostics, tradingEventBus } from '../lib/trading-events';
 import { normalizeAdapterHealth } from '../lib/adapter-health';
+import { getNewYorkMarketState } from '../lib/market-calendar';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -633,15 +634,11 @@ Rules:
     const cutoffTime = settings.trading_cutoff_time || '16:00';
     const startMinutes = this.parseTimeToMinutes(startTime, '09:30');
     const cutoffMinutes = this.parseTimeToMinutes(cutoffTime, '16:00');
-    const weekday = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
-      weekday: 'short'
-    }).format(now);
-    const isWeekday = weekday !== 'Sat' && weekday !== 'Sun';
+    const marketState = getNewYorkMarketState(now, startMinutes, cutoffMinutes);
 
     return {
-      isOpen: isWeekday && nyParts.minutes >= startMinutes && nyParts.minutes < cutoffMinutes,
-      isWeekday,
+      isOpen: marketState.isOpen,
+      isWeekday: marketState.isWeekday,
       nowLabel: `${String(nyParts.hour).padStart(2, '0')}:${String(nyParts.minute).padStart(2, '0')}`,
       startTime,
       cutoffTime
