@@ -1188,6 +1188,105 @@ async function testMeanReversionTrendBlockersRequireStrongerConfirmation() {
   assert(blockers.some((item: string) => item.includes('strong downtrend')), `Expected strong downtrend blocker, got ${blockers.join(', ')}`);
 }
 
+async function testStrictSetupModelRequiresGammaEmaVolumeAndTrigger() {
+  const scanner = createScanner();
+  const previous = {
+    datetime: '2026-07-02T14:25:00.000Z',
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 748.2,
+    high: 748.8,
+    low: 747.9,
+    close: 748.4,
+    volume: 1000,
+    timestamp: Date.parse('2026-07-02T14:25:00.000Z') / 1000
+  };
+  const bullishLatest = {
+    datetime: '2026-07-02T14:30:00.000Z',
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 748.6,
+    high: 750.2,
+    low: 748.5,
+    close: 750,
+    volume: 2200,
+    timestamp: Date.parse('2026-07-02T14:30:00.000Z') / 1000
+  };
+  const bearishLatest = {
+    datetime: '2026-07-02T14:30:00.000Z',
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 748.2,
+    high: 748.3,
+    low: 746.8,
+    close: 747,
+    volume: 2200,
+    timestamp: Date.parse('2026-07-02T14:30:00.000Z') / 1000
+  };
+
+  const cleanCall = scanner.buildStrictSetupModelBlockers({
+    winningSide: 'CALL',
+    currentPrice: 750,
+    vwap: 749,
+    emaShort: 749.4,
+    emaLong: 748.9,
+    latest: bullishLatest,
+    previous,
+    hasBullishVolumeBreakout: true,
+    hasBearishVolumeBreakout: false,
+    gexRegime: 'NEGATIVE',
+    flowDirection: 'bullish',
+    flipStrike: 749
+  });
+  const missingCallVolume = scanner.buildStrictSetupModelBlockers({
+    winningSide: 'CALL',
+    currentPrice: 750,
+    vwap: 749,
+    emaShort: 749.4,
+    emaLong: 748.9,
+    latest: bullishLatest,
+    previous,
+    hasBullishVolumeBreakout: false,
+    hasBearishVolumeBreakout: false,
+    gexRegime: 'NEGATIVE',
+    flowDirection: 'bullish',
+    flipStrike: 749
+  });
+  const cleanPut = scanner.buildStrictSetupModelBlockers({
+    winningSide: 'PUT',
+    currentPrice: 747,
+    vwap: 747.8,
+    emaShort: 747.5,
+    emaLong: 748.1,
+    latest: bearishLatest,
+    previous,
+    hasBullishVolumeBreakout: false,
+    hasBearishVolumeBreakout: true,
+    gexRegime: 'NEGATIVE',
+    flowDirection: 'bearish',
+    flipStrike: 748
+  });
+  const badGammaCall = scanner.buildStrictSetupModelBlockers({
+    winningSide: 'CALL',
+    currentPrice: 747.93,
+    vwap: 748.5,
+    emaShort: 748.2,
+    emaLong: 749.4,
+    latest: bearishLatest,
+    previous,
+    hasBullishVolumeBreakout: false,
+    hasBearishVolumeBreakout: true,
+    gexRegime: 'POSITIVE',
+    flowDirection: 'amplifying',
+    flipStrike: 750
+  });
+
+  assert(cleanCall.length === 0, `Expected clean CALL strict setup, got ${cleanCall.join(', ')}`);
+  assert(missingCallVolume.some((item: string) => item.includes('high-volume green')), `Expected CALL volume blocker, got ${missingCallVolume.join(', ')}`);
+  assert(cleanPut.length === 0, `Expected clean PUT strict setup, got ${cleanPut.join(', ')}`);
+  assert(badGammaCall.some((item: string) => item.includes('CALL requires bullish gamma')), `Expected CALL gamma blocker, got ${badGammaCall.join(', ')}`);
+}
+
 async function testMeanReversionRequiresEntryConfirmationForAutoExecution() {
   const scanner = createScanner();
   const callBlocked = scanner.buildAutoExecutionBlockers({
@@ -1422,6 +1521,7 @@ async function runTests() {
   await testContractMismatchBlocksExecution();
   await testHighImpactEventBlocksZeroDteAutoTrading();
   await testMeanReversionTrendBlockersRequireStrongerConfirmation();
+  await testStrictSetupModelRequiresGammaEmaVolumeAndTrigger();
   await testMeanReversionRequiresEntryConfirmationForAutoExecution();
   await testGexProximityDeduplicatesCallWallAndKingNodeAtSameStrike();
   await testExecutionRealismScoresCleanQuoteAsExecutable();

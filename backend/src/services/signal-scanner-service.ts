@@ -1293,6 +1293,21 @@ Rules:
       openingRangeHigh
     }));
 
+    noTradeReasons.push(...this.buildStrictSetupModelBlockers({
+      winningSide,
+      currentPrice,
+      vwap,
+      emaShort,
+      emaLong,
+      latest,
+      previous,
+      hasBullishVolumeBreakout,
+      hasBearishVolumeBreakout,
+      gexRegime: qqqGexRegime,
+      flowDirection: qqqFlowDirection,
+      flipStrike: qqqGexFlip
+    }));
+
     if (winningScore < dynamicMinScore) {
       noTradeReasons.push(`Best setup score ${winningScore} is below dynamic minimum ${dynamicMinScore}`);
     }
@@ -2425,6 +2440,55 @@ Rules:
       return ['Mean-reversion PUT blocked: strong uptrend requires resistance rejection and breakdown confirmation'];
     }
     return [];
+  }
+
+  private buildStrictSetupModelBlockers(input: {
+    winningSide: 'CALL' | 'PUT';
+    currentPrice: number;
+    vwap: number;
+    emaShort: number | null;
+    emaLong: number | null;
+    latest: Candle;
+    previous: Candle;
+    hasBullishVolumeBreakout: boolean;
+    hasBearishVolumeBreakout: boolean;
+    gexRegime: string;
+    flowDirection: string;
+    flipStrike: number | null;
+  }): string[] {
+    const blockers: string[] = [];
+    const flow = String(input.flowDirection || '').toLowerCase();
+    const regime = String(input.gexRegime || '').toUpperCase();
+    const aboveFlip = input.flipStrike !== null && input.currentPrice > input.flipStrike;
+    const belowFlip = input.flipStrike !== null && input.currentPrice < input.flipStrike;
+
+    if (input.winningSide === 'CALL') {
+      const gammaAligned = flow === 'bullish' || (flow === 'amplifying' && aboveFlip) || (regime === 'NEGATIVE' && aboveFlip);
+      const emaStacked = input.emaShort !== null && input.emaLong !== null && input.emaShort > input.emaLong && input.currentPrice > input.emaShort;
+      const vwapAligned = input.currentPrice >= input.vwap;
+      const volumeConfirmed = input.hasBullishVolumeBreakout;
+      const triggerConfirmed = input.latest.close > input.latest.open && input.latest.close >= input.previous.high;
+
+      if (!gammaAligned) blockers.push('Strict setup blocked: CALL requires bullish gamma direction or price above gamma flip');
+      if (!emaStacked) blockers.push('Strict setup blocked: CALL requires price > EMA9 > EMA21');
+      if (!vwapAligned) blockers.push('Strict setup blocked: CALL requires price above or reclaiming VWAP');
+      if (!volumeConfirmed) blockers.push('Strict setup blocked: CALL requires high-volume green confirmation candle');
+      if (!triggerConfirmed) blockers.push('Strict setup blocked: CALL requires reclaim/break confirmation above the prior candle high');
+      return blockers;
+    }
+
+    const gammaAligned = flow === 'bearish' || (flow === 'amplifying' && belowFlip) || (regime === 'NEGATIVE' && belowFlip);
+    const emaStacked = input.emaShort !== null && input.emaLong !== null && input.emaShort < input.emaLong && input.currentPrice < input.emaShort;
+    const vwapAligned = input.currentPrice <= input.vwap;
+    const volumeConfirmed = input.hasBearishVolumeBreakout;
+    const triggerConfirmed = input.latest.close < input.latest.open && input.latest.close <= input.previous.low;
+
+    if (!gammaAligned) blockers.push('Strict setup blocked: PUT requires bearish gamma direction or price below gamma flip');
+    if (!emaStacked) blockers.push('Strict setup blocked: PUT requires price < EMA9 < EMA21');
+    if (!vwapAligned) blockers.push('Strict setup blocked: PUT requires price below or rejecting VWAP');
+    if (!volumeConfirmed) blockers.push('Strict setup blocked: PUT requires high-volume red confirmation candle');
+    if (!triggerConfirmed) blockers.push('Strict setup blocked: PUT requires breakdown/rejection confirmation below the prior candle low');
+    return blockers;
   }
 
   private buildAutoExecutionBlockers(input: {

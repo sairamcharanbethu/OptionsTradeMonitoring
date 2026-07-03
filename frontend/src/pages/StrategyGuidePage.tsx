@@ -71,19 +71,39 @@ export default function StrategyGuidePage() {
         <RuleCard title="Entry Strategy" detail="Only high-quality scanner setups should reach execution." icon={Workflow}>
           <BulletList
             items={[
-              'The scanner creates CALL or PUT setups from market regime, GEX, VWAP, trend, option pricing, liquidity, and spread checks.',
-              'Execution is gated to A or A+ setups. B/C/lotto setups can be displayed, but the execution path skips them.',
+              'The scanner now requires one strict setup model: Gamma/GEX direction, EMA stack, VWAP alignment, volume confirmation, and trigger confirmation.',
+              'RSI, macro, mega-cap internals, and nearby levels remain context. They cannot override a missing core setup pillar.',
               'The app blocks duplicate entries for the same user, symbol, side, strike, and expiration while an OPEN or PENDING_ORDER position already exists.',
               'If an opposite-side position exists, the app tries to clean it up first. Broker-review exit states block the new entry until Wealthsimple status is verified.',
-              'After 1:00 PM ET, the scanner selects 1DTE instead of 0DTE to reduce same-day expiry pressure.'
+              'After 1:00 PM ET, the scanner selects 1DTE instead of 0DTE to reduce same-day expiry pressure. High-impact event days block 0DTE auto-entry.'
             ]}
           />
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Example title="Allowed">
-              QQQ PUT, A setup, no open matching contract, selected after 1:00 PM ET. The app chooses the next trading day expiry and can submit the entry.
+            <Example title="CALL allowed">
+              Gamma flow is bullish, SPY is above VWAP, price is above EMA9 and EMA9 is above EMA21, the confirmation candle is green on high volume, and price reclaims the trigger.
             </Example>
-            <Example title="Skipped">
-              SPY CALL, B setup, even if price looks interesting. The app records it as below the A/A+ execution threshold.
+            <Example title="CALL skipped">
+              SPY is oversold and near support, but price is still below VWAP, EMA9 is below EMA21, and the candle has not reclaimed the prior high.
+            </Example>
+          </div>
+        </RuleCard>
+
+        <RuleCard title="High-Probability Setup Model" detail="Every executable setup must pass the same core checklist." icon={Target}>
+          <BulletList
+            items={[
+              'Gamma/GEX direction: CALL needs bullish flow or price above gamma flip; PUT needs bearish flow or price below gamma flip.',
+              'EMA stack: CALL needs price > EMA9 > EMA21. PUT needs price < EMA9 < EMA21.',
+              'VWAP alignment: CALL needs price above or reclaiming VWAP. PUT needs price below or rejecting VWAP.',
+              'Volume confirmation: CALL needs a high-volume green candle. PUT needs a high-volume red candle.',
+              'Trigger confirmation: CALL needs reclaim or break above the prior candle high. PUT needs breakdown or rejection below the prior candle low.'
+            ]}
+          />
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Example title="PUT allowed">
+              Gamma flow is bearish, SPY is below VWAP, price is below EMA9 and EMA9 is below EMA21, the confirmation candle is red on high volume, and price breaks the trigger.
+            </Example>
+            <Example title="PUT skipped">
+              Price is above VWAP and looks extended, but EMA9 is still above EMA21 or volume is average. The scanner records the context but blocks execution.
             </Example>
           </div>
         </RuleCard>

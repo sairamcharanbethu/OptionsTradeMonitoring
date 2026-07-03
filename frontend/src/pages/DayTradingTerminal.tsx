@@ -638,6 +638,242 @@ function MacroMetricsStrip({
   );
 }
 
+const toFiniteNumber = (value: unknown): number | null => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const formatDistanceFrom = (price: number | null, level: number | null) => {
+  if (price === null || level === null) return 'N/A';
+  const diff = price - level;
+  const pct = level !== 0 ? (diff / level) * 100 : 0;
+  return `${diff >= 0 ? '+' : ''}${diff.toFixed(2)} (${diff >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
+};
+
+const getLevelDistanceTone = (price: number | null, level: number | null) => {
+  if (price === null || level === null) return 'text-zinc-500';
+  if (Math.abs(price - level) <= 0.05) return 'text-amber-300';
+  return price > level ? 'text-emerald-300' : 'text-red-300';
+};
+
+const getStrictBlocker = (reasons: string[], needle: string) => (
+  reasons.find(reason => reason.toLowerCase().includes(needle.toLowerCase())) || null
+);
+
+type SetupCheckStatus = 'pass' | 'wait' | 'block';
+
+function SetupCheck({
+  label,
+  status,
+  detail
+}: {
+  label: string;
+  status: SetupCheckStatus;
+  detail: string;
+}) {
+  const tone = status === 'pass'
+    ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-200'
+    : status === 'block'
+      ? 'border-red-500/25 bg-red-950/20 text-red-200'
+      : 'border-amber-500/25 bg-amber-950/20 text-amber-200';
+
+  return (
+    <div className={`min-w-0 rounded border px-2.5 py-2 ${tone}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[9px] font-semibold uppercase text-zinc-400">{label}</span>
+        <span className={`h-1.5 w-1.5 rounded-full bg-current ${status === 'wait' ? 'animate-pulse' : ''}`} />
+      </div>
+      <div className="mt-1 break-words text-[10px] leading-snug text-zinc-200">{detail}</div>
+    </div>
+  );
+}
+
+function LiveSpyLevelsPanel({
+  signal,
+  log,
+  websocketConnected,
+  selectedSymbol
+}: {
+  signal: Signal | null;
+  log: ScannerLog | null;
+  websocketConnected: boolean;
+  selectedSymbol: 'QQQ' | 'SPY' | 'BOTH';
+}) {
+  const signalTime = signal ? new Date(signal.created_at).getTime() : 0;
+  const logTime = log ? new Date(log.created_at).getTime() : 0;
+  const useLog = log && (!signal || logTime > signalTime);
+  const sourceLabel = useLog ? 'scan log' : signal ? 'signal' : log ? 'scan log' : 'none';
+  const updatedAt = useLog ? log?.created_at : signal?.created_at || log?.created_at || null;
+  const sourceIndicators = (useLog ? log?.indicators : signal?.indicators) || {};
+  const sourceReasons = (useLog ? log?.no_trade_reasons : signal?.no_trade_reasons) || [];
+  const side = !useLog && (signal?.signal_type === 'CALL' || signal?.signal_type === 'PUT') ? signal.signal_type : null;
+  const price = toFiniteNumber(useLog ? log?.spot_price : signal?.current_price ?? log?.spot_price);
+  const gex = !useLog ? signal?.gex || {} : {};
+  const flow = String(gex.flowDirection || '').toLowerCase();
+  const flipStrike = toFiniteNumber(gex.flipStrike);
+  const ema9 = toFiniteNumber(sourceIndicators.ema9);
+  const ema21 = toFiniteNumber(sourceIndicators.ema21);
+  const vwap = toFiniteNumber(sourceIndicators.vwap);
+
+  const gammaBlocker = sourceReasons.find(reason => /requires (bullish|bearish) gamma/i.test(reason)) || null;
+  const emaBlocker = getStrictBlocker(sourceReasons, 'requires price');
+  const vwapBlocker = getStrictBlocker(sourceReasons, 'VWAP');
+  const volumeBlocker = getStrictBlocker(sourceReasons, 'high-volume');
+  const triggerBlocker = getStrictBlocker(sourceReasons, 'prior candle');
+
+  const gammaPass = side === 'CALL'
+    ? flow === 'bullish' || (price !== null && flipStrike !== null && price > flipStrike)
+    : side === 'PUT'
+      ? flow === 'bearish' || (price !== null && flipStrike !== null && price < flipStrike)
+      : false;
+  const emaPass = side === 'CALL'
+    ? price !== null && ema9 !== null && ema21 !== null && price > ema9 && ema9 > ema21
+    : side === 'PUT'
+      ? price !== null && ema9 !== null && ema21 !== null && price < ema9 && ema9 < ema21
+      : false;
+  const vwapPass = side === 'CALL'
+    ? price !== null && vwap !== null && price >= vwap
+    : side === 'PUT'
+      ? price !== null && vwap !== null && price <= vwap
+      : false;
+
+  const checks = [
+    {
+      label: 'Gamma',
+      status: gammaBlocker ? 'block' as SetupCheckStatus : gammaPass ? 'pass' as SetupCheckStatus : 'wait' as SetupCheckStatus,
+      detail: side
+        ? gammaBlocker || `${gex.regime || 'GEX'} / ${gex.flowDirection || 'flow N/A'} / flip ${formatCurrency(flipStrike)}`
+        : 'Waiting for SPY directional setup.'
+    },
+    {
+      label: 'EMA Stack',
+      status: emaBlocker ? 'block' as SetupCheckStatus : emaPass ? 'pass' as SetupCheckStatus : 'wait' as SetupCheckStatus,
+      detail: emaBlocker || `Price ${formatCurrency(price)} / EMA9 ${formatCurrency(ema9)} / EMA21 ${formatCurrency(ema21)}`
+    },
+    {
+      label: 'VWAP',
+      status: vwapBlocker ? 'block' as SetupCheckStatus : vwapPass ? 'pass' as SetupCheckStatus : 'wait' as SetupCheckStatus,
+      detail: vwapBlocker || `VWAP ${formatCurrency(vwap)} / distance ${formatDistanceFrom(price, vwap)}`
+    },
+    {
+      label: 'Volume',
+      status: volumeBlocker ? 'block' as SetupCheckStatus : side && !sourceReasons.some(reason => reason.toLowerCase().includes('high-volume')) ? 'pass' as SetupCheckStatus : 'wait' as SetupCheckStatus,
+      detail: volumeBlocker || (side ? `${side} volume confirmation is not blocking.` : 'Waiting for confirmation candle.')
+    },
+    {
+      label: 'Trigger',
+      status: triggerBlocker ? 'block' as SetupCheckStatus : side && !sourceReasons.some(reason => reason.toLowerCase().includes('prior candle')) ? 'pass' as SetupCheckStatus : 'wait' as SetupCheckStatus,
+      detail: triggerBlocker || (side ? `Entry trigger ${formatCurrency(signal?.entry_trigger)}` : 'Waiting for reclaim/break trigger.')
+    }
+  ];
+
+  const levels = [
+    { label: 'Spot', value: price, tone: 'text-zinc-100' },
+    { label: 'VWAP', value: vwap },
+    { label: 'EMA9', value: ema9 },
+    { label: 'EMA21', value: ema21 },
+    { label: 'Entry', value: toFiniteNumber(signal?.entry_trigger) },
+    { label: 'Stop', value: toFiniteNumber(signal?.stop_loss) },
+    { label: 'Target', value: toFiniteNumber(signal?.target_price) },
+    { label: 'Gamma flip', value: flipStrike },
+    { label: 'Call wall', value: toFiniteNumber(gex.callWall) },
+    { label: 'Put wall', value: toFiniteNumber(gex.putWall) },
+    { label: 'King node', value: toFiniteNumber(gex.kingNode) },
+    { label: 'OR high', value: toFiniteNumber(sourceIndicators.openingRangeHigh) },
+    { label: 'OR low', value: toFiniteNumber(sourceIndicators.openingRangeLow) }
+  ];
+  const actionableChecks = checks.filter(check => check.status === 'pass').length;
+
+  return (
+    <div className="motion-panel overflow-hidden rounded border border-sky-500/20 bg-zinc-900/25">
+      <div className="flex flex-col gap-2 border-b border-sky-500/10 bg-zinc-950/55 px-3 py-2.5 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Activity className="h-4 w-4 text-sky-300" />
+            <span className="text-xs font-semibold text-zinc-100">SPY live setup monitor</span>
+            {side && (
+              <Badge variant="outline" className={`text-[10px] font-semibold ${getSignalSideTone(side)}`}>
+                {side}
+              </Badge>
+            )}
+          </div>
+          <div className="mt-1 break-words text-[10px] text-zinc-500">
+            {sourceLabel === 'none'
+              ? 'Waiting for the first SPY scan.'
+              : `${sourceLabel} ${formatRelativeTime(updatedAt)} / ${actionableChecks}/5 strict checks passing`}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px]">
+          <span className={`rounded border px-2 py-1 font-mono ${websocketConnected ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-300' : 'border-amber-500/25 bg-amber-950/20 text-amber-300'}`}>
+            {websocketConnected ? 'Browser WS live' : 'Browser WS offline'}
+          </span>
+          <span className="rounded border border-zinc-700 bg-zinc-950/50 px-2 py-1 font-mono text-zinc-400">
+            View {selectedSymbol}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-px bg-zinc-800/70 lg:grid-cols-[0.85fr_1.4fr]">
+        <div className="bg-zinc-950/55 p-3">
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded border border-zinc-700/80 bg-zinc-950/70 p-2.5">
+              <div className="text-[9px] font-semibold uppercase text-zinc-500">SPY price</div>
+              <div className="mt-1 font-mono text-lg font-semibold text-zinc-100">{formatCurrency(price)}</div>
+              <div className={`mt-1 text-[10px] ${getLevelDistanceTone(price, vwap)}`}>vs VWAP {formatDistanceFrom(price, vwap)}</div>
+            </div>
+            <div className="rounded border border-zinc-700/80 bg-zinc-950/70 p-2.5">
+              <div className="text-[9px] font-semibold uppercase text-zinc-500">Bias state</div>
+              <div className="mt-1 font-mono text-lg font-semibold text-zinc-100">{side || 'WAIT'}</div>
+              <div className="mt-1 text-[10px] text-zinc-400">{signal?.setup_grade || log?.outcome || 'No setup yet'}</div>
+            </div>
+          </div>
+          <div className="mt-2 grid gap-2">
+            {checks.map(check => (
+              <SetupCheck key={check.label} {...check} />
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-zinc-950/45 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-sky-400/80">Level board</div>
+            <div className="font-mono text-[10px] text-zinc-500">{updatedAt ? formatTime(updatedAt) : 'N/A'}</div>
+          </div>
+          <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+            {levels.map(level => (
+              <div key={level.label} className="min-w-0 rounded border border-zinc-800 bg-zinc-950/70 px-2.5 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-[9px] font-semibold uppercase text-zinc-500">{level.label}</span>
+                  <span className={`shrink-0 font-mono text-[10px] ${level.tone || getLevelDistanceTone(price, level.value)}`}>
+                    {formatCurrency(level.value)}
+                  </span>
+                </div>
+                <div className={`mt-1 truncate font-mono text-[9px] ${getLevelDistanceTone(price, level.value)}`} title={formatDistanceFrom(price, level.value)}>
+                  {level.label === 'Spot' ? 'current reference' : formatDistanceFrom(price, level.value)}
+                </div>
+              </div>
+            ))}
+          </div>
+          {sourceReasons.length > 0 && (
+            <details className="smooth-details mt-2 rounded border border-amber-500/15 bg-amber-950/10 px-2.5 py-2">
+              <summary className="cursor-pointer list-none text-[10px] font-semibold uppercase text-amber-300">
+                Current blockers ({sourceReasons.length})
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {sourceReasons.slice(0, 8).map(reason => (
+                  <span key={reason} className="max-w-full break-words rounded border border-amber-500/20 bg-zinc-950/50 px-2 py-1 text-[10px] text-amber-100">
+                    {reason}
+                  </span>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EngineFlowPanel({
   selectedSymbol,
   latestSignal,
@@ -1328,6 +1564,15 @@ export default function DayTradingTerminal() {
           />
         )}
       </div>
+
+      {enabledSymbolSet.has('SPY') && (
+        <LiveSpyLevelsPanel
+          signal={latestSPYSignal}
+          log={latestSPYLog}
+          websocketConnected={isConnected}
+          selectedSymbol={selectedSymbol}
+        />
+      )}
 
       <MacroMetricsStrip
         signal={latestMacroSignal}
