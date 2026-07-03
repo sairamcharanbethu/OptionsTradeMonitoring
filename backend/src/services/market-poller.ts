@@ -19,6 +19,8 @@ type ExitQuoteContext = {
   source?: string;
 };
 
+type ExitTriggerType = 'STOP_LOSS' | 'TAKE_PROFIT' | 'THETA_STOP';
+
 export class MarketPoller {
   private fastify: FastifyInstance;
   private aiService: AIService;
@@ -234,11 +236,67 @@ export class MarketPoller {
     return Math.max(1, Math.floor(quantity / 2));
   }
 
-  private isPartialProfitTrim(position: any, exitTriggerType: 'STOP_LOSS' | 'TAKE_PROFIT'): boolean {
+  private isPartialProfitTrim(position: any, exitTriggerType: ExitTriggerType): boolean {
     const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
     return exitTriggerType === 'TAKE_PROFIT'
       && quantity > 1
       && String(position.profit_trim_status || '').toUpperCase() !== 'DONE';
+  }
+
+  private getThetaStopMaxHoldMinutes(entryTime: Date): number | null {
+    const { minutes } = this.getNewYorkTimeParts(entryTime);
+    if (minutes < 11 * 60 + 30) return 25;
+    if (minutes < 14 * 60) return 15;
+    if (minutes < 15 * 60 + 30) return 10;
+    return null;
+  }
+
+  private getThetaStopStartTime(position: any, startedAtOverride?: string | null): Date | null {
+    const overrideDate = startedAtOverride ? new Date(startedAtOverride) : null;
+    if (overrideDate && Number.isFinite(overrideDate.getTime())) return overrideDate;
+
+    const createdAt = position.created_at ? new Date(position.created_at) : null;
+    const updatedAt = position.updated_at ? new Date(position.updated_at) : null;
+    const isLiveBroker = String(position.execution_broker || '').toLowerCase() === 'wealthsimple_snaptrade';
+
+    if (
+      isLiveBroker
+      && updatedAt
+      && Number.isFinite(updatedAt.getTime())
+      && (!createdAt || !Number.isFinite(createdAt.getTime()) || updatedAt.getTime() > createdAt.getTime())
+    ) {
+      return updatedAt;
+    }
+
+    return createdAt && Number.isFinite(createdAt.getTime()) ? createdAt : null;
+  }
+
+  private getThetaStopAssessment(position: any, now: Date = new Date(), startedAtOverride?: string | null): {
+    triggered: boolean;
+    maxHoldMinutes: number;
+    heldMinutes: number;
+    enteredAt: string;
+  } | null {
+    if (String(position.status || '').toUpperCase() !== 'OPEN') return null;
+
+    const expirationDate = position.expiration_date instanceof Date
+      ? this.getNewYorkDateString(position.expiration_date)
+      : String(position.expiration_date || '').split('T')[0];
+    if (expirationDate !== this.getNewYorkDateString(now)) return null;
+
+    const enteredAt = this.getThetaStopStartTime(position, startedAtOverride);
+    if (!enteredAt) return null;
+
+    const maxHoldMinutes = this.getThetaStopMaxHoldMinutes(enteredAt);
+    if (maxHoldMinutes === null) return null;
+
+    const heldMinutes = Math.max(0, (now.getTime() - enteredAt.getTime()) / 60000);
+    return {
+      triggered: heldMinutes >= maxHoldMinutes,
+      maxHoldMinutes,
+      heldMinutes: Number(heldMinutes.toFixed(2)),
+      enteredAt: enteredAt.toISOString()
+    };
   }
 
   private getTakeProfitOrderPreference(position: any, price: number, quote?: ExitQuoteContext): { orderType: 'LIMIT' | 'MARKET'; limitPrice?: string; mode: 'PAST_TP' | 'NEAR_TP' | 'STRUCTURE_TP' | 'EOD_MARKET' } {
@@ -334,7 +392,7 @@ export class MarketPoller {
     position: any,
     orderType: 'LIMIT' | 'MARKET',
     limitPrice?: string,
-    exitTriggerType: 'STOP_LOSS' | 'TAKE_PROFIT' = 'STOP_LOSS',
+    exitTriggerType: ExitTriggerType = 'STOP_LOSS',
     requestedQuantity?: number
   ): Promise<boolean> {
     const accountId = position.account_id;
@@ -812,7 +870,7 @@ export class MarketPoller {
     });
 
     let triggered = !noBidQuote && engineResult.triggered && engineResult.triggerType === 'TAKE_PROFIT';
-    let triggerType: 'STOP_LOSS' | 'TAKE_PROFIT' | undefined = triggered ? 'TAKE_PROFIT' : undefined;
+    let triggerType: ExitTriggerType | undefined = triggered ? 'TAKE_PROFIT' : undefined;
     let lossAvoided = engineResult.lossAvoided;
 
     const entryPrice = Number(position.entry_price);
@@ -1048,6 +1106,35 @@ export class MarketPoller {
       }
     }
 
+    if (!triggered) {
+      const thetaStop = this.getThetaStopAssessment(position, new Date(), analysis.thetaStop?.startedAt);
+      if (thetaStop && !analysis.thetaStop?.startedAt) {
+        analysis.thetaStop = {
+          status: 'ACTIVE',
+          startedAt: thetaStop.enteredAt,
+          maxHoldMinutes: thetaStop.maxHoldMinutes,
+          heldMinutes: thetaStop.heldMinutes
+        };
+        analysisDirty = true;
+      }
+      if (thetaStop?.triggered) {
+        triggered = true;
+        triggerType = 'THETA_STOP';
+        lossAvoided = entryPrice - sellablePremium;
+        analysis.thetaStop = {
+          status: 'MAX_HOLD_EXPIRED',
+          startedAt: thetaStop.enteredAt,
+          maxHoldMinutes: thetaStop.maxHoldMinutes,
+          heldMinutes: thetaStop.heldMinutes,
+          enteredAt: thetaStop.enteredAt,
+          price: sellablePremium,
+          triggeredAt: new Date().toISOString()
+        };
+        analysisDirty = true;
+        this.fastify.log.info(`[MarketPoller] THETA_STOP triggered for position ${position.id}: held ${thetaStop.heldMinutes}m >= max ${thetaStop.maxHoldMinutes}m.`);
+      }
+    }
+
     const quoteRecorded = await this.marketDataBuffer.recordQuote({
       positionId: position.id,
       price,
@@ -1109,7 +1196,7 @@ export class MarketPoller {
         const partialTrim = this.isPartialProfitTrim(position, exitTriggerType);
         const exitQuantity = partialTrim ? this.getProfitTrimQuantity(position) : Number(position.quantity || 1);
         const newStatus = 'CLOSED';
-        const estimatedExitPrice = exitTriggerType === 'STOP_LOSS' || exitTriggerType === 'TAKE_PROFIT' ? sellablePremium : price;
+        const estimatedExitPrice = sellablePremium;
         const realizedPnl = (estimatedExitPrice - Number(position.entry_price)) * exitQuantity * 100;
 
         // Execute Live SnapTrade order if not simulated
@@ -1172,7 +1259,7 @@ export class MarketPoller {
                   notes = COALESCE(notes, '') || $4,
                   updated_at = CURRENT_TIMESTAMP
                   WHERE id = $5 AND status = 'OPEN'`,
-              [newStatus, lossAvoided, realizedPnl, ` [Closed via Underlying-Triggered ${exitTriggerType} Strategy]`, position.id]
+              [newStatus, lossAvoided, realizedPnl, ` [Closed via ${exitTriggerType}]`, position.id]
             );
 
         if (updateResult.rowCount === 0) {
@@ -1193,7 +1280,7 @@ export class MarketPoller {
             type: position.option_type,
             strike: position.strike_price,
             expiration: position.expiration_date,
-            event: exitTriggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+            event: exitTriggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : exitTriggerType === 'THETA_STOP' ? 'THETA_STOP_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
             price: price,
             pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
             greeks: {
@@ -1231,7 +1318,7 @@ export class MarketPoller {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+          event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : type === 'THETA_STOP' ? 'THETA_STOP_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
           notification_type: 'alert',
           username: username,
           symbol: position.symbol,

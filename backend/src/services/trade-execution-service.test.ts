@@ -78,9 +78,40 @@ async function testThetaDataQuoteAllowsProtectedLimit() {
 
   assert(validation.quote.source === 'thetadata', 'Should use ThetaData quote validation');
   assert(validation.quote.syntheticOnly === false, 'Should require non-synthetic bid/ask data');
-  assert(validation.protectedLimit === 2.08, `Should cap protected limit with live ask, got ${validation.protectedLimit}`);
+  assert(validation.protectedLimit === 2.05, `Should route protected limit 20% from mid toward ask, got ${validation.protectedLimit}`);
   assert(validation.stabilityMovePct === null, `Single live quote validation should not compute stability move, got ${validation.stabilityMovePct}`);
   assert(quoteFetchCount === 1, `Should fetch one quote for speed execution, got ${quoteFetchCount}`);
+}
+
+async function testEntryLimitOffsetIsConfigurableAndCappedAtAsk() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const quote = createEntryQuote({ bid: 2, ask: 2.10, mid: 2.05, mark: 2.05 });
+
+  assert(service.calculateEntryProtectedLimit(quote, {}) === 2.06, 'Default 20% mid-to-ask offset should produce 2.06');
+  assert(service.calculateEntryProtectedLimit(quote, { entry_limit_offset_pct: '80' }) === 2.09, '80% offset should move close to ask');
+  assert(service.calculateEntryProtectedLimit(quote, { entry_limit_offset_pct: '200' }) === 2.10, 'Offset above 100 should cap at ask');
+  assert(service.calculateEntryProtectedLimit(quote, { entry_limit_offset_pct: '-10' }) === 2.05, 'Negative offset should floor at mid');
+}
+
+async function testEntryValidationUsesProtectedLimitForRiskCheck() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  let intendedEntrySeen: number | null = null;
+
+  service.getSignalOptionDetails = async () => ({ mark: 2 });
+  service.fetchThetaDataOptionQuote = async () => createEntryQuote({ bid: 2, ask: 2.10, mid: 2.05, mark: 2.05 });
+  service.assertEntryQuote = (_input: any, _quote: any, intendedEntry: number) => {
+    intendedEntrySeen = intendedEntry;
+  };
+
+  const validation = await service.validateEntryQuote(
+    createSignalInput(),
+    { entry_limit_offset_pct: '20' },
+    'QQQ260616P00738000',
+    2.50
+  );
+
+  assert(validation.protectedLimit === 2.06, `Expected protected limit 2.06, got ${validation.protectedLimit}`);
+  assert(intendedEntrySeen === validation.protectedLimit, `Expected risk check to use protected limit ${validation.protectedLimit}, got ${intendedEntrySeen}`);
 }
 
 async function testSnapTradeQuoteIsNotUsedForEntryValidation() {
@@ -441,6 +472,8 @@ async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
 async function runTests() {
   console.log('Running TradeExecutionService broker lifecycle tests...');
   await testThetaDataQuoteAllowsProtectedLimit();
+  await testEntryLimitOffsetIsConfigurableAndCappedAtAsk();
+  await testEntryValidationUsesProtectedLimitForRiskCheck();
   await testSnapTradeQuoteIsNotUsedForEntryValidation();
   await testEntryValidationDoesNotWaitForSecondQuote();
   await testLiveExecutionSkipsTheoreticalPricingSignal();

@@ -109,6 +109,15 @@ interface Candle {
   timestamp: number;
 }
 
+type VolumeAnomaly = {
+  confirmed: boolean;
+  sampleSize: number;
+  sma: number | null;
+  stdev: number | null;
+  threshold: number | null;
+  triggerVolume: number;
+};
+
 type CandleSource = 'alpaca' | 'yahoo';
 
 type CandleFetchResult = {
@@ -1044,12 +1053,10 @@ Rules:
       ? Math.min(...openingRangeCandles.map(c => c.low))
       : latest.low;
 
-    // Volume Breakout Check
-    const last10 = rthCandles.slice(Math.max(0, rthCandles.length - 10));
-    const avgVolume = last10.reduce((sum, c) => sum + c.volume, 0) / (last10.length || 1);
-    const hasVolumeBreakout = latest.volume > (avgVolume * 1.5);
-    const hasBullishVolumeBreakout = hasVolumeBreakout && latest.close >= latest.open;
-    const hasBearishVolumeBreakout = hasVolumeBreakout && latest.close <= latest.open;
+    // Volume Breakout Check: trigger volume must be a structural anomaly versus the prior 20 RTH candles.
+    const volumeAnomaly = this.computeVolumeAnomaly(rthCandles, latest);
+    const hasBullishVolumeBreakout = volumeAnomaly.confirmed && latest.close >= latest.open;
+    const hasBearishVolumeBreakout = volumeAnomaly.confirmed && latest.close <= latest.open;
 
     const atr14 = this.computeAtr(rthCandles, 14) || 1.0;
 
@@ -1254,6 +1261,14 @@ Rules:
       volatilityBlockers.push(`VIX ${vixPrice.toFixed(2)} is below put volatility floor ${minVixForPuts}`);
     }
 
+    volatilityBlockers.push(...this.buildVolatilityCompressionBlockers({
+      symbol,
+      currentMinutes,
+      atr14,
+      currentPrice,
+      vixChangePct: vixSnapshot.changePct
+    }));
+
     if (winningSide === 'CALL' && hasBearishInternals) {
       volatilityBlockers.push(`Mega-Caps are bearish. Avoid going long ${symbol}.`);
     }
@@ -1303,6 +1318,7 @@ Rules:
       previous,
       hasBullishVolumeBreakout,
       hasBearishVolumeBreakout,
+      volumeAnomaly,
       gexRegime: qqqGexRegime,
       flowDirection: qqqFlowDirection,
       flipStrike: qqqGexFlip
@@ -1345,6 +1361,14 @@ Rules:
       openingRangeHigh: Number(openingRangeHigh.toFixed(2)),
       openingRangeLow: Number(openingRangeLow.toFixed(2)),
       atr14: Number(atr14.toFixed(2)),
+      volumeAnomaly: {
+        triggerVolume: volumeAnomaly.triggerVolume,
+        sampleSize: volumeAnomaly.sampleSize,
+        sma20: volumeAnomaly.sma !== null ? Number(volumeAnomaly.sma.toFixed(2)) : null,
+        stdev20: volumeAnomaly.stdev !== null ? Number(volumeAnomaly.stdev.toFixed(2)) : null,
+        threshold: volumeAnomaly.threshold !== null ? Number(volumeAnomaly.threshold.toFixed(2)) : null,
+        confirmed: volumeAnomaly.confirmed
+      },
       ema9: emaShort !== null ? Number(emaShort.toFixed(2)) : null,
       ema21: emaLong !== null ? Number(emaLong.toFixed(2)) : null,
       rsi5: Number(rsi5.toFixed(2)),
@@ -2442,6 +2466,77 @@ Rules:
     return [];
   }
 
+  private computeVolumeAnomaly(candles: Candle[], latest: Candle, window = 20, stdevMultiplier = 1.5): VolumeAnomaly {
+    const priorCandles = candles
+      .filter(candle => candle.timestamp < latest.timestamp && Number.isFinite(Number(candle.volume)) && Number(candle.volume) > 0)
+      .slice(-window);
+    const volumes = priorCandles.map(candle => Number(candle.volume));
+    const triggerVolume = Number(latest.volume || 0);
+
+    if (volumes.length < window) {
+      return {
+        confirmed: false,
+        sampleSize: volumes.length,
+        sma: null,
+        stdev: null,
+        threshold: null,
+        triggerVolume
+      };
+    }
+
+    const sma = volumes.reduce((sum, volume) => sum + volume, 0) / volumes.length;
+    const variance = volumes.reduce((sum, volume) => sum + Math.pow(volume - sma, 2), 0) / volumes.length;
+    const stdev = Math.sqrt(variance);
+    const threshold = sma + stdevMultiplier * stdev;
+
+    return {
+      confirmed: triggerVolume > threshold,
+      sampleSize: volumes.length,
+      sma,
+      stdev,
+      threshold,
+      triggerVolume
+    };
+  }
+
+  private formatVolumeAnomalyBlocker(side: 'CALL' | 'PUT', anomaly?: VolumeAnomaly): string {
+    const candleColor = side === 'CALL' ? 'green' : 'red';
+    if (!anomaly || anomaly.sampleSize < 20 || anomaly.threshold === null) {
+      return `Strict setup blocked: ${side} requires high-volume ${candleColor} confirmation candle with 20-candle RVOL baseline`;
+    }
+    return `Strict setup blocked: ${side} requires high-volume ${candleColor} confirmation candle; volume ${anomaly.triggerVolume.toFixed(0)} must exceed RVOL threshold ${anomaly.threshold.toFixed(0)} (SMA20 ${anomaly.sma!.toFixed(0)} + 1.5 stdev ${anomaly.stdev!.toFixed(0)})`;
+  }
+
+  private buildVolatilityCompressionBlockers(input: {
+    symbol: string;
+    currentMinutes: number;
+    atr14: number;
+    currentPrice: number;
+    vixChangePct: number | null;
+  }): string[] {
+    if (String(input.symbol || '').toUpperCase() !== 'SPY') return [];
+
+    const blockers: string[] = [];
+    const atrPct = input.currentPrice > 0 ? (input.atr14 / input.currentPrice) * 100 : null;
+    const floorPct = this.getSpyAtrCompressionFloorPct(input.currentMinutes);
+
+    if (atrPct !== null && atrPct < floorPct) {
+      blockers.push(`Volatility gateway blocked: SPY ATR14 ${atrPct.toFixed(3)}% is below ${floorPct.toFixed(3)}% floor for this time window`);
+    }
+    if (input.vixChangePct !== null && input.vixChangePct <= -8) {
+      blockers.push(`Volatility gateway blocked: VIX compression ${input.vixChangePct.toFixed(2)}% is too steep for directional 0DTE auto-entry`);
+    }
+
+    return blockers;
+  }
+
+  private getSpyAtrCompressionFloorPct(currentMinutes: number): number {
+    if (currentMinutes < 11 * 60 + 30) return 0.035;
+    if (currentMinutes < 14 * 60) return 0.025;
+    if (currentMinutes < 15 * 60 + 30) return 0.030;
+    return 0.040;
+  }
+
   private buildStrictSetupModelBlockers(input: {
     winningSide: 'CALL' | 'PUT';
     currentPrice: number;
@@ -2452,6 +2547,7 @@ Rules:
     previous: Candle;
     hasBullishVolumeBreakout: boolean;
     hasBearishVolumeBreakout: boolean;
+    volumeAnomaly?: VolumeAnomaly;
     gexRegime: string;
     flowDirection: string;
     flipStrike: number | null;
@@ -2472,7 +2568,7 @@ Rules:
       if (!gammaAligned) blockers.push('Strict setup blocked: CALL requires bullish gamma direction or price above gamma flip');
       if (!emaStacked) blockers.push('Strict setup blocked: CALL requires price > EMA9 > EMA21');
       if (!vwapAligned) blockers.push('Strict setup blocked: CALL requires price above or reclaiming VWAP');
-      if (!volumeConfirmed) blockers.push('Strict setup blocked: CALL requires high-volume green confirmation candle');
+      if (!volumeConfirmed) blockers.push(this.formatVolumeAnomalyBlocker('CALL', input.volumeAnomaly));
       if (!triggerConfirmed) blockers.push('Strict setup blocked: CALL requires reclaim/break confirmation above the prior candle high');
       return blockers;
     }
@@ -2486,7 +2582,7 @@ Rules:
     if (!gammaAligned) blockers.push('Strict setup blocked: PUT requires bearish gamma direction or price below gamma flip');
     if (!emaStacked) blockers.push('Strict setup blocked: PUT requires price < EMA9 < EMA21');
     if (!vwapAligned) blockers.push('Strict setup blocked: PUT requires price below or rejecting VWAP');
-    if (!volumeConfirmed) blockers.push('Strict setup blocked: PUT requires high-volume red confirmation candle');
+    if (!volumeConfirmed) blockers.push(this.formatVolumeAnomalyBlocker('PUT', input.volumeAnomaly));
     if (!triggerConfirmed) blockers.push('Strict setup blocked: PUT requires breakdown/rejection confirmation below the prior candle low');
     return blockers;
   }

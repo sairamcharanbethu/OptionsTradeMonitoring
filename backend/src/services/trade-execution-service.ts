@@ -32,6 +32,7 @@ interface ExecutionSettings {
   contracts_per_trade?: string;
   order_type?: string;
   entry_slippage_pct?: string;
+  entry_limit_offset_pct?: string;
   take_profit_pct?: string;
   stop_loss_engine_enabled?: string;
   live_trading_acknowledged?: string;
@@ -67,7 +68,7 @@ export class TradeExecutionService {
   private readonly ENTRY_MAX_QUOTE_AGE_MS = 2_000;
   private readonly ENTRY_MAX_SPREAD_PCT = 15;
   private readonly ENTRY_MIN_BID_TO_ENTRY_RATIO = 0.90;
-  private readonly ENTRY_PROTECTED_LIMIT_OVER_MID_PCT = 3;
+  private readonly ENTRY_LIMIT_MID_TO_ASK_OFFSET_PCT = 20;
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
@@ -79,6 +80,7 @@ export class TradeExecutionService {
       contracts_per_trade: '1',
       order_type: 'LIMIT',
       entry_slippage_pct: '3',
+      entry_limit_offset_pct: String(this.ENTRY_LIMIT_MID_TO_ASK_OFFSET_PCT),
       take_profit_pct: '',
       stop_loss_engine_enabled: 'true',
       live_trading_acknowledged: 'false',
@@ -598,7 +600,6 @@ export class TradeExecutionService {
   private async validateEntryQuote(input: ExecuteSignalInput, settings: ExecutionSettings, osiTicker: string, plannedLimit: number | undefined): Promise<EntryQuoteValidation> {
     const optionDetails = await this.getSignalOptionDetails(input.signalId);
     const baselineMark = Number(optionDetails?.mark || input.mark || 0) > 0 ? Number(optionDetails?.mark || input.mark) : null;
-    const intendedEntry = Number(plannedLimit || baselineMark || input.mark || 0);
 
     const quote = await this.fetchEntryQuoteSnapshot(input, settings, osiTicker);
     if (!quote) {
@@ -607,13 +608,10 @@ export class TradeExecutionService {
 
     const stabilityMovePct = null;
     const movePct = baselineMark ? Number((((quote.mark - baselineMark) / baselineMark) * 100).toFixed(2)) : null;
+    const protectedLimit = this.calculateEntryProtectedLimit(quote, settings);
+    const intendedEntry = protectedLimit || Number(plannedLimit || baselineMark || input.mark || 0);
     const effectiveIntendedEntry = intendedEntry > 0 ? intendedEntry : quote.mark;
     this.assertEntryQuote(input, quote, effectiveIntendedEntry, baselineMark, movePct, stabilityMovePct);
-
-    const protectedLimit = Number(Math.min(
-      quote.ask,
-      quote.mid * (1 + this.ENTRY_PROTECTED_LIMIT_OVER_MID_PCT / 100)
-    ).toFixed(2));
 
     return {
       quote,
@@ -622,6 +620,16 @@ export class TradeExecutionService {
       movePct,
       stabilityMovePct
     };
+  }
+
+  private calculateEntryProtectedLimit(quote: EntryQuoteSnapshot, settings: ExecutionSettings): number {
+    const configuredOffsetPct = Number(settings.entry_limit_offset_pct ?? process.env.ENTRY_LIMIT_MID_TO_ASK_OFFSET_PCT);
+    const offsetPct = Number.isFinite(configuredOffsetPct)
+      ? Math.min(100, Math.max(0, configuredOffsetPct))
+      : this.ENTRY_LIMIT_MID_TO_ASK_OFFSET_PCT;
+    const mid = quote.mid > 0 ? quote.mid : Number(((quote.bid + quote.ask) / 2).toFixed(4));
+    const rawLimit = mid + (quote.ask - mid) * (offsetPct / 100);
+    return Number(Math.min(quote.ask, Math.max(mid, rawLimit)).toFixed(2));
   }
 
   private async executeSnapTradeOptionTrade(input: ExecuteSignalInput, settings: ExecutionSettings, quantity: number) {

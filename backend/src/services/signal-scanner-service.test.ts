@@ -1188,6 +1188,116 @@ async function testMeanReversionTrendBlockersRequireStrongerConfirmation() {
   assert(blockers.some((item: string) => item.includes('strong downtrend')), `Expected strong downtrend blocker, got ${blockers.join(', ')}`);
 }
 
+async function testVolumeAnomalyUsesTwentyCandleSmaAndStandardDeviation() {
+  const scanner = createScanner();
+  const baseTime = Date.parse('2026-07-02T13:30:00.000Z') / 1000;
+  const candles = Array.from({ length: 20 }, (_, idx) => ({
+    datetime: new Date((baseTime + idx * 300) * 1000).toISOString(),
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 748,
+    high: 749,
+    low: 747,
+    close: 748.5,
+    volume: idx % 2 === 0 ? 1000 : 1200,
+    timestamp: baseTime + idx * 300
+  }));
+  const latest = {
+    datetime: new Date((baseTime + 20 * 300) * 1000).toISOString(),
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 749,
+    high: 750,
+    low: 748.8,
+    close: 749.8,
+    volume: 1400,
+    timestamp: baseTime + 20 * 300
+  };
+
+  const anomaly = scanner.computeVolumeAnomaly([...candles, latest], latest);
+
+  assert(anomaly.sampleSize === 20, `Expected 20-candle volume baseline, got ${anomaly.sampleSize}`);
+  assert(anomaly.sma === 1100, `Expected SMA20 1100, got ${anomaly.sma}`);
+  assert(Math.abs(anomaly.stdev - 100) < 0.0001, `Expected stdev 100, got ${anomaly.stdev}`);
+  assert(anomaly.threshold === 1250, `Expected RVOL threshold 1250, got ${anomaly.threshold}`);
+  assert(anomaly.confirmed === true, 'Trigger volume above SMA20 + 1.5 stdev should confirm');
+
+  const weakLatest = { ...latest, volume: 1249 };
+  const weakAnomaly = scanner.computeVolumeAnomaly([...candles, weakLatest], weakLatest);
+  assert(weakAnomaly.confirmed === false, 'Trigger volume below threshold should not confirm');
+}
+
+async function testVolumeAnomalyRequiresFullBaseline() {
+  const scanner = createScanner();
+  const baseTime = Date.parse('2026-07-02T13:30:00.000Z') / 1000;
+  const candles = Array.from({ length: 8 }, (_, idx) => ({
+    datetime: new Date((baseTime + idx * 300) * 1000).toISOString(),
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 748,
+    high: 749,
+    low: 747,
+    close: 748.5,
+    volume: 1000,
+    timestamp: baseTime + idx * 300
+  }));
+  const latest = {
+    datetime: new Date((baseTime + 8 * 300) * 1000).toISOString(),
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 749,
+    high: 750,
+    low: 748.8,
+    close: 749.8,
+    volume: 5000,
+    timestamp: baseTime + 8 * 300
+  };
+
+  const anomaly = scanner.computeVolumeAnomaly([...candles, latest], latest);
+  const blockers = scanner.buildStrictSetupModelBlockers({
+    winningSide: 'CALL',
+    currentPrice: 750,
+    vwap: 749,
+    emaShort: 749.4,
+    emaLong: 748.9,
+    latest,
+    previous: candles[candles.length - 1],
+    hasBullishVolumeBreakout: anomaly.confirmed,
+    hasBearishVolumeBreakout: false,
+    volumeAnomaly: anomaly,
+    gexRegime: 'NEGATIVE',
+    flowDirection: 'bullish',
+    flipStrike: 749
+  });
+
+  assert(anomaly.sampleSize === 8, `Expected 8 baseline samples, got ${anomaly.sampleSize}`);
+  assert(anomaly.confirmed === false, 'Insufficient baseline should not confirm volume anomaly');
+  assert(blockers.some((item: string) => item.includes('20-candle RVOL baseline')), `Expected RVOL baseline blocker, got ${blockers.join(', ')}`);
+}
+
+async function testVolatilityGatewayBlocksSpyCompression() {
+  const scanner = createScanner();
+
+  const blockers = scanner.buildVolatilityCompressionBlockers({
+    symbol: 'SPY',
+    currentMinutes: 12 * 60,
+    atr14: 0.12,
+    currentPrice: 750,
+    vixChangePct: -9.2
+  });
+  const qqqBlockers = scanner.buildVolatilityCompressionBlockers({
+    symbol: 'QQQ',
+    currentMinutes: 12 * 60,
+    atr14: 0.12,
+    currentPrice: 750,
+    vixChangePct: -9.2
+  });
+
+  assert(blockers.some((item: string) => item.includes('SPY ATR14')), `Expected SPY ATR blocker, got ${blockers.join(', ')}`);
+  assert(blockers.some((item: string) => item.includes('VIX compression')), `Expected VIX compression blocker, got ${blockers.join(', ')}`);
+  assert(qqqBlockers.length === 0, `Expected QQQ to skip SPY-specific volatility gateway, got ${qqqBlockers.join(', ')}`);
+}
+
 async function testStrictSetupModelRequiresGammaEmaVolumeAndTrigger() {
   const scanner = createScanner();
   const previous = {
@@ -1521,6 +1631,9 @@ async function runTests() {
   await testContractMismatchBlocksExecution();
   await testHighImpactEventBlocksZeroDteAutoTrading();
   await testMeanReversionTrendBlockersRequireStrongerConfirmation();
+  await testVolumeAnomalyUsesTwentyCandleSmaAndStandardDeviation();
+  await testVolumeAnomalyRequiresFullBaseline();
+  await testVolatilityGatewayBlocksSpyCompression();
   await testStrictSetupModelRequiresGammaEmaVolumeAndTrigger();
   await testMeanReversionRequiresEntryConfirmationForAutoExecution();
   await testGexProximityDeduplicatesCallWallAndKingNodeAtSameStrike();
