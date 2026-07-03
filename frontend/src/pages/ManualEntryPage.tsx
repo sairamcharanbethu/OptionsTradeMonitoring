@@ -516,7 +516,7 @@ export default function ManualEntryPage() {
               <h2 className="text-xl font-semibold tracking-tight">Manual Entry</h2>
               <Badge variant="outline">Wealthsimple</Badge>
             </div>
-            <p className="text-sm text-muted-foreground">Live option entry with ThetaData quotes and SnapTrade execution.</p>
+            <p className="text-sm text-muted-foreground">Live option entry with IBKR quotes and SnapTrade execution.</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">

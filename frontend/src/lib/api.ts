@@ -1118,7 +1118,7 @@ export const api = {
   async getSignalsHealth(): Promise<{
     yahooFinance: AdapterHealth & { endpoint?: string; checkedAt?: string };
     sscgexPortal: AdapterHealth & { endpoint?: string; checkedAt?: string };
-    thetaData: AdapterHealth & { endpoint?: string; checkedAt?: string };
+    ibkr: AdapterHealth & { endpoint?: string; checkedAt?: string };
     openRouter: AdapterHealth & { endpoint?: string; checkedAt?: string };
     discord: AdapterHealth & { endpoint?: string; checkedAt?: string };
   }> {
@@ -1158,13 +1158,27 @@ export const api = {
         lastError: string | null;
         reconnectAttempts: number;
       };
-    };
-    marketData?: {
-      thetadata?: AdapterHealth & {
+      ibkr: AdapterHealth & {
         status: string;
         connected: boolean;
         provider: string;
-        baseUrl?: string;
+        host?: string;
+        port?: number;
+        marketDataType?: number;
+        activeSubscriptions: number;
+        lastMessageAt: string | null;
+        lastError: string | null;
+        reconnectAttempts: number;
+      };
+    };
+    marketData?: {
+      ibkr?: AdapterHealth & {
+        status: string;
+        connected: boolean;
+        provider: string;
+        host?: string;
+        port?: number;
+        marketDataType?: number;
         latencyMs: number | null;
         lastError: string | null;
       };

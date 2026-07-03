@@ -7,7 +7,7 @@ import { SnaptradeService } from './snaptrade-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
-import { ThetaDataService } from './thetadata-service';
+import { IbkrMarketDataService } from './ibkr-market-data-service';
 import { MarketDataWriteBufferService } from './market-data-write-buffer-service';
 
 type ExitQuoteContext = {
@@ -559,10 +559,10 @@ export class MarketPoller {
     const ticker = this.constructOSITicker(symbol, strike, type, expiration);
 
     try {
-      const thetaData = new ThetaDataService(this.fastify);
+      const marketData = new IbkrMarketDataService(this.fastify);
 
       try {
-        const quote = await thetaData.getOptionQuote(userId, {
+        const quote = await marketData.getOptionQuote(userId, {
           symbol,
           strike,
           right: type === 'CALL' ? 'call' : 'put',
@@ -580,7 +580,7 @@ export class MarketPoller {
               last: quote.last,
               mid: quote.mid,
               spreadPct: quote.spreadPct || undefined,
-              source: 'thetadata'
+              source: 'ibkr'
             }),
             iv: 0,
             underlying_price: 0,
@@ -600,7 +600,7 @@ export class MarketPoller {
           };
         }
       } catch (err: any) {
-        this.fastify.log.warn(`[MarketPoller] ThetaData option quote unavailable for ${ticker}: ${err.message || String(err)}`);
+        this.fastify.log.warn(`[MarketPoller] IBKR option quote unavailable for ${ticker}: ${err.message || String(err)}`);
       }
 
       return null;

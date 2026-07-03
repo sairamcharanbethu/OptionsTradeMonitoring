@@ -11,7 +11,7 @@ import fs from 'fs';
 import { TradeExecutionService } from './trade-execution-service';
 import { TradeRedisService } from './trade-redis-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
-import { ThetaDataOptionChainQuote, ThetaDataService } from './thetadata-service';
+import { IbkrMarketDataService, IbkrOptionChainQuote } from './ibkr-market-data-service';
 import { SignalDecision, SignalGradeDiagnostics, tradingEventBus } from '../lib/trading-events';
 import { normalizeAdapterHealth } from '../lib/adapter-health';
 
@@ -118,7 +118,7 @@ type VolumeAnomaly = {
   triggerVolume: number;
 };
 
-type CandleSource = 'alpaca' | 'yahoo';
+type CandleSource = 'ibkr' | 'alpaca' | 'yahoo';
 
 type CandleFetchResult = {
   candles: Candle[];
@@ -157,9 +157,11 @@ type OptionContractCandidate = {
   expiry: string;
 };
 
+type OptionChainQuote = IbkrOptionChainQuote;
+
 type OptionChainCacheEntry = {
   fetchedAt: number;
-  chain: ThetaDataOptionChainQuote[];
+  chain: OptionChainQuote[];
 };
 
 type TriggerWatchState = {
@@ -1480,7 +1482,7 @@ Rules:
         tradeBias = winningSide === 'CALL' ? 'BUY_CALL_ON_DIP' : 'BUY_PUT_ON_RIP';
       }
 
-      // Fetch the expiry chain from ThetaData and select the cleanest nearby contract.
+      // Fetch the expiry chain from IBKR and select the cleanest nearby contract.
       const strikeOffset = parseInt(settings.strike_offset, 10) || 0;
       const todayDateStr = nyParts.dateStr;
       const targetExpiryDateStr = this.getTargetDayTradeExpiry(todayDateStr, nyParts.minutes);
@@ -1492,7 +1494,7 @@ Rules:
       let contractCandidates: OptionContractCandidate[] = [];
       let preferredStrike = Math.round(currentPrice);
 
-      // 8. Contract pricing (ThetaData chain snapshot -> Black-Scholes fallback)
+      // 8. Contract pricing (IBKR chain snapshot -> Black-Scholes fallback)
       let bid: number | null = null;
       let ask: number | null = null;
       let spread: number | null = null;
@@ -1559,8 +1561,8 @@ Rules:
         }
 
         if (contractCandidates.length > 0) {
-          this.fastify.log.info(`[SignalScannerService] Querying ThetaData option chain for ${contractCandidates.length}/${chain.length} ${symbol} candidates...`);
-          const selection = this.fetchBestThetaDataOptionCandidate({
+          this.fastify.log.info(`[SignalScannerService] Querying IBKR option chain for ${contractCandidates.length}/${chain.length} ${symbol} candidates...`);
+          const selection = this.fetchBestIBKROptionCandidate({
             chain,
             candidates: contractCandidates,
             preferredStrike,
@@ -1572,7 +1574,7 @@ Rules:
 
           const selected = selection.selected;
           candidateSelection = {
-            source: 'thetadata_chain',
+            source: 'ibkr_chain',
             cache: chainSnapshot.cache,
             preferredStrike,
             selectedScore: selected?.score ?? null,
@@ -1615,23 +1617,23 @@ Rules:
             selectedQuoteAgeMs = selected.quoteAgeMs ?? null;
             selectedThetaDragPct = this.getThetaDragPct(selected.theta ?? null, selected.mark);
             usingTheoreticalPricing = false;
-            this.fastify.log.info(`[SignalScannerService] Selected ${selected.ticker} from ${selection.ranked.length} ThetaData candidates: strike=${selected.strike}, mark=$${mark}, spread=${spreadPct}%, volume=${volume}, OI=${openInterest}, score=${selected.score}.`);
+            this.fastify.log.info(`[SignalScannerService] Selected ${selected.ticker} from ${selection.ranked.length} IBKR candidates: strike=${selected.strike}, mark=$${mark}, spread=${spreadPct}%, volume=${volume}, OI=${openInterest}, score=${selected.score}.`);
           } else if (selection.ranked.length > 0) {
             chainSelectionRejected = true;
             const bestRejected = selection.ranked[0];
             const bestRejectedReasons = bestRejected.failedFilters.length > 0 ? bestRejected.failedFilters : bestRejected.reasons;
             chainRejectionDetail = `Best rejected ${bestRejected.ticker}: ${bestRejectedReasons.join('; ')}`;
-            this.fastify.log.warn(`[SignalScannerService] No ThetaData ${symbol} contract passed liquidity filters. Best rejected ${bestRejected.ticker}: mark=${bestRejected.mark}, spread=${bestRejected.spreadPct}%, volume=${bestRejected.volume}, OI=${bestRejected.openInterest}, score=${bestRejected.score}, failedFilters=${bestRejected.failedFilters.join('; ') || 'none'}, reasons=${bestRejected.reasons.join('; ')}.`);
+            this.fastify.log.warn(`[SignalScannerService] No IBKR ${symbol} contract passed liquidity filters. Best rejected ${bestRejected.ticker}: mark=${bestRejected.mark}, spread=${bestRejected.spreadPct}%, volume=${bestRejected.volume}, OI=${bestRejected.openInterest}, score=${bestRejected.score}, failedFilters=${bestRejected.failedFilters.join('; ') || 'none'}, reasons=${bestRejected.reasons.join('; ')}.`);
           }
         }
-      } catch (thetaErr: any) {
-        this.fastify.log.warn(`[SignalScannerService] ThetaData option chain selection failed: ${thetaErr.message}`);
+      } catch (ibkrErr: any) {
+        this.fastify.log.warn(`[SignalScannerService] IBKR option chain selection failed: ${ibkrErr.message}`);
       }
 
       if (usingTheoreticalPricing && chosenContract) {
         try {
-          const thetaData = new ThetaDataService(this.fastify);
-          const quote = await thetaData.getOptionQuote(userId, {
+          const ibkr = new IbkrMarketDataService(this.fastify);
+          const quote = await ibkr.getOptionQuote(userId, {
             symbol,
             expiration: chosenContract.expiry,
             right: winningSide === 'CALL' ? 'call' : 'put',
@@ -1651,7 +1653,7 @@ Rules:
             usingTheoreticalPricing = false;
           }
         } catch (quoteErr: any) {
-          this.fastify.log.warn(`[SignalScannerService] ThetaData single-contract quote fallback failed: ${quoteErr.message}`);
+          this.fastify.log.warn(`[SignalScannerService] IBKR single-contract quote fallback failed: ${quoteErr.message}`);
         }
       }
 
@@ -1699,7 +1701,7 @@ Rules:
       // Check premium actionability constraints
       const pricingWarnings: string[] = [];
       if (mark === null || bid === null || ask === null) pricingWarnings.push('No usable live option quote selected');
-      if (chainSelectionRejected) pricingWarnings.push('No ThetaData option candidate passed liquidity/spread filters');
+      if (chainSelectionRejected) pricingWarnings.push('No IBKR option candidate passed liquidity/spread filters');
       if (chainRejectionDetail) pricingWarnings.push(chainRejectionDetail);
       if (usingTheoreticalPricing && mark !== null && bid !== null && ask !== null) pricingWarnings.push('Using theoretical option price fallback');
       if (mark !== null && mark < minOptionMark) pricingWarnings.push(`Option premium $${mark} below limit $${minOptionMark}`);
@@ -2338,11 +2340,11 @@ Rules:
 
   private getPricingWarningPenalty(pricingWarnings: string[]): number {
     const missingLiveQuote = pricingWarnings.includes('No usable live option quote selected');
-    const chainRejected = pricingWarnings.includes('No ThetaData option candidate passed liquidity/spread filters');
+    const chainRejected = pricingWarnings.includes('No IBKR option candidate passed liquidity/spread filters');
     const theoreticalFallback = pricingWarnings.includes('Using theoretical option price fallback');
     const groupedWarnings = new Set([
       'No usable live option quote selected',
-      'No ThetaData option candidate passed liquidity/spread filters',
+      'No IBKR option candidate passed liquidity/spread filters',
       'Using theoretical option price fallback'
     ]);
     let penalty = 0;
@@ -2717,6 +2719,18 @@ Rules:
       .filter((candle: Candle | null): candle is Candle => candle !== null);
   }
 
+  private parseIbkrHistoricalBars(bars: Array<{ start: string; open: number; high: number; low: number; close: number; volume: number }>): Candle[] {
+    return bars
+      .map((bar) => this.normalizeCandleQuote({
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: bar.volume
+      }, bar.start))
+      .filter((candle: Candle | null): candle is Candle => candle !== null);
+  }
+
   private async fetchScannerCandles(input: {
     symbol: string;
     now: Date;
@@ -2730,6 +2744,24 @@ Rules:
     const alpacaGet = input.alpacaGet || axios.get;
     const yahooChart = input.yahooChart || ((symbol: string, options: any) => (yahooFinance as any).chart(symbol, options));
     let fallbackReason: string | null = null;
+
+    try {
+      const ibkr = new IbkrMarketDataService(this.fastify);
+      const bars = await ibkr.getHistoricalBars(input.symbol, '5 D', '5 mins');
+      const candles = this.parseIbkrHistoricalBars(bars);
+      if (candles.length > 0) {
+        return {
+          candles,
+          source: 'ibkr',
+          fetchedAt: input.now.toISOString(),
+          fallbackReason: null
+        };
+      }
+      fallbackReason = 'IBKR returned no usable bars';
+    } catch (err: any) {
+      fallbackReason = `IBKR bars failed: ${err.message || String(err)}`;
+      this.fastify.log.warn(`[SignalScannerService] ${fallbackReason}`);
+    }
 
     if (alpacaCredentials.keyId && alpacaCredentials.secretKey) {
       try {
@@ -3394,8 +3426,8 @@ Rules:
     windowKey: string;
     forceRefresh?: boolean;
     nowMs?: number;
-    thetaData?: Pick<ThetaDataService, 'getOptionChainSnapshot'>;
-  }): Promise<{ chain: ThetaDataOptionChainQuote[]; cache: { key: string; hit: boolean; ageMs: number | null; ttlMs: number } }> {
+    marketData?: Pick<IbkrMarketDataService, 'getOptionChainSnapshot'>;
+  }): Promise<{ chain: OptionChainQuote[]; cache: { key: string; hit: boolean; ageMs: number | null; ttlMs: number } }> {
     const nowMs = input.nowMs ?? Date.now();
     const key = [
       input.userId,
@@ -3417,8 +3449,8 @@ Rules:
       };
     }
 
-    const thetaData = input.thetaData || new ThetaDataService(this.fastify);
-    const chain = await thetaData.getOptionChainSnapshot(
+    const marketData = input.marketData || new IbkrMarketDataService(this.fastify);
+    const chain = await marketData.getOptionChainSnapshot(
       input.userId,
       input.symbol,
       input.expiration,
@@ -3640,8 +3672,8 @@ Rules:
     return candles.filter((candle) => candle.timestamp <= cutoffSeconds);
   }
 
-  private fetchBestThetaDataOptionCandidate(input: {
-    chain: ThetaDataOptionChainQuote[];
+  private fetchBestIBKROptionCandidate(input: {
+    chain: OptionChainQuote[];
     candidates: OptionContractCandidate[];
     preferredStrike: number;
     minOptionMark: number;
@@ -3660,7 +3692,7 @@ Rules:
       const base = {
         ...candidate,
         alpacaTicker: candidate.ticker,
-        source: 'thetadata_chain',
+        source: quote?.source ?? 'ibkr_chain',
         bid: quote?.bid ?? null,
         ask: quote?.ask ?? null,
         spread: quote?.spread ?? null,
@@ -4465,11 +4497,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       });
     }, !!settings.sscgex_password, 'https://sscgex.up.railway.app/api/gex/QQQ?strikes=10', 'sscgexPortal');
 
-    const thetaDataCheck = checkLatency(async () => {
-      const thetaData = new ThetaDataService(this.fastify);
-      const health = await thetaData.getHealth(targetUserId);
-      if (!health.connected) throw new Error(health.lastError || 'ThetaData unavailable');
-    }, !!settings.thetadata_base_url || !!process.env.THETADATA_BASE_URL, `${settings.thetadata_base_url || process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status`, 'thetaData');
+    const ibkrCheck = checkLatency(async () => {
+      const ibkr = new IbkrMarketDataService(this.fastify);
+      const health = await ibkr.getHealth();
+      if (!health.connected) throw new Error(health.lastError || 'IBKR unavailable');
+    }, true, `${process.env.IBKR_HOST || 'ib_gateway'}:${process.env.IBKR_PORT || 4003}`, 'ibkr');
 
     const openrouterCheck = checkLatency(async () => {
       const aiSettings = await this.aiService.getSettings(targetUserId);
@@ -4489,10 +4521,10 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       await axios.get(settings.discord_webhook_url, { timeout: 4000 });
     }, !!settings.discord_webhook_url, settings.discord_webhook_url ? 'configured Discord webhook URL' : undefined, 'discord');
 
-    const [yahoo, sscgex, thetaData, openrouter, discord] = await Promise.all([
+    const [yahoo, sscgex, ibkr, openrouter, discord] = await Promise.all([
       yahooCheck,
       sscgexCheck,
-      thetaDataCheck,
+      ibkrCheck,
       openrouterCheck,
       discordCheck
     ]);
@@ -4500,7 +4532,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     return {
       yahooFinance: yahoo,
       sscgexPortal: sscgex,
-      thetaData,
+      ibkr,
       openRouter: openrouter,
       discord: discord
     };
@@ -4756,7 +4788,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       strike: state.chosenStrike,
       ticker
     });
-    const quote = await new ThetaDataService(this.fastify).getOptionQuoteForOsi(state.userId, ticker);
+    const quote = await new IbkrMarketDataService(this.fastify).getOptionQuoteForOsi(state.userId, ticker);
     const pricingWarnings: string[] = [...contractBlockers];
 
     if (!quote) {

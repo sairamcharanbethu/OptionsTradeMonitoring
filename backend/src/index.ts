@@ -543,6 +543,9 @@ const start = async () => {
     const { ThetaDataService } = await import('./services/thetadata-service');
     const thetaData = new ThetaDataService(fastify);
     fastify.decorate('thetaData', thetaData);
+    const { IbkrMarketDataService } = await import('./services/ibkr-market-data-service');
+    const ibkrMarketData = new IbkrMarketDataService(fastify);
+    fastify.decorate('ibkrMarketData', ibkrMarketData);
 
     // Initialize poller BEFORE listen
     const { MarketPoller } = await import('./services/market-poller');
@@ -564,6 +567,10 @@ const start = async () => {
     const { AlpacaMarketDataStreamService } = await import('./services/alpaca-market-data-stream-service');
     const alpacaMarketDataStreamer = new AlpacaMarketDataStreamService(fastify);
     fastify.decorate('alpacaMarketDataStreamer', alpacaMarketDataStreamer);
+
+    const { IbkrMarketDataStreamService } = await import('./services/ibkr-market-data-stream-service');
+    const ibkrMarketDataStreamer = new IbkrMarketDataStreamService(fastify);
+    fastify.decorate('ibkrMarketDataStreamer', ibkrMarketDataStreamer);
 
     const { LiveExitMonitorService } = await import('./services/live-exit-monitor-service');
     const liveExitMonitor = new LiveExitMonitorService(fastify);
@@ -661,7 +668,7 @@ const start = async () => {
       const keys = manualQuoteSubscriptionKeys.get(socket);
       if (keys) {
         for (const key of keys.values()) {
-          thetaDataStreamer.removeTemporarySubscription(key);
+          ibkrMarketDataStreamer.removeTemporarySubscription(key);
         }
       }
       manualQuoteSubscriptionKeys.delete(socket);
@@ -683,7 +690,7 @@ const start = async () => {
       const subscriptionKey = `manual-entry:${clientId}:${ticker}:${Date.now()}`;
       manualQuoteSubscriptions.set(socket, new Set([ticker]));
       manualQuoteSubscriptionKeys.set(socket, new Map([[ticker, subscriptionKey]]));
-      await thetaDataStreamer.addTemporarySubscription(subscriptionKey, { symbol, strike, optionType, expiration });
+      await ibkrMarketDataStreamer.addTemporarySubscription(subscriptionKey, { symbol, strike, optionType, expiration });
       socket.send(JSON.stringify({ type: 'MANUAL_ENTRY_QUOTE_SUBSCRIBED', data: { ticker, symbol, optionType, strike, expiration } }));
     };
 
@@ -718,21 +725,24 @@ const start = async () => {
 
     thetaDataStreamer.on('quote', handleStreamQuote);
     alpacaMarketDataStreamer.on('quote', handleStreamQuote);
+    ibkrMarketDataStreamer.on('quote', handleStreamQuote);
 
     fastify.get('/api/services/health', { preHandler: fastify.authenticate }, async (request) => {
       const { id: userId } = (request as any).user;
       const generatedAt = new Date().toISOString();
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
       const thetaDataHealth = thetaDataStreamer.getHealth();
+      const ibkrStreamHealth = ibkrMarketDataStreamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
       const postgresStartedAt = Date.now();
-      const [thetaDataTerminalHealth, scannerHealth, tradeRedisHealth, postgresHealth] = await Promise.all([
+      const [ibkrHealth, scannerHealth, tradeRedisHealth, postgresHealth] = await Promise.all([
         withTimeout(
-          thetaData.getHealth(userId).catch((err: any) => ({
+          ibkrMarketData.getHealth().catch((err: any) => ({
             status: 'DOWN',
             connected: false,
-            provider: 'thetadata',
-            baseUrl: process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503',
+            provider: 'ibkr',
+            host: process.env.IBKR_HOST || 'ib_gateway',
+            port: Number(process.env.IBKR_PORT || 4003),
             latencyMs: null,
             lastError: err.message || String(err)
           })),
@@ -740,10 +750,11 @@ const start = async () => {
           () => ({
             status: 'DOWN',
             connected: false,
-            provider: 'thetadata',
-            baseUrl: process.env.THETADATA_BASE_URL || 'http://127.0.0.1:25503',
+            provider: 'ibkr',
+            host: process.env.IBKR_HOST || 'ib_gateway',
+            port: Number(process.env.IBKR_PORT || 4003),
             latencyMs: null,
-            lastError: 'ThetaData health check timed out'
+            lastError: 'IBKR health check timed out'
           })
         ),
         withTimeout(
@@ -792,10 +803,11 @@ const start = async () => {
         liveExitMonitor: normalizeAdapterHealth('liveExitMonitor', liveExitHealth, generatedAt),
         streams: {
           alpaca: normalizeAdapterHealth('alpaca', alpacaHealth, generatedAt),
-          thetadata: normalizeAdapterHealth('thetadataStream', thetaDataHealth, generatedAt)
+          thetadata: normalizeAdapterHealth('thetadataStream', thetaDataHealth, generatedAt),
+          ibkr: normalizeAdapterHealth('ibkrStream', ibkrStreamHealth, generatedAt)
         },
         marketData: {
-          thetadata: normalizeAdapterHealth('thetadata', thetaDataTerminalHealth, generatedAt)
+          ibkr: normalizeAdapterHealth('ibkr', ibkrHealth, generatedAt)
         },
         poller: normalizeAdapterHealth('marketPoller', {
           status: poller.isRunning() ? 'UP' : 'DOWN',
@@ -975,8 +987,19 @@ const start = async () => {
       let liveExitStreamStarted = false;
 
       try {
-        const thetaDataStreamStarted = await thetaDataStreamer.start();
-        if (thetaDataStreamStarted) {
+        const ibkrStreamStarted = await ibkrMarketDataStreamer.start();
+        if (ibkrStreamStarted) {
+          liveExitMonitor.start('ibkr');
+          fastify.log.info('[Stream] IBKR option market data stream enabled for live exit monitoring.');
+          liveExitStreamStarted = true;
+        }
+      } catch (err: any) {
+        fastify.log.warn(`[Stream] IBKR option market data stream failed to start: ${err.message}`);
+      }
+
+      try {
+        const thetaDataStreamStarted = !liveExitStreamStarted && await thetaDataStreamer.start();
+        if (!liveExitStreamStarted && thetaDataStreamStarted) {
           liveExitMonitor.start('thetadata');
           fastify.log.info('[Stream] ThetaData option market data stream enabled for live exit monitoring.');
           liveExitStreamStarted = true;

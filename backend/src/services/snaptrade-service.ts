@@ -916,6 +916,7 @@ export class SnaptradeService {
             await redis.del(`SNAPTRADE_PORTFOLIO:${userId}`);
 
             const streamers = [
+                (this.fastify as any).ibkrMarketDataStreamer,
                 (this.fastify as any).alpacaMarketDataStreamer,
                 (this.fastify as any).thetaDataStreamer
             ];

@@ -40,7 +40,7 @@ function createSignalInput(overrides: Partial<any> = {}) {
 
 function createEntryQuote(overrides: Partial<any> = {}) {
   return {
-    source: 'thetadata',
+    source: 'ibkr',
     ticker: 'QQQ260616P00738000',
     bid: 2,
     ask: 2.08,
@@ -56,13 +56,13 @@ function createEntryQuote(overrides: Partial<any> = {}) {
   };
 }
 
-async function testThetaDataQuoteAllowsProtectedLimit() {
+async function testIBKRQuoteAllowsProtectedLimit() {
   const service = new TradeExecutionService(createFastifyMock());
   const input = createSignalInput();
   let quoteFetchCount = 0;
 
   (service as any).getSignalOptionDetails = async () => ({ mark: 2 });
-  (service as any).fetchThetaDataOptionQuote = async () => {
+  (service as any).fetchIbkrOptionQuote = async () => {
     quoteFetchCount += 1;
     return createEntryQuote();
   };
@@ -76,7 +76,7 @@ async function testThetaDataQuoteAllowsProtectedLimit() {
     '7:wealthsimple-account'
   );
 
-  assert(validation.quote.source === 'thetadata', 'Should use ThetaData quote validation');
+  assert(validation.quote.source === 'ibkr', 'Should use IBKR quote validation');
   assert(validation.quote.syntheticOnly === false, 'Should require non-synthetic bid/ask data');
   assert(validation.protectedLimit === 2.05, `Should route protected limit 20% from mid toward ask, got ${validation.protectedLimit}`);
   assert(validation.stabilityMovePct === null, `Single live quote validation should not compute stability move, got ${validation.stabilityMovePct}`);
@@ -98,7 +98,7 @@ async function testEntryValidationUsesProtectedLimitForRiskCheck() {
   let intendedEntrySeen: number | null = null;
 
   service.getSignalOptionDetails = async () => ({ mark: 2 });
-  service.fetchThetaDataOptionQuote = async () => createEntryQuote({ bid: 2, ask: 2.10, mid: 2.05, mark: 2.05 });
+  service.fetchIbkrOptionQuote = async () => createEntryQuote({ bid: 2, ask: 2.10, mid: 2.05, mark: 2.05 });
   service.assertEntryQuote = (_input: any, _quote: any, intendedEntry: number) => {
     intendedEntrySeen = intendedEntry;
   };
@@ -119,7 +119,7 @@ async function testSnapTradeQuoteIsNotUsedForEntryValidation() {
   let snapTradeQuoteCalled = false;
 
   (service as any).getSignalOptionDetails = async () => ({ mark: 2 });
-  (service as any).fetchThetaDataOptionQuote = async () => null;
+  (service as any).fetchIbkrOptionQuote = async () => null;
   (service as any).fetchAlpacaOptionSnapshot = async () => null;
   (service as any).fetchSnapTradeOptionQuote = async () => {
     snapTradeQuoteCalled = true;
@@ -145,7 +145,7 @@ async function testEntryValidationDoesNotWaitForSecondQuote() {
   (service as any).getSignalOptionDetails = async () => ({ mark: 2 });
   (service as any).fetchEntryQuoteSnapshot = async () => {
     quoteFetchCount += 1;
-    return createEntryQuote({ source: 'thetadata' });
+    return createEntryQuote({ source: 'ibkr' });
   };
   (service as any).wait = async () => {
     waited = true;
@@ -471,7 +471,7 @@ async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
 
 async function runTests() {
   console.log('Running TradeExecutionService broker lifecycle tests...');
-  await testThetaDataQuoteAllowsProtectedLimit();
+  await testIBKRQuoteAllowsProtectedLimit();
   await testEntryLimitOffsetIsConfigurableAndCappedAtAsk();
   await testEntryValidationUsesProtectedLimitForRiskCheck();
   await testSnapTradeQuoteIsNotUsedForEntryValidation();

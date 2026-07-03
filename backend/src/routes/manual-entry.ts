@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import YahooFinance from 'yahoo-finance2';
 import { z } from 'zod';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
-import { ThetaDataService } from '../services/thetadata-service';
+import { IbkrMarketDataService } from '../services/ibkr-market-data-service';
 import { SnaptradeService } from '../services/snaptrade-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
@@ -106,7 +106,7 @@ function isRegularUsMarketSession(now = new Date()): boolean {
 
 function assertUsableEntryQuote(quote: any, intendedEntry: number | null, orderType: 'MARKET' | 'LIMIT') {
   if (!quote || Number(quote.mark || 0) <= 0) {
-    throw new Error('A live ThetaData quote is required before submitting the order.');
+    throw new Error('A live IBKR quote is required before submitting the order.');
   }
   if (Number(quote.bid || 0) <= 0 || Number(quote.ask || 0) <= 0) {
     throw new Error('Manual entry blocked: selected contract is missing live bid/ask.');
@@ -188,7 +188,7 @@ async function fetchUnderlyingPrice(symbol: string): Promise<number | null> {
 
 export async function manualEntryRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
-  const thetaData = new ThetaDataService(fastify);
+  const marketData = new IbkrMarketDataService(fastify);
 
   fastify.get('/settings', async (request) => {
     const { id: userId } = (request as any).user;
@@ -237,11 +237,11 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
 
     const symbol = parsed.data.symbol.toUpperCase();
     const right = parsed.data.optionType === 'CALL' ? 'call' : 'put';
-    const expirations = await thetaData.getOptionExpirations(userId, symbol);
+    const expirations = await marketData.getOptionExpirations(symbol);
     const expiration = expirations.find((candidate) => calculateDte(candidate) === parsed.data.dte);
     if (!expiration) return reply.code(404).send({ error: `No ${parsed.data.dte} DTE expiration found for ${symbol}` });
 
-    const chain = await thetaData.getOptionChainSnapshot(userId, symbol, expiration, right);
+    const chain = await marketData.getOptionChainSnapshot(userId, symbol, expiration, right);
     const strikes = [...new Set(chain.map((quote) => Number(quote.strike)).filter((strike) => Number.isFinite(strike) && strike > 0))]
       .sort((a, b) => a - b);
     if (strikes.length === 0) return reply.code(404).send({ error: 'No strikes found for selected contract' });
@@ -285,7 +285,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
     const parsed = QuoteQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: 'symbol, optionType, strike, and expiration are required' });
 
-    const quote = await thetaData.getOptionQuote(userId, {
+    const quote = await marketData.getOptionQuote(userId, {
       symbol: parsed.data.symbol.toUpperCase(),
       expiration: parsed.data.expiration,
       right: parsed.data.optionType === 'CALL' ? 'call' : 'put',
@@ -340,7 +340,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
         return reply.code(409).send({ error: `An active ${symbol} ${input.optionType} ${input.strike} ${input.expiration} trade already exists.` });
       }
 
-      const firstQuote = await thetaData.getOptionQuote(userId, {
+      const firstQuote = await marketData.getOptionQuote(userId, {
         symbol,
         expiration: input.expiration,
         right: input.optionType === 'CALL' ? 'call' : 'put',
@@ -349,7 +349,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
       assertUsableEntryQuote(firstQuote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(firstQuote?.mark || 0), input.orderType);
 
       await wait(750);
-      const quote = await thetaData.getOptionQuote(userId, {
+      const quote = await marketData.getOptionQuote(userId, {
         symbol,
         expiration: input.expiration,
         right: input.optionType === 'CALL' ? 'call' : 'put',
@@ -502,7 +502,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
       });
       await TradeRedisService.rebuildOpenTrades((fastify as any).pg, userId, fastify);
       await TradeRedisService.requestBrokerSync(userId);
-      (fastify as any).thetaDataStreamer?.syncSubscriptions?.().catch((err: any) => {
+      (fastify as any).ibkrMarketDataStreamer?.syncSubscriptions?.().catch((err: any) => {
         fastify.log.warn(`[ManualEntry] Failed to refresh stream subscriptions after entry: ${err.message}`);
       });
 

@@ -39,10 +39,10 @@ function macroSnapshot(overrides: Record<string, any>) {
   };
 }
 
-async function testThetaDataMissingVolumeDoesNotRejectLiquidCandidate() {
+async function testIBKRMissingVolumeDoesNotRejectLiquidCandidate() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [{
       ticker: 'QQQ260622C00741000',
       symbol: 'QQQ',
@@ -75,15 +75,15 @@ async function testThetaDataMissingVolumeDoesNotRejectLiquidCandidate() {
     minOpenInterest: 200
   });
 
-  assert(result.selected !== null, 'Missing ThetaData volume should be treated as unknown, not failed');
+  assert(result.selected !== null, 'Missing IBKR volume should be treated as unknown, not failed');
   assert(result.selected?.ticker === 'QQQ260622C00741000', `Expected selected contract, got ${result.selected?.ticker}`);
   assert(result.ranked[0].reasons.includes('volume unavailable'), 'Ranked candidate should explain unknown volume');
 }
 
-async function testThetaDataKnownLowVolumeStillRejectsCandidate() {
+async function testIBKRKnownLowVolumeStillRejectsCandidate() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [{
       ticker: 'QQQ260622C00741000',
       symbol: 'QQQ',
@@ -121,10 +121,10 @@ async function testThetaDataKnownLowVolumeStillRejectsCandidate() {
   assert(result.ranked[0].failedFilters.includes('volume below 200'), 'Failed filters should include low volume');
 }
 
-async function testThetaDataStrongVolumeOffsetsMissingOpenInterest() {
+async function testIBKRStrongVolumeOffsetsMissingOpenInterest() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [{
       ticker: 'QQQ260622C00741000',
       symbol: 'QQQ',
@@ -162,10 +162,10 @@ async function testThetaDataStrongVolumeOffsetsMissingOpenInterest() {
   assert(result.ranked[0].reasons.includes('strong volume offsets open interest gap'), 'Ranked candidate should explain OI override');
 }
 
-async function testThetaDataMissingOpenInterestRequiresStrongVolume() {
+async function testIBKRMissingOpenInterestRequiresStrongVolume() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [{
       ticker: 'QQQ260622C00741000',
       symbol: 'QQQ',
@@ -202,10 +202,10 @@ async function testThetaDataMissingOpenInterestRequiresStrongVolume() {
   assert(result.ranked[0].failedFilters.some((reason: string) => reason.includes('OI unavailable')), 'Failed filters should explain missing OI');
 }
 
-async function testThetaDataPrefersUsefulDeltaOverExactOffset() {
+async function testIBKRPrefersUsefulDeltaOverExactOffset() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [
       {
         ticker: 'QQQ260622C00741000',
@@ -272,10 +272,10 @@ async function testThetaDataPrefersUsefulDeltaOverExactOffset() {
   assert(result.ranked[1].reasons.includes('delta too low 0.12'), 'Rejected candidate should explain weak delta');
 }
 
-async function testThetaDataRejectsStaleOptionQuoteCandidate() {
+async function testIBKRRejectsStaleOptionQuoteCandidate() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [{
       ticker: 'QQQ260622C00741000',
       symbol: 'QQQ',
@@ -312,10 +312,10 @@ async function testThetaDataRejectsStaleOptionQuoteCandidate() {
   assert(result.ranked[0].reasons.some((reason: string) => reason.includes('stale quote')), 'Ranked candidate should explain stale quote');
 }
 
-async function testThetaDataRejectsUnstableMarkLastCandidate() {
+async function testIBKRRejectsUnstableMarkLastCandidate() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [{
       ticker: 'QQQ260622C00741000',
       symbol: 'QQQ',
@@ -352,10 +352,10 @@ async function testThetaDataRejectsUnstableMarkLastCandidate() {
   assert(result.ranked[0].reasons.some((reason: string) => reason.includes('unstable mark/last')), 'Ranked candidate should explain mark/last instability');
 }
 
-async function testThetaDataRejectsHighSpreadCostCandidate() {
+async function testIBKRRejectsHighSpreadCostCandidate() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [{
       ticker: 'QQQ260622C00741000',
       symbol: 'QQQ',
@@ -392,10 +392,10 @@ async function testThetaDataRejectsHighSpreadCostCandidate() {
   assert(result.ranked[0].reasons.some((reason: string) => reason.includes('spread cost')), 'Ranked candidate should explain spread cost');
 }
 
-async function testThetaDataRejectsHighThetaDragCandidate() {
+async function testIBKRRejectsHighThetaDragCandidate() {
   const scanner = createScanner();
 
-  const result = scanner.fetchBestThetaDataOptionCandidate({
+  const result = scanner.fetchBestIBKROptionCandidate({
     chain: [{
       ticker: 'QQQ260622C00741000',
       symbol: 'QQQ',
@@ -435,7 +435,7 @@ async function testThetaDataRejectsHighThetaDragCandidate() {
 async function testOptionChainCacheReusesSnapshotWithinWindow() {
   const scanner = createScanner();
   let fetchCount = 0;
-  const thetaData = {
+  const marketData = {
     getOptionChainSnapshot: async () => {
       fetchCount++;
       return [{
@@ -468,7 +468,7 @@ async function testOptionChainCacheReusesSnapshotWithinWindow() {
     side: 'CALL',
     windowKey: '2026-06-22:570',
     nowMs: 1_000,
-    thetaData
+    marketData
   });
   const second = await scanner.getCachedOptionChainSnapshot({
     userId: 1,
@@ -477,7 +477,7 @@ async function testOptionChainCacheReusesSnapshotWithinWindow() {
     side: 'CALL',
     windowKey: '2026-06-22:570',
     nowMs: 2_000,
-    thetaData
+    marketData
   });
 
   assert(fetchCount === 1, `Expected one chain fetch within cache window, got ${fetchCount}`);
@@ -490,7 +490,7 @@ async function testOptionChainCacheReusesSnapshotWithinWindow() {
 async function testOptionChainCacheIgnoresStaleSnapshotAfterTtl() {
   const scanner = createScanner();
   let fetchCount = 0;
-  const thetaData = {
+  const marketData = {
     getOptionChainSnapshot: async () => {
       fetchCount++;
       return [{
@@ -523,7 +523,7 @@ async function testOptionChainCacheIgnoresStaleSnapshotAfterTtl() {
     side: 'CALL',
     windowKey: '2026-06-22:570',
     nowMs: 1_000,
-    thetaData
+    marketData
   });
   const refreshed = await scanner.getCachedOptionChainSnapshot({
     userId: 1,
@@ -532,7 +532,7 @@ async function testOptionChainCacheIgnoresStaleSnapshotAfterTtl() {
     side: 'CALL',
     windowKey: '2026-06-22:570',
     nowMs: 30_000,
-    thetaData
+    marketData
   });
 
   assert(fetchCount === 2, `Expected stale cache to refetch, got ${fetchCount}`);
@@ -543,7 +543,7 @@ async function testOptionChainCacheIgnoresStaleSnapshotAfterTtl() {
 async function testOptionChainCacheBypassesSnapshotOnForceRefresh() {
   const scanner = createScanner();
   let fetchCount = 0;
-  const thetaData = {
+  const marketData = {
     getOptionChainSnapshot: async () => {
       fetchCount++;
       return [{
@@ -576,7 +576,7 @@ async function testOptionChainCacheBypassesSnapshotOnForceRefresh() {
     side: 'CALL',
     windowKey: '2026-06-22:570',
     nowMs: 1_000,
-    thetaData
+    marketData
   });
   const refreshed = await scanner.getCachedOptionChainSnapshot({
     userId: 1,
@@ -586,7 +586,7 @@ async function testOptionChainCacheBypassesSnapshotOnForceRefresh() {
     windowKey: '2026-06-22:570',
     forceRefresh: true,
     nowMs: 2_000,
-    thetaData
+    marketData
   });
 
   assert(fetchCount === 2, `Expected force refresh to bypass cache, got ${fetchCount} fetch(es)`);
@@ -1038,7 +1038,7 @@ async function testRelatedMissingQuoteWarningsUseSingleCappedPenalty() {
 
   const penalty = scanner.getPricingWarningPenalty([
     'No usable live option quote selected',
-    'No ThetaData option candidate passed liquidity/spread filters'
+    'No IBKR option candidate passed liquidity/spread filters'
   ]);
 
   assert(penalty === 20, `Expected missing live quote warnings to cap at 20, got ${penalty}`);
@@ -1048,7 +1048,7 @@ async function testLiveQuoteFallbackAfterChainRejectionUsesSmallPenalty() {
   const scanner = createScanner();
 
   const penalty = scanner.getPricingWarningPenalty([
-    'No ThetaData option candidate passed liquidity/spread filters'
+    'No IBKR option candidate passed liquidity/spread filters'
   ]);
 
   assert(penalty === 5, `Expected live quote fallback after chain rejection to subtract 5, got ${penalty}`);
@@ -1071,19 +1071,19 @@ async function testChainRejectionBlocksExecutionGrade() {
     volume: 5000,
     openInterest: 8000,
     usingTheoreticalPricing: false,
-    pricingWarnings: ['No ThetaData option candidate passed liquidity/spread filters']
+    pricingWarnings: ['No IBKR option candidate passed liquidity/spread filters']
   });
   const executionBlockers = scanner.buildPricingExecutionBlockers({
     chainSelectionRejected: true,
     selectedQuoteAgeMs: null,
     selectedThetaDragPct: null,
-    pricingWarnings: ['No ThetaData option candidate passed liquidity/spread filters'],
+    pricingWarnings: ['No IBKR option candidate passed liquidity/spread filters'],
     executionRealism
   });
   const diagnostics = scanner.buildSignalGradeDiagnostics({
     baseScore: 105,
     macroRegime,
-    pricingWarnings: ['No ThetaData option candidate passed liquidity/spread filters'],
+    pricingWarnings: ['No IBKR option candidate passed liquidity/spread filters'],
     pricingPenalty: 5,
     executionRealism,
     executionBlockers,
@@ -1597,15 +1597,15 @@ async function testBlockedDecisionSnapshotCapturesBlockersAndNoOptionSelection()
 
 async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
-  await testThetaDataMissingVolumeDoesNotRejectLiquidCandidate();
-  await testThetaDataKnownLowVolumeStillRejectsCandidate();
-  await testThetaDataStrongVolumeOffsetsMissingOpenInterest();
-  await testThetaDataMissingOpenInterestRequiresStrongVolume();
-  await testThetaDataPrefersUsefulDeltaOverExactOffset();
-  await testThetaDataRejectsStaleOptionQuoteCandidate();
-  await testThetaDataRejectsUnstableMarkLastCandidate();
-  await testThetaDataRejectsHighSpreadCostCandidate();
-  await testThetaDataRejectsHighThetaDragCandidate();
+  await testIBKRMissingVolumeDoesNotRejectLiquidCandidate();
+  await testIBKRKnownLowVolumeStillRejectsCandidate();
+  await testIBKRStrongVolumeOffsetsMissingOpenInterest();
+  await testIBKRMissingOpenInterestRequiresStrongVolume();
+  await testIBKRPrefersUsefulDeltaOverExactOffset();
+  await testIBKRRejectsStaleOptionQuoteCandidate();
+  await testIBKRRejectsUnstableMarkLastCandidate();
+  await testIBKRRejectsHighSpreadCostCandidate();
+  await testIBKRRejectsHighThetaDragCandidate();
   await testOptionChainCacheReusesSnapshotWithinWindow();
   await testOptionChainCacheIgnoresStaleSnapshotAfterTtl();
   await testOptionChainCacheBypassesSnapshotOnForceRefresh();

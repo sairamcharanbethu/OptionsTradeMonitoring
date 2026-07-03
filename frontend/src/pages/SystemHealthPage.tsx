@@ -151,7 +151,7 @@ const apiLabel = (name: string) => {
   const labels: Record<string, string> = {
     yahooFinance: 'Yahoo Finance',
     sscgexPortal: 'SSCGEX Portal',
-    thetaData: 'ThetaData Terminal',
+    ibkr: 'IBKR Gateway',
     openRouter: 'OpenRouter AI',
     discord: 'Discord Webhook'
   };
@@ -257,46 +257,58 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       lastSeen: adapterLastSeen(services.liveExitMonitor, services.liveExitMonitor?.lastQuoteAt || services.generatedAt),
       evidence: services.liveExitMonitor?.degradedReason || services.liveExitMonitor?.lastError || null,
       cause: causeFromError('Live exit quote processing error.', services.liveExitMonitor?.degradedReason || services.liveExitMonitor?.lastError),
-      nextStep: 'Check the active stream, open option subscriptions, and ThetaData quote timestamps.',
-      actionCommand: 'Open /system-health and compare Live Exit Monitor with ThetaData stream last message time.'
+      nextStep: 'Check the active stream, open option subscriptions, and quote timestamps.',
+      actionCommand: 'Open /system-health and compare Live Exit Monitor with the active stream last message time.'
     });
 
-    const thetaTerminal = services.marketData?.thetadata;
+    const ibkr = services.marketData?.ibkr;
     items.push({
-      id: 'market:thetadata',
+      id: 'market:ibkr',
       area: 'Market Data',
-      title: 'ThetaData Terminal',
-      status: thetaTerminal?.status || 'N/A',
-      severity: thetaTerminal?.lastError ? 'critical' : severityForStatus(thetaTerminal?.status),
-      endpoint: `${thetaTerminal?.baseUrl || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status`,
-      latencyMs: thetaTerminal?.latencyMs ?? null,
-      freshnessMs: thetaTerminal?.freshnessMs ?? null,
-      lastSeen: adapterLastSeen(thetaTerminal, services.generatedAt),
-      evidence: thetaTerminal?.degradedReason || thetaTerminal?.lastError || null,
-      cause: statusSummary(thetaTerminal?.status, thetaTerminal?.degradedReason || thetaTerminal?.lastError, 'ThetaData terminal is not reachable or not connected.'),
-      nextStep: isHealthyStatus(thetaTerminal?.status)
-        ? 'No action needed. Terminal is reachable.'
-        : 'Verify the ThetaData v3 jar is running in the backend container and that credentials/subscription are valid.',
-      actionCommand: `node -e "fetch('${thetaTerminal?.baseUrl || 'http://127.0.0.1:25503'}/v3/terminal/mdds/status').then(r=>r.text()).then(console.log).catch(e=>console.error(e.message))"`
+      title: 'IBKR Gateway',
+      status: ibkr?.status || 'N/A',
+      severity: ibkr?.lastError ? 'critical' : severityForStatus(ibkr?.status),
+      endpoint: `${ibkr?.host || 'ib_gateway'}:${ibkr?.port || 4003}`,
+      latencyMs: ibkr?.latencyMs ?? null,
+      freshnessMs: ibkr?.freshnessMs ?? null,
+      lastSeen: adapterLastSeen(ibkr, services.generatedAt),
+      evidence: ibkr?.degradedReason || ibkr?.lastError || null,
+      cause: statusSummary(ibkr?.status, ibkr?.degradedReason || ibkr?.lastError, 'IBKR Gateway is not reachable or live market data is unavailable.'),
+      nextStep: isHealthyStatus(ibkr?.status)
+        ? 'No action needed. IBKR live market data is reachable.'
+        : 'Verify IB Gateway is logged in live mode, port 4003 is reachable, and live data subscriptions are active.',
+      actionCommand: 'Run the IBKR TypeScript smoke test from the backend container.'
     });
 
     Object.entries(services.streams || {}).forEach(([name, stream]) => {
       const isActive = services.liveExitMonitor?.provider === name || Boolean(stream?.connected || (stream?.activeSubscriptions ?? 0) > 0 || stream?.lastMessageAt);
+      const streamTitle = name === 'ibkr' ? 'IBKR' : name === 'thetadata' ? 'ThetaData' : 'Alpaca';
+      const streamEndpoint = name === 'ibkr'
+        ? 'IBKR Gateway TCP market-data stream'
+        : name === 'thetadata'
+          ? 'THETADATA_STREAM_URL / v1 events'
+          : 'Alpaca market-data stream';
       items.push({
         id: `stream:${name}`,
         area: 'Stream',
-        title: `${name === 'thetadata' ? 'ThetaData' : 'Alpaca'} Quote Stream`,
+        title: `${streamTitle} Quote Stream`,
         status: isActive ? stream?.status || 'N/A' : 'DISABLED',
         severity: isActive && stream?.lastError ? 'critical' : severityForStatus(isActive ? stream?.status : 'DISABLED'),
-        endpoint: name === 'thetadata' ? 'THETADATA_STREAM_URL / v1 events' : 'Alpaca market-data stream',
+        endpoint: streamEndpoint,
         freshnessMs: stream?.freshnessMs ?? null,
         lastSeen: adapterLastSeen(stream, stream?.lastMessageAt || services.generatedAt),
         evidence: stream?.degradedReason || stream?.lastError || `${stream?.activeSubscriptions ?? 0} active subscriptions, ${stream?.reconnectAttempts ?? 0} reconnect attempts`,
         cause: stream?.degradedReason || stream?.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream?.degradedReason || stream?.lastError) : statusSummary(isActive ? stream?.status : 'DISABLED', null, 'Stream status and subscription state.'),
-        nextStep: name === 'thetadata' ? 'Confirm ThetaData stream URL and subscribed option symbols.' : 'Alpaca stream is optional unless selected as active provider.',
-        actionCommand: name === 'thetadata'
-          ? 'Check THETADATA_STREAM_URL and open option positions subscribed by the live exit monitor.'
-          : 'No action needed unless Alpaca is intentionally used as active provider.'
+        nextStep: name === 'ibkr'
+          ? 'Confirm IB Gateway is logged in and open/manual option contracts are subscribed.'
+          : name === 'thetadata'
+            ? 'Confirm ThetaData stream URL and subscribed option symbols.'
+            : 'Alpaca stream is optional unless selected as active provider.',
+        actionCommand: name === 'ibkr'
+          ? 'Check IBKR_HOST, IBKR_PORT, and live market-data subscriptions.'
+          : name === 'thetadata'
+            ? 'Check THETADATA_STREAM_URL and open option positions subscribed by the live exit monitor.'
+            : 'No action needed unless Alpaca is intentionally used as active provider.'
       });
     });
 
@@ -561,7 +573,11 @@ export default function SystemHealthPage() {
   const rootCauseItems = problematicEndpoints.slice(0, 4);
   const statusLabel = failures.length > 0 ? 'Action Required' : warnings.length > 0 ? 'Watch Closely' : 'All Systems Normal';
   const statusSeverity: HealthSeverity = failures.length > 0 ? 'critical' : warnings.length > 0 ? 'warning' : 'ok';
-  const activeProvider = services?.liveExitMonitor?.provider === 'alpaca' ? services?.streams?.alpaca : services?.streams?.thetadata;
+  const activeProvider = services?.liveExitMonitor?.provider === 'ibkr'
+    ? services?.streams?.ibkr
+    : services?.liveExitMonitor?.provider === 'alpaca'
+      ? services?.streams?.alpaca
+      : services?.streams?.thetadata;
 
   return (
     <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">

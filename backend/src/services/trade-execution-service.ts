@@ -5,7 +5,7 @@ import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeRedisService } from './trade-redis-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
-import { ThetaDataService } from './thetadata-service';
+import { IbkrMarketDataService } from './ibkr-market-data-service';
 import { tradingEventBus } from '../lib/trading-events';
 import { RiskDecisionService } from './risk-decision-service';
 import type { PreSubmitRiskAssessment } from './risk-decision-service';
@@ -36,11 +36,10 @@ interface ExecutionSettings {
   take_profit_pct?: string;
   stop_loss_engine_enabled?: string;
   live_trading_acknowledged?: string;
-  thetadata_base_url?: string;
 }
 
 type EntryQuoteSnapshot = {
-  source: 'thetadata';
+  source: 'ibkr';
   ticker: string;
   bid: number;
   ask: number;
@@ -369,6 +368,7 @@ export class TradeExecutionService {
     if (summary.closed > 0 || summary.supersededPending > 0) {
       await this.invalidateUserCaches(input.userId);
       const streamers = [
+        (this.fastify as any).ibkrMarketDataStreamer,
         (this.fastify as any).alpacaMarketDataStreamer,
         (this.fastify as any).thetaDataStreamer
       ];
@@ -534,13 +534,13 @@ export class TradeExecutionService {
     return raw;
   }
 
-  private async fetchThetaDataOptionQuote(userId: number, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
-    const thetaData = new ThetaDataService(this.fastify);
-    const quote = await thetaData.getOptionQuoteForOsi(userId, osiTicker);
+  private async fetchIbkrOptionQuote(userId: number, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
+    const marketData = new IbkrMarketDataService(this.fastify);
+    const quote = await marketData.getOptionQuoteForOsi(userId, osiTicker);
     if (!quote) return null;
 
     return {
-      source: 'thetadata',
+      source: 'ibkr',
       ticker: osiTicker,
       bid: quote.bid,
       ask: quote.ask,
@@ -557,13 +557,13 @@ export class TradeExecutionService {
 
   private async fetchEntryQuoteSnapshot(input: ExecuteSignalInput, settings: ExecutionSettings, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
     try {
-      const thetaDataQuote = await this.fetchThetaDataOptionQuote(input.userId, osiTicker);
-      if (thetaDataQuote) {
-        this.fastify.log.info(`[TradeExecutionService] Using ThetaData option quote for ${osiTicker}`);
-        return thetaDataQuote;
+      const ibkrQuote = await this.fetchIbkrOptionQuote(input.userId, osiTicker);
+      if (ibkrQuote) {
+        this.fastify.log.info(`[TradeExecutionService] Using IBKR option quote for ${osiTicker}`);
+        return ibkrQuote;
       }
     } catch (err: any) {
-      this.fastify.log.warn(`[TradeExecutionService] ThetaData entry quote unavailable for ${osiTicker}: ${err.message || String(err)}`);
+      this.fastify.log.warn(`[TradeExecutionService] IBKR entry quote unavailable for ${osiTicker}: ${err.message || String(err)}`);
     }
 
     return null;
@@ -831,6 +831,7 @@ export class TradeExecutionService {
     );
 
     const streamers = [
+      (this.fastify as any).ibkrMarketDataStreamer,
       (this.fastify as any).alpacaMarketDataStreamer,
       (this.fastify as any).thetaDataStreamer
     ];

@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { redis } from '../lib/redis';
+import { IbkrMarketDataService } from '../services/ibkr-market-data-service';
 
 export async function marketRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
     fastify.addHook('onRequest', fastify.authenticate);
@@ -11,17 +12,15 @@ export async function marketRoutes(fastify: FastifyInstance, options: FastifyPlu
             }
 
             const isOpen = poller.isMarketOpen();
-            const thetaData = (fastify as any).thetaData;
+            const ibkr = (fastify as any).ibkrMarketData || new IbkrMarketDataService(fastify);
 
-            // Check if ThetaData terminal/API is reachable.
+            // Check if IBKR Gateway/API is reachable.
             let connectionStatus = 'DISCONNECTED';
-            if (thetaData) {
-                try {
-                    const health = await thetaData.getHealth();
-                    connectionStatus = health.connected ? 'CONNECTED' : 'DISCONNECTED';
-                } catch (e) {
-                    connectionStatus = 'DISCONNECTED';
-                }
+            try {
+                const health = await ibkr.getHealth();
+                connectionStatus = health.connected ? 'CONNECTED' : 'DISCONNECTED';
+            } catch (e) {
+                connectionStatus = 'DISCONNECTED';
             }
 
             return {

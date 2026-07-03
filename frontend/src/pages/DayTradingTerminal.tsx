@@ -39,7 +39,7 @@ import {
 interface ApiHealthState {
   yahooFinance: { status: string; latencyMs: number | null };
   sscgexPortal: { status: string; latencyMs: number | null };
-  thetaData: { status: string; latencyMs: number | null };
+  ibkr: { status: string; latencyMs: number | null };
   openRouter: { status: string; latencyMs: number | null };
   discord: { status: string; latencyMs: number | null };
   alpaca?: { status: string; latencyMs: number | null };
@@ -66,6 +66,13 @@ interface ServiceHealthState {
       reconnectAttempts: number;
     };
     thetadata: {
+      status: string;
+      connected: boolean;
+      activeSubscriptions: number;
+      lastMessageAt: string | null;
+      reconnectAttempts: number;
+    };
+    ibkr: {
       status: string;
       connected: boolean;
       activeSubscriptions: number;
@@ -123,6 +130,13 @@ const defaultServiceHealth: ServiceHealthState = {
       reconnectAttempts: 0
     },
     thetadata: {
+      status: 'N/A',
+      connected: false,
+      activeSubscriptions: 0,
+      lastMessageAt: null,
+      reconnectAttempts: 0
+    },
+    ibkr: {
       status: 'N/A',
       connected: false,
       activeSubscriptions: 0,
@@ -897,7 +911,7 @@ function EngineFlowPanel({
   websocketConnected: boolean;
   brokerLabel: string;
 }) {
-  const feedConnected = Boolean(serviceHealth.streams.thetadata.connected || serviceHealth.streams.alpaca.connected);
+  const feedConnected = Boolean(serviceHealth.streams.ibkr.connected || serviceHealth.streams.thetadata.connected || serviceHealth.streams.alpaca.connected);
   const scannerTone = getStatusTone(serviceHealth.scanner.status, serviceHealth.scanner.status === 'RUNNING');
   const scoringTone: OpsTone = latestSignal ? 'ok' : latestLog ? 'warning' : 'idle';
   const executionTone: OpsTone = canTradeNow ? 'ok' : latestActionableSignal ? 'warning' : 'idle';
@@ -945,7 +959,13 @@ function EngineFlowPanel({
   const adapters = [
     { label: 'Candle REST', status: healthData.yahooFinance.status, detail: `${healthData.yahooFinance.latencyMs || 0}ms` },
     { label: 'GEX', status: healthData.sscgexPortal.status, detail: `${healthData.sscgexPortal.latencyMs || 0}ms` },
-    { label: 'Theta API', status: healthData.thetaData.status, detail: `${healthData.thetaData.latencyMs || 0}ms` },
+    { label: 'IBKR API', status: healthData.ibkr.status, detail: `${healthData.ibkr.latencyMs || 0}ms` },
+    {
+      label: 'IBKR Stream',
+      status: serviceHealth.streams.ibkr.status,
+      detail: `${serviceHealth.streams.ibkr.activeSubscriptions || 0} subs`,
+      connected: serviceHealth.streams.ibkr.connected
+    },
     {
       label: 'Theta WS',
       status: serviceHealth.streams.thetadata.status,
@@ -1060,7 +1080,7 @@ export default function DayTradingTerminal() {
   const [healthData, setHealthData] = useState<ApiHealthState>({
     yahooFinance: { status: 'UP', latencyMs: 95 },
     sscgexPortal: { status: 'UP', latencyMs: 140 },
-    thetaData: { status: 'UP', latencyMs: 110 },
+    ibkr: { status: 'UP', latencyMs: 110 },
     openRouter: { status: 'UP', latencyMs: 310 },
     discord: { status: 'UP', latencyMs: 120 },
     alpaca: { status: 'N/A', latencyMs: 0 }

@@ -91,8 +91,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
         try {
             const settings = await getSettingsWithGlobalFallback((fastify as any).pg, userId);
-            const thetaBaseUrl = valueFor(settings.thetadata_base_url, process.env.THETADATA_BASE_URL, 'http://127.0.0.1:25503');
-            const thetaStreamUrl = valueFor(settings.thetadata_stream_url, process.env.THETADATA_STREAM_URL, 'ws://127.0.0.1:25520/v1/events');
+            const ibkrHost = valueFor(undefined, process.env.IBKR_HOST, 'ib_gateway');
+            const ibkrPort = valueFor(undefined, process.env.IBKR_PORT, '4003');
+            const ibkrMarketDataType = valueFor(undefined, process.env.IBKR_MARKET_DATA_TYPE, '1');
             const aiProvider = valueFor(settings.ai_provider, undefined, 'openrouter');
             const aiModel = valueFor(settings.ai_model, process.env.AI_MODEL, 'deepseek/deepseek-chat');
             const buildSha = process.env.BUILD_SHA || process.env.GITHUB_SHA || process.env.VITE_APP_BUILD_SHA || '';
@@ -130,54 +131,44 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     detail: 'Optional deployment revision for tracing.'
                 }),
                 runtimeItem({
-                    id: 'market:thetadata-mode',
+                    id: 'market:ibkr-mode',
                     group: 'Market Data',
-                    label: 'ThetaData mode',
+                    label: 'Market data provider',
                     source: 'runtime',
                     status: 'configured',
                     secret: false,
-                    value: 'Integrated v3 terminal',
-                    detail: 'Backend talks to ThetaData on container-local 127.0.0.1.'
+                    value: 'IBKR Gateway',
+                    detail: 'Backend talks to IBKR Gateway over the Docker network.'
                 }),
                 runtimeItem({
-                    id: 'market:thetadata-base-url',
+                    id: 'market:ibkr-host',
                     group: 'Market Data',
-                    label: 'ThetaData REST URL',
-                    source: sourceFor(settings.thetadata_base_url, process.env.THETADATA_BASE_URL, 'http://127.0.0.1:25503'),
-                    status: thetaBaseUrl ? 'configured' : 'missing',
+                    label: 'IBKR host',
+                    source: sourceFor(undefined, process.env.IBKR_HOST, 'ib_gateway'),
+                    status: ibkrHost ? 'configured' : 'missing',
                     secret: false,
-                    value: thetaBaseUrl,
-                    detail: 'Used for v3 option quotes, chain selection, backtesting, and service health.'
+                    value: ibkrHost,
+                    detail: 'Used for stock bars, option chain, option quotes, and service health.'
                 }),
                 runtimeItem({
-                    id: 'market:thetadata-stream-url',
+                    id: 'market:ibkr-port',
                     group: 'Market Data',
-                    label: 'ThetaData stream URL',
-                    source: sourceFor(settings.thetadata_stream_url, process.env.THETADATA_STREAM_URL, 'ws://127.0.0.1:25520/v1/events'),
-                    status: thetaStreamUrl ? 'configured' : 'missing',
+                    label: 'IBKR live API port',
+                    source: sourceFor(undefined, process.env.IBKR_PORT, '4003'),
+                    status: ibkrPort ? 'configured' : 'missing',
                     secret: false,
-                    value: thetaStreamUrl,
-                    detail: 'ThetaData v3 option quote stream used for live exits.'
+                    value: ibkrPort,
+                    detail: 'Use 4003 for live Gateway inside Docker; 4004 is paper.'
                 }),
                 runtimeItem({
-                    id: 'market:thetadata-username',
+                    id: 'market:ibkr-market-data-type',
                     group: 'Market Data',
-                    label: 'ThetaData username',
-                    source: 'env',
-                    status: secretStatus(process.env.THETADATA_USERNAME),
-                    secret: true,
-                    value: secretValue(process.env.THETADATA_USERNAME),
-                    detail: 'Deployment secret loaded from env/Infisical.'
-                }),
-                runtimeItem({
-                    id: 'market:thetadata-password',
-                    group: 'Market Data',
-                    label: 'ThetaData password',
-                    source: 'env',
-                    status: secretStatus(process.env.THETADATA_PASSWORD),
-                    secret: true,
-                    value: secretValue(process.env.THETADATA_PASSWORD),
-                    detail: 'Deployment secret loaded from env/Infisical.'
+                    label: 'IBKR market data type',
+                    source: sourceFor(undefined, process.env.IBKR_MARKET_DATA_TYPE, '1'),
+                    status: ibkrMarketDataType === '1' ? 'configured' : 'attention',
+                    secret: false,
+                    value: ibkrMarketDataType,
+                    detail: '1 means live data. Delayed or frozen data should not be used for auto-entry.'
                 }),
                 runtimeItem({
                     id: 'ai:provider',
