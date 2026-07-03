@@ -805,7 +805,7 @@ Rules:
       discord_webhook_url: '',
       discord_alerts_enabled: 'false',
       trading_start_time: '09:30',
-      trading_cutoff_time: '16:00',
+      trading_cutoff_time: '15:30',
       strike_offset: '0',
       min_signal_score: '70',
       day_trading_ai_enabled: 'true',
@@ -1347,7 +1347,7 @@ Rules:
     let pricingData: any = null;
     let planData: any = null;
     const minOptionMark = 0.30;
-    const maxBidAskSpreadPct = 12;
+    const maxBidAskSpreadPct = 5;
     const minOptionVolume = 200;
     const minOpenInterest = 500;
     const configSnapshot = this.buildSignalConfigSnapshot(settings, {
@@ -2517,24 +2517,16 @@ Rules:
     if (String(input.symbol || '').toUpperCase() !== 'SPY') return [];
 
     const blockers: string[] = [];
-    const atrPct = input.currentPrice > 0 ? (input.atr14 / input.currentPrice) * 100 : null;
-    const floorPct = this.getSpyAtrCompressionFloorPct(input.currentMinutes);
+    const minAtr = 0.15;
 
-    if (atrPct !== null && atrPct < floorPct) {
-      blockers.push(`Volatility gateway blocked: SPY ATR14 ${atrPct.toFixed(3)}% is below ${floorPct.toFixed(3)}% floor for this time window`);
+    if (Number.isFinite(input.atr14) && input.atr14 < minAtr) {
+      blockers.push(`Volatility gateway blocked: SPY ATR14 ${input.atr14.toFixed(2)} is below minimum structural movement ${minAtr.toFixed(2)}`);
     }
     if (input.vixChangePct !== null && input.vixChangePct <= -8) {
       blockers.push(`Volatility gateway blocked: VIX compression ${input.vixChangePct.toFixed(2)}% is too steep for directional 0DTE auto-entry`);
     }
 
     return blockers;
-  }
-
-  private getSpyAtrCompressionFloorPct(currentMinutes: number): number {
-    if (currentMinutes < 11 * 60 + 30) return 0.035;
-    if (currentMinutes < 14 * 60) return 0.025;
-    if (currentMinutes < 15 * 60 + 30) return 0.030;
-    return 0.040;
   }
 
   private buildStrictSetupModelBlockers(input: {

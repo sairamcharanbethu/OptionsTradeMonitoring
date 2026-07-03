@@ -189,7 +189,7 @@ export class OptionsBacktester {
                 const etMinute = quoteTime.getUTCMinutes();
                 const etTimeMinutes = etHour * 60 + etMinute;
 
-                // 2. Scan Entries at scheduled checkpoints (Morning Session < 1:00 PM (780 mins), Afternoon >= 1:00 PM)
+                // 2. Scan Entries at scheduled checkpoints (0DTE before 1:00 PM, 1DTE after)
                 // Filter setups around 9:45 AM (585 mins) and 1:30 PM (810 mins)
                 const isCheckpoint = (etTimeMinutes >= 585 && etTimeMinutes <= 600) || (etTimeMinutes >= 810 && etTimeMinutes <= 825);
                 if (!isCheckpoint) continue;
@@ -294,7 +294,7 @@ export class OptionsBacktester {
 
                     // 4. Intraday Exit Emulator
                     let exitPrice = entryPrice;
-                    let exitTimeStr = '3:50 PM';
+                    let exitTimeStr = '3:30 PM';
                     let exitReason = 'EOD Cutoff';
                     let exitIndex = i;
                     const underlyingStopPrice = optionType === 'CALL' ? entrySpot * 0.995 : entrySpot * 1.005;
@@ -341,21 +341,12 @@ export class OptionsBacktester {
                             break;
                         }
 
-                        // Check Hard Cutoffs
-                        if (isMorning && exitMins >= 13 * 60) {
-                            // 1:00 PM morning exit cutoff
+                        // Check Hard Cutoff
+                        if (exitMins >= 15 * 60 + 30) {
+                            // 3:30 PM EOD exit cutoff
                             exitPrice = calculateBSPrice(exitQuote.close, strike, tExit, r, iv, optionType === 'CALL');
-                            exitTimeStr = '1:00 PM';
-                            exitReason = 'Morning Session Cutoff (1:00 PM ET)';
-                            exitIndex = j;
-                            break;
-                        }
-
-                        if (exitMins >= 15 * 60 + 50) {
-                            // 3:50 PM EOD exit cutoff
-                            exitPrice = calculateBSPrice(exitQuote.close, strike, tExit, r, iv, optionType === 'CALL');
-                            exitTimeStr = '3:50 PM';
-                            exitReason = 'EOD Liquidation Cutoff (3:50 PM ET)';
+                            exitTimeStr = '3:30 PM';
+                            exitReason = 'EOD Liquidation Cutoff (3:30 PM ET)';
                             exitIndex = j;
                             break;
                         }

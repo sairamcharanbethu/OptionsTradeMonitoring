@@ -705,10 +705,7 @@ export class MarketPoller {
     const etMinute = parseInt(etMinuteStr, 10);
     const etTimeMinutes = etHour * 60 + etMinute;
 
-    const todayStr = this.getNewYorkDateString(now);
-
-    const isEodCutoff = etTimeMinutes >= 15 * 60 + 50; // 3:50 PM ET or later
-    const isMorningCutoff = etTimeMinutes >= 13 * 60; // 1:00 PM ET or later
+    const isEodCutoff = etTimeMinutes >= 15 * 60 + 30; // 3:30 PM ET or later
 
     for (const pos of positions) {
         let shouldForceClose = false;
@@ -718,17 +715,9 @@ export class MarketPoller {
             continue;
         }
 
-        const expDateStr = pos.expiration_date instanceof Date
-            ? this.getNewYorkDateString(pos.expiration_date)
-            : String(pos.expiration_date).split('T')[0];
-        const is0Dte = expDateStr === todayStr;
-
         if (isEodCutoff) {
             shouldForceClose = true;
-            reason = 'EOD Hard Cutoff (3:50 PM ET)';
-        } else if (isMorningCutoff && is0Dte) {
-            shouldForceClose = true;
-            reason = 'Morning 0 DTE Hard Cutoff (1:00 PM ET)';
+            reason = 'Hard Cutoff (3:30 PM ET)';
         }
 
         if (shouldForceClose) {

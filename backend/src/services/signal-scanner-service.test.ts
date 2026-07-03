@@ -1484,14 +1484,14 @@ async function testSignalConfigSnapshotCapturesReplayAndExecutionSettings() {
     snaptrade_auto_trade: 'true'
   }, {
     minOptionMark: 0.3,
-    maxBidAskSpreadPct: 12,
+    maxBidAskSpreadPct: 5,
     minOptionVolume: 200,
     minOpenInterest: 500
   });
 
   assert(snapshot.version === 1, `Expected snapshot version 1, got ${snapshot.version}`);
   assert(snapshot.scanner.minSignalScore === 82, `Expected min signal score 82, got ${snapshot.scanner.minSignalScore}`);
-  assert(snapshot.scanner.maxBidAskSpreadPct === 12, `Expected spread threshold 12, got ${snapshot.scanner.maxBidAskSpreadPct}`);
+  assert(snapshot.scanner.maxBidAskSpreadPct === 5, `Expected spread threshold 5, got ${snapshot.scanner.maxBidAskSpreadPct}`);
   assert(snapshot.replay.contractsPerTrade === 3, `Expected replay contracts 3, got ${snapshot.replay.contractsPerTrade}`);
   assert(snapshot.replay.takeProfitPct === 18, `Expected replay take profit 18, got ${snapshot.replay.takeProfitPct}`);
   assert(snapshot.execution.broker === 'wealthsimple_snaptrade', `Expected broker snapshot, got ${snapshot.execution.broker}`);
@@ -1507,7 +1507,7 @@ async function testGeneratedDecisionSnapshotCapturesInputsImmutably() {
     execution_broker: 'wealthsimple_snaptrade'
   }, {
     minOptionMark: 0.3,
-    maxBidAskSpreadPct: 12,
+    maxBidAskSpreadPct: 5,
     minOptionVolume: 200,
     minOpenInterest: 500
   });

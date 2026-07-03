@@ -66,9 +66,10 @@ export class TradeExecutionService {
   constructor(private fastify: FastifyInstance) {}
 
   private readonly ENTRY_MAX_QUOTE_AGE_MS = 2_000;
-  private readonly ENTRY_MAX_SPREAD_PCT = 15;
+  private readonly ENTRY_MAX_SPREAD_PCT = 5;
   private readonly ENTRY_MIN_BID_TO_ENTRY_RATIO = 0.90;
   private readonly ENTRY_LIMIT_MID_TO_ASK_OFFSET_PCT = 20;
+  private readonly BROKER_SYNC_RETRY_BACKOFF_BASE_MS = 500;
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
@@ -930,7 +931,8 @@ export class TradeExecutionService {
   }
 
   private scheduleSnapTradePendingSync(userId: number) {
-    const delays = [5000, 30000, 120000];
+    const base = this.BROKER_SYNC_RETRY_BACKOFF_BASE_MS;
+    const delays = [base, base * 2, base * 4, base * 8, base * 16, 15000];
     for (const delayMs of delays) {
       setTimeout(() => {
         const snaptradeService = new SnaptradeService(this.fastify);

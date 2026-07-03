@@ -6,7 +6,7 @@ import { TradeRedisService } from './trade-redis-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 
-const SNAPTRADE_API_TIMEOUT_MS = Number(process.env.SNAPTRADE_API_TIMEOUT_MS || 8000);
+const SNAPTRADE_API_TIMEOUT_MS = Number(process.env.SNAPTRADE_API_TIMEOUT_MS || 15000);
 
 export class SnaptradeService {
     private fastify: FastifyInstance;
