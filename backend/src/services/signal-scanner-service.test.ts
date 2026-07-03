@@ -1118,23 +1118,109 @@ async function testStaleQuoteAndThetaDragBlockExecution() {
   assert(blockers.some((item: string) => item.includes('theta drag')), `Expected theta drag blocker, got ${blockers.join(', ')}`);
 }
 
-async function testMeanReversionCallRequiresEntryReclaimForAutoExecution() {
+async function testContractMismatchBlocksExecution() {
   const scanner = createScanner();
-  const blocked = scanner.buildAutoExecutionBlockers({
+
+  const blockers = scanner.buildContractConsistencyBlockers({
+    symbol: 'SPY',
+    side: 'CALL',
+    expiry: '2026-07-02',
+    strike: 748,
+    ticker: 'SPY260702C00749000'
+  });
+
+  assert(blockers.some((item: string) => item.includes('strike 749') && item.includes('selected strike 748')), `Expected strike mismatch blocker, got ${blockers.join(', ')}`);
+}
+
+async function testHighImpactEventBlocksZeroDteAutoTrading() {
+  const scanner = createScanner();
+
+  const zeroDteBlockers = scanner.buildEventRiskExecutionBlockers({
+    marketDate: '2026-07-02',
+    expiry: '2026-07-02'
+  });
+  const oneDteBlockers = scanner.buildEventRiskExecutionBlockers({
+    marketDate: '2026-07-02',
+    expiry: '2026-07-06'
+  });
+
+  assert(zeroDteBlockers.some((item: string) => item.includes('High-impact economic event')), `Expected 0DTE event blocker, got ${zeroDteBlockers.join(', ')}`);
+  assert(oneDteBlockers.length === 0, `Expected no 1DTE event blocker, got ${oneDteBlockers.join(', ')}`);
+}
+
+async function testMeanReversionTrendBlockersRequireStrongerConfirmation() {
+  const scanner = createScanner();
+  const latestRed = {
+    datetime: '2026-07-02T14:30:00.000Z',
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 748.5,
+    high: 748.8,
+    low: 747.6,
+    close: 747.9,
+    volume: 1000,
+    timestamp: Date.parse('2026-07-02T14:30:00.000Z') / 1000
+  };
+  const previous = {
+    datetime: '2026-07-02T14:25:00.000Z',
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 749.5,
+    high: 749.8,
+    low: 748.4,
+    close: 748.6,
+    volume: 1000,
+    timestamp: Date.parse('2026-07-02T14:25:00.000Z') / 1000
+  };
+
+  const blockers = scanner.buildMeanReversionTrendBlockers({
+    regime: 'MEAN_REVERSION',
+    winningSide: 'CALL',
+    currentPrice: 747.9,
+    latest: latestRed,
+    previous,
+    emaShort: 748.2,
+    emaLong: 749.4,
+    openingRangeLow: 747.6,
+    openingRangeHigh: 750,
+  });
+
+  assert(blockers.some((item: string) => item.includes('strong downtrend')), `Expected strong downtrend blocker, got ${blockers.join(', ')}`);
+}
+
+async function testMeanReversionRequiresEntryConfirmationForAutoExecution() {
+  const scanner = createScanner();
+  const callBlocked = scanner.buildAutoExecutionBlockers({
     tradeBias: 'BUY_CALL_ON_DIP',
     currentPrice: 747.93,
     entryTrigger: 749.79,
     executionBlockers: []
   });
-  const reclaimed = scanner.buildAutoExecutionBlockers({
+  const callReclaimed = scanner.buildAutoExecutionBlockers({
     tradeBias: 'BUY_CALL_ON_DIP',
     currentPrice: 750,
     entryTrigger: 749.79,
     executionBlockers: []
   });
+  const putBlocked = scanner.buildAutoExecutionBlockers({
+    tradeBias: 'BUY_PUT_ON_RIP',
+    currentPrice: 750.12,
+    entryTrigger: 748.25,
+    executionBlockers: []
+  });
+  const putBroken = scanner.buildAutoExecutionBlockers({
+    tradeBias: 'BUY_PUT_ON_RIP',
+    currentPrice: 748,
+    entryTrigger: 748.25,
+    executionBlockers: []
+  });
 
-  assert(blocked.some((item: string) => item.includes('has not reclaimed entry trigger')), `Expected reclaim blocker, got ${blocked.join(', ')}`);
-  assert(reclaimed.length === 0, `Expected no reclaim blocker after trigger reclaim, got ${reclaimed.join(', ')}`);
+  assert(callBlocked.some((item: string) => item.includes('has not reclaimed entry trigger')), `Expected reclaim blocker, got ${callBlocked.join(', ')}`);
+  assert(callReclaimed.length === 0, `Expected no reclaim blocker after trigger reclaim, got ${callReclaimed.join(', ')}`);
+  assert(putBlocked.some((item: string) => item.includes('has not broken entry trigger')), `Expected PUT break blocker, got ${putBlocked.join(', ')}`);
+  assert(putBroken.length === 0, `Expected no PUT blocker after trigger break, got ${putBroken.join(', ')}`);
+  assert(scanner.isEntryTriggerHit({ tradeBias: 'BUY_CALL_ON_DIP', price: 750, entryTrigger: 749.79 }) === true, 'CALL trigger should be hit after reclaim');
+  assert(scanner.isEntryTriggerHit({ tradeBias: 'BUY_PUT_ON_RIP', price: 748, entryTrigger: 748.25 }) === true, 'PUT trigger should be hit after breakdown');
 }
 
 async function testGexProximityDeduplicatesCallWallAndKingNodeAtSameStrike() {
@@ -1333,7 +1419,10 @@ async function runTests() {
   await testLiveQuoteFallbackAfterChainRejectionUsesSmallPenalty();
   await testChainRejectionBlocksExecutionGrade();
   await testStaleQuoteAndThetaDragBlockExecution();
-  await testMeanReversionCallRequiresEntryReclaimForAutoExecution();
+  await testContractMismatchBlocksExecution();
+  await testHighImpactEventBlocksZeroDteAutoTrading();
+  await testMeanReversionTrendBlockersRequireStrongerConfirmation();
+  await testMeanReversionRequiresEntryConfirmationForAutoExecution();
   await testGexProximityDeduplicatesCallWallAndKingNodeAtSameStrike();
   await testExecutionRealismScoresCleanQuoteAsExecutable();
   await testSignalConfigSnapshotCapturesReplayAndExecutionSettings();

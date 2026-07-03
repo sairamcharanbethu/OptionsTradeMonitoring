@@ -294,6 +294,14 @@ export class MarketPoller {
     return Boolean(quote && (!quote.bid || quote.bid <= 0) && ((quote.ask || 0) > 0 || (quote.last || 0) > 0 || (quote.mid || 0) > 0));
   }
 
+  private isUnderlyingStopBroken(position: any, underlyingPrice: number | undefined, underlyingStop: number | null): boolean {
+    if (!underlyingPrice || !underlyingStop) return false;
+    return (
+      (position.option_type === 'CALL' && underlyingPrice <= underlyingStop) ||
+      (position.option_type === 'PUT' && underlyingPrice >= underlyingStop)
+    );
+  }
+
   private async isStopLossEngineEnabledForUser(userId: number): Promise<boolean> {
     try {
       const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
@@ -819,15 +827,10 @@ export class MarketPoller {
     // Strategy 1: Underlying structure informs stop-loss confirmation.
     const underlyingStop = position.suggested_stop_loss ? Number(position.suggested_stop_loss) : null;
     const underlyingTarget = position.suggested_take_profit_1 ? Number(position.suggested_take_profit_1) : null;
-    const underlyingStopBroken = Boolean(
-      underlyingPrice && underlyingStop &&
-      (
-        (position.option_type === 'CALL' && underlyingPrice <= underlyingStop) ||
-        (position.option_type === 'PUT' && underlyingPrice >= underlyingStop)
-      )
-    );
+    const underlyingStopBroken = this.isUnderlyingStopBroken(position, underlyingPrice, underlyingStop);
 
     const stopLossCandidate = !triggered && (
+      underlyingStopBroken ||
       (noBidQuote && softPremiumStop > 0) ||
       premiumHardStopHit ||
       premiumSoftStopHit
@@ -835,7 +838,20 @@ export class MarketPoller {
     const stopLossEngineEnabled = stopLossCandidate ? await this.isStopLossEngineEnabledForUser(Number(position.user_id)) : true;
 
     if (!triggered && stopLossEngineEnabled) {
-      if (noBidQuote && softPremiumStop > 0) {
+      if (underlyingStopBroken) {
+        triggered = true;
+        triggerType = 'STOP_LOSS';
+        lossAvoided = entryPrice - sellablePremium;
+        analysis.smartStopWarning = {
+          status: 'UNDERLYING_STOP_BROKEN',
+          price: sellablePremium,
+          underlyingPrice: underlyingPrice ?? null,
+          underlyingStop,
+          triggeredAt: new Date().toISOString()
+        };
+        analysisDirty = true;
+        this.fastify.log.info(`[MarketPoller] UNDERLYING STOP triggered for position ${position.id}: ${position.symbol} ${underlyingPrice} crossed ${underlyingStop}`);
+      } else if (noBidQuote && softPremiumStop > 0) {
         triggered = true;
         triggerType = 'STOP_LOSS';
         lossAvoided = entryPrice - sellablePremium;
@@ -1239,9 +1255,10 @@ export class MarketPoller {
     }
   }
   private broadcastToFrontend(message: any) {
-    if (this.fastify.websocketServer) {
+    const websocketServer = (this.fastify as any).websocketServer;
+    if (websocketServer) {
       const payload = JSON.stringify(message);
-      this.fastify.websocketServer.clients.forEach((client: any) => {
+      websocketServer.clients.forEach((client: any) => {
         if (client.readyState === 1) {
           client.send(payload);
         }

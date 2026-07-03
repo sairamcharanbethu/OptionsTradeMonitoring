@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 
 const UpdateStatusSchema = z.object({
-  status: z.enum(['PENDING', 'EXECUTED', 'CANCELLED'])
+  status: z.enum(['PENDING', 'PENDING_TRIGGER', 'EXECUTED', 'CANCELLED'])
 });
 
 export async function signalRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
@@ -61,14 +61,14 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
       await fastify.pg.query(`
         UPDATE signals older
         SET status = 'CANCELLED'
-        WHERE older.status = 'PENDING'
+        WHERE older.status IN ('PENDING', 'PENDING_TRIGGER')
           AND older.signal_type != 'NONE'
           AND EXISTS (
             SELECT 1
             FROM signals newer
             WHERE newer.symbol = older.symbol
               AND newer.signal_type != 'NONE'
-              AND newer.status = 'PENDING'
+              AND newer.status IN ('PENDING', 'PENDING_TRIGGER')
               AND newer.created_at > older.created_at
           )
       `);
@@ -245,7 +245,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     schema: {
       tags: ['Signals'],
       summary: 'Update signal status',
-      description: 'Set signal status to EXECUTED, CANCELLED, or PENDING.',
+      description: 'Set signal status to EXECUTED, CANCELLED, PENDING_TRIGGER, or PENDING.',
       security: [{ bearerAuth: [] }],
       params: {
         type: 'object',
@@ -258,7 +258,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
         type: 'object',
         required: ['status'],
         properties: {
-          status: { type: 'string', enum: ['PENDING', 'EXECUTED', 'CANCELLED'] }
+          status: { type: 'string', enum: ['PENDING', 'PENDING_TRIGGER', 'EXECUTED', 'CANCELLED'] }
         }
       },
       response: {

@@ -153,6 +153,27 @@ type OptionChainCacheEntry = {
   chain: ThetaDataOptionChainQuote[];
 };
 
+type TriggerWatchState = {
+  userId: number;
+  signalId: number;
+  symbol: string;
+  winningSide: 'CALL' | 'PUT';
+  tradeBias: string;
+  chosenStrike: number;
+  chosenExpiry: string;
+  optionTicker: string | null;
+  entryTrigger: number;
+  stopUnderlying: number;
+  targetUnderlying: number;
+  mark: number | null;
+  settings: any;
+  autoTradeMode: 'instant' | 'ai_confirmed';
+  startedAtMs: number;
+  expiresAtMs: number;
+  armedAtMs: number | null;
+  armedPrice: number | null;
+};
+
 type ScannerNyDateParts = {
   year: string;
   month: string;
@@ -265,6 +286,7 @@ export class SignalScannerService {
   private liveMacroSnapshotFetchedAt = 0;
   private optionChainCache = new Map<string, OptionChainCacheEntry>();
   private readonly optionChainCacheTtlMs = Number(process.env.OPTION_CHAIN_CACHE_TTL_MS || 15_000);
+  private triggerWatchers = new Map<number, NodeJS.Timeout>();
 
   constructor(fastify: FastifyInstance) {
     this.fastify = fastify;
@@ -366,6 +388,10 @@ export class SignalScannerService {
       clearTimeout(this.newsWarmTimerId);
       this.newsWarmTimerId = null;
     }
+    for (const timer of this.triggerWatchers.values()) {
+      clearTimeout(timer);
+    }
+    this.triggerWatchers.clear();
     this.fastify.log.info('[SignalScannerService] Stopped background scanner loop.');
   }
 
@@ -1188,10 +1214,12 @@ Rules:
       addScore(callScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && qqqGexFlip !== null && currentPrice > qqqGexFlip && currentPrice < qqqKingNode, weights.gravityNode, 'Price between GEX Flip and King Node');
 
       // PUT
-      addScore(putScoreParts, currentPrice <= openingRangeHigh && currentPrice >= openingRangeHigh * 0.998, weights.supportResistanceHold, 'Price rejecting Opening Range High resistance');
+      const putRejectingResistance = currentPrice <= openingRangeHigh && currentPrice >= openingRangeHigh * 0.998;
+      const putBreakingDown = latest.close < latest.open && latest.close <= previous.low;
+      addScore(putScoreParts, putRejectingResistance, weights.supportResistanceHold, 'Price rejecting Opening Range High resistance');
       addScore(putScoreParts, rsi5 >= 70, weights.rsiReversal, 'Short-term RSI is overbought (RSI5 >= 70)');
       addScore(putScoreParts, latest.close < latest.open, weights.candleReversal, 'Latest candle closed red (reversal)');
-      addScore(putScoreParts, currentPrice > vwap, weights.oversoldDip, 'Price is above VWAP (overextended rip)');
+      addScore(putScoreParts, currentPrice > vwap && putRejectingResistance && putBreakingDown, weights.oversoldDip, 'Price is above VWAP while rejecting resistance and breaking down');
       addScore(putScoreParts, hasBearishInternals, weights.internals, 'Mega-Caps support rejection');
       addScore(putScoreParts, qqqGexRegime === 'POSITIVE' && qqqFlowDirection !== 'bullish', weights.flowDirection, 'Positive GEX and neutral/bearish flow');
       addScore(putScoreParts, qqqGexRegime === 'POSITIVE' && qqqKingNode !== null && currentPrice > qqqKingNode, weights.gravityNode, 'Price above King Node');
@@ -1252,6 +1280,18 @@ Rules:
     for (const blocker of volatilityBlockers) {
       noTradeReasons.push(blocker);
     }
+
+    noTradeReasons.push(...this.buildMeanReversionTrendBlockers({
+      regime,
+      winningSide,
+      currentPrice,
+      latest,
+      previous,
+      emaShort,
+      emaLong,
+      openingRangeLow,
+      openingRangeHigh
+    }));
 
     if (winningScore < dynamicMinScore) {
       noTradeReasons.push(`Best setup score ${winningScore} is below dynamic minimum ${dynamicMinScore}`);
@@ -1627,6 +1667,19 @@ Rules:
       if (spreadPct !== null && spreadPct > maxBidAskSpreadPct) pricingWarnings.push(`Spread ${spreadPct}% exceeds ceiling ${maxBidAskSpreadPct}%`);
       if (selectedQuoteAgeMs !== null && selectedQuoteAgeMs > 15_000) pricingWarnings.push(`Option quote stale ${Math.round(selectedQuoteAgeMs / 1000)}s`);
       if (selectedThetaDragPct !== null && selectedThetaDragPct > 45) pricingWarnings.push(`Option theta drag ${selectedThetaDragPct.toFixed(1)}%`);
+      const contractConsistencyBlockers = this.buildContractConsistencyBlockers({
+        symbol,
+        side: winningSide as 'CALL' | 'PUT',
+        expiry: chosenExpiry,
+        strike: chosenStrike,
+        ticker: optionTicker
+      });
+      for (const blocker of contractConsistencyBlockers) pricingWarnings.push(blocker);
+      const eventRiskBlockers = this.buildEventRiskExecutionBlockers({
+        marketDate: nyParts.dateStr,
+        expiry: chosenExpiry
+      });
+      for (const blocker of eventRiskBlockers) pricingWarnings.push(blocker);
       if (volume !== null && volume < minOptionVolume) pricingWarnings.push(`Volume ${volume} below minimum ${minOptionVolume}`);
       if (openInterest !== null && openInterest < minOpenInterest) pricingWarnings.push(`Open interest ${openInterest} below minimum ${minOpenInterest}`);
 
@@ -1653,6 +1706,8 @@ Rules:
         chainSelectionRejected,
         selectedQuoteAgeMs,
         selectedThetaDragPct,
+        contractConsistencyBlockers,
+        eventRiskBlockers,
         pricingWarnings,
         executionRealism
       });
@@ -1863,16 +1918,39 @@ Rules:
       const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
       if (this.isAutoExecutionEnabled(settings) && autoTradeMode === 'instant') {
         if (autoExecutionBlockers.length > 0) {
-          this.fastify.log.warn(`[SignalScannerService] Auto-execution blocked for signal #${signalId}: ${autoExecutionBlockers.join('; ')}`);
-          TradeRedisService.recordEvent(this.fastify.pg, {
-            userId,
-            signalId,
-            eventType: 'SIGNAL_AUTO_EXECUTION_BLOCKED',
-            message: autoExecutionBlockers.join('; '),
-            metadata: { symbol, side: winningSide, tradeBias, entryTrigger, currentPrice }
-          }).catch((err: any) => {
-            this.fastify.log.warn(`[SignalScannerService] Failed to record auto-execution blocker for #${signalId}: ${err.message || String(err)}`);
-          });
+          if (executionBlockers.length === 0 && this.hasEntryTriggerBlocker(autoExecutionBlockers)) {
+            this.startTriggerWatch({
+              userId,
+              signalId,
+              symbol,
+              winningSide: winningSide as 'CALL' | 'PUT',
+              tradeBias,
+              chosenStrike: chosenStrike as number,
+              chosenExpiry: chosenExpiry || '',
+              optionTicker,
+              entryTrigger,
+              stopUnderlying,
+              targetUnderlying,
+              mark,
+              settings,
+              autoTradeMode: 'instant',
+              startedAtMs: Date.now(),
+              expiresAtMs: Date.now() + this.getTriggerWatchWindowMs(),
+              armedAtMs: null,
+              armedPrice: null
+            });
+          } else {
+            this.fastify.log.warn(`[SignalScannerService] Auto-execution blocked for signal #${signalId}: ${autoExecutionBlockers.join('; ')}`);
+            TradeRedisService.recordEvent(this.fastify.pg, {
+              userId,
+              signalId,
+              eventType: 'SIGNAL_AUTO_EXECUTION_BLOCKED',
+              message: autoExecutionBlockers.join('; '),
+              metadata: { symbol, side: winningSide, tradeBias, entryTrigger, currentPrice }
+            }).catch((err: any) => {
+              this.fastify.log.warn(`[SignalScannerService] Failed to record auto-execution blocker for #${signalId}: ${err.message || String(err)}`);
+            });
+          }
         } else {
           setImmediate(() => {
             this.executeSignalForEligibleUsers({
@@ -2097,7 +2175,7 @@ Rules:
        SET status = 'CANCELLED'
        WHERE symbol = $1
          AND id <> $2
-         AND status = 'PENDING'
+         AND status IN ('PENDING', 'PENDING_TRIGGER')
          AND signal_type != 'NONE'
          AND (
            signal_type <> $3
@@ -2249,6 +2327,8 @@ Rules:
     chainSelectionRejected: boolean;
     selectedQuoteAgeMs: number | null;
     selectedThetaDragPct: number | null;
+    contractConsistencyBlockers?: string[];
+    eventRiskBlockers?: string[];
     pricingWarnings: string[];
     executionRealism: SignalGradeDiagnostics['executionRealism'];
   }): string[] {
@@ -2261,6 +2341,12 @@ Rules:
     }
     if (input.selectedThetaDragPct !== null && input.selectedThetaDragPct > 45) {
       blockers.add(`Option theta drag is extreme (${input.selectedThetaDragPct.toFixed(1)}%)`);
+    }
+    for (const blocker of input.contractConsistencyBlockers || []) {
+      blockers.add(blocker);
+    }
+    for (const blocker of input.eventRiskBlockers || []) {
+      blockers.add(blocker);
     }
     for (const warning of input.pricingWarnings) {
       const normalized = warning.toLowerCase();
@@ -2277,6 +2363,70 @@ Rules:
     return Array.from(blockers);
   }
 
+  private buildContractConsistencyBlockers(input: {
+    symbol: string;
+    side: 'CALL' | 'PUT';
+    expiry: string | null;
+    strike: number | null;
+    ticker: string | null;
+  }): string[] {
+    if (!input.ticker || input.strike === null || !input.expiry) return [];
+    const parsed = this.parseOsiTicker(input.ticker);
+    if (!parsed) return [`Option ticker ${input.ticker} is not a valid OSI contract`];
+
+    const blockers: string[] = [];
+    const expectedExpiry = String(input.expiry).split('T')[0];
+    if (parsed.symbol !== input.symbol.toUpperCase()) {
+      blockers.push(`Option ticker symbol ${parsed.symbol} does not match signal symbol ${input.symbol.toUpperCase()}`);
+    }
+    if (parsed.side !== input.side) {
+      blockers.push(`Option ticker side ${parsed.side} does not match selected side ${input.side}`);
+    }
+    if (parsed.expiry !== expectedExpiry) {
+      blockers.push(`Option ticker expiry ${parsed.expiry} does not match selected expiry ${expectedExpiry}`);
+    }
+    if (Math.abs(parsed.strike - Number(input.strike)) > 0.001) {
+      blockers.push(`Option ticker strike ${parsed.strike} does not match selected strike ${input.strike}`);
+    }
+    return blockers;
+  }
+
+  private buildEventRiskExecutionBlockers(input: {
+    marketDate: string;
+    expiry: string | null;
+  }): string[] {
+    if (!input.expiry || input.expiry !== input.marketDate) return [];
+    const context = getEconomicCalendarContext(input.marketDate);
+    if (!context.includes('HIGH EVENT RISK')) return [];
+    return [`High-impact economic event today; 0DTE auto-trading blocked (${context.split('\n')[0]})`];
+  }
+
+  private buildMeanReversionTrendBlockers(input: {
+    regime: string;
+    winningSide: 'CALL' | 'PUT';
+    currentPrice: number;
+    latest: Candle;
+    previous: Candle;
+    emaShort: number | null;
+    emaLong: number | null;
+    openingRangeLow: number;
+    openingRangeHigh: number;
+  }): string[] {
+    if (input.regime !== 'MEAN_REVERSION') return [];
+    const strongDowntrend = input.emaShort !== null && input.emaLong !== null && input.emaShort < input.emaLong && input.currentPrice < input.emaShort;
+    const strongUptrend = input.emaShort !== null && input.emaLong !== null && input.emaShort > input.emaLong && input.currentPrice > input.emaShort;
+    const callConfirmed = input.currentPrice >= input.openingRangeLow && input.latest.close > input.latest.open && input.latest.close >= input.previous.high;
+    const putConfirmed = input.currentPrice <= input.openingRangeHigh && input.latest.close < input.latest.open && input.latest.close <= input.previous.low;
+
+    if (input.winningSide === 'CALL' && strongDowntrend && !callConfirmed) {
+      return ['Mean-reversion CALL blocked: strong downtrend requires support hold and reclaim confirmation'];
+    }
+    if (input.winningSide === 'PUT' && strongUptrend && !putConfirmed) {
+      return ['Mean-reversion PUT blocked: strong uptrend requires resistance rejection and breakdown confirmation'];
+    }
+    return [];
+  }
+
   private buildAutoExecutionBlockers(input: {
     tradeBias: string;
     currentPrice: number;
@@ -2286,6 +2436,9 @@ Rules:
     const blockers = [...input.executionBlockers];
     if (input.tradeBias === 'BUY_CALL_ON_DIP' && input.currentPrice < input.entryTrigger) {
       blockers.push(`Mean-reversion CALL has not reclaimed entry trigger ${input.entryTrigger.toFixed(2)}; current ${input.currentPrice.toFixed(2)}`);
+    }
+    if (input.tradeBias === 'BUY_PUT_ON_RIP' && input.currentPrice > input.entryTrigger) {
+      blockers.push(`Mean-reversion PUT has not broken entry trigger ${input.entryTrigger.toFixed(2)}; current ${input.currentPrice.toFixed(2)}`);
     }
     return blockers;
   }
@@ -3411,6 +3564,18 @@ Rules:
     return `${symbol.toUpperCase()}${yy}${mm}${dd}${right}${strikeValue}`;
   }
 
+  private parseOsiTicker(ticker: string): { symbol: string; expiry: string; side: 'CALL' | 'PUT'; strike: number } | null {
+    const match = String(ticker || '').replace(/\s+/g, '').toUpperCase().match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+    if (!match) return null;
+    const [, symbol, expiry, side, strikeRaw] = match;
+    return {
+      symbol,
+      expiry: `20${expiry.slice(0, 2)}-${expiry.slice(2, 4)}-${expiry.slice(4, 6)}`,
+      side: side === 'C' ? 'CALL' : 'PUT',
+      strike: Number(strikeRaw) / 1000
+    };
+  }
+
   /**
    * Two-stage AI enrichment pipeline. Runs in the background after signal INSERT.
    *
@@ -4397,6 +4562,265 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       targetUnderlying: input.targetUnderlying,
       mark: input.mark
     }, input.settings);
+  }
+
+  private getTriggerWatchWindowMs(): number {
+    const configured = Number(process.env.TRIGGER_WATCH_WINDOW_MS || 10 * 60 * 1000);
+    return Number.isFinite(configured) && configured > 0 ? configured : 10 * 60 * 1000;
+  }
+
+  private getTriggerWatchPollMs(): number {
+    const configured = Number(process.env.TRIGGER_WATCH_POLL_MS || 15_000);
+    return Number.isFinite(configured) && configured > 0 ? configured : 15_000;
+  }
+
+  private hasEntryTriggerBlocker(blockers: string[]): boolean {
+    return blockers.some((blocker) => blocker.includes('entry trigger'));
+  }
+
+  private isEntryTriggerHit(input: { tradeBias: string; price: number; entryTrigger: number }): boolean {
+    if (input.tradeBias === 'BUY_CALL_ON_DIP') return input.price >= input.entryTrigger;
+    if (input.tradeBias === 'BUY_PUT_ON_RIP') return input.price <= input.entryTrigger;
+    return true;
+  }
+
+  private async fetchUnderlyingSpotPrice(symbol: string): Promise<number | null> {
+    const quote = await (yahooFinance as any).quote(symbol);
+    return this.finiteNumber(
+      quote?.regularMarketPrice ??
+      quote?.postMarketPrice ??
+      quote?.preMarketPrice ??
+      quote?.bid ??
+      quote?.ask
+    );
+  }
+
+  private async validateTriggerEntryQuote(state: TriggerWatchState): Promise<{ mark: number | null; blockers: string[] }> {
+    const ticker = state.optionTicker || this.buildOsiTicker(state.symbol, state.chosenExpiry, state.winningSide, state.chosenStrike);
+    const contractBlockers = this.buildContractConsistencyBlockers({
+      symbol: state.symbol,
+      side: state.winningSide,
+      expiry: state.chosenExpiry,
+      strike: state.chosenStrike,
+      ticker
+    });
+    const quote = await new ThetaDataService(this.fastify).getOptionQuoteForOsi(state.userId, ticker);
+    const pricingWarnings: string[] = [...contractBlockers];
+
+    if (!quote) {
+      pricingWarnings.push('No usable live option quote selected');
+      const executionRealism = this.buildExecutionRealismDiagnostics({
+        mark: null,
+        spreadPct: null,
+        volume: null,
+        openInterest: null,
+        usingTheoreticalPricing: false,
+        pricingWarnings
+      });
+      return {
+        mark: null,
+        blockers: this.buildPricingExecutionBlockers({
+          chainSelectionRejected: false,
+          selectedQuoteAgeMs: null,
+          selectedThetaDragPct: null,
+          contractConsistencyBlockers: contractBlockers,
+          eventRiskBlockers: [],
+          pricingWarnings,
+          executionRealism
+        })
+      };
+    }
+
+    if (quote.quoteAgeMs !== null && quote.quoteAgeMs > 15_000) {
+      pricingWarnings.push(`Option quote stale ${Math.round(quote.quoteAgeMs / 1000)}s`);
+    }
+    if (quote.spreadPct !== null && quote.spreadPct > 12) {
+      pricingWarnings.push(`Spread ${quote.spreadPct}% exceeds ceiling 12%`);
+    }
+    const executionRealism = this.buildExecutionRealismDiagnostics({
+      mark: quote.mark,
+      spreadPct: quote.spreadPct,
+      volume: null,
+      openInterest: null,
+      usingTheoreticalPricing: false,
+      pricingWarnings
+    });
+
+    return {
+      mark: quote.mark,
+      blockers: this.buildPricingExecutionBlockers({
+        chainSelectionRejected: false,
+        selectedQuoteAgeMs: quote.quoteAgeMs,
+        selectedThetaDragPct: null,
+        contractConsistencyBlockers: contractBlockers,
+        eventRiskBlockers: [],
+        pricingWarnings,
+        executionRealism
+      })
+    };
+  }
+
+  private startTriggerWatch(state: TriggerWatchState) {
+    const existing = this.triggerWatchers.get(state.signalId);
+    if (existing) clearTimeout(existing);
+
+    this.fastify.pg.query(
+      `UPDATE signals
+       SET status = 'PENDING_TRIGGER'
+       WHERE id = $1 AND status = 'PENDING'`,
+      [state.signalId]
+    ).catch((err: any) => {
+      this.fastify.log.warn(`[SignalScannerService] Failed to mark signal #${state.signalId} pending trigger: ${err.message || String(err)}`);
+    });
+
+    TradeRedisService.recordEvent(this.fastify.pg, {
+      userId: state.userId,
+      signalId: state.signalId,
+      eventType: 'SIGNAL_TRIGGER_WATCH_STARTED',
+      message: `${state.symbol} ${state.winningSide} waiting for entry trigger ${state.entryTrigger.toFixed(2)}`,
+      metadata: {
+        symbol: state.symbol,
+        side: state.winningSide,
+        tradeBias: state.tradeBias,
+        entryTrigger: state.entryTrigger,
+        expiresAt: new Date(state.expiresAtMs).toISOString()
+      }
+    }).catch((err: any) => {
+      this.fastify.log.warn(`[SignalScannerService] Failed to record trigger watch event for #${state.signalId}: ${err.message || String(err)}`);
+    });
+
+    this.scheduleTriggerWatchTick(state, 0);
+  }
+
+  private scheduleTriggerWatchTick(state: TriggerWatchState, delayMs = this.getTriggerWatchPollMs()) {
+    const timer = setTimeout(() => {
+      this.evaluateTriggerWatch(state).catch((err: any) => {
+        this.fastify.log.warn(`[SignalScannerService] Trigger watch failed for signal #${state.signalId}: ${err.message || String(err)}`);
+        this.triggerWatchers.delete(state.signalId);
+      });
+    }, delayMs);
+    this.triggerWatchers.set(state.signalId, timer);
+  }
+
+  private async cancelTriggerWatch(state: TriggerWatchState, reason: string, eventType = 'SIGNAL_TRIGGER_WATCH_CANCELLED') {
+    const timer = this.triggerWatchers.get(state.signalId);
+    if (timer) clearTimeout(timer);
+    this.triggerWatchers.delete(state.signalId);
+    await this.fastify.pg.query(
+      `UPDATE signals
+       SET status = 'CANCELLED',
+           no_trade_reasons = array_append(COALESCE(no_trade_reasons, ARRAY[]::TEXT[]), $2)
+       WHERE id = $1 AND status IN ('PENDING', 'PENDING_TRIGGER')`,
+      [state.signalId, reason]
+    );
+    await TradeRedisService.recordEvent(this.fastify.pg, {
+      userId: state.userId,
+      signalId: state.signalId,
+      eventType,
+      message: reason,
+      metadata: {
+        symbol: state.symbol,
+        side: state.winningSide,
+        tradeBias: state.tradeBias,
+        entryTrigger: state.entryTrigger,
+        armedPrice: state.armedPrice
+      }
+    });
+  }
+
+  private async evaluateTriggerWatch(state: TriggerWatchState) {
+    const statusResult = await this.fastify.pg.query('SELECT status FROM signals WHERE id = $1', [state.signalId]);
+    const status = statusResult.rows[0]?.status;
+    if (!status || !['PENDING', 'PENDING_TRIGGER'].includes(status)) {
+      this.triggerWatchers.delete(state.signalId);
+      return;
+    }
+
+    const now = Date.now();
+    if (now >= state.expiresAtMs) {
+      await this.cancelTriggerWatch(state, `Entry trigger was not confirmed before watch expired`, 'SIGNAL_TRIGGER_WATCH_EXPIRED');
+      return;
+    }
+
+    const price = await this.fetchUnderlyingSpotPrice(state.symbol);
+    if (price === null) {
+      this.scheduleTriggerWatchTick(state);
+      return;
+    }
+
+    const triggerHit = this.isEntryTriggerHit({ tradeBias: state.tradeBias, price, entryTrigger: state.entryTrigger });
+    if (!triggerHit) {
+      if (state.armedAtMs !== null) {
+        await this.cancelTriggerWatch(state, `Entry trigger failed after first touch; ${state.symbol} is back at ${price.toFixed(2)}`, 'SIGNAL_TRIGGER_FAILED');
+        return;
+      }
+      this.scheduleTriggerWatchTick(state);
+      return;
+    }
+
+    if (state.armedAtMs === null) {
+      this.scheduleTriggerWatchTick({
+        ...state,
+        armedAtMs: now,
+        armedPrice: price
+      });
+      return;
+    }
+
+    const quoteValidation = await this.validateTriggerEntryQuote(state);
+    if (quoteValidation.blockers.length > 0) {
+      await this.cancelTriggerWatch(state, quoteValidation.blockers.join('; '), 'SIGNAL_TRIGGER_QUOTE_BLOCKED');
+      return;
+    }
+
+    const timer = this.triggerWatchers.get(state.signalId);
+    if (timer) clearTimeout(timer);
+    this.triggerWatchers.delete(state.signalId);
+    const updateResult = await this.fastify.pg.query(
+      `UPDATE signals
+       SET status = 'PENDING',
+           current_price = $2,
+           option_details = jsonb_set(COALESCE(option_details, '{}'::jsonb), '{triggerWatch}', $3::jsonb, true)
+       WHERE id = $1 AND status IN ('PENDING', 'PENDING_TRIGGER')`,
+      [state.signalId, price, JSON.stringify({
+        confirmedAt: new Date(now).toISOString(),
+        confirmedPrice: price,
+        armedAt: state.armedAtMs ? new Date(state.armedAtMs).toISOString() : null,
+        armedPrice: state.armedPrice,
+        quoteMark: quoteValidation.mark
+      })]
+    );
+    if ((updateResult.rowCount || 0) === 0) {
+      return;
+    }
+    await TradeRedisService.recordEvent(this.fastify.pg, {
+      userId: state.userId,
+      signalId: state.signalId,
+      eventType: 'SIGNAL_TRIGGER_CONFIRMED',
+      message: `${state.symbol} ${state.winningSide} trigger confirmed at ${price.toFixed(2)}`,
+      metadata: {
+        symbol: state.symbol,
+        side: state.winningSide,
+        tradeBias: state.tradeBias,
+        entryTrigger: state.entryTrigger,
+        price,
+        quoteMark: quoteValidation.mark
+      }
+    });
+
+    await this.executeSignalForEligibleUsers({
+      userId: state.userId,
+      signalId: state.signalId,
+      symbol: state.symbol,
+      winningSide: state.winningSide,
+      chosenStrike: state.chosenStrike,
+      chosenExpiry: state.chosenExpiry,
+      stopUnderlying: state.stopUnderlying,
+      targetUnderlying: state.targetUnderlying,
+      mark: quoteValidation.mark ?? state.mark,
+      settings: state.settings,
+      autoTradeMode: state.autoTradeMode
+    });
   }
 
   private async executeSignalForEligibleUsers(input: {
