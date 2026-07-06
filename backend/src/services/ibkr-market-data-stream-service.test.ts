@@ -82,11 +82,29 @@ async function testTemporarySubscriptionsUseContractKeys() {
   assert(((service as any).activeContracts as Map<string, any>).size === 0, 'Removing final temp subscription should clear active contract');
 }
 
+async function testDisconnectSchedulesReconnect() {
+  const service = new IbkrMarketDataStreamService(createFastifyMock());
+  let reconnectScheduleCount = 0;
+  (service as any).isConnected = true;
+  (service as any).connectedPromise = Promise.resolve();
+  (service as any).scheduleReconnect = () => {
+    reconnectScheduleCount++;
+  };
+
+  (service as any).handleDisconnected('test disconnect');
+
+  assert((service as any).isConnected === false, 'Disconnect should mark stream disconnected');
+  assert((service as any).connectedPromise === null, 'Disconnect should clear pending connection promise');
+  assert((service as any).lastError === 'test disconnect', 'Disconnect should record reason');
+  assert(reconnectScheduleCount === 1, `Disconnect should schedule reconnect once, got ${reconnectScheduleCount}`);
+}
+
 async function runTests() {
   console.log('Running IbkrMarketDataStreamService tests...');
   await testOptionQuotePayloadShape();
   await testContractKeyAndOsiSymbol();
   await testTemporarySubscriptionsUseContractKeys();
+  await testDisconnectSchedulesReconnect();
   console.log('All IbkrMarketDataStreamService tests passed!');
 }
 

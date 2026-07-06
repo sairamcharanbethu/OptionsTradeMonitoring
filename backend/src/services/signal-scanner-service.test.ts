@@ -784,6 +784,26 @@ async function testStaleScannerCandlesProduceBlocker() {
   assert(blocker?.includes('Candle data stale from yahoo'), `Expected stale candle blocker, got ${blocker}`);
 }
 
+async function testCompletedFiveMinuteCandleWithinCurrentWindowIsFresh() {
+  const scanner = createScanner();
+  const candle = {
+    datetime: '2026-06-22T13:45:00.000Z',
+    nyDateStr: '2026-06-22',
+    isRTH: true,
+    open: 100,
+    high: 101,
+    low: 99,
+    close: 100.5,
+    volume: 1000,
+    timestamp: Date.parse('2026-06-22T13:45:00.000Z') / 1000
+  };
+  const freshnessMs = scanner.getCandleFreshnessMs(candle, new Date('2026-06-22T13:52:52.000Z'));
+  const blocker = scanner.getCandleFreshnessBlocker({ source: 'ibkr', freshnessMs });
+
+  assert(freshnessMs === 172 * 1000, `Expected 172s candle freshness after bar close, got ${freshnessMs}`);
+  assert(blocker === null, `Expected 172s completed candle freshness to be allowed, got ${blocker}`);
+}
+
 async function testScannerCycleContextUsesFixedClock() {
   const scanner = createScanner();
   const cycle = scanner.buildScannerCycleContext({
@@ -1615,6 +1635,7 @@ async function runTests() {
   await testScannerAlpacaSettingsCredentialsBeatEnvCredentials();
   await testScannerCandlesFallbackToYahooWhenAlpacaFails();
   await testStaleScannerCandlesProduceBlocker();
+  await testCompletedFiveMinuteCandleWithinCurrentWindowIsFresh();
   await testScannerCycleContextUsesFixedClock();
   await testFixedClockDrivesExpiryAndAfternoonThreshold();
   await testFixedClockMacroAssessmentIsDeterministic();

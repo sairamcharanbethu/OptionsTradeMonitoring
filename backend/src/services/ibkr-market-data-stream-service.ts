@@ -183,10 +183,14 @@ export class IbkrMarketDataStreamService extends EventEmitter {
     this.ib.off(EventName.tickSize, this.onTickSize);
     this.ib.off(EventName.tickOptionComputation, this.onTickOptionComputation);
     this.ib.off(EventName.error, this.onStreamError);
+    this.ib.off(EventName.disconnected, this.onDisconnected);
+    this.ib.off(EventName.connectionClosed, this.onConnectionClosed);
     this.ib.on(EventName.tickPrice, this.onTickPrice);
     this.ib.on(EventName.tickSize, this.onTickSize);
     this.ib.on(EventName.tickOptionComputation, this.onTickOptionComputation);
     this.ib.on(EventName.error, this.onStreamError);
+    this.ib.on(EventName.disconnected, this.onDisconnected);
+    this.ib.on(EventName.connectionClosed, this.onConnectionClosed);
   }
 
   private readonly onTickPrice = (reqId: number, field: number, price: number) => {
@@ -225,10 +229,26 @@ export class IbkrMarketDataStreamService extends EventEmitter {
     this.lastError = `IBKR stream error${code ? ` ${code}` : ''}: ${err?.message || String(err)}`;
     this.fastify.log.warn(`[IBKRStream] ${this.lastError}`);
     if (Number(reqId) === -1 || reqId === undefined || reqId === null) {
-      this.isConnected = false;
-      this.scheduleReconnect();
+      this.handleDisconnected(this.lastError);
     }
   };
+
+  private readonly onDisconnected = () => {
+    this.handleDisconnected('IBKR stream socket disconnected');
+  };
+
+  private readonly onConnectionClosed = () => {
+    this.handleDisconnected('IBKR stream connection closed');
+  };
+
+  private handleDisconnected(reason: string) {
+    if (!this.isConnected && this.reconnectTimer) return;
+    this.isConnected = false;
+    this.connectedPromise = null;
+    this.lastError = reason;
+    this.fastify.log.warn(`[IBKRStream] ${reason}. Scheduling reconnect...`);
+    this.scheduleReconnect();
+  }
 
   private reconcileSubscriptions() {
     if (!this.ib || !this.isConnected) return;

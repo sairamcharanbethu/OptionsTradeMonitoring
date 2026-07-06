@@ -1,4 +1,5 @@
 import '@fastify/postgres';
+import { EventEmitter } from 'events';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
 
 function assert(condition: boolean, message: string) {
@@ -77,11 +78,36 @@ async function testMissingBidAskIsNonExecutableState() {
   assert(quote.spreadPct === null, 'Missing bid/ask should not invent spread pct');
 }
 
+async function testNoTickSnapshotResetsSharedConnection() {
+  const service = new IbkrMarketDataService(createFastifyMock());
+  const fakeIb = new EventEmitter() as any;
+  let canceledReqId: number | null = null;
+  let disconnectCount = 0;
+  fakeIb.reqMktData = () => {};
+  fakeIb.cancelMktData = (reqId: number) => {
+    canceledReqId = reqId;
+  };
+  fakeIb.disconnect = () => {
+    disconnectCount++;
+  };
+
+  (IbkrMarketDataService as any).sharedApi = fakeIb;
+  (IbkrMarketDataService as any).connectedPromise = Promise.resolve();
+
+  await (service as any).requestMarketData({}, '', 1, 'test no ticks');
+
+  assert(canceledReqId !== null, 'No-tick snapshot should cancel market data request');
+  assert(disconnectCount === 1, `No-tick snapshot should disconnect stale shared API, got ${disconnectCount}`);
+  assert((IbkrMarketDataService as any).sharedApi === null, 'No-tick snapshot should clear shared API');
+  assert((IbkrMarketDataService as any).connectedPromise === null, 'No-tick snapshot should clear connection promise');
+}
+
 async function runTests() {
   console.log('Running IbkrMarketDataService normalization tests...');
   await testOsiTickerParsing();
   await testQuoteNormalization();
   await testMissingBidAskIsNonExecutableState();
+  await testNoTickSnapshotResetsSharedConnection();
   console.log('All IbkrMarketDataService normalization tests passed!');
 }
 

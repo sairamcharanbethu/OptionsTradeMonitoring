@@ -2818,8 +2818,9 @@ Rules:
     return Math.max(0, now.getTime() - completedAtMs);
   }
 
-  private getCandleFreshnessBlocker(input: { source: CandleSource; freshnessMs: number }): string | null {
-    const maxFreshnessMs = 2 * 60 * 1000;
+  private getCandleFreshnessBlocker(input: { source: CandleSource; freshnessMs: number; intervalMinutes?: number }): string | null {
+    const intervalMinutes = input.intervalMinutes ?? 5;
+    const maxFreshnessMs = (intervalMinutes + 2) * 60 * 1000;
     if (input.freshnessMs <= maxFreshnessMs) return null;
     return `Candle data stale from ${input.source}: latest completed candle closed ${Math.round(input.freshnessMs / 1000)}s ago`;
   }

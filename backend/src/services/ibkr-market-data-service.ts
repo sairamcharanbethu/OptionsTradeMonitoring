@@ -76,6 +76,13 @@ export class IbkrMarketDataService {
 
   constructor(private fastify: FastifyInstance) {}
 
+  private static resetConnection() {
+    const ib = IbkrMarketDataService.sharedApi;
+    IbkrMarketDataService.sharedApi = null;
+    IbkrMarketDataService.connectedPromise = null;
+    try { ib?.disconnect?.(); } catch {}
+  }
+
   public async getHealth() {
     const startedAt = Date.now();
     try {
@@ -173,6 +180,7 @@ export class IbkrMarketDataService {
         if (rows.length > 0) {
           resolve();
         } else {
+          IbkrMarketDataService.resetConnection();
           reject(new Error(`IBKR historical bars timed out for ${symbol}`));
         }
       }, this.requestTimeoutMs);
@@ -404,21 +412,25 @@ export class IbkrMarketDataService {
     const ib = await this.ensureConnected();
     const reqId = this.nextReqId();
     const snapshot: any = { timestamp: new Date().toISOString() };
+    let receivedTick = false;
 
     await new Promise<void>((resolve, reject) => {
       const cleanup = this.registerRequest(reqId, reject, [
         [EventName.tickPrice, (id: number, field: number, price: number) => {
           if (id !== reqId) return;
+          receivedTick = true;
           const name = this.tickPriceFieldName(field);
           if (name) snapshot[name] = price;
         }],
         [EventName.tickSize, (id: number, field: number, size: number) => {
           if (id !== reqId) return;
+          receivedTick = true;
           if (field === 8) snapshot.volume = size;
           if (field === 27 || field === 28) snapshot.openInterest = size;
         }],
         [EventName.tickOptionComputation, (id: number, _tickType: number, _tickAttrib: any, impliedVolatility: number, delta: number, _optPrice: number, _pvDividend: number, gamma: number, vega: number, theta: number) => {
           if (id !== reqId) return;
+          receivedTick = true;
           if (Number.isFinite(impliedVolatility) && impliedVolatility > 0) snapshot.impliedVolatility = impliedVolatility;
           if (Number.isFinite(delta) && Math.abs(delta) <= 1) snapshot.delta = delta;
           if (Number.isFinite(gamma)) snapshot.gamma = gamma;
@@ -429,6 +441,9 @@ export class IbkrMarketDataService {
       const timeout = setTimeout(() => {
         cleanup.cleanup();
         try { ib.cancelMktData(reqId); } catch {}
+        if (!receivedTick) {
+          IbkrMarketDataService.resetConnection();
+        }
         resolve();
       }, waitMs);
       try {
@@ -436,6 +451,7 @@ export class IbkrMarketDataService {
       } catch (err) {
         clearTimeout(timeout);
         cleanup.cleanup();
+        IbkrMarketDataService.resetConnection();
         reject(err);
       }
     });
@@ -453,7 +469,18 @@ export class IbkrMarketDataService {
       IbkrMarketDataService.sharedApi = ib;
       IbkrMarketDataService.connectedPromise = new Promise<void>((resolve, reject) => {
         let timeout: NodeJS.Timeout | null = null;
+        let settled = false;
+        const fail = (err: Error) => {
+          if (settled) return;
+          settled = true;
+          if (timeout) clearTimeout(timeout);
+          cleanup();
+          IbkrMarketDataService.resetConnection();
+          reject(err);
+        };
         const onReady = () => {
+          if (settled) return;
+          settled = true;
           if (timeout) clearTimeout(timeout);
           cleanup();
           try { ib.reqMarketDataType(this.marketDataType); } catch {}
@@ -461,24 +488,27 @@ export class IbkrMarketDataService {
         };
         const onError = (err: any, code: any) => {
           if (code === 2104 || code === 2106 || code === 2158) return;
-          if (timeout) clearTimeout(timeout);
-          cleanup();
-          IbkrMarketDataService.sharedApi = null;
-          IbkrMarketDataService.connectedPromise = null;
-          reject(new Error(`IBKR connection failed${code ? ` (${code})` : ''}: ${err?.message || String(err)}`));
+          fail(new Error(`IBKR connection failed${code ? ` (${code})` : ''}: ${err?.message || String(err)}`));
+        };
+        const onDisconnected = () => {
+          this.fastify.log.warn('[IBKR] Market data socket disconnected. Next request will reconnect.');
+          IbkrMarketDataService.resetConnection();
+        };
+        const onConnectionClosed = () => {
+          this.fastify.log.warn('[IBKR] Market data connection closed. Next request will reconnect.');
+          IbkrMarketDataService.resetConnection();
         };
         const cleanup = () => {
           ib.off(EventName.nextValidId, onReady);
           ib.off(EventName.error, onError);
         };
         timeout = setTimeout(() => {
-          cleanup();
-          IbkrMarketDataService.sharedApi = null;
-          IbkrMarketDataService.connectedPromise = null;
-          reject(new Error(`IBKR connection timed out to ${this.host}:${this.port}`));
+          fail(new Error(`IBKR connection timed out to ${this.host}:${this.port}`));
         }, this.requestTimeoutMs);
         ib.once(EventName.nextValidId, onReady);
         ib.on(EventName.error, onError);
+        ib.on(EventName.disconnected, onDisconnected);
+        ib.on(EventName.connectionClosed, onConnectionClosed);
         ib.connect();
         ib.reqIds();
       });
