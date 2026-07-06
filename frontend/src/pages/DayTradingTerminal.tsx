@@ -674,6 +674,12 @@ const getStrictBlocker = (reasons: string[], needle: string) => (
   reasons.find(reason => reason.toLowerCase().includes(needle.toLowerCase())) || null
 );
 
+const getScannerLogGex = (log?: ScannerLog | null) => (
+  log?.indicators?.decisionSnapshot?.gexSnapshot
+  || log?.indicators?.gexSnapshot
+  || {}
+);
+
 type SetupCheckStatus = 'pass' | 'wait' | 'block';
 
 function SetupCheck({
@@ -722,7 +728,7 @@ function LiveSpyLevelsPanel({
   const sourceReasons = (useLog ? log?.no_trade_reasons : signal?.no_trade_reasons) || [];
   const side = !useLog && (signal?.signal_type === 'CALL' || signal?.signal_type === 'PUT') ? signal.signal_type : null;
   const price = toFiniteNumber(useLog ? log?.spot_price : signal?.current_price ?? log?.spot_price);
-  const gex = !useLog ? signal?.gex || {} : {};
+  const gex = useLog ? getScannerLogGex(log) : signal?.gex || {};
   const flow = String(gex.flowDirection || '').toLowerCase();
   const flipStrike = toFiniteNumber(gex.flipStrike);
   const ema9 = toFiniteNumber(sourceIndicators.ema9);
@@ -1215,7 +1221,10 @@ export default function DayTradingTerminal() {
         market_date: formatDate(selectedLog.created_at),
         created_at: selectedLog.created_at,
         indicators: selectedLog.indicators,
-        gex: { regime: selectedLog.regime },
+        gex: {
+          regime: selectedLog.regime,
+          ...getScannerLogGex(selectedLog)
+        },
         volatility: { vixQuote: selectedLog.vix },
         no_trade_reasons: selectedLog.no_trade_reasons,
         ml_probability: null,
