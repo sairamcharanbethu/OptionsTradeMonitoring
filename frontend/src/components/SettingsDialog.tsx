@@ -21,6 +21,8 @@ interface SettingsDialogProps {
 
 const DEFAULT_AI_PROVIDER = 'openrouter';
 const DEFAULT_AI_MODEL = 'deepseek/deepseek-chat';
+const DEFAULT_IBKR_LIVE_PORT = '4003';
+const DEFAULT_IBKR_PAPER_PORT = '4004';
 const SUPPORTED_DAY_TRADING_SYMBOLS = ['QQQ', 'SPY'] as const;
 type DayTradingSymbol = typeof SUPPORTED_DAY_TRADING_SYMBOLS[number];
 
@@ -56,6 +58,14 @@ function normalizeThetaDataStreamUrl(streamUrl: string) {
     if (!cleaned) return '';
     if (/^ws:\/\/(thetadata:255(10|20)|(127\.0\.0\.1|localhost):25510)\/v1\/events$/i.test(cleaned)) return '';
     return cleaned.replace(/^ws:\/\/thetadata:/i, 'ws://127.0.0.1:');
+}
+
+function normalizeIbkrGatewayMode(value?: string) {
+    return String(value || '').trim().toLowerCase() === 'paper' ? 'paper' : 'live';
+}
+
+function defaultIbkrPort(mode: string) {
+    return normalizeIbkrGatewayMode(mode) === 'paper' ? DEFAULT_IBKR_PAPER_PORT : DEFAULT_IBKR_LIVE_PORT;
 }
 
 function parseDayTradingSymbols(value?: string): DayTradingSymbol[] {
@@ -244,6 +254,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     // ThetaData State
     const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://127.0.0.1:25503');
     const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('');
+    const [ibkrGatewayMode, setIbkrGatewayMode] = useState('live');
+    const [ibkrPort, setIbkrPort] = useState(DEFAULT_IBKR_LIVE_PORT);
 
     // SnapTrade State
     const [snaptradeClientId, setSnaptradeClientId] = useState('');
@@ -320,6 +332,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
             setThetaDataBaseUrl(normalizeThetaDataBaseUrl(data.thetadata_base_url || 'http://127.0.0.1:25503'));
             setThetaDataStreamUrl(normalizeThetaDataStreamUrl(data.thetadata_stream_url || ''));
+            const loadedIbkrMode = normalizeIbkrGatewayMode(data.ibkr_gateway_mode || 'live');
+            setIbkrGatewayMode(loadedIbkrMode);
+            setIbkrPort(data.ibkr_port || defaultIbkrPort(loadedIbkrMode));
             setExecutionBroker(data.execution_broker === 'alpaca_paper' ? 'none' : data.execution_broker || 'none');
             setSnaptradeAutoTrade(data.snaptrade_auto_trade === 'true');
             setSnaptradeTradingAccountId(data.snaptrade_trading_account_id || '');
@@ -394,6 +409,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
         } else {
             setSnaptradeAutoTrade(false);
         }
+    }
+
+    function handleIbkrGatewayModeChange(value: string) {
+        const nextMode = normalizeIbkrGatewayMode(value);
+        setIbkrGatewayMode(nextMode);
+        setIbkrPort(defaultIbkrPort(nextMode));
     }
 
     function handleDayTradingSymbolToggle(symbol: DayTradingSymbol, checked: boolean) {
@@ -562,6 +583,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 snaptrade_trading_account_id: snaptradeTradingAccountId,
                 thetadata_base_url: thetaDataBaseUrl,
                 thetadata_stream_url: thetaDataStreamUrl,
+                ibkr_gateway_mode: ibkrGatewayMode,
+                ibkr_port: ibkrPort || defaultIbkrPort(ibkrGatewayMode),
                 alpaca_auto_trade: 'false',
                 execution_broker: executionBroker === 'alpaca_paper' ? 'none' : executionBroker,
                 max_trades_per_day: maxTradesPerDay,
@@ -1141,6 +1164,47 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 {/* Market data and brokerage integrations */}
                                 <div className="border rounded-lg p-6 bg-card space-y-6">
                                     <h4 className="font-semibold text-sm border-b pb-2">Market data and brokerages</h4>
+
+                                    {isAdmin && (
+                                        <div className="space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <h5 className="font-medium text-sm">IBKR Gateway</h5>
+                                                <Badge variant={ibkrGatewayMode === 'paper' ? 'secondary' : 'default'}>
+                                                    {ibkrGatewayMode === 'paper' ? 'Paper' : 'Live'}
+                                                </Badge>
+                                            </div>
+                                            <div className="grid gap-3 p-4 border rounded-md bg-muted/30">
+                                                <div className="grid gap-3 sm:grid-cols-2">
+                                                    <div className="space-y-1.5">
+                                                        <Label htmlFor="ibkr-gateway-mode">Gateway Mode</Label>
+                                                        <Select value={ibkrGatewayMode} onValueChange={handleIbkrGatewayModeChange}>
+                                                            <SelectTrigger id="ibkr-gateway-mode">
+                                                                <SelectValue placeholder="Select IBKR mode" />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="live">Live Gateway</SelectItem>
+                                                                <SelectItem value="paper">Paper Gateway</SelectItem>
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    <div className="space-y-1.5">
+                                                        <Label htmlFor="ibkr-port">API Port</Label>
+                                                        <Input
+                                                            id="ibkr-port"
+                                                            type="number"
+                                                            min="1"
+                                                            value={ibkrPort}
+                                                            onChange={(e) => setIbkrPort(e.target.value)}
+                                                            placeholder={defaultIbkrPort(ibkrGatewayMode)}
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <p className="text-[10px] text-muted-foreground leading-normal">
+                                                    Live Gateway uses port 4003 in this Docker setup. Paper Gateway uses 4004. Saving restarts the IBKR stream with the selected port.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
                                     
                                     {/* ThetaData */}
                                     {isAdmin && (

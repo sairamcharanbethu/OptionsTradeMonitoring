@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
 import { getSettingsWithGlobalFallback, isGlobalSettingKey, isPublicGlobalSettingKey } from '../lib/settings-utils';
+import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
 type RuntimeConfigStatus = 'configured' | 'missing' | 'default' | 'attention';
@@ -91,8 +92,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
         try {
             const settings = await getSettingsWithGlobalFallback((fastify as any).pg, userId);
-            const ibkrHost = valueFor(undefined, process.env.IBKR_HOST, 'ib_gateway');
-            const ibkrPort = valueFor(undefined, process.env.IBKR_PORT, '4003');
+            const ibkrGatewayModeSetting = safeValue(settings.ibkr_gateway_mode);
+            const ibkrGatewayMode = String(valueFor(settings.ibkr_gateway_mode, process.env.IBKR_GATEWAY_MODE, 'live') || 'live').toLowerCase() === 'paper' ? 'paper' : 'live';
+            const ibkrHost = valueFor(settings.ibkr_host, process.env.IBKR_HOST, 'ib_gateway');
+            const ibkrPort = safeValue(settings.ibkr_port)
+                || (ibkrGatewayModeSetting ? String(defaultIbkrPort(ibkrGatewayMode)) : safeValue(process.env.IBKR_PORT))
+                || String(defaultIbkrPort(ibkrGatewayMode));
             const ibkrMarketDataType = valueFor(undefined, process.env.IBKR_MARKET_DATA_TYPE, '1');
             const aiProvider = valueFor(settings.ai_provider, undefined, 'openrouter');
             const aiModel = valueFor(settings.ai_model, process.env.AI_MODEL, 'deepseek/deepseek-chat');
@@ -134,17 +139,17 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     id: 'market:ibkr-mode',
                     group: 'Market Data',
                     label: 'Market data provider',
-                    source: 'runtime',
+                    source: sourceFor(settings.ibkr_gateway_mode, process.env.IBKR_GATEWAY_MODE, 'live'),
                     status: 'configured',
                     secret: false,
-                    value: 'IBKR Gateway',
+                    value: `IBKR Gateway (${ibkrGatewayMode === 'paper' ? 'Paper' : 'Live'})`,
                     detail: 'Backend talks to IBKR Gateway over the Docker network.'
                 }),
                 runtimeItem({
                     id: 'market:ibkr-host',
                     group: 'Market Data',
                     label: 'IBKR host',
-                    source: sourceFor(undefined, process.env.IBKR_HOST, 'ib_gateway'),
+                    source: sourceFor(settings.ibkr_host, process.env.IBKR_HOST, 'ib_gateway'),
                     status: ibkrHost ? 'configured' : 'missing',
                     secret: false,
                     value: ibkrHost,
@@ -153,8 +158,8 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 runtimeItem({
                     id: 'market:ibkr-port',
                     group: 'Market Data',
-                    label: 'IBKR live API port',
-                    source: sourceFor(undefined, process.env.IBKR_PORT, '4003'),
+                    label: 'IBKR API port',
+                    source: safeValue(settings.ibkr_port) ? 'settings' : ibkrGatewayModeSetting ? 'default' : sourceFor(undefined, process.env.IBKR_PORT, String(defaultIbkrPort(ibkrGatewayMode))),
                     status: ibkrPort ? 'configured' : 'missing',
                     secret: false,
                     value: ibkrPort,
@@ -327,6 +332,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     } else {
                         (fastify as any).poller.stop();
                     }
+                }
+
+                if (role === 'ADMIN' && (updates.ibkr_gateway_mode !== undefined || updates.ibkr_host !== undefined || updates.ibkr_port !== undefined) && (fastify as any).ibkrMarketDataStreamer?.restart) {
+                    (fastify as any).ibkrMarketDataStreamer.restart().catch((err: any) => {
+                        fastify.log.warn(`[Settings] Failed to restart IBKR stream after config change: ${err.message || String(err)}`);
+                    });
                 }
 
                 return { status: 'ok', message: 'Settings updated' };

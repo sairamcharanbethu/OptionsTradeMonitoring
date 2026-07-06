@@ -93,6 +93,7 @@ async function testNoTickSnapshotResetsSharedConnection() {
 
   (IbkrMarketDataService as any).sharedApi = fakeIb;
   (IbkrMarketDataService as any).connectedPromise = Promise.resolve();
+  (IbkrMarketDataService as any).connectionKey = 'live:ib_gateway:4003:1';
 
   await (service as any).requestMarketData({}, '', 1, 'test no ticks');
 

@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import * as ibPkg from '@stoqey/ib';
 import { getNewYorkMarketState } from '../lib/market-calendar';
+import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 
 const { IBApi, EventName, SecType } = ibPkg as any;
 
@@ -66,11 +67,12 @@ export class IbkrMarketDataService {
   private static sharedApi: any = null;
   private static connectedPromise: Promise<void> | null = null;
   private static nextRequestId = Number(process.env.IBKR_REQUEST_ID_START || 50_000);
+  private static connectionKey: string | null = null;
 
-  private readonly host = process.env.IBKR_HOST || 'ib_gateway';
-  private readonly port = Number(process.env.IBKR_PORT || 4003);
+  private host = process.env.IBKR_HOST || 'ib_gateway';
+  private port = Number(process.env.IBKR_PORT || 4003);
   private readonly clientId = Number(process.env.IBKR_CLIENT_ID_MARKET_DATA || process.env.IBKR_CLIENT_ID || 21);
-  private readonly marketDataType = Number(process.env.IBKR_MARKET_DATA_TYPE || 1);
+  private marketDataType = Number(process.env.IBKR_MARKET_DATA_TYPE || 1);
   private readonly requestTimeoutMs = Number(process.env.IBKR_REQUEST_TIMEOUT_MS || 12_000);
   private readonly snapshotWaitMs = Number(process.env.IBKR_SNAPSHOT_WAIT_MS || 2_500);
 
@@ -80,7 +82,16 @@ export class IbkrMarketDataService {
     const ib = IbkrMarketDataService.sharedApi;
     IbkrMarketDataService.sharedApi = null;
     IbkrMarketDataService.connectedPromise = null;
+    IbkrMarketDataService.connectionKey = null;
     try { ib?.disconnect?.(); } catch {}
+  }
+
+  private async refreshRuntimeConfig(): Promise<string> {
+    const config = await getIbkrGatewayConfig((this.fastify as any).pg);
+    this.host = config.host;
+    this.port = config.port;
+    this.marketDataType = config.marketDataType;
+    return config.key;
   }
 
   public async getHealth() {
@@ -461,12 +472,17 @@ export class IbkrMarketDataService {
   }
 
   private async ensureConnected(): Promise<any> {
-    if (IbkrMarketDataService.sharedApi) {
+    const connectionKey = await this.refreshRuntimeConfig();
+    if (IbkrMarketDataService.sharedApi && IbkrMarketDataService.connectionKey === connectionKey) {
       return IbkrMarketDataService.sharedApi;
+    }
+    if (IbkrMarketDataService.sharedApi && IbkrMarketDataService.connectionKey !== connectionKey) {
+      IbkrMarketDataService.resetConnection();
     }
     if (!IbkrMarketDataService.connectedPromise) {
       const ib = new IBApi({ host: this.host, port: this.port, clientId: this.clientId });
       IbkrMarketDataService.sharedApi = ib;
+      IbkrMarketDataService.connectionKey = connectionKey;
       IbkrMarketDataService.connectedPromise = new Promise<void>((resolve, reject) => {
         let timeout: NodeJS.Timeout | null = null;
         let settled = false;

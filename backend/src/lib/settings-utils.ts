@@ -7,6 +7,9 @@ const GLOBAL_SETTING_KEYS = [
   'alpaca_options_feed',
   'thetadata_base_url',
   'thetadata_stream_url',
+  'ibkr_gateway_mode',
+  'ibkr_host',
+  'ibkr_port',
   'sscgex_password',
   'discord_webhook_url',
   'discord_alerts_enabled',
@@ -15,7 +18,7 @@ const GLOBAL_SETTING_KEYS = [
   'day_trading_ai_model',
   'day_trading_coach_model'
 ];
-const ADMIN_ONLY_GLOBAL_SETTING_KEYS = ['day_trading_symbols'];
+const ADMIN_ONLY_GLOBAL_SETTING_KEYS = ['day_trading_symbols', 'ibkr_gateway_mode', 'ibkr_host', 'ibkr_port'];
 
 export async function getGlobalSettings(pg: any): Promise<Record<string, string>> {
   const { rows } = await pg.query(

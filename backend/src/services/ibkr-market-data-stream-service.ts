@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { EventEmitter } from 'events';
 import * as ibPkg from '@stoqey/ib';
+import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 
 const { IBApi, EventName, SecType } = ibPkg as any;
 
@@ -35,10 +36,11 @@ export class IbkrMarketDataStreamService extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private nextRequestId = Number(process.env.IBKR_STREAM_REQUEST_ID_START || 80_000);
-  private readonly host = process.env.IBKR_HOST || 'ib_gateway';
-  private readonly port = Number(process.env.IBKR_PORT || 4003);
+  private host = process.env.IBKR_HOST || 'ib_gateway';
+  private port = Number(process.env.IBKR_PORT || 4003);
   private readonly clientId = Number(process.env.IBKR_CLIENT_ID_STREAM || 22);
-  private readonly marketDataType = Number(process.env.IBKR_MARKET_DATA_TYPE || 1);
+  private marketDataType = Number(process.env.IBKR_MARKET_DATA_TYPE || 1);
+  private connectionKey: string | null = null;
   private readonly requestTimeoutMs = Number(process.env.IBKR_REQUEST_TIMEOUT_MS || 12_000);
   private readonly MAX_RECONNECT_DELAY = 60000;
 
@@ -67,6 +69,15 @@ export class IbkrMarketDataStreamService extends EventEmitter {
       return;
     }
     this.reconcileSubscriptions();
+  }
+
+  public async restart() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.disconnectCurrent();
+    await this.start();
   }
 
   public async addTemporarySubscription(key: string, input: { symbol: string; strike: number; optionType: 'CALL' | 'PUT'; expiration: string | Date }) {
@@ -133,11 +144,16 @@ export class IbkrMarketDataStreamService extends EventEmitter {
   }
 
   private async ensureConnected(): Promise<void> {
-    if (this.isConnected && this.ib) return;
+    const connectionKey = await this.refreshRuntimeConfig();
+    if (this.isConnected && this.ib && this.connectionKey === connectionKey) return;
+    if (this.ib && this.connectionKey !== connectionKey) {
+      this.disconnectCurrent();
+    }
     if (this.connectedPromise) return this.connectedPromise;
 
     const ib = new IBApi({ host: this.host, port: this.port, clientId: this.clientId });
     this.ib = ib;
+    this.connectionKey = connectionKey;
     this.connectedPromise = new Promise<void>((resolve, reject) => {
       let timeout: NodeJS.Timeout | null = null;
       const cleanup = () => {
@@ -175,6 +191,29 @@ export class IbkrMarketDataStreamService extends EventEmitter {
     });
 
     await this.connectedPromise;
+  }
+
+  private async refreshRuntimeConfig(): Promise<string> {
+    const config = await getIbkrGatewayConfig((this.fastify as any).pg);
+    this.host = config.host;
+    this.port = config.port;
+    this.marketDataType = config.marketDataType;
+    return config.key;
+  }
+
+  private disconnectCurrent() {
+    try {
+      for (const subscription of this.subscriptionsByKey.values()) {
+        try { this.ib?.cancelMktData(subscription.reqId); } catch {}
+      }
+      this.ib?.disconnect?.();
+    } catch {}
+    this.ib = null;
+    this.isConnected = false;
+    this.connectedPromise = null;
+    this.connectionKey = null;
+    this.subscriptionsByKey.clear();
+    this.subscriptionsByReqId.clear();
   }
 
   private attachTickHandlers() {
@@ -355,15 +394,7 @@ export class IbkrMarketDataStreamService extends EventEmitter {
     this.reconnectAttempts++;
     this.reconnectTimer = setTimeout(() => {
       this.connectedPromise = null;
-      try {
-        for (const subscription of this.subscriptionsByKey.values()) {
-          try { this.ib?.cancelMktData(subscription.reqId); } catch {}
-        }
-        this.ib?.disconnect?.();
-      } catch {}
-      this.ib = null;
-      this.subscriptionsByKey.clear();
-      this.subscriptionsByReqId.clear();
+      this.disconnectCurrent();
       this.start().catch((err: any) => {
         this.lastError = err.message || String(err);
         this.fastify.log.warn(`[IBKRStream] Reconnect failed: ${this.lastError}`);
