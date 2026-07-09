@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
-import { getSettingsWithGlobalFallback, isGlobalSettingKey, isPublicGlobalSettingKey } from '../lib/settings-utils';
+import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled } from '../lib/settings-utils';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
@@ -76,7 +76,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
         const { id: userId, role } = (request as any).user;
 
         try {
-            const settings = await getSettingsWithGlobalFallback((fastify as any).pg, userId);
+            const settings = applyMcpTradingEnabledFallback(await getSettingsWithGlobalFallback((fastify as any).pg, userId));
             return redactGlobalSettingsForUser(settings, role);
         } catch (err) {
             fastify.log.error(err);
@@ -101,6 +101,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
             const ibkrMarketDataType = valueFor(undefined, process.env.IBKR_MARKET_DATA_TYPE, '1');
             const aiProvider = valueFor(settings.ai_provider, undefined, 'openrouter');
             const aiModel = valueFor(settings.ai_model, process.env.AI_MODEL, 'deepseek/deepseek-chat');
+            const mcpTradingEnabled = resolveMcpTradingEnabled(settings);
             const buildSha = process.env.BUILD_SHA || process.env.GITHUB_SHA || process.env.VITE_APP_BUILD_SHA || '';
             const appVersion = process.env.APP_VERSION || process.env.npm_package_version || '1.4.1';
 
@@ -254,6 +255,16 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     secret: false,
                     value: settings.live_trading_acknowledged === 'true' ? 'Accepted' : 'Missing',
                     detail: 'Required before live broker execution is allowed.'
+                }),
+                runtimeItem({
+                    id: 'broker:mcp-trading-enabled',
+                    group: 'Broker Execution',
+                    label: 'MCP trading endpoint',
+                    source: sourceFor(settings.mcp_trading_enabled, process.env.MCP_TRADING_ENABLED, 'false'),
+                    status: mcpTradingEnabled ? 'configured' : 'attention',
+                    secret: false,
+                    value: mcpTradingEnabled ? 'Enabled' : 'Disabled',
+                    detail: 'Controls whether JWT-authenticated MCP clients can place option trades.'
                 }),
                 runtimeItem({
                     id: 'alerts:discord-webhook',

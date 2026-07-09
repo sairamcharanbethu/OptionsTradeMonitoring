@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import YahooFinance from 'yahoo-finance2';
-import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { getSettingsWithGlobalFallback, resolveMcpTradingEnabled } from '../lib/settings-utils';
 import { redis } from '../lib/redis';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
 import { SnaptradeService } from './snaptrade-service';
@@ -168,7 +168,7 @@ export class ManualOptionOrderService {
     const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
     return {
       userId,
-      enabled: process.env.MCP_TRADING_ENABLED === 'true',
+      enabled: resolveMcpTradingEnabled(settings),
       authMode: 'app_jwt',
       allowedActions: ['BUY_TO_OPEN', 'SELL_TO_OPEN'],
       allowedOrderTypes: ['LIMIT', 'MARKET'],

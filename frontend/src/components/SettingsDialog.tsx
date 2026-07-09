@@ -239,6 +239,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [takeProfitPct, setTakeProfitPct] = useState('');
     const [stopLossEngineEnabled, setStopLossEngineEnabled] = useState(true);
     const [liveTradingAcknowledged, setLiveTradingAcknowledged] = useState(false);
+    const [mcpTradingEnabled, setMcpTradingEnabled] = useState(false);
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -345,6 +346,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setTakeProfitPct(data.take_profit_pct || '');
             setStopLossEngineEnabled(data.stop_loss_engine_enabled !== 'false');
             setLiveTradingAcknowledged(data.live_trading_acknowledged === 'true');
+            setMcpTradingEnabled(data.mcp_trading_enabled === 'true');
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
@@ -569,7 +571,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
         }
         setSaving(true);
         try {
-            await api.updateSettings({
+            const settingsPayload: Record<string, string> = {
                 ai_provider: provider,
                 openrouter_key: openRouterKey,
                 ai_model: model,
@@ -607,7 +609,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 day_trading_ai_provider: provider,
                 day_trading_ai_model: model,
                 day_trading_coach_model: model
-            });
+            };
+            if (isAdmin) {
+                settingsPayload.mcp_trading_enabled = mcpTradingEnabled ? 'true' : 'false';
+            }
+            await api.updateSettings(settingsPayload);
             queryClient.invalidateQueries({ queryKey: ['settings'] });
             onUpdate(user); // Force refresh of parent if needed
             setOpen(false);
@@ -934,6 +940,30 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                             Open Connections
                                                         </Button>
                                                     </div>
+                                                </div>
+                                            )}
+                                            {isAdmin && (
+                                                <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <Label htmlFor="mcpTradingEnabled" className="flex flex-wrap items-center gap-2">
+                                                            MCP Trading Endpoint
+                                                            {mcpTradingEnabled ? (
+                                                                <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
+                                                            ) : (
+                                                                <Badge variant="secondary" className="h-5 text-[10px]">Disabled</Badge>
+                                                            )}
+                                                        </Label>
+                                                        <Switch
+                                                            id="mcpTradingEnabled"
+                                                            checked={mcpTradingEnabled}
+                                                            onCheckedChange={setMcpTradingEnabled}
+                                                        />
+                                                    </div>
+                                                    <p className={`text-[10px] ${mcpTradingEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
+                                                        {mcpTradingEnabled
+                                                            ? 'JWT-authenticated MCP clients can reach the option trading tools.'
+                                                            : 'Public MCP requests are blocked before auth and trade validation.'}
+                                                    </p>
                                                 </div>
                                             )}
                                         </div>

@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
 import { ManualOptionOrderService } from '../services/manual-option-order-service';
+import { getGlobalSettings, resolveMcpTradingEnabled } from '../lib/settings-utils';
 
 type McpConfig = {
   enabled: boolean;
@@ -15,9 +16,10 @@ function jsonToolResult(data: any) {
   };
 }
 
-function getMcpConfig(): McpConfig {
+async function getMcpConfig(fastify: FastifyInstance): Promise<McpConfig> {
+  const settings = await getGlobalSettings((fastify as any).pg);
   return {
-    enabled: process.env.MCP_TRADING_ENABLED === 'true'
+    enabled: resolveMcpTradingEnabled(settings)
   };
 }
 
@@ -130,7 +132,7 @@ export async function mcpRoutes(fastify: FastifyInstance, options: FastifyPlugin
     method: ['GET', 'POST', 'DELETE'],
     url: '/mcp',
     handler: async (request, reply) => {
-      const config = getMcpConfig();
+      const config = await getMcpConfig(fastify);
       if (!config.enabled) return reject(reply, 503, 'MCP trading is disabled.');
       try {
         await request.jwtVerify();

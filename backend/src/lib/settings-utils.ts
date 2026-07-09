@@ -14,11 +14,12 @@ const GLOBAL_SETTING_KEYS = [
   'discord_webhook_url',
   'discord_alerts_enabled',
   'day_trading_symbols',
+  'mcp_trading_enabled',
   'day_trading_ai_provider',
   'day_trading_ai_model',
   'day_trading_coach_model'
 ];
-const ADMIN_ONLY_GLOBAL_SETTING_KEYS = ['day_trading_symbols', 'ibkr_gateway_mode', 'ibkr_host', 'ibkr_port'];
+const ADMIN_ONLY_GLOBAL_SETTING_KEYS = ['day_trading_symbols', 'ibkr_gateway_mode', 'ibkr_host', 'ibkr_port', 'mcp_trading_enabled'];
 
 export async function getGlobalSettings(pg: any): Promise<Record<string, string>> {
   const { rows } = await pg.query(
@@ -67,4 +68,19 @@ export function isGlobalSettingKey(key: string): boolean {
 
 export function isPublicGlobalSettingKey(key: string): boolean {
   return key === 'day_trading_symbols';
+}
+
+export function resolveMcpTradingEnabled(settings: Record<string, string>, envValue = process.env.MCP_TRADING_ENABLED): boolean {
+  const settingValue = String(settings.mcp_trading_enabled || '').trim().toLowerCase();
+  if (settingValue) return settingValue === 'true';
+  return String(envValue || '').trim().toLowerCase() === 'true';
+}
+
+export function applyMcpTradingEnabledFallback(settings: Record<string, string>, envValue = process.env.MCP_TRADING_ENABLED): Record<string, string> {
+  if (String(settings.mcp_trading_enabled || '').trim()) return settings;
+  if (!String(envValue || '').trim()) return settings;
+  return {
+    ...settings,
+    mcp_trading_enabled: String(envValue || '').trim().toLowerCase() === 'true' ? 'true' : 'false'
+  };
 }
