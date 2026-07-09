@@ -169,6 +169,7 @@ export class ManualOptionOrderService {
     return {
       userId,
       enabled: process.env.MCP_TRADING_ENABLED === 'true',
+      authMode: 'app_jwt',
       allowedActions: ['BUY_TO_OPEN', 'SELL_TO_OPEN'],
       allowedOrderTypes: ['LIMIT', 'MARKET'],
       limitPremiumRequired: true,

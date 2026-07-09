@@ -1,4 +1,4 @@
-import { FastifyInstance, FastifyPluginOptions, FastifyReply, FastifyRequest } from 'fastify';
+import { FastifyInstance, FastifyPluginOptions, FastifyReply } from 'fastify';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
@@ -6,8 +6,6 @@ import { ManualOptionOrderService } from '../services/manual-option-order-servic
 
 type McpConfig = {
   enabled: boolean;
-  token: string;
-  userId: number;
 };
 
 function jsonToolResult(data: any) {
@@ -18,19 +16,9 @@ function jsonToolResult(data: any) {
 }
 
 function getMcpConfig(): McpConfig {
-  const token = String(process.env.MCP_TRADING_TOKEN || '').trim();
-  const userId = Number(process.env.MCP_TRADING_USER_ID || 0);
   return {
-    enabled: process.env.MCP_TRADING_ENABLED === 'true',
-    token,
-    userId: Number.isInteger(userId) && userId > 0 ? userId : 0
+    enabled: process.env.MCP_TRADING_ENABLED === 'true'
   };
-}
-
-function getBearerToken(request: FastifyRequest): string {
-  const header = request.headers.authorization || '';
-  const match = /^Bearer\s+(.+)$/i.exec(Array.isArray(header) ? header[0] || '' : header);
-  return match?.[1]?.trim() || '';
 }
 
 function reject(reply: FastifyReply, statusCode: number, message: string) {
@@ -144,11 +132,16 @@ export async function mcpRoutes(fastify: FastifyInstance, options: FastifyPlugin
     handler: async (request, reply) => {
       const config = getMcpConfig();
       if (!config.enabled) return reject(reply, 503, 'MCP trading is disabled.');
-      if (!config.token || !config.userId) return reject(reply, 503, 'MCP trading token and user mapping are not configured.');
-      if (getBearerToken(request) !== config.token) return reject(reply, 401, 'Unauthorized MCP trading request.');
+      try {
+        await request.jwtVerify();
+      } catch {
+        return reject(reply, 401, 'Unauthorized MCP trading request.');
+      }
+      const userId = Number((request as any).user?.id || 0);
+      if (!Number.isInteger(userId) || userId <= 0) return reject(reply, 401, 'MCP JWT is missing a valid app user id.');
 
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createTradingMcpServer(fastify, config.userId);
+      const server = createTradingMcpServer(fastify, userId);
       await server.connect(transport);
       reply.hijack();
       await transport.handleRequest(request.raw as any, reply.raw as any, request.body);
