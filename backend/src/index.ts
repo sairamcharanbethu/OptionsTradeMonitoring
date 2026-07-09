@@ -18,6 +18,7 @@ import { tradeRoutes } from './routes/trades';
 import { backtestRoutes } from './routes/backtests';
 import { coveredCallRoutes } from './routes/covered-calls';
 import { manualEntryRoutes } from './routes/manual-entry';
+import { mcpRoutes } from './routes/mcp';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -258,6 +259,8 @@ const ensureSchema = async (instance: any) => {
       { name: 'broker_exit_order_id', type: 'VARCHAR(255)' },
       { name: 'broker_exit_trade_id', type: 'VARCHAR(255)' },
       { name: 'execution_account_id', type: 'VARCHAR(255)' },
+      { name: 'entry_action', type: "VARCHAR(20) DEFAULT 'BUY_TO_OPEN'" },
+      { name: 'exit_action', type: "VARCHAR(20) DEFAULT 'SELL_TO_CLOSE'" },
       { name: 'execution_status', type: 'VARCHAR(50)' },
       { name: 'execution_error', type: 'TEXT' },
       { name: 'contracts_requested', type: 'INTEGER' },
@@ -530,6 +533,7 @@ const start = async () => {
     fastify.register(backtestRoutes, { prefix: '/api/backtests' });
     fastify.register(coveredCallRoutes, { prefix: '/api/covered-calls' });
     fastify.register(manualEntryRoutes, { prefix: '/api/manual-entry' });
+    fastify.register(mcpRoutes);
 
     fastify.get('/health', async () => {
       return { status: 'ok' };

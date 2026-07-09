@@ -683,7 +683,7 @@ export class SnaptradeService {
                         const requestedQty = Number(position.profit_trim_quantity || position.quantity || 1);
                         const currentQty = Number(position.quantity || 1);
                         const filledQty = Math.min(this.getFilledQuantity(order) || requestedQty, currentQty);
-                        const realizedPnl = (fillPrice - Number(position.entry_price || 0)) * filledQty * 100;
+                        const realizedPnl = TradeLifecycleService.calculateRealizedPnl(position, fillPrice, filledQty);
                         if (isTrim && filledQty < currentQty) {
                             const isManualTrim = String(position.exit_reason || '').startsWith('MANUAL_TRIM');
                             const trimLabel = isManualTrim ? 'manual trim' : 'profit trim';
@@ -742,10 +742,11 @@ export class SnaptradeService {
                         }
                     } else {
                         const manualEntry = this.getManualEntryConfig(position);
-                        const stopLoss = manualEntry ? null : Number((fillPrice * 0.8).toFixed(2));
-                        const takeProfit = manualEntry?.takeProfitPct
+                        const isShortOpen = TradeLifecycleService.isShortPremiumPosition(position);
+                        const stopLoss = manualEntry || isShortOpen ? null : Number((fillPrice * 0.8).toFixed(2));
+                        const takeProfit = !isShortOpen && manualEntry?.takeProfitPct
                             ? Number((fillPrice * (1 + manualEntry.takeProfitPct / 100)).toFixed(2))
-                            : takeProfitPct !== null
+                            : !isShortOpen && takeProfitPct !== null
                             ? Number((fillPrice * (1 + takeProfitPct / 100)).toFixed(2))
                             : null;
                         await this.fastify.pg.query(
@@ -772,7 +773,7 @@ export class SnaptradeService {
                             message: `SnapTrade entry fill confirmed: ${status}`,
                             metadata: { status, fillPrice }
                         });
-                        if (manualEntry?.takeProfitPct && takeProfit) {
+                        if (!isShortOpen && manualEntry?.takeProfitPct && takeProfit) {
                             await this.submitManualTakeProfit(position, accountId, takeProfit, status);
                         }
                     }
@@ -963,11 +964,12 @@ export class SnaptradeService {
 
         try {
             const optionSymbol = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+            const exitAction = TradeLifecycleService.getExitAction(position);
             const order = await this.placeOptionOrder(
                 userId,
                 accountId,
                 optionSymbol,
-                'SELL_TO_CLOSE',
+                exitAction,
                 quantity,
                 'LIMIT',
                 takeProfit.toFixed(2)
@@ -975,14 +977,14 @@ export class SnaptradeService {
             await TradeLifecycleService.markExitSubmitted(this.fastify.pg, position.id, order, {
                 reason: 'MANUAL_TAKE_PROFIT',
                 orderType: 'LIMIT',
-                note: ` [Manual Entry take-profit LIMIT submitted at $${takeProfit}${order.orderId ? `: ${order.orderId}` : ''}]`
+                note: ` [Manual Entry take-profit LIMIT ${exitAction} submitted at $${takeProfit}${order.orderId ? `: ${order.orderId}` : ''}]`
             });
             await TradeRedisService.recordEvent(this.fastify.pg, {
                 userId,
                 positionId: position.id,
                 eventType: 'MANUAL_TAKE_PROFIT_SUBMITTED',
                 message: `Manual Entry take-profit limit submitted at $${takeProfit}`,
-                metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity, limitPrice: takeProfit, fillStatus }
+                metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity, limitPrice: takeProfit, fillStatus, action: exitAction }
             });
         } catch (err: any) {
             await this.fastify.pg.query(

@@ -455,11 +455,12 @@ export class TradeExecutionService {
         if (!accountId) throw new Error('No SnapTrade account id is attached to the superseded position');
 
         const osiTicker = this.constructOSITicker(refreshed.symbol, Number(refreshed.strike_price), refreshed.option_type, refreshed.expiration_date);
+        const exitAction = TradeLifecycleService.getExitAction(refreshed);
         const order = await snaptradeService.placeOptionOrder(
           Number(refreshed.user_id),
           accountId,
           osiTicker,
-          'SELL_TO_CLOSE',
+          exitAction,
           Number(refreshed.quantity || 1),
           'MARKET'
         );
@@ -471,7 +472,7 @@ export class TradeExecutionService {
           {
             reason: 'SUPERSEDED',
             orderType: 'MARKET',
-            note: ` [Superseded by Signal #${signalId}; SnapTrade MARKET exit submitted${order.orderId ? `: ${order.orderId}` : ''}]`
+            note: ` [Superseded by Signal #${signalId}; SnapTrade MARKET ${exitAction} exit submitted${order.orderId ? `: ${order.orderId}` : ''}]`
           }
         );
         await TradeRedisService.recordEvent(this.fastify.pg, {
@@ -479,7 +480,7 @@ export class TradeExecutionService {
           positionId: refreshed.id,
           eventType: 'EXIT_REQUESTED',
           message: `Superseded by Signal #${signalId}; SnapTrade close submitted`,
-          metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, reason: 'SUPERSEDED' }
+          metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, reason: 'SUPERSEDED', action: exitAction }
         });
         await TradeRedisService.rebuildOpenTrades(this.fastify.pg, Number(refreshed.user_id), this.fastify);
         await TradeRedisService.requestBrokerSync(Number(refreshed.user_id));
@@ -491,7 +492,7 @@ export class TradeExecutionService {
     }
 
     const exitPrice = Number(position.current_price || position.entry_price || 0);
-    const realizedPnl = (exitPrice - Number(position.entry_price || 0)) * Number(position.quantity || 1) * 100;
+    const realizedPnl = TradeLifecycleService.calculateRealizedPnl(position, exitPrice, Number(position.quantity || 1));
     await this.fastify.pg.query(
       `UPDATE positions
        SET status = 'CLOSED',
@@ -793,12 +794,14 @@ export class TradeExecutionService {
         trailing_high_price, trailing_stop_loss_pct, current_price,
         status, is_simulated, account_id, notes, execution_broker,
         broker_order_id, broker_trade_id, execution_account_id, execution_status, contracts_requested,
+        entry_action, exit_action,
         suggested_stop_loss, suggested_take_profit_1,
         created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
         $23, $24,
+        $25, $26,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       RETURNING *`,
@@ -825,6 +828,8 @@ export class TradeExecutionService {
         execution.accountId,
         execution.executionStatus,
         execution.quantity,
+        'BUY_TO_OPEN',
+        'SELL_TO_CLOSE',
         input.stopUnderlying,
         input.targetUnderlying
       ]

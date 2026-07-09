@@ -354,11 +354,7 @@ export class MarketPoller {
   }
 
   private isUnderlyingStopBroken(position: any, underlyingPrice: number | undefined, underlyingStop: number | null): boolean {
-    if (!underlyingPrice || !underlyingStop) return false;
-    return (
-      (position.option_type === 'CALL' && underlyingPrice <= underlyingStop) ||
-      (position.option_type === 'PUT' && underlyingPrice >= underlyingStop)
-    );
+    return TradeLifecycleService.isUnderlyingStopBroken(position, underlyingPrice, underlyingStop);
   }
 
   private async isStopLossEngineEnabledForUser(userId: number): Promise<boolean> {
@@ -407,10 +403,11 @@ export class MarketPoller {
       Math.floor(Number(requestedQuantity || (partialTrim ? this.getProfitTrimQuantity(position) : position.quantity) || 1)),
       Math.floor(Number(position.quantity || 1))
     ));
+    const exitAction = TradeLifecycleService.getExitAction(position);
     const nextExecutionStatus = partialTrim ? 'PENDING_TRIM' : 'PENDING_EXIT';
     const nextExitReason = partialTrim ? 'PROFIT_TRIM' : 'AUTO_EXIT';
     const claimNote = partialTrim
-      ? ` [Profit trim claim created before SnapTrade ${orderType} SELL_TO_CLOSE for ${exitQuantity}/${position.quantity} contracts]`
+      ? ` [Profit trim claim created before SnapTrade ${orderType} ${exitAction} for ${exitQuantity}/${position.quantity} contracts]`
       : ` [Exit claim created before SnapTrade ${orderType} submission]`;
 
     const claimResult = await (this.fastify as any).pg.query(
@@ -433,7 +430,7 @@ export class MarketPoller {
     );
 
     if (claimResult.rowCount === 0) {
-      this.fastify.log.info(`[MarketPoller] Exit/trim already pending or unavailable for position ${position.id}. Skipping duplicate SELL_TO_CLOSE.`);
+      this.fastify.log.info(`[MarketPoller] Exit/trim already pending or unavailable for position ${position.id}. Skipping duplicate ${exitAction}.`);
       return false;
     }
 
@@ -450,7 +447,7 @@ export class MarketPoller {
         position.user_id,
         accountId,
         osiTicker,
-        'SELL_TO_CLOSE',
+        exitAction,
         exitQuantity,
         orderType,
         limitPrice
@@ -475,8 +472,8 @@ export class MarketPoller {
           result.tradeId || null,
           partialTrim,
           partialTrim
-            ? ` [SnapTrade ${orderType} profit trim submitted for ${exitQuantity}/${position.quantity} contracts${result.orderId ? `: ${result.orderId}` : ''}]`
-            : ` [SnapTrade ${orderType} exit submitted${result.orderId ? `: ${result.orderId}` : ''}]`,
+            ? ` [SnapTrade ${orderType} ${exitAction} profit trim submitted for ${exitQuantity}/${position.quantity} contracts${result.orderId ? `: ${result.orderId}` : ''}]`
+            : ` [SnapTrade ${orderType} ${exitAction} exit submitted${result.orderId ? `: ${result.orderId}` : ''}]`,
           position.id
         ]
       );
@@ -701,6 +698,7 @@ export class MarketPoller {
             let currentPrice = Number(pos.current_price || pos.entry_price);
             
             if (!pos.is_simulated) {
+                const exitAction = TradeLifecycleService.getExitAction(pos);
                 const submitted = await this.submitSnapTradeExit(pos, 'MARKET');
                 if (!submitted) continue;
                 await this.notifyN8n(
@@ -710,13 +708,13 @@ export class MarketPoller {
                     0,
                     'FORCE_CLOSE',
                     `Exit order submitted due to ${reason}`,
-                    `**[FORCE CLOSE SUBMITTED]** ${reason}. Market SELL_TO_CLOSE was submitted; waiting for broker fill confirmation. Last app price: $${currentPrice}.`
+                    `**[FORCE CLOSE SUBMITTED]** ${reason}. Market ${exitAction} was submitted; waiting for broker fill confirmation. Last app price: $${currentPrice}.`
                 );
                 pos.execution_status = 'PENDING_EXIT';
                 continue;
             }
 
-            const realizedPnl = (currentPrice - Number(pos.entry_price)) * pos.quantity * 100;
+            const realizedPnl = TradeLifecycleService.calculateRealizedPnl(pos, currentPrice, pos.quantity);
 
             await (this.fastify as any).pg.query(
                 `UPDATE positions 
@@ -834,7 +832,8 @@ export class MarketPoller {
       trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
     });
 
-    let triggered = !noBidQuote && engineResult.triggered && engineResult.triggerType === 'TAKE_PROFIT';
+    const isShortPremiumPosition = TradeLifecycleService.isShortPremiumPosition(position);
+    let triggered = !isShortPremiumPosition && !noBidQuote && engineResult.triggered && engineResult.triggerType === 'TAKE_PROFIT';
     let triggerType: ExitTriggerType | undefined = triggered ? 'TAKE_PROFIT' : undefined;
     let lossAvoided = engineResult.lossAvoided;
 
@@ -842,8 +841,8 @@ export class MarketPoller {
     const softPremiumStop = Number(position.stop_loss_trigger);
     const hardPremiumStop = Number(Math.max(entryPrice * 0.65, softPremiumStop * 0.85).toFixed(2));
     const softStopConfirmationMs = 10_000;
-    const premiumSoftStopHit = engineResult.triggered && engineResult.triggerType === 'STOP_LOSS';
-    const premiumHardStopHit = sellablePremium <= hardPremiumStop;
+    const premiumSoftStopHit = !isShortPremiumPosition && engineResult.triggered && engineResult.triggerType === 'STOP_LOSS';
+    const premiumHardStopHit = !isShortPremiumPosition && sellablePremium <= hardPremiumStop;
     const premiumTakeProfit = Number(position.take_profit_trigger || 0);
     const nearTakeProfitThreshold = premiumTakeProfit > 0 ? Number((premiumTakeProfit * 0.95).toFixed(2)) : null;
 
@@ -959,6 +958,7 @@ export class MarketPoller {
 
     if (
       !triggered
+      && !isShortPremiumPosition
       && premiumTakeProfit > 0
       && nearTakeProfitThreshold !== null
       && takeProfitReferencePremium >= nearTakeProfitThreshold
@@ -1162,11 +1162,12 @@ export class MarketPoller {
         const exitQuantity = partialTrim ? this.getProfitTrimQuantity(position) : Number(position.quantity || 1);
         const newStatus = 'CLOSED';
         const estimatedExitPrice = sellablePremium;
-        const realizedPnl = (estimatedExitPrice - Number(position.entry_price)) * exitQuantity * 100;
+        const realizedPnl = TradeLifecycleService.calculateRealizedPnl(position, estimatedExitPrice, exitQuantity);
 
         // Execute Live SnapTrade order if not simulated
         if (!position.is_simulated) {
-            this.fastify.log.info(`[MarketPoller] LIVE position ${partialTrim ? 'profit trim' : 'exit'} triggered for position ${position.id} (${position.symbol}). Executing SELL_TO_CLOSE ${exitQuantity}/${position.quantity} via SnapTrade...`);
+            const exitAction = TradeLifecycleService.getExitAction(position);
+            this.fastify.log.info(`[MarketPoller] LIVE position ${partialTrim ? 'profit trim' : 'exit'} triggered for position ${position.id} (${position.symbol}). Executing ${exitAction} ${exitQuantity}/${position.quantity} via SnapTrade...`);
             let limitPrice: string | undefined = undefined;
             let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
 
@@ -1193,8 +1194,8 @@ export class MarketPoller {
                   ? `${exitTriggerType} profit trim submitted for ${exitQuantity}/${position.quantity} contracts; waiting for broker fill confirmation.`
                   : `${exitTriggerType} exit order submitted; waiting for broker fill confirmation.`,
                 partialTrim
-                  ? `**[${exitTriggerType} TRIM SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} SELL_TO_CLOSE ${exitQuantity}/${position.quantity} submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
-                  : `**[${exitTriggerType} EXIT SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} SELL_TO_CLOSE submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
+                  ? `**[${exitTriggerType} TRIM SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} ${exitAction} ${exitQuantity}/${position.quantity} submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
+                  : `**[${exitTriggerType} EXIT SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} ${exitAction} submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
               );
             }
             return;

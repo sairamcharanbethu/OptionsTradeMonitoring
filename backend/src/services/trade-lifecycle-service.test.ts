@@ -78,6 +78,20 @@ async function testMarkExitSubmittedDoesNotMarkTrimWithoutTrimQuantity() {
   assert(query.params?.[7] === null, 'Full trim should not pass partial trim quantity');
 }
 
+async function testShortOptionLifecycleHelpers() {
+  const longCall = { option_type: 'CALL', entry_action: 'BUY_TO_OPEN', entry_price: 1.5 };
+  const shortCall = { option_type: 'CALL', entry_action: 'SELL_TO_OPEN', entry_price: 1.5 };
+  const shortPut = { option_type: 'PUT', entry_action: 'SELL_TO_OPEN', entry_price: 1.5 };
+
+  assert(TradeLifecycleService.getExitAction(longCall) === 'SELL_TO_CLOSE', 'Long options should close with SELL_TO_CLOSE');
+  assert(TradeLifecycleService.getExitAction(shortCall) === 'BUY_TO_CLOSE', 'Short options should close with BUY_TO_CLOSE');
+  assert(TradeLifecycleService.calculateRealizedPnl(longCall, 2, 1) === 50, 'Long option PnL should increase when premium rises');
+  assert(TradeLifecycleService.calculateRealizedPnl(shortCall, 1, 1) === 50, 'Short option PnL should increase when premium falls');
+  assert(TradeLifecycleService.isUnderlyingStopBroken(shortCall, 505, 500), 'Short call stop should break when underlying rises through stop');
+  assert(!TradeLifecycleService.isUnderlyingStopBroken(shortCall, 495, 500), 'Short call stop should not break below stop');
+  assert(TradeLifecycleService.isUnderlyingStopBroken(shortPut, 495, 500), 'Short put stop should break when underlying falls through stop');
+}
+
 async function runTests() {
   console.log('Running TradeLifecycleService tests...');
   await testEntrySubmittedStatusMapsOrderTypes();
@@ -85,6 +99,7 @@ async function runTests() {
   await testFinalEntryExecutionStatuses();
   await testMarkExitSubmittedRecordsPendingTrimMetadata();
   await testMarkExitSubmittedDoesNotMarkTrimWithoutTrimQuantity();
+  await testShortOptionLifecycleHelpers();
   console.log('All TradeLifecycleService tests passed!');
 }
 

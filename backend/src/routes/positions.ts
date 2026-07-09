@@ -600,11 +600,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
         try {
           const snaptradeService = new SnaptradeService(fastify);
           const osiTicker = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+          const exitAction = TradeLifecycleService.getExitAction(position);
           const order = await snaptradeService.placeOptionOrder(
             userId,
             accountId,
             osiTicker,
-            'SELL_TO_CLOSE',
+            exitAction,
             closeQty,
             'MARKET'
           );
@@ -616,7 +617,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             {
               reason: 'MANUAL',
               orderType: 'MARKET',
-              note: ` [Manual SnapTrade MARKET exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
+              note: ` [Manual SnapTrade MARKET ${exitAction} exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
             }
           );
           await TradeRedisService.recordEvent(client, {
@@ -624,7 +625,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             positionId: id,
             eventType: 'EXIT_REQUESTED',
             message: 'Manual SnapTrade close submitted',
-            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQty, orderType: 'MARKET' }
+            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQty, orderType: 'MARKET', action: exitAction }
           });
           await client.query('COMMIT');
           await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
@@ -647,7 +648,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
       // 3. Calculate Analytics for the closed portion
       const entryPrice = Number(position.entry_price);
-      const realizedPnl = (closePrice - entryPrice) * closeQty * 100;
+      const realizedPnl = TradeLifecycleService.calculateRealizedPnl(position, closePrice, closeQty);
 
       let resultPosition;
 

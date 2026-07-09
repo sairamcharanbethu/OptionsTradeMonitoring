@@ -3,6 +3,8 @@ type Queryable = {
 };
 
 export type ExitExecutionStatus = 'PENDING_EXIT' | 'PENDING_TRIM';
+export type OptionEntryAction = 'BUY_TO_OPEN' | 'SELL_TO_OPEN';
+export type OptionExitAction = 'SELL_TO_CLOSE' | 'BUY_TO_CLOSE';
 export type EntryOrderState =
   | 'LOCAL_BLOCKED'
   | 'SUBMITTED'
@@ -44,6 +46,40 @@ export class TradeLifecycleService {
       message: 'Market entry submitted; broker reconciliation is required before treating it as filled.',
       noteLabel: 'market entry pending reconciliation'
     };
+  }
+
+  static exitActionForEntryAction(action?: string | null): OptionExitAction {
+    return String(action || '').toUpperCase() === 'SELL_TO_OPEN' ? 'BUY_TO_CLOSE' : 'SELL_TO_CLOSE';
+  }
+
+  static getEntryAction(position: any): OptionEntryAction {
+    return String(position?.entry_action || '').toUpperCase() === 'SELL_TO_OPEN' ? 'SELL_TO_OPEN' : 'BUY_TO_OPEN';
+  }
+
+  static getExitAction(position: any): OptionExitAction {
+    const configured = String(position?.exit_action || '').toUpperCase();
+    if (configured === 'BUY_TO_CLOSE') return 'BUY_TO_CLOSE';
+    if (configured === 'SELL_TO_CLOSE') return 'SELL_TO_CLOSE';
+    return this.exitActionForEntryAction(position?.entry_action);
+  }
+
+  static isShortPremiumPosition(position: any): boolean {
+    return this.getEntryAction(position) === 'SELL_TO_OPEN';
+  }
+
+  static calculateRealizedPnl(position: any, exitPrice: number, quantity: number): number {
+    const entryPrice = Number(position?.entry_price || 0);
+    const multiplier = this.isShortPremiumPosition(position) ? -1 : 1;
+    return (Number(exitPrice || 0) - entryPrice) * Number(quantity || 0) * 100 * multiplier;
+  }
+
+  static isUnderlyingStopBroken(position: any, underlyingPrice: number | null | undefined, underlyingStop: number | null | undefined): boolean {
+    if (!underlyingPrice || !underlyingStop) return false;
+    const optionType = String(position?.option_type || '').toUpperCase();
+    const shortPremium = this.isShortPremiumPosition(position);
+    if (optionType === 'CALL') return shortPremium ? underlyingPrice >= underlyingStop : underlyingPrice <= underlyingStop;
+    if (optionType === 'PUT') return shortPremium ? underlyingPrice <= underlyingStop : underlyingPrice >= underlyingStop;
+    return false;
   }
 
   static staleEntryDecision(currentExecutionStatus?: string | null): EntryOrderDecision {

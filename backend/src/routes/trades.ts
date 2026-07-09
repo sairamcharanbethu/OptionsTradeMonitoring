@@ -764,11 +764,12 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
 
         try {
           const optionSymbol = constructOSITicker(trade.symbol, Number(trade.strike_price), trade.option_type, trade.expiration_date);
+          const exitAction = TradeLifecycleService.getExitAction(trade);
           const order = await snaptradeService.placeOptionOrder(
             userId,
             accountId,
             optionSymbol,
-            'SELL_TO_CLOSE',
+            exitAction,
             closeQuantity,
             'MARKET'
           );
@@ -780,7 +781,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             {
               reason: 'MANUAL',
               orderType: 'MARKET',
-              note: ` [Manual Wealthsimple MARKET exit submitted for ${closeQuantity} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
+              note: ` [Manual Wealthsimple MARKET ${exitAction} exit submitted for ${closeQuantity} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
             }
           );
 
@@ -789,7 +790,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             positionId: id,
             eventType: 'EXIT_REQUESTED',
             message: 'Manual Wealthsimple close submitted',
-            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQuantity, orderType: 'MARKET' }
+            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQuantity, orderType: 'MARKET', action: exitAction }
           });
           await client.query('COMMIT');
           await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
@@ -983,11 +984,12 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
 
         try {
           const optionSymbol = constructOSITicker(trade.symbol, Number(trade.strike_price), trade.option_type, trade.expiration_date);
+          const exitAction = TradeLifecycleService.getExitAction(trade);
           const order = await snaptradeService.placeOptionOrder(
             userId,
             accountId,
             optionSymbol,
-            'SELL_TO_CLOSE',
+            exitAction,
             closeQuantity,
             'MARKET'
           );
@@ -1000,7 +1002,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
               reason: trade.exit_reason || 'RETRY',
               orderType: 'MARKET',
               incrementRetry: true,
-              note: ` [Retry Wealthsimple MARKET exit submitted for ${closeQuantity} contract(s) after broker status ${brokerStatus || trade.execution_status}${order.orderId ? `: ${order.orderId}` : ''}]`
+              note: ` [Retry Wealthsimple MARKET ${exitAction} exit submitted for ${closeQuantity} contract(s) after broker status ${brokerStatus || trade.execution_status}${order.orderId ? `: ${order.orderId}` : ''}]`
             }
           );
 
@@ -1009,7 +1011,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             positionId: id,
             eventType: 'EXIT_RETRY_REQUESTED',
             message: 'Retry Wealthsimple close submitted',
-            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQuantity, brokerStatus }
+            metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQuantity, brokerStatus, action: exitAction }
           });
           await client.query('COMMIT');
           await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
