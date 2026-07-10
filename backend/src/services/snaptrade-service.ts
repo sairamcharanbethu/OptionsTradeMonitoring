@@ -450,6 +450,98 @@ export class SnaptradeService {
         }) || null;
     }
 
+    async getRecentOrderStatusById(userId: number, orderId: string) {
+        const requestedOrderId = String(orderId || '').trim();
+        if (!requestedOrderId) throw new Error('orderId is required.');
+
+        const { rows: localRows } = await this.fastify.pg.query(
+            `SELECT id, symbol, option_type, strike_price, expiration_date, status, execution_status,
+                    broker_order_id, broker_trade_id, broker_exit_order_id, broker_exit_trade_id,
+                    account_id, execution_account_id, last_broker_order_status, last_broker_sync_at
+             FROM positions
+             WHERE user_id = $1
+               AND execution_broker = 'wealthsimple_snaptrade'
+               AND (
+                 broker_order_id = $2
+                 OR broker_trade_id = $2
+                 OR broker_exit_order_id = $2
+                 OR broker_exit_trade_id = $2
+               )
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+            [userId, requestedOrderId]
+        );
+        const localPosition = localRows[0] || null;
+
+        const accountIds = new Set<string>();
+        if (localPosition?.execution_account_id || localPosition?.account_id) {
+            accountIds.add(String(localPosition.execution_account_id || localPosition.account_id));
+        }
+
+        const { rows: selectedRows } = await this.fastify.pg.query(
+            `SELECT value FROM settings
+             WHERE user_id = $1
+               AND key = 'snaptrade_trading_account_id'
+               AND value IS NOT NULL
+               AND value != ''`,
+            [userId]
+        );
+        for (const row of selectedRows) accountIds.add(String(row.value));
+
+        const { rows: accountRows } = await this.fastify.pg.query(
+            'SELECT id FROM snaptrade_accounts WHERE user_id = $1',
+            [userId]
+        );
+        for (const row of accountRows) accountIds.add(String(row.id));
+
+        if (accountIds.size === 0) {
+            return {
+                found: false,
+                orderId: requestedOrderId,
+                status: localPosition?.last_broker_order_status || 'UNKNOWN',
+                localPosition,
+                reason: 'No SnapTrade accounts are synced for this user.'
+            };
+        }
+
+        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        for (const accountId of accountIds) {
+            const snaptradeAccountId = this.toSnaptradeAccountId(accountId);
+            const response = await snaptrade.accountInformation.getUserAccountRecentOrders({
+                userId: userIdStr,
+                userSecret,
+                accountId: snaptradeAccountId,
+                onlyExecuted: false
+            }, this.snaptradeRequestOptions());
+            const orders = this.extractRecentOrders(response.data);
+            const order = orders.find((candidate) => this.collectOrderIds(candidate).includes(requestedOrderId));
+            if (!order) continue;
+
+            const rawStatus = this.normalizeOrderStatus(order.status);
+            const status = this.hasFillEvidence(order) && !['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED'].includes(rawStatus)
+                ? 'FILLED'
+                : rawStatus;
+            return {
+                found: true,
+                orderId: requestedOrderId,
+                accountId,
+                status,
+                fillPrice: this.getOrderFillPrice(order, 0) || null,
+                filledQuantity: this.getFilledQuantity(order) || null,
+                localPosition,
+                rawOrder: order
+            };
+        }
+
+        return {
+            found: false,
+            orderId: requestedOrderId,
+            status: localPosition?.last_broker_order_status || 'UNKNOWN',
+            localPosition,
+            reason: 'Order was not found in recent SnapTrade orders.'
+        };
+    }
+
     private normalizeOrderStatus(status: any): string {
         return String(status || 'UNKNOWN').trim().toUpperCase();
     }

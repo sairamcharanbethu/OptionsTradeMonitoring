@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
 import { ManualOptionOrderService } from '../services/manual-option-order-service';
+import { SnaptradeService } from '../services/snaptrade-service';
 import { getGlobalSettings, resolveMcpTradingEnabled } from '../lib/settings-utils';
 
 type McpConfig = {
@@ -73,6 +74,31 @@ function createTradingMcpServer(fastify: FastifyInstance, userId: number) {
     return jsonToolResult(service.toQuotePayload(quote));
   });
 
+  server.registerTool('get_order_status', {
+    title: 'Get Order Status',
+    description: 'Look up a recent Wealthsimple/SnapTrade order by broker order id and refresh local pending-order reconciliation.',
+    inputSchema: {
+      orderId: z.string().trim().min(1).max(160).describe('Broker order id returned by place_option_trade or close_option_position.')
+    },
+    annotations: {
+      readOnlyHint: true,
+      openWorldHint: true
+    }
+  }, async (input) => {
+    const snaptrade = new SnaptradeService(fastify);
+    let sync: any = null;
+    try {
+      sync = await snaptrade.syncPendingBrokerOrders(userId);
+    } catch (err: any) {
+      sync = { success: false, error: err.message || String(err) };
+    }
+    const status = await snaptrade.getRecentOrderStatusById(userId, input.orderId);
+    return jsonToolResult({
+      ...status,
+      sync
+    });
+  });
+
   server.registerTool('place_option_trade', {
     title: 'Place Option Trade',
     description: 'Submit a single-leg option opening order directly through SnapTrade after app-level account, duplicate, and live-trading checks.',
@@ -121,6 +147,46 @@ function createTradingMcpServer(fastify: FastifyInstance, userId: number) {
       executionStatus: result.position?.execution_status || null,
       action: result.position?.entry_action || input.action,
       orderType: input.orderType
+    });
+  });
+
+  server.registerTool('close_option_position', {
+    title: 'Close Option Position',
+    description: 'Submit a SELL_TO_CLOSE or BUY_TO_CLOSE order for an app-tracked open Wealthsimple option position. The server derives the correct close action from the original entry action.',
+    inputSchema: {
+      positionId: z.number().int().positive().describe('App position id to close. Use the positionId returned by place_option_trade or app trade data.'),
+      quantity: z.number().int().positive().optional().describe('Number of contracts to close. Omit to close the full remaining quantity.'),
+      orderType: z.enum(['LIMIT', 'MARKET']).describe('Close order type.'),
+      premium: z.number().positive().optional().describe('Required for LIMIT closes; submitted as the exact per-contract limit price.'),
+      reason: z.string().trim().min(1).max(80).optional().describe('Optional audit reason, for example USER_CONFIRMED_EXIT.')
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      openWorldHint: true
+    }
+  }, async (input) => {
+    if (input.orderType === 'LIMIT' && (!input.premium || input.premium <= 0)) {
+      throw new Error('premium is required for LIMIT close orders and is submitted as the exact limit price.');
+    }
+    const result = await service.closePosition(userId, {
+      positionId: input.positionId,
+      quantity: input.quantity || null,
+      orderType: input.orderType,
+      limitPrice: input.orderType === 'LIMIT' ? input.premium : null,
+      reason: input.reason || 'MCP'
+    });
+    return jsonToolResult({
+      success: result.success,
+      orderId: result.orderId,
+      tradeId: result.tradeId,
+      optionSymbol: result.optionSymbol,
+      positionId: result.position?.id || input.positionId,
+      positionStatus: result.position?.status || null,
+      executionStatus: result.position?.execution_status || null,
+      action: result.action,
+      orderType: result.orderType,
+      quantity: result.quantity
     });
   });
 

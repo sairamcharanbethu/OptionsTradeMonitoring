@@ -145,6 +145,57 @@ Field notes:
 - `SELL_TO_OPEN` margin and eligibility checks are handled by SnapTrade/Wealthsimple.
 - The MCP server does not require IBKR quote validation before submitting to SnapTrade/Wealthsimple.
 
+### `get_order_status`
+
+Read-only. Looks up a recent Wealthsimple/SnapTrade order by broker order id and refreshes local pending-order reconciliation.
+
+Input:
+
+```json
+{
+  "orderId": "broker-order-id"
+}
+```
+
+Use the `orderId` returned by `place_option_trade` or `close_option_position`.
+
+### `close_option_position`
+
+Submits a closing order for an app-tracked open Wealthsimple option position.
+
+Input:
+
+```json
+{
+  "positionId": 123,
+  "quantity": 1,
+  "orderType": "MARKET",
+  "reason": "USER_CONFIRMED_EXIT"
+}
+```
+
+Limit close example:
+
+```json
+{
+  "positionId": 123,
+  "quantity": 1,
+  "orderType": "LIMIT",
+  "premium": 0.75,
+  "reason": "USER_CONFIRMED_EXIT"
+}
+```
+
+Close notes:
+
+- Use `positionId`, not raw contract fields, so the server can verify ownership and open quantity.
+- Omit `quantity` to close the full remaining position.
+- The server derives the close action from the original entry:
+  - `BUY_TO_OPEN` closes with `SELL_TO_CLOSE`.
+  - `SELL_TO_OPEN` closes with `BUY_TO_CLOSE`.
+- `premium` is required only for `LIMIT` close orders.
+- The close order is reconciled later by SnapTrade order sync, same as entry orders.
+
 ## Recommended Agent Instruction
 
 Paste this into the AI tool or agent that will use the MCP server:
@@ -160,6 +211,8 @@ Before any trade:
 5. Use LIMIT or MARKET only. For LIMIT orders, premium is the exact per-contract limit price.
 6. Treat quantity as number of option contracts.
 7. Generate a stable clientOrderId for each intended order and reuse it only for retries of the same order.
-8. Never place multi-leg, closing, rolling, or replacement orders through this MCP server. It supports single-leg opening orders only.
-9. After place_option_trade, report orderId, tradeId, optionSymbol, positionId, positionStatus, executionStatus, action, and orderType.
+8. Never place multi-leg, rolling, or replacement orders through this MCP server.
+9. For exits, call close_option_position with the app positionId. Do not manually choose SELL_TO_CLOSE or BUY_TO_CLOSE; the server derives the correct close action.
+10. After place_option_trade or close_option_position, report orderId, tradeId, optionSymbol, positionId, positionStatus, executionStatus, action, orderType, and quantity when present.
+11. Use get_order_status with the broker orderId when the user asks whether an entry or close has filled, rejected, canceled, or is still pending.
 ```

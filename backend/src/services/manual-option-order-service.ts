@@ -33,6 +33,17 @@ export type ManualOptionOrderResult = {
   position: any;
 };
 
+export type ManualOptionCloseResult = {
+  success: true;
+  orderId: string | null;
+  tradeId: string | null;
+  optionSymbol: string;
+  action: 'SELL_TO_CLOSE' | 'BUY_TO_CLOSE';
+  orderType: OptionOrderType;
+  quantity: number;
+  position: any;
+};
+
 type ManualEntrySettings = {
   slippagePct: number;
   takeProfitPct: number | null;
@@ -426,6 +437,146 @@ export class ManualOptionOrderService {
       return result;
     } finally {
       await TradeRedisService.releaseLock(entryLock);
+    }
+  }
+
+  async closePosition(userId: number, input: {
+    positionId: number;
+    quantity?: number | null;
+    orderType: OptionOrderType;
+    limitPrice?: number | null;
+    reason?: string | null;
+  }): Promise<ManualOptionCloseResult> {
+    if (!Number.isInteger(input.positionId) || input.positionId <= 0) {
+      throw new Error('A valid positionId is required.');
+    }
+    if (input.orderType === 'LIMIT' && (!input.limitPrice || input.limitPrice <= 0)) {
+      throw new Error('A positive premium is required for LIMIT close orders.');
+    }
+
+    const snaptrade = new SnaptradeService(this.fastify);
+    try {
+      await snaptrade.syncPendingBrokerOrders(userId);
+    } catch (err: any) {
+      throw new Error(`Could not verify latest Wealthsimple order status before close: ${err.message || String(err)}`);
+    }
+
+    const exitLock = await TradeRedisService.acquireLock(TradeRedisService.keys.exitLock(input.positionId));
+    if (!exitLock.acquired) throw new Error('A close request is already in progress for this position.');
+
+    try {
+      const client = await (this.fastify as any).pg.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(
+          `SELECT *
+           FROM positions
+           WHERE id = $1
+             AND user_id = $2
+             AND execution_broker = 'wealthsimple_snaptrade'
+           FOR UPDATE`,
+          [input.positionId, userId]
+        );
+        const position = rows[0];
+        if (!position) {
+          await client.query('ROLLBACK');
+          throw new Error('Wealthsimple position not found.');
+        }
+
+        TradeLifecycleService.assertCanRequestExit(position);
+
+        const currentQty = Number(position.quantity || 0);
+        const closeQty = input.quantity === null || input.quantity === undefined
+          ? currentQty
+          : Number(input.quantity);
+        if (!Number.isFinite(closeQty) || closeQty <= 0 || closeQty > currentQty) {
+          await client.query('ROLLBACK');
+          throw new Error('Invalid close quantity.');
+        }
+
+        const accountId = String(position.execution_account_id || position.account_id || '').trim();
+        if (!accountId) {
+          await client.query('ROLLBACK');
+          throw new Error('No SnapTrade account id is attached to this position.');
+        }
+
+        const optionSymbol = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+        const exitAction = TradeLifecycleService.getExitAction(position);
+        let order: any;
+        try {
+          order = await snaptrade.placeOptionOrder(
+            userId,
+            accountId,
+            optionSymbol,
+            exitAction,
+            closeQty,
+            input.orderType,
+            input.orderType === 'LIMIT' ? Number(input.limitPrice).toFixed(2) : undefined,
+            { skipImpact: true }
+          );
+        } catch (err: any) {
+          await TradeLifecycleService.markExitSubmissionFailure(client, input.positionId, err.message || String(err), 'MCP SnapTrade exit failed');
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: input.positionId,
+            eventType: 'MCP_EXIT_ORDER_FAILED',
+            message: err.message || String(err),
+            metadata: { contract: optionSymbol, quantity: closeQty, orderType: input.orderType, action: exitAction }
+          });
+          await client.query('COMMIT');
+          await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
+          throw err;
+        }
+
+        const updatedPosition = await TradeLifecycleService.markExitSubmitted(
+          client,
+          input.positionId,
+          order,
+          {
+            reason: input.reason || 'MCP',
+            orderType: input.orderType,
+            trimQuantity: closeQty < currentQty ? closeQty : null,
+            note: ` [MCP SnapTrade ${input.orderType} ${exitAction} exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
+          }
+        );
+        await TradeRedisService.recordEvent(client, {
+          userId,
+          positionId: input.positionId,
+          eventType: 'MCP_EXIT_ORDER_SUBMITTED',
+          message: `MCP Wealthsimple ${input.orderType} ${exitAction} submitted`,
+          metadata: {
+            orderId: order.orderId || null,
+            tradeId: order.tradeId || null,
+            contract: optionSymbol,
+            quantity: closeQty,
+            action: exitAction,
+            orderType: input.orderType,
+            limitPrice: input.limitPrice || null
+          }
+        });
+        await client.query('COMMIT');
+        await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
+        await TradeRedisService.requestBrokerSync(userId);
+        return {
+          success: true,
+          orderId: order.orderId || null,
+          tradeId: order.tradeId || null,
+          optionSymbol,
+          action: exitAction,
+          orderType: input.orderType,
+          quantity: closeQty,
+          position: updatedPosition
+        };
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {}
+        throw err;
+      } finally {
+        client.release();
+      }
+    } finally {
+      await TradeRedisService.releaseLock(exitLock);
     }
   }
 }
