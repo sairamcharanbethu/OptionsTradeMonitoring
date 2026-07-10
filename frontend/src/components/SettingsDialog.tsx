@@ -1114,12 +1114,39 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
                             <div className="space-y-6">
                                 {isAdmin && (
-                                    <RuntimeConfigPanel
-                                        runtimeConfig={runtimeConfig}
-                                        loading={runtimeConfigLoading}
-                                        error={runtimeConfigError}
-                                        onRefresh={loadRuntimeConfig}
-                                    />
+                                    <>
+                                        <section className="rounded-lg border bg-card p-4">
+                                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                                <div className="min-w-0">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <Server className="h-4 w-4 text-muted-foreground" />
+                                                        <h4 className="text-sm font-semibold">MCP Trading Endpoint</h4>
+                                                        {mcpTradingEnabled ? (
+                                                            <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
+                                                        ) : (
+                                                            <Badge variant="secondary" className="h-5 text-[10px]">Disabled</Badge>
+                                                        )}
+                                                    </div>
+                                                    <p className={`mt-1 text-[10px] ${mcpTradingEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
+                                                        {mcpTradingEnabled
+                                                            ? 'JWT-authenticated MCP clients can reach the option trading tools.'
+                                                            : 'Public MCP requests are blocked before auth and trade validation.'}
+                                                    </p>
+                                                </div>
+                                                <Switch
+                                                    id="mcpTradingEnabledConnections"
+                                                    checked={mcpTradingEnabled}
+                                                    onCheckedChange={setMcpTradingEnabled}
+                                                />
+                                            </div>
+                                        </section>
+                                        <RuntimeConfigPanel
+                                            runtimeConfig={runtimeConfig}
+                                            loading={runtimeConfigLoading}
+                                            error={runtimeConfigError}
+                                            onRefresh={loadRuntimeConfig}
+                                        />
+                                    </>
                                 )}
 
                                 {/* API Keys & Services */}
