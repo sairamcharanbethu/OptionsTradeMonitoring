@@ -85,7 +85,18 @@ function isUnderlyingStopBreached(trade: Position) {
 }
 
 function isManualEntryTrade(trade: Position) {
-  return Boolean(getManualEntryData(trade)?.enabled) || String(trade.notes || '').includes('[Manual Entry]');
+  const manualEntry = getManualEntryData(trade);
+  const notes = String(trade.notes || '');
+  return Boolean(manualEntry?.enabled)
+    || manualEntry?.source === 'mcp'
+    || notes.includes('[Manual Entry]')
+    || notes.includes('[MCP]');
+}
+
+function entrySourceLabel(trade: Position) {
+  const manualEntry = getManualEntryData(trade);
+  if (manualEntry?.source === 'mcp' || String(trade.notes || '').includes('[MCP]')) return 'MCP';
+  return 'Manual';
 }
 
 function executionMessage(trade: Position) {
@@ -516,7 +527,7 @@ export default function ManualEntryPage() {
               <h2 className="text-xl font-semibold tracking-tight">Manual Entry</h2>
               <Badge variant="outline">Wealthsimple</Badge>
             </div>
-            <p className="text-sm text-muted-foreground">Live option entry with IBKR quotes and SnapTrade execution.</p>
+            <p className="text-sm text-muted-foreground">Live option entry and MCP-routed trades with SnapTrade execution.</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -739,14 +750,14 @@ export default function ManualEntryPage() {
 
           <div className="min-w-0 overflow-hidden rounded-md border border-border">
             <div className="flex items-center justify-between border-b bg-muted/30 px-3 py-2">
-              <h3 className="font-semibold">Manual Entries</h3>
+              <h3 className="font-semibold">Managed Entries</h3>
               <Badge variant="outline">{manualTrades.length} active</Badge>
             </div>
             <div className="grid gap-3 p-3 md:hidden">
               {loadingTrades ? (
                 <div className="py-6 text-center text-sm text-muted-foreground">Loading manual entries...</div>
               ) : manualTrades.length === 0 ? (
-                <div className="py-6 text-center text-sm text-muted-foreground">No active manual entries.</div>
+                <div className="py-6 text-center text-sm text-muted-foreground">No active managed entries.</div>
               ) : manualTrades.map((trade) => {
                 const manualEntry = getManualEntryData(trade);
                 const stopBreached = isUnderlyingStopBreached(trade);
@@ -756,7 +767,10 @@ export default function ManualEntryPage() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="break-words font-medium">{contractLabel(trade)}</div>
-                        <div className="mt-1 break-all text-xs text-muted-foreground">Entry {trade.broker_order_id || '-'}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+                          <Badge variant="outline" className="h-5 text-[10px]">{entrySourceLabel(trade)}</Badge>
+                          <span className="break-all">Entry {trade.broker_order_id || '-'}</span>
+                        </div>
                         <div className="mt-1 text-xs text-muted-foreground">{executionMessage(trade)}</div>
                       </div>
                       <div className="flex flex-col items-end gap-1">
@@ -817,7 +831,7 @@ export default function ManualEntryPage() {
                   {loadingTrades ? (
                     <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">Loading manual entries...</td></tr>
                   ) : manualTrades.length === 0 ? (
-                    <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No active manual entries.</td></tr>
+                    <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No active managed entries.</td></tr>
                   ) : manualTrades.map((trade) => {
                     const manualEntry = getManualEntryData(trade);
                     const stopBreached = isUnderlyingStopBreached(trade);
@@ -826,7 +840,10 @@ export default function ManualEntryPage() {
                       <tr key={trade.id} className={`border-t border-border/70 ${stopBreached ? 'manual-stop-breached' : ''}`}>
                         <td className="px-3 py-3">
                           <div className="font-medium">{contractLabel(trade)}</div>
-                          <div className="text-xs text-muted-foreground">Entry {trade.broker_order_id || '-'}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+                            <Badge variant="outline" className="h-5 text-[10px]">{entrySourceLabel(trade)}</Badge>
+                            <span className="break-all">Entry {trade.broker_order_id || '-'}</span>
+                          </div>
                           <div className="text-xs text-muted-foreground">{executionMessage(trade)}</div>
                           {stopBreached && <Badge variant="destructive" className="mt-2 animate-pulse">CLOSE NOW</Badge>}
                         </td>

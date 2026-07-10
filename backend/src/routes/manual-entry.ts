@@ -305,7 +305,11 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
               try { return JSON.parse(position.analysis_data); } catch { return null; }
             })()
           : position.analysis_data;
-        const isManualEntry = Boolean(analysisData?.manualEntry?.enabled) || String(position.notes || '').includes('[Manual Entry]');
+        const notes = String(position.notes || '');
+        const isManualEntry = Boolean(analysisData?.manualEntry?.enabled)
+          || analysisData?.manualEntry?.source === 'mcp'
+          || notes.includes('[Manual Entry]')
+          || notes.includes('[MCP]');
         if (!isManualEntry) {
           await client.query('ROLLBACK');
           return reply.code(404).send({ error: 'Manual entry trade not found' });

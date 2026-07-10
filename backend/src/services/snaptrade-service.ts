@@ -518,9 +518,39 @@ export class SnaptradeService {
             if (!order) continue;
 
             const rawStatus = this.normalizeOrderStatus(order.status);
-            const status = this.hasFillEvidence(order) && !['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED'].includes(rawStatus)
+            const terminalStatuses = ['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED'];
+            const pendingStatuses = ['PENDING', 'ACCEPTED', 'QUEUED', 'TRIGGERED', 'ACTIVATED', 'PENDING_RISK_REVIEW', 'CONTINGENT_ORDER', 'CANCEL_PENDING', 'REPLACE_PENDING', 'REPLACED', 'STOPPED', 'SUSPENDED', 'NONE', 'UNKNOWN'];
+            const status = this.hasFillEvidence(order) && !terminalStatuses.includes(rawStatus)
                 ? 'FILLED'
                 : rawStatus;
+            let repairedLocalPosition = localPosition;
+            const matchedEntryOrder = localPosition
+                && [localPosition.broker_order_id, localPosition.broker_trade_id].filter(Boolean).map((value) => String(value)).includes(requestedOrderId);
+            if (matchedEntryOrder && localPosition.status === 'CLOSED' && pendingStatuses.includes(status)) {
+                const { rows: repairedRows } = await this.fastify.pg.query(
+                    `UPDATE positions
+                     SET status = 'PENDING_ORDER',
+                         execution_status = $1,
+                         execution_error = NULL,
+                         last_broker_order_status = $1,
+                         last_broker_sync_at = CURRENT_TIMESTAMP,
+                         notes = COALESCE(notes, '') || $2,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $3
+                       AND user_id = $4
+                       AND status = 'CLOSED'
+                     RETURNING id, symbol, option_type, strike_price, expiration_date, status, execution_status,
+                               broker_order_id, broker_trade_id, broker_exit_order_id, broker_exit_trade_id,
+                               account_id, execution_account_id, last_broker_order_status, last_broker_sync_at`,
+                    [
+                        status,
+                        ` [SnapTrade order status repair: broker order ${requestedOrderId} is ${status} with no fill evidence; restored to pending.]`,
+                        localPosition.id,
+                        userId
+                    ]
+                );
+                repairedLocalPosition = repairedRows[0] || localPosition;
+            }
             return {
                 found: true,
                 orderId: requestedOrderId,
@@ -528,7 +558,8 @@ export class SnaptradeService {
                 status,
                 fillPrice: this.getOrderFillPrice(order, 0) || null,
                 filledQuantity: this.getFilledQuantity(order) || null,
-                localPosition,
+                localPosition: repairedLocalPosition,
+                repairedLocalStatus: repairedLocalPosition !== localPosition,
                 rawOrder: order
             };
         }

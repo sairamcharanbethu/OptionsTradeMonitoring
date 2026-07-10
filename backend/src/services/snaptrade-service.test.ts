@@ -20,6 +20,19 @@ function createFastifyMock() {
   } as any;
 }
 
+function createFastifyMockWithQueries(handler: (sql: string, params?: any[]) => Promise<any>) {
+  return {
+    log: {
+      info: () => {},
+      warn: () => {},
+      error: () => {}
+    },
+    pg: {
+      query: handler
+    }
+  } as any;
+}
+
 async function testPlaceOptionOrderUsesSingleLegForceOrderPayload() {
   const service = new SnaptradeService(createFastifyMock());
   let forcePayload: any = null;
@@ -140,11 +153,75 @@ async function testPlaceOptionOrderRejectsInvalidLimitPriceBeforeBrokerCall() {
   assert(forceCalled === false, 'Should not call broker with invalid limit price');
 }
 
+async function testOrderStatusRepairsClosedAcceptedEntry() {
+  const localClosedPosition = {
+    id: 42,
+    symbol: 'SPY',
+    option_type: 'CALL',
+    strike_price: 755,
+    expiration_date: '2026-07-10',
+    status: 'CLOSED',
+    execution_status: 'ACCEPTED',
+    broker_order_id: 'order-accepted',
+    broker_trade_id: null,
+    broker_exit_order_id: null,
+    broker_exit_trade_id: null,
+    account_id: '7:snap-account',
+    execution_account_id: '7:snap-account',
+    last_broker_order_status: 'ACCEPTED',
+    last_broker_sync_at: null
+  };
+  let repaired = false as boolean;
+  const service = new SnaptradeService(createFastifyMockWithQueries(async (sql: string) => {
+    if (sql.includes('FROM positions') && sql.includes('broker_order_id = $2')) {
+      return { rows: [localClosedPosition] };
+    }
+    if (sql.includes("key = 'snaptrade_trading_account_id'")) {
+      return { rows: [{ value: '7:snap-account' }] };
+    }
+    if (sql.includes('FROM snaptrade_accounts')) {
+      return { rows: [] };
+    }
+    if (sql.includes("SET status = 'PENDING_ORDER'")) {
+      repaired = true;
+      return { rows: [{ ...localClosedPosition, status: 'PENDING_ORDER', execution_status: 'ACCEPTED' }] };
+    }
+    return { rows: [] };
+  }));
+
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: {
+      accountInformation: {
+        getUserAccountRecentOrders: async () => ({
+          data: [{
+            brokerage_order_id: 'order-accepted',
+            status: 'ACCEPTED',
+            filled_quantity: 0,
+            execution_price: null,
+            time_executed: null,
+            open_quantity: '1.00'
+          }]
+        })
+      }
+    }
+  });
+
+  const status = await service.getRecentOrderStatusById(7, 'order-accepted');
+  assert(status.found === true, 'Should find accepted broker order');
+  assert(status.status === 'ACCEPTED', `Expected ACCEPTED broker status, got ${status.status}`);
+  assert(status.localPosition.status === 'PENDING_ORDER', `Expected local repair to PENDING_ORDER, got ${status.localPosition.status}`);
+  assert(status.repairedLocalStatus === true, 'Should report local status repair');
+  assert(repaired === true, 'Should update the local position');
+}
+
 async function runTests() {
   console.log('Running SnaptradeService order payload tests...');
   await testPlaceOptionOrderUsesSingleLegForceOrderPayload();
   await testPlaceOptionOrderUsesLimitPriceForForceOrder();
   await testPlaceOptionOrderRejectsInvalidLimitPriceBeforeBrokerCall();
+  await testOrderStatusRepairsClosedAcceptedEntry();
   console.log('All SnaptradeService order payload tests passed!');
 }
 
