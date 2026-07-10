@@ -144,9 +144,40 @@ export async function mcpRoutes(fastify: FastifyInstance, options: FastifyPlugin
 
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       const server = createTradingMcpServer(fastify, userId);
-      await server.connect(transport);
-      reply.hijack();
-      await transport.handleRequest(request.raw as any, reply.raw as any, request.body);
+      let cleanedUp = false;
+      const cleanup = async () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        await transport.close().catch((err) => {
+          fastify.log.warn(`[MCP] Failed to close transport: ${err.message || String(err)}`);
+        });
+        await server.close().catch((err) => {
+          fastify.log.warn(`[MCP] Failed to close server: ${err.message || String(err)}`);
+        });
+      };
+
+      reply.raw.on('close', () => {
+        cleanup().catch((err) => {
+          fastify.log.warn(`[MCP] Cleanup failed: ${err.message || String(err)}`);
+        });
+      });
+
+      try {
+        await server.connect(transport);
+        reply.hijack();
+        await transport.handleRequest(request.raw as any, reply.raw as any, request.body);
+      } catch (err: any) {
+        fastify.log.error(`[MCP] Request failed: ${err.message || String(err)}`);
+        if (!reply.raw.headersSent && !reply.raw.writableEnded) {
+          reply.raw.writeHead(500, { 'Content-Type': 'application/json' });
+          reply.raw.end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'Internal server error' },
+            id: null
+          }));
+        }
+        await cleanup();
+      }
     }
   });
 }
