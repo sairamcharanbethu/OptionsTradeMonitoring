@@ -48,6 +48,7 @@ const SETTING_KEYS = {
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 const MAX_ENTRY_QUOTE_AGE_MS = 60_000;
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
+const MCP_MARKET_PENDING_ENTRY_PRICE = 0.01;
 
 function normalizeSettings(settings: Record<string, string>): ManualEntrySettings {
   const slippagePct = Number(settings[SETTING_KEYS.slippagePct] || 3);
@@ -177,9 +178,9 @@ export class ManualOptionOrderService {
       liveTradingAcknowledged: settings.live_trading_acknowledged === 'true',
       hasSelectedSnapTradeAccount: Boolean(String(settings.snaptrade_trading_account_id || '').trim()),
       quoteValidation: {
-        maxQuoteAgeMs: MAX_ENTRY_QUOTE_AGE_MS,
-        maxSpreadPct: 15,
-        maxValidationMovePct: 8
+        requiredForMcpOrders: false,
+        mode: 'MCP orders relay directly to SnapTrade/Wealthsimple without IBKR quote validation.',
+        getOptionQuoteAvailable: true
       },
       shortOpenGuard: 'Broker eligibility and margin checks are delegated to SnapTrade/Wealthsimple.'
     };
@@ -199,6 +200,7 @@ export class ManualOptionOrderService {
 
     const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
     const manualSettings = normalizeSettings(settings);
+    const isMcpRelay = input.source === 'mcp';
 
     if (settings.live_trading_acknowledged !== 'true') {
       throw new Error('Live trading acknowledgement is required before placing manual option orders.');
@@ -235,36 +237,42 @@ export class ManualOptionOrderService {
         throw new Error(`An active ${input.symbol} ${input.optionType} ${input.strike} ${input.expiration} trade already exists.`);
       }
 
-      const firstQuote = await this.getOptionQuote(userId, input);
-      assertUsableEntryQuote(firstQuote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(firstQuote?.mark || 0), input.orderType, input.action);
+      let quote: any = null;
+      if (!isMcpRelay) {
+        const firstQuote = await this.getOptionQuote(userId, input);
+        assertUsableEntryQuote(firstQuote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(firstQuote?.mark || 0), input.orderType, input.action);
 
-      await wait(750);
-      const quote = await this.getOptionQuote(userId, input);
-      assertUsableEntryQuote(quote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(quote?.mark || 0), input.orderType, input.action);
+        await wait(750);
+        quote = await this.getOptionQuote(userId, input);
+        assertUsableEntryQuote(quote, input.orderType === 'LIMIT' && input.limitPrice ? Number(input.limitPrice) : Number(quote?.mark || 0), input.orderType, input.action);
 
-      const movePct = Number(firstQuote?.mark || 0) > 0
-        ? Number((((Number(quote!.mark) - Number(firstQuote!.mark)) / Number(firstQuote!.mark)) * 100).toFixed(2))
-        : 0;
-      if (Math.abs(movePct) > 8) {
-        throw new Error(`Manual option order blocked: premium moved ${movePct}% during quote validation.`);
-      }
+        const movePct = Number(firstQuote?.mark || 0) > 0
+          ? Number((((Number(quote!.mark) - Number(firstQuote!.mark)) / Number(firstQuote!.mark)) * 100).toFixed(2))
+          : 0;
+        if (Math.abs(movePct) > 8) {
+          throw new Error(`Manual option order blocked: premium moved ${movePct}% during quote validation.`);
+        }
 
-      if (input.orderType === 'LIMIT' && Number(input.limitPrice) < Number(quote!.bid || 0)) {
-        throw new Error('Limit premium is below the current bid.');
-      }
-      const maxLimit = Number((Number(quote!.ask) * (1 + Math.max(manualSettings.slippagePct, 3) / 100)).toFixed(2));
-      if (input.orderType === 'LIMIT' && Number(input.limitPrice) > maxLimit) {
-        throw new Error(`Limit premium is above the protected maximum ${maxLimit.toFixed(2)}.`);
+        if (input.orderType === 'LIMIT' && Number(input.limitPrice) < Number(quote!.bid || 0)) {
+          throw new Error('Limit premium is below the current bid.');
+        }
+        const maxLimit = Number((Number(quote!.ask) * (1 + Math.max(manualSettings.slippagePct, 3) / 100)).toFixed(2));
+        if (input.orderType === 'LIMIT' && Number(input.limitPrice) > maxLimit) {
+          throw new Error(`Limit premium is above the protected maximum ${maxLimit.toFixed(2)}.`);
+        }
       }
 
       const osiTicker = constructOSITicker(input.symbol, input.strike, input.optionType, input.expiration);
       const entryState = TradeLifecycleService.entrySubmittedStatus(input.orderType);
-      const entryPrice = Number(quote!.mark.toFixed(2));
+      const brokerFillPending = isMcpRelay && input.orderType === 'MARKET';
+      const entryPrice = isMcpRelay
+        ? (brokerFillPending ? MCP_MARKET_PENDING_ENTRY_PRICE : Number(Number(input.limitPrice).toFixed(2)))
+        : Number(quote!.mark.toFixed(2));
       const isShortOpen = input.action === 'SELL_TO_OPEN';
-      const takeProfitTrigger = !isShortOpen && manualSettings.takeProfitPct
+      const takeProfitTrigger = !brokerFillPending && !isShortOpen && manualSettings.takeProfitPct
         ? Number((entryPrice * (1 + manualSettings.takeProfitPct / 100)).toFixed(2))
         : null;
-      const stopLossDisplay = !isShortOpen && manualSettings.stopLossPct
+      const stopLossDisplay = !brokerFillPending && !isShortOpen && manualSettings.stopLossPct
         ? Number((entryPrice * (1 - manualSettings.stopLossPct / 100)).toFixed(2))
         : null;
       const underlyingStopPrice = input.underlyingStopPrice
@@ -302,7 +310,7 @@ export class ManualOptionOrderService {
           input.quantity,
           takeProfitTrigger,
           accountId,
-          `[${sourceLabel}] ${input.orderType} ${input.action} preparing. Stop loss display ${stopLossDisplay === null ? 'not set' : `$${stopLossDisplay}`}. Underlying stop ${underlyingStopPrice === null ? 'not set' : `$${underlyingStopPrice}`}.`,
+          `[${sourceLabel}] ${input.orderType} ${input.action} preparing. ${brokerFillPending ? 'Broker fill price pending.' : `Stop loss display ${stopLossDisplay === null ? 'not set' : `$${stopLossDisplay}`}.`} Underlying stop ${underlyingStopPrice === null ? 'not set' : `$${underlyingStopPrice}`}.`,
           {
             manualEntry: {
               enabled: input.source !== 'mcp',
@@ -316,7 +324,9 @@ export class ManualOptionOrderService {
               initialTakeProfitTrigger: takeProfitTrigger,
               stopLossDisplay,
               underlyingStopPrice,
-              quote: toQuotePayload(quote)
+              quote: quote ? toQuotePayload(quote) : null,
+              quoteValidation: isMcpRelay ? 'skipped_mcp_relay' : 'ibkr_live_quote',
+              brokerFillPending
             }
           },
           underlyingPrice,
@@ -392,7 +402,9 @@ export class ManualOptionOrderService {
           action: input.action,
           orderType: input.orderType,
           limitPrice: input.limitPrice || null,
-          quote: toQuotePayload(quote)
+          quote: quote ? toQuotePayload(quote) : null,
+          quoteValidation: isMcpRelay ? 'skipped_mcp_relay' : 'ibkr_live_quote',
+          brokerFillPending
         }
       });
       await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);

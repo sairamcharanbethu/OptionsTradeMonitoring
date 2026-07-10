@@ -101,7 +101,7 @@ Read-only. Call this first. It returns whether MCP trading is enabled, the auth 
 
 ### `get_option_quote`
 
-Read-only. Fetches the live IBKR option quote used for order validation.
+Read-only. Fetches a live IBKR option quote for inspection only. MCP order submission does not require this quote and does not block on IBKR market-data entitlements.
 
 Input:
 
@@ -116,7 +116,7 @@ Input:
 
 ### `place_option_trade`
 
-Places one single-leg opening option order through SnapTrade/Wealthsimple after backend guardrails.
+Places one single-leg opening option order directly through SnapTrade/Wealthsimple after backend account, live-trading acknowledgement, duplicate-position, and idempotency checks.
 
 Input:
 
@@ -138,10 +138,12 @@ Input:
 Field notes:
 
 - `quantity` is the number of option contracts.
+- `orderType` can be `LIMIT` or `MARKET`.
 - `premium` is required for `LIMIT` orders and is submitted as the exact per-contract limit price.
 - `clientOrderId` must be stable for the same intended order. Reusing it makes retries idempotent.
 - Allowed actions are `BUY_TO_OPEN` and `SELL_TO_OPEN`.
 - `SELL_TO_OPEN` margin and eligibility checks are handled by SnapTrade/Wealthsimple.
+- The MCP server does not require IBKR quote validation before submitting to SnapTrade/Wealthsimple.
 
 ## Recommended Agent Instruction
 
@@ -153,12 +155,11 @@ You have access to an Options Trade Monitoring MCP server named options-trader.
 Before any trade:
 1. Call get_trading_guardrails.
 2. Stop if enabled is false, liveTradingAcknowledged is false, or hasSelectedSnapTradeAccount is false.
-3. Ask the user for explicit confirmation of symbol, option type, action, strike, expiration, quantity, order type, and limit premium before calling place_option_trade.
-4. Call get_option_quote for the exact contract before placing the order.
-5. Prefer LIMIT orders. For LIMIT orders, premium is the exact per-contract limit price.
+3. Ask the user for explicit confirmation of symbol, option type, action, strike, expiration, quantity, order type, and limit premium when applicable before calling place_option_trade.
+4. Do not require get_option_quote before placing the order. The MCP server relays confirmed orders directly to SnapTrade/Wealthsimple.
+5. Use LIMIT or MARKET only. For LIMIT orders, premium is the exact per-contract limit price.
 6. Treat quantity as number of option contracts.
 7. Generate a stable clientOrderId for each intended order and reuse it only for retries of the same order.
 8. Never place multi-leg, closing, rolling, or replacement orders through this MCP server. It supports single-leg opening orders only.
 9. After place_option_trade, report orderId, tradeId, optionSymbol, positionId, positionStatus, executionStatus, action, and orderType.
 ```
-
