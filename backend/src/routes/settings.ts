@@ -1,6 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { redis } from '../lib/redis';
-import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled } from '../lib/settings-utils';
+import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled } from '../lib/settings-utils';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
@@ -325,8 +324,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
                 await client.query('COMMIT');
 
-                // Invalidate cache
-                await redis.set(`USER_SETTINGS:${userId}`, '', 1);
+                await invalidateSettingsCache(userId, Object.keys(updates));
 
                 // If poll interval was updated, notify the poller service
                 if (updates.market_poll_interval) {

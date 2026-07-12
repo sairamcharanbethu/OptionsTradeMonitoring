@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import YahooFinance from 'yahoo-finance2';
 import { z } from 'zod';
-import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { getSettingsWithGlobalFallback, invalidateSettingsCache } from '../lib/settings-utils';
 import { IbkrMarketDataService } from '../services/ibkr-market-data-service';
 import { ManualOptionOrderService } from '../services/manual-option-order-service';
 import { SnaptradeService } from '../services/snaptrade-service';
@@ -184,6 +184,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
          SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
         [userId, ...entries.flatMap(([key, value]) => [key, value])]
       );
+      await invalidateSettingsCache(userId, Object.keys(values));
       return normalizeSettings(values as Record<string, string>);
     } catch (err) {
       throw err;

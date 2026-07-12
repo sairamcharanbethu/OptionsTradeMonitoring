@@ -365,6 +365,36 @@ async function testHistoricalVixBackfillUsesSignalTimeBars() {
   assert((backtester as any).getScenarioSkipReason('vix_contango', signal) === null, 'Historical contango evidence should make the signal eligible');
 }
 
+async function testScannerLogFallbackBuildsReplaySignal() {
+  const backtester = createBacktester();
+  const decision = createDecision({
+    signalId: undefined,
+    symbol: 'SPY',
+    contract: { ticker: 'SPY260622C00550000', strike: 550, expiry: '2026-06-22' }
+  });
+  const signal = (backtester as any).scannerLogToReplaySignal({
+    id: 88,
+    symbol: 'SPY',
+    created_at: '2026-06-22T13:45:00.000Z',
+    indicators: {
+      signalDecision: decision,
+      decisionSnapshot: {
+        macroSnapshot: {
+          vixTermStructure: createVixTermStructureSnapshot(1.1),
+          macroRegime: { directionBias: 'CALL', score: 76, blockers: [] }
+        }
+      }
+    },
+    no_trade_reasons: []
+  });
+
+  assert(signal !== null, 'Signal-generated scanner log should become a replay signal');
+  assert(signal.id === -88, `Expected synthetic scanner log id -88, got ${signal.id}`);
+  assert(signal.signal_type === 'CALL', `Expected CALL signal, got ${signal.signal_type}`);
+  assert((backtester as any).resolveContract(signal)?.strike === 550, 'Scanner log should preserve the option contract');
+  assert((backtester as any).getScenarioSkipReason('vix_contango', signal) === null, 'Scanner log should preserve macro evidence');
+}
+
 async function testStoredSignalDecisionDrivesReplayMetadata() {
   const backtester = createBacktester();
   const signal = createSignal({
@@ -844,6 +874,7 @@ async function runTests() {
   await testVixContangoScenarioRequiresStoredTermStructure();
   await testVixResearchReportRequiresComparableSample();
   await testHistoricalVixBackfillUsesSignalTimeBars();
+  await testScannerLogFallbackBuildsReplaySignal();
   await testStoredSignalDecisionDrivesReplayMetadata();
   await testParitySummaryReportsDecisionGaps();
   await testSnapshotDriftReportUsesStoredDecisionSnapshot();

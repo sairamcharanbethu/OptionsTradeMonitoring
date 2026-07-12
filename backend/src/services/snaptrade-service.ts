@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { TradeRedisService } from './trade-redis-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
+import { getSettingsWithGlobalFallback, invalidateSettingsCache } from '../lib/settings-utils';
 
 const SNAPTRADE_API_TIMEOUT_MS = Number(process.env.SNAPTRADE_API_TIMEOUT_MS || 15000);
 
@@ -25,11 +26,7 @@ export class SnaptradeService {
     }
 
     private async getSnaptradeClient(userId: number): Promise<{ snaptrade: Snaptrade, userIdStr: string, userSecret: string }> {
-        const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
-        const settings = rows.reduce((acc: any, row: any) => {
-            acc[row.key] = row.value;
-            return acc;
-        }, {});
+        const settings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
         const clientId = settings.snaptrade_client_id?.trim();
         const consumerKey = settings.snaptrade_consumer_key?.trim();
@@ -63,6 +60,7 @@ export class SnaptradeService {
                      SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
                     [userId, userSecret, snaptradeUserId]
                 );
+                await invalidateSettingsCache(userId, ['snaptrade_user_secret', 'snaptrade_user_id']);
             } catch (err: any) {
                 const isPersonalKeyLimit = err.responseBody?.code === '1012' || 
                                           err.responseBody?.code === 1012 || 
@@ -1211,11 +1209,7 @@ export class SnaptradeService {
         limitPrice?: number;
         mark?: number;
     }) {
-        const { rows } = await this.fastify.pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
-        const settings = rows.reduce((acc: any, row: any) => {
-            acc[row.key] = row.value;
-            return acc;
-        }, {});
+        const settings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
         if (settings.live_trading_acknowledged !== 'true') {
             throw new Error('Wealthsimple live trading acknowledgement is required before placing a test order.');

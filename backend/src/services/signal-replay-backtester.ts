@@ -456,7 +456,7 @@ export class SignalReplayBacktester {
       : '';
     if (symbolFilter) params.push(config.symbols);
 
-    const { rows } = await (this.fastify as any).pg.query(
+    const { rows: signalRows } = await (this.fastify as any).pg.query(
       `SELECT id, symbol, signal_type, confidence_score, setup_grade, created_at, market_date,
               option_expiration_date, option_details, volatility, no_trade_reasons
        FROM signals
@@ -468,7 +468,107 @@ export class SignalReplayBacktester {
        LIMIT $3`,
       params
     );
-    return rows;
+    const { rows: scannerLogRows } = await (this.fastify as any).pg.query(
+      `SELECT id, symbol, indicators, no_trade_reasons, created_at
+       FROM scanner_logs
+       WHERE outcome = 'SIGNAL_GENERATED'
+         AND created_at::date >= $1
+         AND created_at::date <= $2
+         ${symbolFilter}
+       ORDER BY created_at ASC
+       LIMIT $3`,
+      params
+    );
+
+    const merged = new Map<string, ReplaySignal>();
+    for (const signal of signalRows) {
+      merged.set(`signal:${signal.id}`, signal);
+    }
+    for (const row of scannerLogRows) {
+      const scannerSignal = this.scannerLogToReplaySignal(row);
+      if (!scannerSignal) continue;
+      const key = scannerSignal.id > 0 ? `signal:${scannerSignal.id}` : `log:${row.id}`;
+      const existing = merged.get(key);
+      merged.set(key, existing ? this.mergeReplaySignals(existing, scannerSignal) : scannerSignal);
+    }
+
+    return [...merged.values()]
+      .filter((signal) => signal.signal_type === 'CALL' || signal.signal_type === 'PUT')
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+      .slice(0, config.maxSignals);
+  }
+
+  private scannerLogToReplaySignal(row: any): ReplaySignal | null {
+    const indicators = typeof row.indicators === 'string'
+      ? this.parseJsonObject(row.indicators)
+      : row.indicators || {};
+    const decision = indicators.signalDecision || indicators.decisionSnapshot?.finalDecision?.signalDecision;
+    const side = String(decision?.side || '').trim().toUpperCase();
+    if (side !== 'CALL' && side !== 'PUT') return null;
+
+    const createdAt = new Date(row.created_at);
+    const decisionSnapshot = indicators.decisionSnapshot || null;
+    const macroSnapshot = decisionSnapshot?.macroSnapshot || indicators.macroSnapshot || {};
+    const macroRegime = macroSnapshot.macroRegime || indicators.macroRegime || null;
+    const contract = decision?.contract || {};
+    const quote = decision?.quote || {};
+    const signalId = Number(decision?.signalId);
+    const id = Number.isInteger(signalId) && signalId > 0 ? signalId : -Number(row.id || 0);
+
+    return {
+      id,
+      symbol: String(row.symbol || decision?.symbol || '').toUpperCase(),
+      signal_type: side,
+      confidence_score: Number(decision?.grade?.finalConfidence || decisionSnapshot?.finalDecision?.finalConfidence || 0),
+      setup_grade: decision?.grade?.setupGrade || decisionSnapshot?.finalDecision?.setupGrade || null,
+      created_at: row.created_at,
+      market_date: Number.isFinite(createdAt.getTime()) ? this.getNewYorkDateKey(createdAt) : null,
+      option_expiration_date: contract.expiry || null,
+      option_details: {
+        ticker: contract.ticker || null,
+        symbol: contract.ticker || null,
+        strike: contract.strike ?? null,
+        expiry: contract.expiry || null,
+        mark: quote.mark ?? null,
+        decision,
+        decisionSnapshot,
+        candidateSelection: decisionSnapshot?.optionSelection?.candidateSelection || null
+      },
+      volatility: {
+        ...macroSnapshot,
+        macroRegime
+      },
+      no_trade_reasons: Array.isArray(row.no_trade_reasons) ? row.no_trade_reasons : []
+    };
+  }
+
+  private mergeReplaySignals(canonical: ReplaySignal, fallback: ReplaySignal): ReplaySignal {
+    const canonicalDetails = canonical.option_details || {};
+    const fallbackDetails = fallback.option_details || {};
+    return {
+      ...fallback,
+      ...canonical,
+      option_details: {
+        ...fallbackDetails,
+        ...canonicalDetails,
+        decision: canonicalDetails.decision || fallbackDetails.decision,
+        decisionSnapshot: canonicalDetails.decisionSnapshot || fallbackDetails.decisionSnapshot,
+        candidateSelection: canonicalDetails.candidateSelection || fallbackDetails.candidateSelection
+      },
+      volatility: {
+        ...(fallback.volatility || {}),
+        ...(canonical.volatility || {})
+      }
+    };
+  }
+
+  private parseJsonObject(value: string): Record<string, any> {
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
   }
 
   private resolveContract(signal: ReplaySignal): IbkrOptionContract | null {

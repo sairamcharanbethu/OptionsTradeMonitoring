@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 
 type DiscordAlertSeverity = 'info' | 'warning' | 'critical';
 
@@ -33,17 +34,7 @@ export class DiscordAlertService {
   constructor(private fastify: FastifyInstance) {}
 
   private async resolveWebhook(userId: number): Promise<string | null> {
-    const { rows } = await this.fastify.pg.query(
-      `SELECT key, value
-       FROM settings
-       WHERE user_id = $1
-         AND key IN ('discord_alerts_enabled', 'discord_webhook_url')`,
-      [userId]
-    );
-    const settings = rows.reduce((acc: Record<string, string>, row: any) => {
-      acc[row.key] = row.value;
-      return acc;
-    }, {});
+    const settings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
     const userWebhook = String(settings.discord_webhook_url || '').trim();
     if (settings.discord_alerts_enabled === 'true' && userWebhook) return userWebhook;
