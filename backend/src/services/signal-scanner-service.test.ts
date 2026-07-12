@@ -1256,7 +1256,7 @@ async function testVolumeAnomalyUsesTwentyCandleSmaAndStandardDeviation() {
   assert(anomaly.sampleSize === 20, `Expected 20-candle volume baseline, got ${anomaly.sampleSize}`);
   assert(anomaly.sma === 1100, `Expected SMA20 1100, got ${anomaly.sma}`);
   assert(Math.abs(anomaly.stdev - 100) < 0.0001, `Expected stdev 100, got ${anomaly.stdev}`);
-  assert(anomaly.threshold === 1250, `Expected RVOL threshold 1250, got ${anomaly.threshold}`);
+  assert(anomaly.threshold === 1250, `Expected volume anomaly threshold 1250, got ${anomaly.threshold}`);
   assert(anomaly.confirmed === true, 'Trigger volume above SMA20 + 1.5 stdev should confirm');
 
   const weakLatest = { ...latest, volume: 1249 };
@@ -1309,7 +1309,53 @@ async function testVolumeAnomalyRequiresFullBaseline() {
 
   assert(anomaly.sampleSize === 8, `Expected 8 baseline samples, got ${anomaly.sampleSize}`);
   assert(anomaly.confirmed === false, 'Insufficient baseline should not confirm volume anomaly');
-  assert(blockers.some((item: string) => item.includes('20-candle RVOL baseline')), `Expected RVOL baseline blocker, got ${blockers.join(', ')}`);
+  assert(blockers.some((item: string) => item.includes('20-candle volume baseline')), `Expected volume baseline blocker, got ${blockers.join(', ')}`);
+}
+
+async function testVolumeBlockerSeparatesThresholdFromCandleColor() {
+  const scanner = createScanner();
+  const baseTime = Date.parse('2026-07-02T13:30:00.000Z') / 1000;
+  const candles = Array.from({ length: 20 }, (_, idx) => ({
+    datetime: new Date((baseTime + idx * 300) * 1000).toISOString(),
+    nyDateStr: '2026-07-02',
+    isRTH: true,
+    open: 748,
+    high: 749,
+    low: 747,
+    close: 748.5,
+    volume: idx % 2 === 0 ? 1000 : 1200,
+    timestamp: baseTime + idx * 300
+  }));
+  const redLatest = {
+    ...candles[candles.length - 1],
+    datetime: new Date((baseTime + 20 * 300) * 1000).toISOString(),
+    open: 749.8,
+    high: 750,
+    low: 748.8,
+    close: 749.2,
+    volume: 1400,
+    timestamp: baseTime + 20 * 300
+  };
+  const anomaly = scanner.computeVolumeAnomaly([...candles, redLatest], redLatest);
+  const blockers = scanner.buildStrictSetupModelBlockers({
+    winningSide: 'CALL',
+    currentPrice: 750,
+    vwap: 749,
+    emaShort: 749.4,
+    emaLong: 748.9,
+    latest: redLatest,
+    previous: candles[candles.length - 1],
+    hasBullishVolumeBreakout: false,
+    hasBearishVolumeBreakout: false,
+    volumeAnomaly: anomaly,
+    gexRegime: 'NEGATIVE',
+    flowDirection: 'bullish',
+    flipStrike: 749
+  });
+
+  assert(anomaly.confirmed === true, 'Volume should pass the anomaly threshold');
+  assert(blockers.some((item: string) => item.includes('volume passed the anomaly threshold')), `Expected candle-color blocker, got ${blockers.join(', ')}`);
+  assert(!blockers.some((item: string) => item.includes('must exceed')), `Passed volume should not be reported as below threshold, got ${blockers.join(', ')}`);
 }
 
 async function testVolatilityGatewayBlocksSpyCompression() {
@@ -1672,6 +1718,7 @@ async function runTests() {
   await testMeanReversionTrendBlockersRequireStrongerConfirmation();
   await testVolumeAnomalyUsesTwentyCandleSmaAndStandardDeviation();
   await testVolumeAnomalyRequiresFullBaseline();
+  await testVolumeBlockerSeparatesThresholdFromCandleColor();
   await testVolatilityGatewayBlocksSpyCompression();
   await testStrictSetupModelRequiresGammaEmaVolumeAndTrigger();
   await testMeanReversionRequiresEntryConfirmationForAutoExecution();

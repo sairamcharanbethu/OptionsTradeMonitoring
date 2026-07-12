@@ -2513,12 +2513,15 @@ Rules:
     };
   }
 
-  private formatVolumeAnomalyBlocker(side: 'CALL' | 'PUT', anomaly?: VolumeAnomaly): string {
+  private formatVolumeAnomalyBlocker(side: 'CALL' | 'PUT', anomaly?: VolumeAnomaly, candleMatchesSide = false, actualCandleColor = 'unknown'): string {
     const candleColor = side === 'CALL' ? 'green' : 'red';
     if (!anomaly || anomaly.sampleSize < 20 || anomaly.threshold === null) {
-      return `Strict setup blocked: ${side} requires high-volume ${candleColor} confirmation candle with 20-candle RVOL baseline`;
+      return `Strict setup blocked: ${side} requires high-volume ${candleColor} confirmation candle with a 20-candle volume baseline`;
     }
-    return `Strict setup blocked: ${side} requires high-volume ${candleColor} confirmation candle; volume ${anomaly.triggerVolume.toFixed(0)} must exceed RVOL threshold ${anomaly.threshold.toFixed(0)} (SMA20 ${anomaly.sma!.toFixed(0)} + 1.5 stdev ${anomaly.stdev!.toFixed(0)})`;
+    if (anomaly.confirmed && !candleMatchesSide) {
+      return `Strict setup blocked: ${side} volume passed the anomaly threshold (${anomaly.triggerVolume.toFixed(0)} > ${anomaly.threshold.toFixed(0)}), but the latest candle was ${actualCandleColor}; a ${candleColor} confirmation candle is required`;
+    }
+    return `Strict setup blocked: ${side} volume ${anomaly.triggerVolume.toFixed(0)} did not exceed the volume anomaly threshold ${anomaly.threshold.toFixed(0)} (SMA20 ${anomaly.sma!.toFixed(0)} + 1.5 stdev ${anomaly.stdev!.toFixed(0)})`;
   }
 
   private buildVolatilityCompressionBlockers(input: {
@@ -2574,7 +2577,7 @@ Rules:
       if (!gammaAligned) blockers.push('Strict setup blocked: CALL requires bullish gamma direction or price above gamma flip');
       if (!emaStacked) blockers.push('Strict setup blocked: CALL requires price > EMA9 > EMA21');
       if (!vwapAligned) blockers.push('Strict setup blocked: CALL requires price above or reclaiming VWAP');
-      if (!volumeConfirmed) blockers.push(this.formatVolumeAnomalyBlocker('CALL', input.volumeAnomaly));
+      if (!volumeConfirmed) blockers.push(this.formatVolumeAnomalyBlocker('CALL', input.volumeAnomaly, input.latest.close >= input.latest.open, input.latest.close > input.latest.open ? 'green' : input.latest.close < input.latest.open ? 'red' : 'flat'));
       if (!triggerConfirmed) blockers.push('Strict setup blocked: CALL requires reclaim/break confirmation above the prior candle high');
       return blockers;
     }
@@ -2588,7 +2591,7 @@ Rules:
     if (!gammaAligned) blockers.push('Strict setup blocked: PUT requires bearish gamma direction or price below gamma flip');
     if (!emaStacked) blockers.push('Strict setup blocked: PUT requires price < EMA9 < EMA21');
     if (!vwapAligned) blockers.push('Strict setup blocked: PUT requires price below or rejecting VWAP');
-    if (!volumeConfirmed) blockers.push(this.formatVolumeAnomalyBlocker('PUT', input.volumeAnomaly));
+    if (!volumeConfirmed) blockers.push(this.formatVolumeAnomalyBlocker('PUT', input.volumeAnomaly, input.latest.close <= input.latest.open, input.latest.close > input.latest.open ? 'green' : input.latest.close < input.latest.open ? 'red' : 'flat'));
     if (!triggerConfirmed) blockers.push('Strict setup blocked: PUT requires breakdown/rejection confirmation below the prior candle low');
     return blockers;
   }
