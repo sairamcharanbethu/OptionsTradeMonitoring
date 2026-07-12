@@ -17,6 +17,7 @@ const StrategyGuidePage = lazy(() => import('./pages/StrategyGuidePage'));
 const TradeIntelligencePage = lazy(() => import('./pages/TradeIntelligencePage'));
 const CoveredCallsPage = lazy(() => import('./pages/CoveredCallsPage'));
 const ManualEntryPage = lazy(() => import('./pages/ManualEntryPage'));
+const ResearchPage = lazy(() => import('./pages/ResearchPage'));
 
 function RouteLoader() {
   return (
@@ -119,6 +120,15 @@ function App() {
                   variant="ghost"
                   size="icon"
                   className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
+                  onClick={() => { window.location.href = '/research'; }}
+                  title="Strategy Research"
+                >
+                  <FlaskConical className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
                   onClick={() => { window.location.href = '/trades'; }}
                   title="Wealthsimple Trades"
                 >
@@ -145,6 +155,7 @@ function App() {
                 <Route path="/manual-entry" element={<ManualEntryPage />} />
                 <Route path="/covered-calls" element={<CoveredCallsPage />} />
                 <Route path="/trade-intelligence" element={<TradeIntelligencePage />} />
+                <Route path="/research" element={<ResearchPage />} />
                 <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
                 <Route path="/system-health" element={<SystemHealthPage />} />
                 <Route path="/strategy-guide" element={<StrategyGuidePage />} />

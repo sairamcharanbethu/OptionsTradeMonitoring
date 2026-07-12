@@ -23,7 +23,7 @@ export async function backtestRoutes(fastify: FastifyInstance, options: FastifyP
     schema: {
       tags: ['Backtests'],
       summary: 'Replay stored signals with IBKR historical option prices',
-      description: 'Simulates TP/SL, contracts, daily profit/loss caps, and macro-filter scenarios over stored generated signals.',
+      description: 'Simulates TP/SL, contracts, daily profit/loss caps, macro filters, and a VIX term-structure research comparison over stored generated signals.',
       security: [{ bearerAuth: [] }],
       body: {
         type: 'object',

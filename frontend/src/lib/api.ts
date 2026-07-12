@@ -4,6 +4,72 @@ export interface User {
   role: 'USER' | 'ADMIN';
 }
 
+export interface SignalReplayRequest {
+  symbols?: string[];
+  startDate?: string;
+  endDate?: string;
+  contractsPerTrade?: number;
+  takeProfitPct?: number;
+  stopLossPct?: number;
+  maxTradesPerDay?: number;
+  dailyProfitTarget?: number;
+  dailyLossLimit?: number;
+  interval?: '1m' | '5m' | '15m' | '1h' | '1d';
+  maxSignals?: number;
+}
+
+export interface SignalReplayScenario {
+  name: string;
+  description: string;
+  skippedSignals: number;
+  skippedReasons: Record<string, number>;
+  summary: {
+    trades: number;
+    wins: number;
+    losses: number;
+    winRate: number;
+    totalPnl: number;
+    averageWin: number;
+    averageLoss: number;
+    profitFactor: number;
+    maxDrawdown: number;
+    daysTested: number;
+    greenDays: number;
+    redDays: number;
+    targetDays: number;
+    lossLimitDays: number;
+  };
+  fillRealism: {
+    rawTotalPnl: number;
+    realisticTotalPnl: number;
+    pnlDelta: number;
+    skippedTrades: number;
+    penalizedTrades: number;
+    unchangedTrades: number;
+  };
+}
+
+export interface SignalReplayResponse {
+  config: SignalReplayRequest;
+  signalsLoaded: number;
+  signalsUsable: number;
+  missingOptionData: number;
+  research: {
+    experiment: 'vix_term_structure';
+    candidateScenario: 'vix_contango';
+    minimumRatio: number;
+    signalsWithTermStructure: number;
+    signalsMissingTermStructure: number;
+    minimumComparableTrades: number;
+    status: 'INSUFFICIENT_DATA' | 'READY_FOR_REVIEW';
+    baseline: Pick<SignalReplayScenario['summary'], 'trades' | 'winRate' | 'totalPnl' | 'profitFactor' | 'maxDrawdown'>;
+    candidate: Pick<SignalReplayScenario['summary'], 'trades' | 'winRate' | 'totalPnl' | 'profitFactor' | 'maxDrawdown'>;
+    delta: Pick<SignalReplayScenario['summary'], 'trades' | 'winRate' | 'totalPnl' | 'profitFactor' | 'maxDrawdown'>;
+    notes: string[];
+  };
+  scenarios: SignalReplayScenario[];
+}
+
 export interface Position {
   id: number;
   symbol: string;
@@ -958,6 +1024,18 @@ export const api = {
   async getRuntimeConfig(): Promise<RuntimeConfigResponse> {
     const res = await authFetch(`${API_BASE}/settings/runtime-config`);
     if (!res.ok) throw new Error('Failed to fetch runtime config');
+    return res.json();
+  },
+
+  async runSignalReplay(payload: SignalReplayRequest): Promise<SignalReplayResponse> {
+    const res = await authFetch(`${API_BASE}/backtests/signal-replay`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.message || error.error || 'Signal replay failed');
+    }
     return res.json();
   },
 

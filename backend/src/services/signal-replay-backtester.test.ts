@@ -94,6 +94,17 @@ function createSignal(overrides: Record<string, any> = {}) {
   };
 }
 
+function createVixTermStructureSnapshot(ratio = 1.1) {
+  return {
+    vix: 20,
+    vix3m: Number((20 * ratio).toFixed(2)),
+    ratio,
+    minimumRatio: 1.05,
+    status: ratio >= 1.1 ? 'STRONG_CONTANGO' : ratio >= 1.05 ? 'CONTANGO' : 'NEUTRAL',
+    blocker: ratio >= 1.05 ? null : 'VIX term structure is neutral'
+  };
+}
+
 function createDecisionSnapshot(overrides: Record<string, any> = {}) {
   return {
     version: 1,
@@ -293,6 +304,45 @@ async function testMacroStrictSkipsWeakMacroScore() {
   assert(backtester.getScenarioSkipReason('baseline', signal) === null, 'Baseline should not macro-filter');
   assert(backtester.getScenarioSkipReason('macro_aligned', signal) === null, 'Macro aligned should allow matching direction');
   assert(backtester.getScenarioSkipReason('macro_strict', signal) === 'macro_score_below_62', 'Strict macro should require score >= 62');
+}
+
+async function testVixContangoScenarioRequiresStoredTermStructure() {
+  const backtester = createBacktester();
+  const eligible = createSignal({
+    option_details: {
+      ...createSignal().option_details,
+      decisionSnapshot: { macroSnapshot: { vixTermStructure: createVixTermStructureSnapshot(1.1) } }
+    }
+  });
+  const neutral = createSignal({
+    option_details: {
+      ...createSignal().option_details,
+      decisionSnapshot: { macroSnapshot: { vixTermStructure: createVixTermStructureSnapshot(1.02) } }
+    }
+  });
+  const legacy = createSignal();
+
+  assert(backtester.getScenarioSkipReason('vix_contango', eligible) === null, 'Contango signal should pass the VIX scenario');
+  assert(backtester.getScenarioSkipReason('vix_contango', neutral) === 'vix_term_structure_below_floor', 'Neutral signal should fail the VIX scenario');
+  assert(backtester.getScenarioSkipReason('vix_contango', legacy) === 'vix_term_structure_unavailable', 'Legacy signal should be excluded without stored VIX evidence');
+}
+
+async function testVixResearchReportRequiresComparableSample() {
+  const backtester = createBacktester();
+  const eligible = createSignal({
+    option_details: {
+      ...createSignal().option_details,
+      decisionSnapshot: { macroSnapshot: { vixTermStructure: createVixTermStructureSnapshot(1.1) } }
+    }
+  });
+  const baseline = { summary: { trades: 25, winRate: 60, totalPnl: 100, profitFactor: 1.2, maxDrawdown: 50 } };
+  const candidate = { summary: { trades: 3, winRate: 66.67, totalPnl: 80, profitFactor: 1.4, maxDrawdown: 30 } };
+  const report = backtester.buildVixTermStructureResearchReport([eligible, createSignal()], baseline, candidate);
+
+  assert(report.signalsWithTermStructure === 1, `Expected one signal with term structure, got ${report.signalsWithTermStructure}`);
+  assert(report.signalsMissingTermStructure === 1, `Expected one signal without term structure, got ${report.signalsMissingTermStructure}`);
+  assert(report.status === 'INSUFFICIENT_DATA', `Expected insufficient data status, got ${report.status}`);
+  assert(report.delta.totalPnl === -20, `Expected PnL delta -20, got ${report.delta.totalPnl}`);
 }
 
 async function testStoredSignalDecisionDrivesReplayMetadata() {
@@ -771,6 +821,8 @@ async function runTests() {
   await testSignalSnapshotOverridesReplayTradeConfig();
   await testSignalSnapshotReplayConfigFallsBackForLegacySignals();
   await testMacroStrictSkipsWeakMacroScore();
+  await testVixContangoScenarioRequiresStoredTermStructure();
+  await testVixResearchReportRequiresComparableSample();
   await testStoredSignalDecisionDrivesReplayMetadata();
   await testParitySummaryReportsDecisionGaps();
   await testSnapshotDriftReportUsesStoredDecisionSnapshot();

@@ -156,13 +156,45 @@ type ReplaySnapshotDriftReport = {
 };
 
 type ReplayScenario = {
-  name: 'baseline' | 'macro_aligned' | 'macro_strict';
+  name: 'baseline' | 'macro_aligned' | 'macro_strict' | 'vix_contango';
   description: string;
   trades: ReplayTrade[];
   skippedSignals: number;
   skippedReasons: Record<string, number>;
   summary: ReplaySummary;
   fillRealism: ReplayFillRealismSummary;
+};
+
+type ReplayResearchReport = {
+  experiment: 'vix_term_structure';
+  candidateScenario: 'vix_contango';
+  minimumRatio: number;
+  signalsWithTermStructure: number;
+  signalsMissingTermStructure: number;
+  minimumComparableTrades: number;
+  status: 'INSUFFICIENT_DATA' | 'READY_FOR_REVIEW';
+  baseline: {
+    trades: number;
+    winRate: number;
+    totalPnl: number;
+    profitFactor: number;
+    maxDrawdown: number;
+  };
+  candidate: {
+    trades: number;
+    winRate: number;
+    totalPnl: number;
+    profitFactor: number;
+    maxDrawdown: number;
+  };
+  delta: {
+    trades: number;
+    winRate: number;
+    totalPnl: number;
+    profitFactor: number;
+    maxDrawdown: number;
+  };
+  notes: string[];
 };
 
 type ReplayFillRealismSummary = {
@@ -256,6 +288,7 @@ export class SignalReplayBacktester {
     snapshotDrift: ReplaySnapshotDriftReport;
     calibration: ReplayCalibrationReport;
     attribution: ReplayAttributionReport;
+    research: ReplayResearchReport;
     scenarios: ReplayScenario[];
   }> {
     const config = this.normalizeConfig(input);
@@ -287,6 +320,15 @@ export class SignalReplayBacktester {
       {
         name: 'macro_strict',
         description: 'Requires macro alignment, no recorded macro blockers, and macro score >= 62.',
+        trades: [],
+        skippedSignals: 0,
+        skippedReasons: {},
+        summary: this.emptySummary(),
+        fillRealism: this.emptyFillRealismSummary()
+      },
+      {
+        name: 'vix_contango',
+        description: 'Requires a stored VIX3M/VIX ratio at or above the configured 1.05 contango floor.',
         trades: [],
         skippedSignals: 0,
         skippedReasons: {},
@@ -347,8 +389,10 @@ export class SignalReplayBacktester {
       scenario.fillRealism = this.summarizeFillRealism(scenario.trades);
     }
     const baseline = scenarios.find((scenario) => scenario.name === 'baseline') as ReplayScenario;
+    const vixContango = scenarios.find((scenario) => scenario.name === 'vix_contango') as ReplayScenario;
     const calibration = this.buildCalibrationReport(baseline.trades);
     const attribution = this.buildAttributionReport(baseline.trades);
+    const research = this.buildVixTermStructureResearchReport(signals, baseline, vixContango);
 
     return {
       config,
@@ -359,6 +403,7 @@ export class SignalReplayBacktester {
       snapshotDrift,
       calibration,
       attribution,
+      research,
       scenarios
     };
   }
@@ -1121,6 +1166,14 @@ export class SignalReplayBacktester {
 
   private getScenarioSkipReason(scenario: ReplayScenario['name'], signal: ReplaySignal): string | null {
     if (scenario === 'baseline') return null;
+    if (scenario === 'vix_contango') {
+      const termStructure = this.getVixTermStructure(signal);
+      if (!termStructure) return 'vix_term_structure_unavailable';
+      const ratio = this.finiteNumber(termStructure.ratio);
+      const minimumRatio = this.finiteNumber(termStructure.minimumRatio) ?? 1.05;
+      if (ratio === null) return 'vix_term_structure_unavailable';
+      return ratio >= minimumRatio ? null : 'vix_term_structure_below_floor';
+    }
     const macro = signal.volatility?.macroRegime;
     if (!macro) return 'macro_unavailable';
     const directionBias = String(macro.directionBias || 'MIXED');
@@ -1131,6 +1184,62 @@ export class SignalReplayBacktester {
       if (Number(macro.score || 0) < 62) return 'macro_score_below_62';
     }
     return null;
+  }
+
+  private getVixTermStructure(signal: ReplaySignal): any | null {
+    const candidates = [
+      signal.option_details?.decisionSnapshot?.macroSnapshot?.vixTermStructure,
+      signal.option_details?.macroSnapshot?.vixTermStructure,
+      signal.volatility?.vixTermStructure,
+      signal.volatility?.macroSnapshot?.vixTermStructure
+    ];
+    return candidates.find((candidate) => candidate && typeof candidate === 'object') || null;
+  }
+
+  private buildVixTermStructureResearchReport(signals: ReplaySignal[], baseline: ReplayScenario, candidate: ReplayScenario): ReplayResearchReport {
+    const termStructureSignals = signals.filter((signal) => this.getVixTermStructure(signal));
+    const minimumRatio = termStructureSignals
+      .map((signal) => this.finiteNumber(this.getVixTermStructure(signal)?.minimumRatio))
+      .find((value): value is number => value !== null) ?? 1.05;
+    const minimumComparableTrades = 20;
+    const project = (summary: ReplaySummary) => ({
+      trades: summary.trades,
+      winRate: summary.winRate,
+      totalPnl: summary.totalPnl,
+      profitFactor: summary.profitFactor,
+      maxDrawdown: summary.maxDrawdown
+    });
+    const baselineMetrics = project(baseline.summary);
+    const candidateMetrics = project(candidate.summary);
+    const delta = {
+      trades: candidateMetrics.trades - baselineMetrics.trades,
+      winRate: Number((candidateMetrics.winRate - baselineMetrics.winRate).toFixed(2)),
+      totalPnl: Number((candidateMetrics.totalPnl - baselineMetrics.totalPnl).toFixed(2)),
+      profitFactor: Number((candidateMetrics.profitFactor - baselineMetrics.profitFactor).toFixed(2)),
+      maxDrawdown: Number((candidateMetrics.maxDrawdown - baselineMetrics.maxDrawdown).toFixed(2))
+    };
+    const notes = [
+      'This is a comparison report, not an automatic strategy approval.',
+      'The candidate uses only stored VIX/VIX3M evidence and does not refetch current macro data.',
+      'Historical signals without term-structure evidence are excluded from the candidate scenario.'
+    ];
+    if (candidateMetrics.trades < minimumComparableTrades) {
+      notes.push(`Candidate has ${candidateMetrics.trades} trades; at least ${minimumComparableTrades} are required before review.`);
+    }
+
+    return {
+      experiment: 'vix_term_structure',
+      candidateScenario: 'vix_contango',
+      minimumRatio,
+      signalsWithTermStructure: termStructureSignals.length,
+      signalsMissingTermStructure: signals.length - termStructureSignals.length,
+      minimumComparableTrades,
+      status: candidateMetrics.trades >= minimumComparableTrades ? 'READY_FOR_REVIEW' : 'INSUFFICIENT_DATA',
+      baseline: baselineMetrics,
+      candidate: candidateMetrics,
+      delta,
+      notes
+    };
   }
 
   private shouldSkipForDailyControls(state: ReturnType<SignalReplayBacktester['newScenarioState']>, dateKey: string, config: ReplayConfig): boolean {
