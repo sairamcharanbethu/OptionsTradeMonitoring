@@ -182,13 +182,11 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
           : status === 'N/A'
             ? 'Configure the service only if this dependency is required.'
             : 'Check credentials, entitlement, endpoint reachability, and upstream status.',
-        actionCommand: name === 'thetaData'
-          ? `node -e "fetch('${value?.endpoint || 'http://127.0.0.1:25503/v3/terminal/mdds/status'}').then(r=>r.text()).then(console.log).catch(e=>console.error(e.message))"`
-          : name === 'openRouter'
-            ? 'Check Settings -> AI model and OpenRouter key, then refresh this page.'
-            : name === 'sscgexPortal'
-              ? 'Check Settings -> SSCGEX password, then run a manual scan.'
-              : null
+        actionCommand: name === 'openRouter'
+          ? 'Check Settings -> AI model and OpenRouter key, then refresh this page.'
+          : name === 'sscgexPortal'
+            ? 'Check Settings -> SSCGEX password, then run a manual scan.'
+            : null
       });
     });
   }
@@ -282,12 +280,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
 
     Object.entries(services.streams || {}).forEach(([name, stream]) => {
       const isActive = services.liveExitMonitor?.provider === name || Boolean(stream?.connected || (stream?.activeSubscriptions ?? 0) > 0 || stream?.lastMessageAt);
-      const streamTitle = name === 'ibkr' ? 'IBKR' : name === 'thetadata' ? 'ThetaData' : 'Alpaca';
+      const streamTitle = name === 'ibkr' ? 'IBKR' : 'Alpaca';
       const streamEndpoint = name === 'ibkr'
         ? 'IBKR Gateway TCP market-data stream'
-        : name === 'thetadata'
-          ? 'THETADATA_STREAM_URL / v1 events'
-          : 'Alpaca market-data stream';
+        : 'Alpaca market-data stream';
       items.push({
         id: `stream:${name}`,
         area: 'Stream',
@@ -301,14 +297,10 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
         cause: stream?.degradedReason || stream?.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream?.degradedReason || stream?.lastError) : statusSummary(isActive ? stream?.status : 'DISABLED', null, 'Stream status and subscription state.'),
         nextStep: name === 'ibkr'
           ? 'Confirm IB Gateway is logged in and open/manual option contracts are subscribed.'
-          : name === 'thetadata'
-            ? 'Confirm ThetaData stream URL and subscribed option symbols.'
-            : 'Alpaca stream is optional unless selected as active provider.',
+          : 'Alpaca stream is optional unless selected as active provider.',
         actionCommand: name === 'ibkr'
           ? 'Check IBKR_HOST, IBKR_PORT, and live market-data subscriptions.'
-          : name === 'thetadata'
-            ? 'Check THETADATA_STREAM_URL and open option positions subscribed by the live exit monitor.'
-            : 'No action needed unless Alpaca is intentionally used as active provider.'
+          : 'No action needed unless Alpaca is intentionally used as active provider.'
       });
     });
 
@@ -575,9 +567,7 @@ export default function SystemHealthPage() {
   const statusSeverity: HealthSeverity = failures.length > 0 ? 'critical' : warnings.length > 0 ? 'warning' : 'ok';
   const activeProvider = services?.liveExitMonitor?.provider === 'ibkr'
     ? services?.streams?.ibkr
-    : services?.liveExitMonitor?.provider === 'alpaca'
-      ? services?.streams?.alpaca
-      : services?.streams?.thetadata;
+    : services?.streams?.alpaca;
 
   return (
     <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">

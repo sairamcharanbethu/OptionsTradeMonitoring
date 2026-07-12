@@ -22,7 +22,7 @@ export async function backtestRoutes(fastify: FastifyInstance, options: FastifyP
   fastify.post('/signal-replay', {
     schema: {
       tags: ['Backtests'],
-      summary: 'Replay stored signals with ThetaData historical option prices',
+      summary: 'Replay stored signals with IBKR historical option prices',
       description: 'Simulates TP/SL, contracts, daily profit/loss caps, and macro-filter scenarios over stored generated signals.',
       security: [{ bearerAuth: [] }],
       body: {

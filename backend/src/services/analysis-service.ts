@@ -1,6 +1,6 @@
 
 import { FastifyInstance } from 'fastify';
-import { ThetaDataService } from './thetadata-service';
+import { IbkrMarketDataService } from './ibkr-market-data-service';
 
 
 interface Candle {
@@ -40,32 +40,28 @@ export class AnalysisService {
             // Let's fetch 2 days to be safe.
 
             const endTime = new Date();
-            const startTime = new Date(endTime.getTime() - 5 * 24 * 60 * 60 * 1000); // 5 days back
-
-            const thetaData = new ThetaDataService(this.fastify);
+            const ibkr = new IbkrMarketDataService(this.fastify);
             const strike = Number(position.strike_price || position.strike || 0);
             const optionType: 'call' | 'put' = String(position.option_type || '').toUpperCase() === 'PUT' ? 'put' : 'call';
             const expiration = String(position.expiration_date || position.expiration || '').split('T')[0];
             if (!symbol || !strike || !expiration) {
-                throw new Error('Position is missing symbol, strike, or expiration for ThetaData analysis');
+                throw new Error('Position is missing symbol, strike, or expiration for IBKR analysis');
             }
 
-            let candles: Candle[] = await thetaData.getOptionOhlcHistory(
-                Number(position.user_id || 0) || null,
+            let candles: Candle[] = await ibkr.getOptionHistoricalBars(
                 { symbol, strike, right: optionType, expiration },
-                startTime,
                 endTime,
-                '5m'
+                '5 D',
+                '5 mins'
             );
 
             if (!candles || candles.length < 30) {
-                this.fastify.log.warn(`[Analysis] Not enough 5m ThetaData for ${symbol}. Falling back to 1h.`);
-                candles = await thetaData.getOptionOhlcHistory(
-                    Number(position.user_id || 0) || null,
+                this.fastify.log.warn(`[Analysis] Not enough 5m IBKR history for ${symbol}. Falling back to 1h.`);
+                candles = await ibkr.getOptionHistoricalBars(
                     { symbol, strike, right: optionType, expiration },
-                    startTime,
                     endTime,
-                    '1h'
+                    '10 D',
+                    '1 hour'
                 );
                 if (!candles || candles.length < 20) {
                     throw new Error('Insufficient historical data for analysis');

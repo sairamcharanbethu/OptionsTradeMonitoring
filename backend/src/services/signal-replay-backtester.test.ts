@@ -747,12 +747,12 @@ async function testQuoteQualityBuckets() {
   assert(backtester.getQuoteQualityBucket(createDecision({ quote: { ...createDecision().quote, mark: null } })) === 'missing_quote', 'Expected missing quote bucket');
 }
 
-async function testNaiveThetaDataBarsParseAsEasternTime() {
+async function testNaiveIbkrBarsParseAsEasternTime() {
   const backtester = createBacktester();
 
   const parsed = backtester.parseBarTime('2026-06-22T09:45:00.000', '2026-06-22');
 
-  assert(parsed !== null, 'Naive ThetaData timestamp should parse');
+  assert(parsed !== null, 'Naive IBKR timestamp should parse');
   assert(parsed.toISOString() === '2026-06-22T13:45:00.000Z', `Expected 09:45 ET -> 13:45Z, got ${parsed.toISOString()}`);
 }
 
@@ -782,7 +782,7 @@ async function runTests() {
   await testFillRealismSummaryComparesRawAndAdjustedPnl();
   await testAttributionReportGroupsPostTradeBuckets();
   await testQuoteQualityBuckets();
-  await testNaiveThetaDataBarsParseAsEasternTime();
+  await testNaiveIbkrBarsParseAsEasternTime();
   await testEasternDateHelperHandlesStandardTime();
   console.log('All SignalReplayBacktester tests passed!');
 }

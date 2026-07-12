@@ -369,8 +369,7 @@ export class TradeExecutionService {
       await this.invalidateUserCaches(input.userId);
       const streamers = [
         (this.fastify as any).ibkrMarketDataStreamer,
-        (this.fastify as any).alpacaMarketDataStreamer,
-        (this.fastify as any).thetaDataStreamer
+        (this.fastify as any).alpacaMarketDataStreamer
       ];
       for (const streamer of streamers) {
         if (streamer?.syncSubscriptions) {
@@ -837,8 +836,7 @@ export class TradeExecutionService {
 
     const streamers = [
       (this.fastify as any).ibkrMarketDataStreamer,
-      (this.fastify as any).alpacaMarketDataStreamer,
-      (this.fastify as any).thetaDataStreamer
+      (this.fastify as any).alpacaMarketDataStreamer
     ];
     for (const streamer of streamers) {
       if (streamer?.syncSubscriptions) {

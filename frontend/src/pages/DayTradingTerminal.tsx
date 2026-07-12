@@ -65,13 +65,6 @@ interface ServiceHealthState {
       lastMessageAt: string | null;
       reconnectAttempts: number;
     };
-    thetadata: {
-      status: string;
-      connected: boolean;
-      activeSubscriptions: number;
-      lastMessageAt: string | null;
-      reconnectAttempts: number;
-    };
     ibkr: {
       status: string;
       connected: boolean;
@@ -125,13 +118,6 @@ const defaultServiceHealth: ServiceHealthState = {
       status: 'N/A',
       connected: false,
       feed: undefined,
-      activeSubscriptions: 0,
-      lastMessageAt: null,
-      reconnectAttempts: 0
-    },
-    thetadata: {
-      status: 'N/A',
-      connected: false,
       activeSubscriptions: 0,
       lastMessageAt: null,
       reconnectAttempts: 0
@@ -920,7 +906,7 @@ function EngineFlowPanel({
   websocketConnected: boolean;
   brokerLabel: string;
 }) {
-  const feedConnected = Boolean(serviceHealth.streams.ibkr.connected || serviceHealth.streams.thetadata.connected || serviceHealth.streams.alpaca.connected);
+  const feedConnected = Boolean(serviceHealth.streams.ibkr.connected || serviceHealth.streams.alpaca.connected);
   const scannerTone = getStatusTone(serviceHealth.scanner.status, serviceHealth.scanner.status === 'RUNNING');
   const scoringTone: OpsTone = latestSignal ? 'ok' : latestLog ? 'warning' : 'idle';
   const executionTone: OpsTone = canTradeNow ? 'ok' : latestActionableSignal ? 'warning' : 'idle';
@@ -974,12 +960,6 @@ function EngineFlowPanel({
       status: serviceHealth.streams.ibkr.status,
       detail: `${serviceHealth.streams.ibkr.activeSubscriptions || 0} subs`,
       connected: serviceHealth.streams.ibkr.connected
-    },
-    {
-      label: 'Theta WS',
-      status: serviceHealth.streams.thetadata.status,
-      detail: `${serviceHealth.streams.thetadata.activeSubscriptions || 0} subs`,
-      connected: serviceHealth.streams.thetadata.connected
     },
     {
       label: 'Alpaca WS',

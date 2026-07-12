@@ -1041,8 +1041,7 @@ export class SnaptradeService {
 
             const streamers = [
                 (this.fastify as any).ibkrMarketDataStreamer,
-                (this.fastify as any).alpacaMarketDataStreamer,
-                (this.fastify as any).thetaDataStreamer
+                (this.fastify as any).alpacaMarketDataStreamer
             ];
             for (const streamer of streamers) {
                 if (streamer?.syncSubscriptions) {

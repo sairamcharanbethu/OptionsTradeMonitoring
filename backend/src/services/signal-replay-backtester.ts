@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { SignalDecision } from '../lib/trading-events';
-import { ThetaDataContract, ThetaDataService } from './thetadata-service';
+import { IbkrMarketDataService, IbkrOptionContract } from './ibkr-market-data-service';
 
 type ReplayBar = {
   start: string;
@@ -241,10 +241,10 @@ type ReplaySummary = {
 };
 
 export class SignalReplayBacktester {
-  private thetaData: ThetaDataService;
+  private ibkrMarketData: IbkrMarketDataService;
 
   constructor(private fastify: FastifyInstance) {
-    this.thetaData = new ThetaDataService(fastify);
+    this.ibkrMarketData = new IbkrMarketDataService(fastify);
   }
 
   public async run(userId: number, input: Partial<ReplayConfig>): Promise<{
@@ -321,15 +321,14 @@ export class SignalReplayBacktester {
         let bars = historyCache.get(cacheKey);
         if (!bars) {
           try {
-            bars = await this.thetaData.getOptionOhlcHistory(
-              userId,
+            bars = await this.ibkrMarketData.getOptionHistoricalBars(
               contract,
-              this.dateAtEt(dateKey, 9, 30),
               this.dateAtEt(dateKey, 16, 0),
-              signalConfig.interval
+              this.historyDuration(signalConfig.interval),
+              this.historyBarSize(signalConfig.interval)
             );
           } catch (err: any) {
-            this.fastify.log.warn(`[SignalReplayBacktester] ThetaData history unavailable for ${cacheKey}: ${err.message || String(err)}`);
+            this.fastify.log.warn(`[SignalReplayBacktester] IBKR history unavailable for ${cacheKey}: ${err.message || String(err)}`);
             bars = [];
           }
           historyCache.set(cacheKey, bars);
@@ -418,7 +417,7 @@ export class SignalReplayBacktester {
     return rows;
   }
 
-  private resolveContract(signal: ReplaySignal): ThetaDataContract | null {
+  private resolveContract(signal: ReplaySignal): IbkrOptionContract | null {
     const decision = this.getSignalDecision(signal);
     if (decision?.contract?.ticker) {
       const parsedDecisionTicker = this.parseOsiTicker(decision.contract.ticker);
@@ -441,7 +440,7 @@ export class SignalReplayBacktester {
     };
   }
 
-  private simulateTrade(signal: ReplaySignal, contract: ThetaDataContract, bars: ReplayBar[], config: ReplayConfig): ReplayTrade | null {
+  private simulateTrade(signal: ReplaySignal, contract: IbkrOptionContract, bars: ReplayBar[], config: ReplayConfig): ReplayTrade | null {
     const decision = this.getSignalDecision(signal);
     const signalTime = new Date(signal.created_at);
     const marketDate = this.getSignalDate(signal);
@@ -1221,7 +1220,21 @@ export class SignalReplayBacktester {
     };
   }
 
-  private parseOsiTicker(ticker: any): ThetaDataContract | null {
+  private historyDuration(interval: string): string {
+    if (interval === '1d') return '1 Y';
+    if (interval === '1h') return '10 D';
+    return '1 D';
+  }
+
+  private historyBarSize(interval: string): string {
+    if (interval === '1m') return '1 min';
+    if (interval === '5m') return '5 mins';
+    if (interval === '15m') return '15 mins';
+    if (interval === '1h') return '1 hour';
+    return '1 day';
+  }
+
+  private parseOsiTicker(ticker: any): IbkrOptionContract | null {
     const match = String(ticker || '').replace(/\s+/g, '').toUpperCase().match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
     if (!match) return null;
     const [, symbol, expiry, side, strikeRaw] = match;
@@ -1233,7 +1246,7 @@ export class SignalReplayBacktester {
     };
   }
 
-  private constructOsiTicker(contract: ThetaDataContract): string {
+  private constructOsiTicker(contract: IbkrOptionContract): string {
     const cleanDate = contract.expiration.replace(/-/g, '');
     const yy = cleanDate.slice(2, 4);
     const mm = cleanDate.slice(4, 6);

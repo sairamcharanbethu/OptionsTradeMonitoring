@@ -176,9 +176,7 @@ export default function DevLiveExitTestPage() {
   const monitor = health?.liveExitMonitor;
   const activeStream = monitor?.provider === 'ibkr'
     ? health?.streams?.ibkr
-    : monitor?.provider === 'alpaca'
-      ? health?.streams?.alpaca
-      : health?.streams?.thetadata;
+    : health?.streams?.alpaca;
 
   return (
     <div className="mx-auto w-[95%] max-w-5xl py-6 space-y-4">
@@ -217,7 +215,6 @@ export default function DevLiveExitTestPage() {
                 <SelectContent>
                   <SelectItem value="ibkr">IBKR</SelectItem>
                   <SelectItem value="alpaca">Alpaca</SelectItem>
-                  <SelectItem value="thetadata">ThetaData</SelectItem>
                   <SelectItem value="wealthsimple">Wealthsimple/SnapTrade</SelectItem>
                 </SelectContent>
               </Select>

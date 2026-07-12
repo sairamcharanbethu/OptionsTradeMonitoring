@@ -20,7 +20,7 @@ async function testHealthyAdapterGetsLastGoodAtAndFreshness() {
 }
 
 async function testDegradedAdapterGetsReason() {
-  const health = normalizeAdapterHealth('thetadata', {
+  const health = normalizeAdapterHealth('ibkrStream', {
     status: 'DEGRADED',
     lastMessageAt: '2026-06-22T14:59:00.000Z',
     lastError: 'stream closed'

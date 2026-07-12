@@ -544,9 +544,6 @@ const start = async () => {
       return { message: 'Options Monitoring API' };
     });
 
-    const { ThetaDataService } = await import('./services/thetadata-service');
-    const thetaData = new ThetaDataService(fastify);
-    fastify.decorate('thetaData', thetaData);
     const { IbkrMarketDataService } = await import('./services/ibkr-market-data-service');
     const ibkrMarketData = new IbkrMarketDataService(fastify);
     fastify.decorate('ibkrMarketData', ibkrMarketData);
@@ -563,10 +560,6 @@ const start = async () => {
     // --- WebSocket & Streaming Setup ---
     await fastify.register(import('@fastify/websocket'));
     const { redis } = await import('./lib/redis');
-
-    const { ThetaDataStreamService } = await import('./services/thetadata-stream-service');
-    const thetaDataStreamer = new ThetaDataStreamService(fastify);
-    fastify.decorate('thetaDataStreamer', thetaDataStreamer);
 
     const { AlpacaMarketDataStreamService } = await import('./services/alpaca-market-data-stream-service');
     const alpacaMarketDataStreamer = new AlpacaMarketDataStreamService(fastify);
@@ -727,7 +720,6 @@ const start = async () => {
       await liveExitMonitor.handleQuote(quote);
     };
 
-    thetaDataStreamer.on('quote', handleStreamQuote);
     alpacaMarketDataStreamer.on('quote', handleStreamQuote);
     ibkrMarketDataStreamer.on('quote', handleStreamQuote);
 
@@ -735,7 +727,6 @@ const start = async () => {
       const { id: userId } = (request as any).user;
       const generatedAt = new Date().toISOString();
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
-      const thetaDataHealth = thetaDataStreamer.getHealth();
       const ibkrStreamHealth = ibkrMarketDataStreamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
       const postgresStartedAt = Date.now();
@@ -807,7 +798,6 @@ const start = async () => {
         liveExitMonitor: normalizeAdapterHealth('liveExitMonitor', liveExitHealth, generatedAt),
         streams: {
           alpaca: normalizeAdapterHealth('alpaca', alpacaHealth, generatedAt),
-          thetadata: normalizeAdapterHealth('thetadataStream', thetaDataHealth, generatedAt),
           ibkr: normalizeAdapterHealth('ibkrStream', ibkrStreamHealth, generatedAt)
         },
         marketData: {
@@ -999,17 +989,6 @@ const start = async () => {
         }
       } catch (err: any) {
         fastify.log.warn(`[Stream] IBKR option market data stream failed to start: ${err.message}`);
-      }
-
-      try {
-        const thetaDataStreamStarted = !liveExitStreamStarted && await thetaDataStreamer.start();
-        if (!liveExitStreamStarted && thetaDataStreamStarted) {
-          liveExitMonitor.start('thetadata');
-          fastify.log.info('[Stream] ThetaData option market data stream enabled for live exit monitoring.');
-          liveExitStreamStarted = true;
-        }
-      } catch (err: any) {
-        fastify.log.warn(`[Stream] ThetaData option market data stream failed to start: ${err.message}`);
       }
 
       if (!liveExitStreamStarted) {

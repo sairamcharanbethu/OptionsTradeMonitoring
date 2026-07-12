@@ -144,7 +144,7 @@ Status: completed in current work.
 
 ## Completed Task 8: Adapter Health Contracts And Freshness
 
-Goal: normalize health and freshness for Yahoo, ThetaData, Alpaca, SnapTrade, GEX, OpenRouter, Discord, Redis, and Postgres.
+Goal: normalize health and freshness for Yahoo, IBKR, Alpaca, SnapTrade, GEX, OpenRouter, Discord, Redis, and Postgres.
 
 Implementation:
 - Define one adapter health shape: `status`, `latencyMs`, `lastGoodAt`, `lastError`, `freshnessMs`, `degradedReason`, and `source`.
@@ -165,7 +165,7 @@ Status: completed in current work.
 
 ## Completed Task 9: Option Instrument Cache And Selection Stability
 
-Goal: reduce transient ThetaData/API noise by caching option chain snapshots and selection evidence per symbol/expiry/time window.
+Goal: reduce transient IBKR/API noise by caching option chain snapshots and selection evidence per symbol/expiry/time window.
 
 Implementation:
 - Cache normalized option chain snapshots for a short TTL keyed by symbol, expiry, and scan window.

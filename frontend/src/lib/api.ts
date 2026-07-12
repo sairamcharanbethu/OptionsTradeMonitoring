@@ -1149,15 +1149,6 @@ export const api = {
         lastError: string | null;
         reconnectAttempts: number;
       };
-      thetadata: AdapterHealth & {
-        status: string;
-        connected: boolean;
-        provider: string;
-        activeSubscriptions: number;
-        lastMessageAt: string | null;
-        lastError: string | null;
-        reconnectAttempts: number;
-      };
       ibkr: AdapterHealth & {
         status: string;
         connected: boolean;

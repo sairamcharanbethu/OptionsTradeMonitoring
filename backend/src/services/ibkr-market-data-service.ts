@@ -157,6 +157,32 @@ export class IbkrMarketDataService {
   }
 
   public async getHistoricalBars(symbol: string, durationStr = '5 D', barSize = '5 mins'): Promise<IbkrHistoricalBar[]> {
+    return this.getHistoricalBarsForContract(this.stockContract(symbol), symbol, '', durationStr, barSize);
+  }
+
+  public async getOptionHistoricalBars(
+    contract: IbkrOptionContract,
+    endTime: Date | string = '',
+    durationStr = '5 D',
+    barSize = '5 mins'
+  ): Promise<IbkrHistoricalBar[]> {
+    const ticker = this.constructOSITicker(contract.symbol, contract.strike, contract.right === 'call' ? 'CALL' : 'PUT', contract.expiration);
+    return this.getHistoricalBarsForContract(
+      this.optionContract(contract),
+      ticker,
+      this.formatHistoricalEndTime(endTime),
+      durationStr,
+      barSize
+    );
+  }
+
+  private async getHistoricalBarsForContract(
+    contract: any,
+    label: string,
+    endDateTime: string,
+    durationStr: string,
+    barSize: string
+  ): Promise<IbkrHistoricalBar[]> {
     const ib = await this.ensureConnected();
     const reqId = this.nextReqId();
     const rows: IbkrHistoricalBar[] = [];
@@ -192,13 +218,33 @@ export class IbkrMarketDataService {
           resolve();
         } else {
           IbkrMarketDataService.resetConnection();
-          reject(new Error(`IBKR historical bars timed out for ${symbol}`));
+          reject(new Error(`IBKR historical bars timed out for ${label}`));
         }
       }, this.requestTimeoutMs);
-      ib.reqHistoricalData(reqId, this.stockContract(symbol), '', durationStr, barSize, 'TRADES', false, 2, false);
+      ib.reqHistoricalData(reqId, contract, endDateTime, durationStr, barSize, 'TRADES', false, 2, false);
     });
 
     return rows.filter((row) => row.start && row.close > 0);
+  }
+
+  private formatHistoricalEndTime(endTime: Date | string): string {
+    if (!endTime) return '';
+    const date = new Date(endTime);
+    if (!Number.isFinite(date.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).formatToParts(date).reduce<Record<string, string>>((result, part) => {
+      if (part.type !== 'literal') result[part.type] = part.value;
+      return result;
+    }, {});
+    return `${parts.year}${parts.month}${parts.day} ${parts.hour}:${parts.minute}:${parts.second} America/New_York`;
   }
 
   public async getOptionExpirations(symbol: string): Promise<string[]> {

@@ -45,21 +45,6 @@ function formatAccountBalance(account: any) {
     }).format(numericBalance);
 }
 
-function normalizeThetaDataBaseUrl(baseUrl: string) {
-    const cleaned = baseUrl.trim().replace(/\/$/, '');
-    if (!cleaned) return 'http://127.0.0.1:25503';
-    if (/^https?:\/\/thetadata:25510$/i.test(cleaned)) return 'http://127.0.0.1:25503';
-    if (/^https?:\/\/(127\.0\.0\.1|localhost):25510$/i.test(cleaned)) return 'http://127.0.0.1:25503';
-    return cleaned;
-}
-
-function normalizeThetaDataStreamUrl(streamUrl: string) {
-    const cleaned = streamUrl.trim();
-    if (!cleaned) return '';
-    if (/^ws:\/\/(thetadata:255(10|20)|(127\.0\.0\.1|localhost):25510)\/v1\/events$/i.test(cleaned)) return '';
-    return cleaned.replace(/^ws:\/\/thetadata:/i, 'ws://127.0.0.1:');
-}
-
 function normalizeIbkrGatewayMode(value?: string) {
     return String(value || '').trim().toLowerCase() === 'paper' ? 'paper' : 'live';
 }
@@ -252,9 +237,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [profileError, setProfileError] = useState<string | null>(null);
     const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
 
-    // ThetaData State
-    const [thetaDataBaseUrl, setThetaDataBaseUrl] = useState('http://127.0.0.1:25503');
-    const [thetaDataStreamUrl, setThetaDataStreamUrl] = useState('');
     const [ibkrGatewayMode, setIbkrGatewayMode] = useState('live');
     const [ibkrPort, setIbkrPort] = useState(DEFAULT_IBKR_LIVE_PORT);
 
@@ -331,8 +313,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setPositionPollInterval(data.position_poll_interval || '2');
             setSnaptradeClientId(data.snaptrade_client_id || '');
             setSnaptradeConsumerKey(data.snaptrade_consumer_key || '');
-            setThetaDataBaseUrl(normalizeThetaDataBaseUrl(data.thetadata_base_url || 'http://127.0.0.1:25503'));
-            setThetaDataStreamUrl(normalizeThetaDataStreamUrl(data.thetadata_stream_url || ''));
             const loadedIbkrMode = normalizeIbkrGatewayMode(data.ibkr_gateway_mode || 'live');
             setIbkrGatewayMode(loadedIbkrMode);
             setIbkrPort(data.ibkr_port || defaultIbkrPort(loadedIbkrMode));
@@ -583,8 +563,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 snaptrade_consumer_key: snaptradeConsumerKey,
                 snaptrade_auto_trade: snaptradeAutoTrade ? 'true' : 'false',
                 snaptrade_trading_account_id: snaptradeTradingAccountId,
-                thetadata_base_url: thetaDataBaseUrl,
-                thetadata_stream_url: thetaDataStreamUrl,
                 ibkr_gateway_mode: ibkrGatewayMode,
                 ibkr_port: ibkrPort || defaultIbkrPort(ibkrGatewayMode),
                 alpaca_auto_trade: 'false',
@@ -1263,43 +1241,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </div>
                                     )}
                                     
-                                    {/* ThetaData */}
-                                    {isAdmin && (
-                                        <div className="space-y-3">
-                                            <div className="flex items-center justify-between">
-                                                <h5 className="font-medium text-sm">ThetaData Market Data</h5>
-                                                <Badge variant={thetaDataBaseUrl ? "default" : "secondary"}>
-                                                    {thetaDataBaseUrl ? "Configured" : "Not Configured"}
-                                                </Badge>
-                                            </div>
-                                            <div className="grid gap-2 p-4 border rounded-md bg-muted/30">
-                                                <div className="grid gap-3 sm:grid-cols-2">
-                                                    <div className="space-y-1.5">
-                                                        <Label htmlFor="thetadata-base-url">REST URL</Label>
-                                                        <Input
-                                                            id="thetadata-base-url"
-                                                            value={thetaDataBaseUrl}
-                                                            onChange={(e) => setThetaDataBaseUrl(e.target.value)}
-                                                            placeholder="http://127.0.0.1:25503"
-                                                        />
-                                                    </div>
-                                                    <div className="space-y-1.5">
-                                                        <Label htmlFor="thetadata-stream-url">Stream URL</Label>
-                                                        <Input
-                                                            id="thetadata-stream-url"
-                                                            value={thetaDataStreamUrl}
-                                                            onChange={(e) => setThetaDataStreamUrl(e.target.value)}
-                                                            placeholder="ws://127.0.0.1:25520/v1/events"
-                                                        />
-                                                    </div>
-                                                </div>
-                                                <p className="text-[10px] text-muted-foreground leading-normal">
-                                                    ThetaData Terminal v3 REST runs on 127.0.0.1:25503 and the option quote stream runs on ws://127.0.0.1:25520/v1/events.
-                                                </p>
-                                            </div>
-                                        </div>
-                                    )}
-
                                     {/* SnapTrade */}
                                     <details className={`group rounded-lg border bg-card ${isAdmin ? 'mt-4' : ''} ${wealthsimpleMissingItems.length > 0 ? 'border-destructive/40' : ''}`}>
                                         <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4">

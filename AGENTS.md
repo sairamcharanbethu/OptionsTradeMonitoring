@@ -60,9 +60,9 @@ Strong success criteria reduce unnecessary changes, overcomplication, and late c
 ## Runtime And Topology
 
 - Backend runtime is Node.js 22 or newer. Keep `backend/package.json` and `backend/Dockerfile` aligned with that floor.
-- Keep ThetaData inside the backend container. The backend should start Theta Terminal v3 in the same container and communicate with it over `127.0.0.1` ports.
-- Do not split Theta Terminal into a separate sidecar/container service unless the user explicitly asks for that architecture change.
-- Treat `THETADATA_BASE_URL=http://127.0.0.1:25503` and `THETADATA_STREAM_URL=ws://127.0.0.1:25520/v1/events` as the intended container-local defaults.
+- Use IBKR Gateway as the market-data provider. The backend should connect to the configured IBKR Gateway host and API port for snapshots, historical bars, option chains, and streaming quotes.
+- Do not reintroduce ThetaData or add a ThetaData terminal, sidecar, credentials, ports, or fallback path.
+- Treat `IBKR_HOST`, `IBKR_PORT`, `IBKR_CLIENT_ID_MARKET_DATA`, `IBKR_CLIENT_ID_STREAM`, and `IBKR_MARKET_DATA_TYPE` as the intended runtime configuration.
 
 ## Verification Commands
 

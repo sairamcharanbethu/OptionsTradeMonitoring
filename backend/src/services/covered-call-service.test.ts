@@ -1,5 +1,5 @@
 import { rankCoveredCallCandidates, scoreCoveredCallCandidate } from './covered-call-service';
-import { ThetaDataOptionChainQuote } from './thetadata-service';
+import { IbkrOptionChainQuote } from './ibkr-market-data-service';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -9,9 +9,9 @@ function assert(condition: boolean, message: string) {
 
 const now = new Date('2026-06-23T12:00:00Z');
 
-function callQuote(overrides: Partial<ThetaDataOptionChainQuote>): ThetaDataOptionChainQuote {
+function callQuote(overrides: Partial<IbkrOptionChainQuote>): IbkrOptionChainQuote {
   return {
-    source: 'thetadata_chain',
+    source: 'ibkr_chain',
     ticker: 'AAPL260717C00215000',
     symbol: 'AAPL',
     expiration: '2026-07-17',
@@ -30,6 +30,7 @@ function callQuote(overrides: Partial<ThetaDataOptionChainQuote>): ThetaDataOpti
     theta: -0.04,
     vega: 0.11,
     impliedVolatility: 0.31,
+    timestamp: null,
     raw: {},
     ...overrides
   };

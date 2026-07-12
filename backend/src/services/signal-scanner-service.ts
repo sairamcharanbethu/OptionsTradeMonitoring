@@ -599,7 +599,7 @@ Rules:
     const { rows } = await this.fastify.pg.query(`
       SELECT user_id
       FROM settings
-      WHERE key IN ('thetadata_base_url', 'sscgex_password') AND value IS NOT NULL AND value != ''
+      WHERE key = 'sscgex_password' AND value IS NOT NULL AND value != ''
       ORDER BY user_id ASC
       LIMIT 1
     `);
@@ -4443,11 +4443,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     let settings = await this.getSettingsForUser(targetUserId);
 
     // If the logged-in user hasn't configured signal keys, try using the primary user settings.
-    if (!settings.thetadata_base_url && !settings.sscgex_password) {
+    if (!settings.sscgex_password) {
       const primaryId = await this.getPrimaryUserId();
       if (primaryId !== userId) {
         const primarySettings = await this.getSettingsForUser(primaryId);
-        if (primarySettings.thetadata_base_url || primarySettings.sscgex_password) {
+        if (primarySettings.sscgex_password) {
           targetUserId = primaryId;
           settings = primarySettings;
         }

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import YahooFinance from 'yahoo-finance2';
 import { AIService } from './ai-service';
-import { ThetaDataOptionChainQuote, ThetaDataService } from './thetadata-service';
+import { IbkrMarketDataService, IbkrOptionChainQuote } from './ibkr-market-data-service';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -100,7 +100,7 @@ export function calculateDte(expiration: string, now = new Date()): number {
 }
 
 export function scoreCoveredCallCandidate(
-  quote: ThetaDataOptionChainQuote,
+  quote: IbkrOptionChainQuote,
   stockPrice: number,
   now = new Date()
 ): CoveredCallCandidate {
@@ -250,7 +250,7 @@ export function scoreCoveredCallCandidate(
 }
 
 export function rankCoveredCallCandidates(
-  chain: ThetaDataOptionChainQuote[],
+  chain: IbkrOptionChainQuote[],
   stockPrice: number,
   now = new Date()
 ): CoveredCallCandidate[] {
@@ -266,7 +266,7 @@ export function rankCoveredCallCandidates(
 export class CoveredCallService {
   constructor(
     private fastify: FastifyInstance,
-    private thetaData = new ThetaDataService(fastify),
+    private ibkrMarketData = new IbkrMarketDataService(fastify),
     private aiService = new AIService(fastify)
   ) {}
 
@@ -299,7 +299,7 @@ export class CoveredCallService {
     const [quote, news, expirations] = await Promise.all([
       this.fetchStockQuote(normalizedSymbol),
       this.fetchNews(normalizedSymbol),
-      this.thetaData.getOptionExpirations(userId, normalizedSymbol)
+      this.ibkrMarketData.getOptionExpirations(normalizedSymbol)
     ]);
 
     const targetExpirations = expirations
@@ -310,9 +310,9 @@ export class CoveredCallService {
       .slice(0, DEFAULTS.maxExpirations);
 
     const chains = await Promise.all(targetExpirations.map((expiration) =>
-      this.thetaData.getOptionChainSnapshot(userId, normalizedSymbol, expiration, 'call')
+      this.ibkrMarketData.getOptionChainSnapshot(userId, normalizedSymbol, expiration, 'call')
         .catch((err: any) => {
-          this.fastify.log.warn(`[CoveredCallService] ThetaData chain failed for ${normalizedSymbol} ${expiration}: ${err.message || String(err)}`);
+          this.fastify.log.warn(`[CoveredCallService] IBKR chain failed for ${normalizedSymbol} ${expiration}: ${err.message || String(err)}`);
           return [];
         })
     ));
@@ -385,7 +385,7 @@ export class CoveredCallService {
       return {
         summary: 'No covered-call candidates were found in the conservative 14-45 DTE window.',
         bestContractTicker: null,
-        riskNotes: ['ThetaData returned no usable call contracts for the selected window.'],
+        riskNotes: ['IBKR returned no usable call contracts for the selected window.'],
         incomeRationale: 'Wait for a liquid out-of-the-money contract before selling premium.',
         avoidIf: ['You do not own at least 100 shares per contract.'],
         fallback: true
