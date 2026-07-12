@@ -619,6 +619,7 @@ export default function SystemHealthPage() {
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Root Issues" value={`${failures.length}`} detail={`${warnings.length} warnings active`} icon={Search} />
         <MetricCard label="Live Exit" value={services?.liveExitMonitor?.status || 'N/A'} detail={`${services?.liveExitMonitor?.matchedUpdates ?? 0} matched updates`} icon={Activity} />
+        <MetricCard label="Option Capture" value={services?.optionHistoryCapture?.status || 'N/A'} detail={`${services?.optionHistoryCapture?.persistedQuotes ?? 0} persisted quotes`} icon={Database} />
         <MetricCard label="Active Stream" value={activeProvider?.connected ? 'Connected' : 'Disconnected'} detail={`${activeProvider?.activeSubscriptions ?? 0} subscriptions`} icon={Router} />
         <MetricCard label="Broker Sync" value={services?.snaptradePendingOrders?.status || 'N/A'} detail={`Checked ${services?.snaptradePendingOrders?.lastResult?.checked ?? 0} pending orders`} icon={Zap} />
       </div>

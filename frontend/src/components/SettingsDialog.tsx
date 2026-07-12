@@ -219,6 +219,13 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [executionBroker, setExecutionBroker] = useState('none');
     const [maxTradesPerDay, setMaxTradesPerDay] = useState('2');
     const [contractsPerTrade, setContractsPerTrade] = useState('1');
+    const [maxDailyLossDollars, setMaxDailyLossDollars] = useState('200');
+    const [maxConsecutiveLosses, setMaxConsecutiveLosses] = useState('3');
+    const [lossCooldownMinutes, setLossCooldownMinutes] = useState('30');
+    const [maxPremiumRiskDollars, setMaxPremiumRiskDollars] = useState('500');
+    const [maxCorrelatedPositions, setMaxCorrelatedPositions] = useState('1');
+    const [shadowTradingEnabled, setShadowTradingEnabled] = useState(false);
+    const [expiryMode, setExpiryMode] = useState('adaptive');
     const [orderType, setOrderType] = useState('LIMIT');
     const [entrySlippagePct, setEntrySlippagePct] = useState('3');
     const [takeProfitPct, setTakeProfitPct] = useState('');
@@ -321,6 +328,13 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setSnaptradeTradingAccountId(data.snaptrade_trading_account_id || '');
             setMaxTradesPerDay(data.max_trades_per_day || '2');
             setContractsPerTrade(data.contracts_per_trade || '1');
+            setMaxDailyLossDollars(data.max_daily_loss_dollars || '200');
+            setMaxConsecutiveLosses(data.max_consecutive_losses || '3');
+            setLossCooldownMinutes(data.loss_cooldown_minutes || '30');
+            setMaxPremiumRiskDollars(data.max_premium_risk_dollars || '500');
+            setMaxCorrelatedPositions(data.max_correlated_positions || '1');
+            setShadowTradingEnabled(data.shadow_trading_enabled === 'true');
+            setExpiryMode(data.day_trading_expiry_mode || 'adaptive');
             setOrderType(data.order_type || 'LIMIT');
             setEntrySlippagePct(data.entry_slippage_pct || '3');
             setTakeProfitPct(data.take_profit_pct || '');
@@ -569,6 +583,13 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 execution_broker: executionBroker === 'alpaca_paper' ? 'none' : executionBroker,
                 max_trades_per_day: maxTradesPerDay,
                 contracts_per_trade: contractsPerTrade,
+                max_daily_loss_dollars: maxDailyLossDollars,
+                max_consecutive_losses: maxConsecutiveLosses,
+                loss_cooldown_minutes: lossCooldownMinutes,
+                max_premium_risk_dollars: maxPremiumRiskDollars,
+                max_correlated_positions: maxCorrelatedPositions,
+                shadow_trading_enabled: shadowTradingEnabled ? 'true' : 'false',
+                day_trading_expiry_mode: expiryMode,
                 order_type: orderType,
                 entry_slippage_pct: entrySlippagePct,
                 take_profit_pct: takeProfitPct,
@@ -973,7 +994,49 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setContractsPerTrade(e.target.value)}
                                                 />
                                             </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="maxDailyLossDollars">Daily Loss Limit ($)</Label>
+                                                <Input id="maxDailyLossDollars" type="number" min="1" value={maxDailyLossDollars} onChange={(e) => setMaxDailyLossDollars(e.target.value)} />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="maxPremiumRiskDollars">Max Premium Risk / Trade ($)</Label>
+                                                <Input id="maxPremiumRiskDollars" type="number" min="1" value={maxPremiumRiskDollars} onChange={(e) => setMaxPremiumRiskDollars(e.target.value)} />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="maxConsecutiveLosses">Consecutive Losses Before Cooldown</Label>
+                                                <Input id="maxConsecutiveLosses" type="number" min="1" value={maxConsecutiveLosses} onChange={(e) => setMaxConsecutiveLosses(e.target.value)} />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="lossCooldownMinutes">Loss Cooldown (minutes)</Label>
+                                                <Input id="lossCooldownMinutes" type="number" min="1" value={lossCooldownMinutes} onChange={(e) => setLossCooldownMinutes(e.target.value)} />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="maxCorrelatedPositions">Max SPY/QQQ Correlated Positions</Label>
+                                                <Input id="maxCorrelatedPositions" type="number" min="1" value={maxCorrelatedPositions} onChange={(e) => setMaxCorrelatedPositions(e.target.value)} />
+                                            </div>
                                         </div>
+                                        <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <Label htmlFor="shadowTradingEnabled">Shadow Trading Mode</Label>
+                                                <Switch id="shadowTradingEnabled" checked={shadowTradingEnabled} onCheckedChange={setShadowTradingEnabled} />
+                                            </div>
+                                            <p className="text-[10px] text-muted-foreground">Runs the live signal and risk path but creates simulated positions only. No broker order is sent.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
+                                        <div>
+                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Expiry policy</h5>
+                                            <p className="text-[10px] text-muted-foreground">Control whether the scanner uses same-day expiry or its safer late-day 1DTE fallback.</p>
+                                        </div>
+                                        <Select value={expiryMode} onValueChange={setExpiryMode}>
+                                            <SelectTrigger><SelectValue /></SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="adaptive">Adaptive: 0DTE before 1 PM, 1DTE after</SelectItem>
+                                                <SelectItem value="0dte">Always 0DTE</SelectItem>
+                                                <SelectItem value="1dte">Always 1DTE</SelectItem>
+                                            </SelectContent>
+                                        </Select>
                                     </div>
 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">

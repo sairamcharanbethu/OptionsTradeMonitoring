@@ -28,10 +28,13 @@ async function testOptionQuotePayloadShape() {
     emitted = quote;
   });
 
+  (service as any).latestUnderlyingPrices.set('SPY', 754.88);
+
   (service as any).emitQuote({
     reqId: 80001,
     type: 'option',
     symbol: 'SPY260706C00745000',
+    contract: { symbol: 'SPY', expiration: '2026-07-06', strike: 745, optionType: 'CALL' },
     snapshot: {
       bid: 1.2,
       ask: 1.3,
@@ -53,6 +56,7 @@ async function testOptionQuotePayloadShape() {
   assert(emitted.price === 1.25, `Expected midpoint price 1.25, got ${emitted.price}`);
   assert(emitted.delta === 0.48, `Expected delta 0.48, got ${emitted.delta}`);
   assert(emitted.theta === -0.22, `Expected theta -0.22, got ${emitted.theta}`);
+  assert(emitted.underlyingPrice === 754.88, `Expected latest underlying price, got ${emitted.underlyingPrice}`);
 }
 
 async function testContractKeyAndOsiSymbol() {

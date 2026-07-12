@@ -82,10 +82,22 @@ async function testThetaStopMaxHoldWindows() {
   assert(anchoredStart?.triggered === true && anchoredStart.heldMinutes === 30, `Expected stored theta-stop anchor to survive later updates, got ${JSON.stringify(anchoredStart)}`);
 }
 
+async function testTradeExcursionTracksLongAndShortPremium() {
+  const poller = createPoller();
+  const longFirst = poller.calculateTradeExcursion({ entry_price: 2 }, 2.5);
+  const longNext = poller.calculateTradeExcursion({ entry_price: 2, max_favorable_price: 2.5, max_adverse_price: 2 }, 1.5);
+  const shortFirst = poller.calculateTradeExcursion({ entry_price: 2, entry_action: 'SELL_TO_OPEN' }, 1.5);
+
+  assert(longFirst.mfePct === 25 && longFirst.maePct === 0, `Expected long MFE 25% and MAE 0%, got ${JSON.stringify(longFirst)}`);
+  assert(longNext.mfePct === 25 && longNext.maePct === 25, `Expected long excursion to preserve MFE and add 25% MAE, got ${JSON.stringify(longNext)}`);
+  assert(shortFirst.mfePct === 25 && shortFirst.maePct === 0, `Expected short premium gain to be favorable, got ${JSON.stringify(shortFirst)}`);
+}
+
 async function runTests() {
   console.log('Running MarketPoller tests...');
   await testUnderlyingStopDirection();
   await testThetaStopMaxHoldWindows();
+  await testTradeExcursionTracksLongAndShortPremium();
   console.log('All MarketPoller tests passed!');
 }
 

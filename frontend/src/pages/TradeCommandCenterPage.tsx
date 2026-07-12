@@ -280,6 +280,8 @@ export default function TradeCommandCenterPage() {
           <DetailRow label="Trim fill" value={riskPlan.trim.price ? `${currency(riskPlan.trim.price)} x ${riskPlan.trim.quantity}` : '-'} />
           <DetailRow label="Underlying SL" value={currency(riskPlan.underlyingPlan.stop)} />
           <DetailRow label="Underlying TP" value={currency(riskPlan.underlyingPlan.target)} />
+          <DetailRow label="MFE" value={riskPlan.mfePct == null ? '-' : `${Number(riskPlan.mfePct).toFixed(2)}%`} />
+          <DetailRow label="MAE" value={riskPlan.maePct == null ? '-' : `${Number(riskPlan.maePct).toFixed(2)}%`} />
         </section>
       </div>
 

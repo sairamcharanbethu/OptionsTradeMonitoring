@@ -235,6 +235,67 @@ const ensureSchema = async (instance: any) => {
       );
     `);
 
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS option_market_history (
+        id BIGSERIAL PRIMARY KEY,
+        provider VARCHAR(30) NOT NULL,
+        osi_ticker VARCHAR(40) NOT NULL,
+        underlying_symbol VARCHAR(20) NOT NULL,
+        expiration DATE NOT NULL,
+        option_type VARCHAR(4) NOT NULL,
+        strike NUMERIC(12, 4) NOT NULL,
+        quote_time TIMESTAMPTZ NOT NULL,
+        bid NUMERIC(12, 4),
+        ask NUMERIC(12, 4),
+        last NUMERIC(12, 4),
+        mark NUMERIC(12, 4) NOT NULL,
+        volume BIGINT,
+        open_interest BIGINT,
+        iv NUMERIC(12, 6),
+        delta NUMERIC(12, 6),
+        gamma NUMERIC(12, 6),
+        theta NUMERIC(12, 6),
+        vega NUMERIC(12, 6),
+        underlying_price NUMERIC(12, 4),
+        raw_data JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await instance.pg.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_option_market_history_quote
+        ON option_market_history (osi_ticker, quote_time, provider);
+    `);
+    await instance.pg.query(`ALTER TABLE option_market_history ADD COLUMN IF NOT EXISTS underlying_price NUMERIC(12, 4);`);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_option_market_history_lookup
+        ON option_market_history (osi_ticker, quote_time DESC);
+    `);
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS execution_telemetry (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER,
+        signal_id INTEGER,
+        position_id INTEGER,
+        event_type VARCHAR(80) NOT NULL,
+        broker VARCHAR(50),
+        order_id VARCHAR(255),
+        ticker VARCHAR(50),
+        bid NUMERIC(12, 4),
+        ask NUMERIC(12, 4),
+        mark NUMERIC(12, 4),
+        intended_price NUMERIC(12, 4),
+        fill_price NUMERIC(12, 4),
+        slippage_pct NUMERIC(12, 4),
+        latency_ms INTEGER,
+        metadata JSONB,
+        occurred_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_execution_telemetry_signal
+        ON execution_telemetry (signal_id, occurred_at DESC);
+    `);
+
     // 3. Ensure all extra columns are added to positions table
     const columns = [
       { name: 'delta', type: 'DECIMAL(10, 4)' },
@@ -276,7 +337,11 @@ const ensureSchema = async (instance: any) => {
       { name: 'profit_trimmed_at', type: 'TIMESTAMPTZ' },
       { name: 'exit_retry_count', type: 'INTEGER DEFAULT 0' },
       { name: 'last_broker_sync_at', type: 'TIMESTAMPTZ' },
-      { name: 'last_broker_order_status', type: 'VARCHAR(50)' }
+      { name: 'last_broker_order_status', type: 'VARCHAR(50)' },
+      { name: 'max_favorable_price', type: 'DECIMAL(10, 4)' },
+      { name: 'max_adverse_price', type: 'DECIMAL(10, 4)' },
+      { name: 'mfe_pct', type: 'DECIMAL(10, 4)' },
+      { name: 'mae_pct', type: 'DECIMAL(10, 4)' }
     ];
 
     for (const col of columns) {
@@ -574,6 +639,10 @@ const start = async () => {
     const liveExitMonitor = new LiveExitMonitorService(fastify);
     fastify.decorate('liveExitMonitor', liveExitMonitor);
 
+    const { OptionMarketHistoryCaptureService } = await import('./services/option-market-history-capture-service');
+    const optionMarketHistoryCapture = new OptionMarketHistoryCaptureService(fastify);
+    fastify.decorate('optionMarketHistoryCapture', optionMarketHistoryCapture);
+
     const { SnaptradeService } = await import('./services/snaptrade-service');
     const snaptradeOrderSync = new SnaptradeService(fastify);
     const { OrderWatchdogService } = await import('./services/order-watchdog-service');
@@ -718,6 +787,7 @@ const start = async () => {
       }
 
       // Feed data into the dedicated live exit monitor without waiting for the next poll cycle.
+      optionMarketHistoryCapture.handleQuote(quote);
       await liveExitMonitor.handleQuote(quote);
     };
 
@@ -735,6 +805,7 @@ const start = async () => {
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
       const ibkrStreamHealth = ibkrMarketDataStreamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
+      const optionHistoryHealth = optionMarketHistoryCapture.getHealth();
       const postgresStartedAt = Date.now();
       const [ibkrHealth, scannerHealth, tradeRedisHealth, postgresHealth] = await Promise.all([
         withTimeout(
@@ -804,6 +875,7 @@ const start = async () => {
 
       return {
         liveExitMonitor: normalizeAdapterHealth('liveExitMonitor', liveExitHealth, generatedAt),
+        optionHistoryCapture: normalizeAdapterHealth('optionHistoryCapture', optionHistoryHealth, generatedAt),
         streams: {
           alpaca: normalizeAdapterHealth('alpaca', alpacaHealth, generatedAt),
           ibkr: normalizeAdapterHealth('ibkrStream', ibkrStreamHealth, generatedAt)
@@ -995,6 +1067,7 @@ const start = async () => {
           fastify.log.info('[Stream] IBKR option market data stream enabled for live exit monitoring.');
           liveExitStreamStarted = true;
         }
+        await optionMarketHistoryCapture.rehydrateRecentSignals?.();
       } catch (err: any) {
         fastify.log.warn(`[Stream] IBKR option market data stream failed to start: ${err.message}`);
       }

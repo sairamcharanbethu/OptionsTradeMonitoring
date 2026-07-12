@@ -4,6 +4,10 @@ export type RiskDecisionCode =
   | 'SETUP_GRADE_NOT_EXECUTABLE'
   | 'DUPLICATE_OPEN_ENTRY'
   | 'DAILY_TRADE_LIMIT'
+  | 'DAILY_LOSS_LIMIT'
+  | 'CONSECUTIVE_LOSS_COOLDOWN'
+  | 'PREMIUM_RISK_LIMIT'
+  | 'CORRELATED_EXPOSURE_LIMIT'
   | 'EXECUTION_REALISM_TOO_LOW'
   | 'THEORETICAL_PRICING'
   | 'LIVE_TRADING_NOT_ACKNOWLEDGED'
@@ -36,6 +40,15 @@ export type PreSubmitRiskInput = {
   duplicateOpenEntry?: any;
   currentTradeCount?: number;
   maxTradesPerDay?: number;
+  dailyRealizedPnl?: number;
+  maxDailyLoss?: number;
+  consecutiveLosses?: number;
+  maxConsecutiveLosses?: number;
+  cooldownUntil?: string | null;
+  premiumRisk?: number;
+  maxPremiumRisk?: number;
+  correlatedOpenPositions?: number;
+  maxCorrelatedPositions?: number;
   optionDetails?: any;
   quoteValidation?: {
     quote: any;
@@ -71,6 +84,18 @@ export class RiskDecisionService {
       input.currentTradeCount !== undefined && input.maxTradesPerDay !== undefined
         ? this.forDailyTradeLimit(input.currentTradeCount, input.maxTradesPerDay)
         : this.allow(),
+      input.dailyRealizedPnl !== undefined && input.maxDailyLoss !== undefined
+        ? this.forDailyLossLimit(input.dailyRealizedPnl, input.maxDailyLoss)
+        : this.allow(),
+      input.consecutiveLosses !== undefined && input.maxConsecutiveLosses !== undefined
+        ? this.forConsecutiveLosses(input.consecutiveLosses, input.maxConsecutiveLosses, input.cooldownUntil)
+        : this.allow(),
+      input.premiumRisk !== undefined && input.maxPremiumRisk !== undefined
+        ? this.forPremiumRisk(input.premiumRisk, input.maxPremiumRisk)
+        : this.allow(),
+      input.correlatedOpenPositions !== undefined && input.maxCorrelatedPositions !== undefined
+        ? this.forCorrelatedExposure(input.correlatedOpenPositions, input.maxCorrelatedPositions, input.contractLabel || 'underlying')
+        : this.allow(),
       input.broker === 'wealthsimple_snaptrade' && input.settings !== undefined ? this.forLiveTradingAcknowledgement(input.settings) : this.allow(),
       input.broker === 'wealthsimple_snaptrade' && input.settings !== undefined ? this.forTradingAccount(input.settings) : this.allow(),
       input.optionDetails !== undefined ? this.forTheoreticalPricing(input.optionDetails) : this.allow(),
@@ -93,6 +118,15 @@ export class RiskDecisionService {
         setupGrade: input.setupGrade ?? null,
         currentTradeCount: input.currentTradeCount ?? null,
         maxTradesPerDay: input.maxTradesPerDay ?? null,
+        dailyRealizedPnl: input.dailyRealizedPnl ?? null,
+        maxDailyLoss: input.maxDailyLoss ?? null,
+        consecutiveLosses: input.consecutiveLosses ?? null,
+        maxConsecutiveLosses: input.maxConsecutiveLosses ?? null,
+        cooldownUntil: input.cooldownUntil ?? null,
+        premiumRisk: input.premiumRisk ?? null,
+        maxPremiumRisk: input.maxPremiumRisk ?? null,
+        correlatedOpenPositions: input.correlatedOpenPositions ?? null,
+        maxCorrelatedPositions: input.maxCorrelatedPositions ?? null,
         quote: input.quoteValidation?.quote ? {
           source: input.quoteValidation.quote.source || null,
           ticker: input.quoteValidation.quote.ticker || null,
@@ -150,6 +184,49 @@ export class RiskDecisionService {
       skipped: true,
       code: 'DAILY_TRADE_LIMIT',
       message: `Daily trade limit reached (${currentTradeCount}/${maxTradesPerDay})`
+    };
+  }
+
+  static forDailyLossLimit(dailyRealizedPnl: number, maxDailyLoss: number): RiskDecision {
+    if (dailyRealizedPnl > -Math.abs(maxDailyLoss)) return this.allow();
+    return {
+      allowed: false,
+      skipped: true,
+      code: 'DAILY_LOSS_LIMIT',
+      message: `Daily loss limit reached ($${Math.abs(dailyRealizedPnl).toFixed(2)} / $${Math.abs(maxDailyLoss).toFixed(2)})`
+    };
+  }
+
+  static forConsecutiveLosses(consecutiveLosses: number, maxConsecutiveLosses: number, cooldownUntil?: string | null): RiskDecision {
+    if (consecutiveLosses < maxConsecutiveLosses) return this.allow();
+    if (cooldownUntil && Number.isFinite(Date.parse(cooldownUntil)) && Date.parse(cooldownUntil) <= Date.now()) return this.allow();
+    return {
+      allowed: false,
+      skipped: true,
+      code: 'CONSECUTIVE_LOSS_COOLDOWN',
+      message: `Entry blocked during consecutive-loss cooldown (${consecutiveLosses}/${maxConsecutiveLosses})`,
+      metadata: { cooldownUntil: cooldownUntil || null }
+    };
+  }
+
+  static forPremiumRisk(premiumRisk: number, maxPremiumRisk: number): RiskDecision {
+    if (premiumRisk <= Math.abs(maxPremiumRisk)) return this.allow();
+    return {
+      allowed: false,
+      skipped: true,
+      code: 'PREMIUM_RISK_LIMIT',
+      message: `Premium risk $${premiumRisk.toFixed(2)} exceeds per-trade limit $${Math.abs(maxPremiumRisk).toFixed(2)}`,
+      metadata: { premiumRisk, maxPremiumRisk: Math.abs(maxPremiumRisk) }
+    };
+  }
+
+  static forCorrelatedExposure(current: number, max: number, contractLabel: string): RiskDecision {
+    if (current < max) return this.allow();
+    return {
+      allowed: false,
+      skipped: true,
+      code: 'CORRELATED_EXPOSURE_LIMIT',
+      message: `Correlated exposure limit reached for ${contractLabel} (${current}/${max})`
     };
   }
 

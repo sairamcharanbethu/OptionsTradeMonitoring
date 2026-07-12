@@ -382,6 +382,12 @@ export class SignalReplayBacktester {
             this.fastify.log.warn(`[SignalReplayBacktester] IBKR history unavailable for ${cacheKey}: ${err.message || String(err)}`);
             bars = [];
           }
+          if (bars.length === 0) {
+            bars = await this.getCapturedOptionBars(contract, dateKey, signalConfig.interval);
+            if (bars.length > 0) {
+              this.fastify.log.info(`[SignalReplayBacktester] Using ${bars.length} captured option bars for ${cacheKey}.`);
+            }
+          }
           historyCache.set(cacheKey, bars);
         }
 
@@ -496,6 +502,52 @@ export class SignalReplayBacktester {
       .filter((signal) => signal.signal_type === 'CALL' || signal.signal_type === 'PUT')
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
       .slice(0, config.maxSignals);
+  }
+
+  private async getCapturedOptionBars(contract: IbkrOptionContract, dateKey: string, interval: string): Promise<ReplayBar[]> {
+    const ticker = this.constructOsiTicker(contract);
+    const start = this.dateAtEt(dateKey, 9, 30);
+    const end = this.dateAtEt(dateKey, 16, 0);
+    try {
+      const { rows } = await (this.fastify as any).pg.query(
+        `SELECT quote_time, mark, volume
+         FROM option_market_history
+         WHERE osi_ticker = $1
+           AND quote_time >= $2
+           AND quote_time <= $3
+         ORDER BY quote_time ASC`,
+        [ticker, start, end]
+      );
+      const intervalMs = this.replayIntervalMs(interval);
+      const buckets = new Map<number, ReplayBar>();
+      for (const row of rows || []) {
+        const timestamp = new Date(row.quote_time).getTime();
+        const mark = Number(row.mark);
+        if (!Number.isFinite(timestamp) || !Number.isFinite(mark) || mark <= 0) continue;
+        const bucketStart = Math.floor(timestamp / intervalMs) * intervalMs;
+        const existing = buckets.get(bucketStart);
+        const volume = Number(row.volume);
+        if (!existing) {
+          buckets.set(bucketStart, {
+            start: new Date(bucketStart).toISOString(),
+            open: mark,
+            high: mark,
+            low: mark,
+            close: mark,
+            volume: Number.isFinite(volume) && volume >= 0 ? volume : 0
+          });
+          continue;
+        }
+        existing.high = Math.max(existing.high, mark);
+        existing.low = Math.min(existing.low, mark);
+        existing.close = mark;
+        if (Number.isFinite(volume) && volume >= 0) existing.volume = Math.max(existing.volume, volume);
+      }
+      return [...buckets.values()].sort((a, b) => a.start.localeCompare(b.start));
+    } catch (err: any) {
+      this.fastify.log.warn(`[SignalReplayBacktester] Captured option history unavailable for ${ticker}: ${err.message || String(err)}`);
+      return [];
+    }
   }
 
   private scannerLogToReplaySignal(row: any): ReplaySignal | null {
@@ -1546,6 +1598,14 @@ export class SignalReplayBacktester {
     if (interval === '15m') return '15 mins';
     if (interval === '1h') return '1 hour';
     return '1 day';
+  }
+
+  private replayIntervalMs(interval: string): number {
+    if (interval === '1m') return 60_000;
+    if (interval === '5m') return 5 * 60_000;
+    if (interval === '15m') return 15 * 60_000;
+    if (interval === '1h') return 60 * 60_000;
+    return 24 * 60 * 60_000;
   }
 
   private parseOsiTicker(ticker: any): IbkrOptionContract | null {

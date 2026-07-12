@@ -30,6 +30,7 @@ export class IbkrMarketDataStreamService extends EventEmitter {
   private activeUnderlyings: Set<string> = new Set();
   private subscriptionsByKey: Map<string, StreamSubscription> = new Map();
   private subscriptionsByReqId: Map<number, StreamSubscription> = new Map();
+  private latestUnderlyingPrices: Map<string, number> = new Map();
   private isConnected = false;
   private lastMessageAt: string | null = null;
   private lastError: string | null = null;
@@ -220,6 +221,7 @@ export class IbkrMarketDataStreamService extends EventEmitter {
     this.connectionKey = null;
     this.subscriptionsByKey.clear();
     this.subscriptionsByReqId.clear();
+    this.latestUnderlyingPrices.clear();
   }
 
   private attachTickHandlers() {
@@ -365,6 +367,10 @@ export class IbkrMarketDataStreamService extends EventEmitter {
             : null;
     if (price === null) return;
 
+    if (subscription.type === 'stock') {
+      this.latestUnderlyingPrices.set(subscription.symbol.toUpperCase(), price);
+    }
+
     this.lastMessageAt = new Date().toISOString();
     this.lastError = null;
 
@@ -385,7 +391,9 @@ export class IbkrMarketDataStreamService extends EventEmitter {
       vega: this.finiteNumber(snapshot.vega) ?? undefined,
       volatility: this.finiteNumber(snapshot.volatility) ?? undefined,
       quoteTimestamp: this.lastMessageAt,
-      underlyingPrice: subscription.type === 'stock' ? price : undefined,
+      underlyingPrice: subscription.type === 'stock'
+        ? price
+        : this.latestUnderlyingPrices.get(subscription.contract?.symbol?.toUpperCase() || ''),
       raw: {
         reqId: subscription.reqId,
         type: subscription.type,

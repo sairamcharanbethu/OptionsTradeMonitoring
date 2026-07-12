@@ -188,6 +188,35 @@ export class TradeRedisService {
       [event.userId, event.signalId || null, event.positionId || null, event.eventType, event.message || null, metadata]
     );
 
+    try {
+      const telemetry = metadata?.telemetry || metadata;
+      await db.query(
+        `INSERT INTO execution_telemetry (
+           user_id, signal_id, position_id, event_type, broker, order_id, ticker,
+           bid, ask, mark, intended_price, fill_price, slippage_pct, latency_ms, metadata
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        [
+          event.userId,
+          event.signalId || null,
+          event.positionId || null,
+          event.eventType,
+          telemetry.broker || null,
+          telemetry.orderId || telemetry.order_id || null,
+          telemetry.ticker || telemetry.contract || null,
+          telemetry.bid ?? null,
+          telemetry.ask ?? null,
+          telemetry.mark ?? null,
+          telemetry.intendedEntry ?? telemetry.intended_price ?? null,
+          telemetry.fillPrice ?? telemetry.fill_price ?? null,
+          telemetry.slippagePct ?? telemetry.slippage_pct ?? null,
+          telemetry.latencyMs ?? telemetry.latency_ms ?? null,
+          metadata
+        ]
+      );
+    } catch {
+      // Telemetry must never prevent the primary trade event from being recorded.
+    }
+
     if (event.positionId) {
       await redis.set(this.keys.latestTradeEvent(event.positionId), JSON.stringify({
         ...event,

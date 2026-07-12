@@ -860,6 +860,13 @@ Rules:
       snaptrade_trading_account_id: '',
       max_trades_per_day: '2',
       contracts_per_trade: '1',
+      max_daily_loss_dollars: '200',
+      max_consecutive_losses: '3',
+      loss_cooldown_minutes: '30',
+      max_premium_risk_dollars: '500',
+      max_correlated_positions: '1',
+      shadow_trading_enabled: 'false',
+      day_trading_expiry_mode: 'adaptive',
       order_type: 'LIMIT',
       entry_slippage_pct: '3',
       take_profit_pct: '',
@@ -1578,7 +1585,7 @@ Rules:
       // Fetch the expiry chain from IBKR and select the cleanest nearby contract.
       const strikeOffset = parseInt(settings.strike_offset, 10) || 0;
       const todayDateStr = nyParts.dateStr;
-      const targetExpiryDateStr = this.getTargetDayTradeExpiry(todayDateStr, nyParts.minutes);
+      const targetExpiryDateStr = this.getTargetDayTradeExpiry(todayDateStr, nyParts.minutes, settings.day_trading_expiry_mode || 'adaptive');
       if (targetExpiryDateStr !== todayDateStr) {
         this.fastify.log.info(`[SignalScannerService] ${symbol} scan is after 1:00 PM ET. Selecting 1DTE expiry ${targetExpiryDateStr} instead of 0DTE ${todayDateStr}.`);
       }
@@ -2004,6 +2011,17 @@ Rules:
 
       const signalId: number = insertResult.rows[0].id;
       signalDecision.signalId = signalId;
+      const optionHistoryCapture = (this.fastify as any).optionMarketHistoryCapture;
+      if (optionHistoryCapture?.registerSignal && chosenStrike !== null && chosenExpiry) {
+        optionHistoryCapture.registerSignal(signalId, {
+          symbol,
+          strike: chosenStrike,
+          optionType: winningSide,
+          expiration: chosenExpiry
+        }).catch((err: any) => {
+          this.fastify.log.warn(`[SignalScannerService] Failed to start option history capture for signal #${signalId}: ${err.message || String(err)}`);
+        });
+      }
       tradingEventBus.publish({
         type: 'SIGNAL_GENERATED',
         createdAt: cycle.startedAt,
@@ -3037,7 +3055,9 @@ Rules:
         minOptionMark: thresholds.minOptionMark,
         maxBidAskSpreadPct: thresholds.maxBidAskSpreadPct,
         minOptionVolume: thresholds.minOptionVolume,
-        minOpenInterest: thresholds.minOpenInterest
+        minOpenInterest: thresholds.minOpenInterest,
+        expiryMode: settings.day_trading_expiry_mode || 'adaptive',
+        deltaRange: { min: 0.30, max: 0.65 }
       },
       replay: {
         contractsPerTrade: this.positiveIntSetting(settings.contracts_per_trade, 1),
@@ -3045,7 +3065,12 @@ Rules:
         stopLossPct: 20,
         maxTradesPerDay: this.positiveIntSetting(settings.max_trades_per_day, 2),
         dailyProfitTarget: 400,
-        dailyLossLimit: 100
+        dailyLossLimit: this.positiveNumberSetting(settings.max_daily_loss_dollars, 200),
+        maxPremiumRisk: this.positiveNumberSetting(settings.max_premium_risk_dollars, 500),
+        maxConsecutiveLosses: this.positiveIntSetting(settings.max_consecutive_losses, 3),
+        lossCooldownMinutes: this.positiveIntSetting(settings.loss_cooldown_minutes, 30),
+        maxCorrelatedPositions: this.positiveIntSetting(settings.max_correlated_positions, 1),
+        shadowTradingEnabled: settings.shadow_trading_enabled === 'true'
       },
       execution: {
         broker: settings.execution_broker || 'none',
@@ -3824,6 +3849,7 @@ Rules:
     const quoteAgeMs = candidate.quoteAgeMs === undefined ? null : candidate.quoteAgeMs;
     const markLastDivergencePct = candidate.markLastDivergencePct === undefined ? null : candidate.markLastDivergencePct;
     const theta = candidate.theta === null || candidate.theta === undefined ? null : Number(candidate.theta);
+    const absDelta = candidate.delta === null || candidate.delta === undefined ? null : Math.abs(Number(candidate.delta));
     const strongVolumeThreshold = Math.max(input.minOptionVolume * 3, 500);
     const hasStrongVolume = volume !== null && Number.isFinite(volume) && volume >= strongVolumeThreshold;
 
@@ -3848,6 +3874,11 @@ Rules:
     }
     if (markLastDivergencePct !== null && markLastDivergencePct > 15) {
       failedFilters.push(`unstable mark/last ${markLastDivergencePct.toFixed(1)}%`);
+    }
+    if (absDelta === null || !Number.isFinite(absDelta)) {
+      failedFilters.push('delta unavailable');
+    } else if (absDelta < 0.30 || absDelta > 0.65) {
+      failedFilters.push(`delta outside 0.30-0.65 (${absDelta.toFixed(2)})`);
     }
     if (theta !== null && Number.isFinite(theta) && mark !== null && Number.isFinite(mark) && mark > 0) {
       const thetaDragPct = Math.abs(theta / mark) * 100;
@@ -4778,9 +4809,11 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     };
   }
 
-  private getTargetDayTradeExpiry(nyDateStr: string, nyMinutes: number): string {
+  private getTargetDayTradeExpiry(nyDateStr: string, nyMinutes: number, expiryMode = 'adaptive'): string {
     const onePmMinutes = 13 * 60;
-    if (nyMinutes < onePmMinutes) return nyDateStr;
+    const normalizedMode = String(expiryMode || 'adaptive').toLowerCase();
+    if (normalizedMode === '0dte') return nyDateStr;
+    if (normalizedMode !== '1dte' && nyMinutes < onePmMinutes) return nyDateStr;
 
     const [year, month, day] = nyDateStr.split('-').map((value) => parseInt(value, 10));
     const expiryDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
@@ -4888,6 +4921,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
   }
 
   private isAutoExecutionEnabled(settings: any): boolean {
+    if (settings.shadow_trading_enabled === 'true') return true;
     const broker = settings.execution_broker || 'none';
     if (broker === 'wealthsimple_snaptrade') return settings.snaptrade_auto_trade === 'true';
     return settings.snaptrade_auto_trade === 'true';

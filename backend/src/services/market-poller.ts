@@ -838,6 +838,23 @@ export class MarketPoller {
     let lossAvoided = engineResult.lossAvoided;
 
     const entryPrice = Number(position.entry_price);
+    const excursion = this.calculateTradeExcursion(position, price);
+    if (excursion.changed) {
+      await (this.fastify as any).pg.query(
+        `UPDATE positions
+         SET max_favorable_price = $1,
+             max_adverse_price = $2,
+             mfe_pct = $3,
+             mae_pct = $4,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $5`,
+        [excursion.maxFavorablePrice, excursion.maxAdversePrice, excursion.mfePct, excursion.maePct, position.id]
+      );
+      position.max_favorable_price = excursion.maxFavorablePrice;
+      position.max_adverse_price = excursion.maxAdversePrice;
+      position.mfe_pct = excursion.mfePct;
+      position.mae_pct = excursion.maePct;
+    }
     const softPremiumStop = Number(position.stop_loss_trigger);
     const hardPremiumStop = Number(Math.max(entryPrice * 0.65, softPremiumStop * 0.85).toFixed(2));
     const softStopConfirmationMs = 10_000;
@@ -1272,6 +1289,29 @@ export class MarketPoller {
         [engineResult.newHigh, engineResult.newStopLoss, position.id]
       );
     }
+  }
+
+  private calculateTradeExcursion(position: any, price: number) {
+    const entryPrice = Number(position.entry_price || 0);
+    const observedPrice = Number(price);
+    const shortPremium = TradeLifecycleService.isShortPremiumPosition(position);
+    const priorFavorable = Number(position.max_favorable_price || entryPrice);
+    const priorAdverse = Number(position.max_adverse_price || entryPrice);
+    const maxFavorablePrice = shortPremium ? Math.min(priorFavorable, observedPrice) : Math.max(priorFavorable, observedPrice);
+    const maxAdversePrice = shortPremium ? Math.max(priorAdverse, observedPrice) : Math.min(priorAdverse, observedPrice);
+    const mfePct = entryPrice > 0
+      ? Number(((shortPremium ? (entryPrice - maxFavorablePrice) : (maxFavorablePrice - entryPrice)) / entryPrice * 100).toFixed(4))
+      : 0;
+    const maePct = entryPrice > 0
+      ? Number(((shortPremium ? (maxAdversePrice - entryPrice) : (entryPrice - maxAdversePrice)) / entryPrice * 100).toFixed(4))
+      : 0;
+    return {
+      maxFavorablePrice,
+      maxAdversePrice,
+      mfePct,
+      maePct,
+      changed: maxFavorablePrice !== priorFavorable || maxAdversePrice !== priorAdverse
+    };
   }
 
   private async notifyN8n(position: any, price: number, pnl: number, lossAvoided?: number, type: string = 'STOP_LOSS', aiSummary?: string, discordMessage?: string, greeks?: any, iv?: number) {

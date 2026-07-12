@@ -36,6 +36,12 @@ interface ExecutionSettings {
   take_profit_pct?: string;
   stop_loss_engine_enabled?: string;
   live_trading_acknowledged?: string;
+  max_daily_loss_dollars?: string;
+  max_consecutive_losses?: string;
+  loss_cooldown_minutes?: string;
+  max_premium_risk_dollars?: string;
+  max_correlated_positions?: string;
+  shadow_trading_enabled?: string;
 }
 
 type EntryQuoteSnapshot = {
@@ -84,6 +90,12 @@ export class TradeExecutionService {
       take_profit_pct: '',
       stop_loss_engine_enabled: 'true',
       live_trading_acknowledged: 'false',
+      max_daily_loss_dollars: '200',
+      max_consecutive_losses: '3',
+      loss_cooldown_minutes: '30',
+      max_premium_risk_dollars: '500',
+      max_correlated_positions: '1',
+      shadow_trading_enabled: 'false',
       ...dbSettings
     };
   }
@@ -93,6 +105,7 @@ export class TradeExecutionService {
     const broker = this.resolveBroker(settings);
     const quantity = this.parsePositiveInt(settings.contracts_per_trade, 1, 100);
     const maxTradesPerDay = this.parsePositiveInt(settings.max_trades_per_day, 2, 100);
+    const riskState = await this.getRiskState(input.userId, settings);
 
     const existingExecution = await this.getExistingSignalExecution(input.userId, input.signalId);
     const existingExecutionRisk = RiskDecisionService.evaluatePreSubmit({
@@ -161,8 +174,32 @@ export class TradeExecutionService {
       return { success: false, broker, message: supersededSummary.message, superseded: supersededSummary };
     }
 
-    if (broker === 'none') {
-      return this.createSimulatedPosition(input, quantity, 'Broker execution disabled');
+    const correlatedOpenPositions = await this.countCorrelatedOpenPositions(input.userId, input.symbol);
+    const correlatedRisk = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      broker,
+      contractLabel: input.symbol,
+      correlatedOpenPositions,
+      maxCorrelatedPositions: riskState.maxCorrelatedPositions
+    });
+    if (!correlatedRisk.approved) {
+      return this.denyPreSubmitRisk(input, broker, correlatedRisk);
+    }
+
+    const accountRisk = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      broker,
+      contractLabel: this.contractLabel(input),
+      dailyRealizedPnl: riskState.dailyRealizedPnl,
+      maxDailyLoss: riskState.maxDailyLoss,
+      consecutiveLosses: riskState.consecutiveLosses,
+      maxConsecutiveLosses: riskState.maxConsecutiveLosses,
+      cooldownUntil: riskState.cooldownUntil,
+      premiumRisk: Math.max(0, Number(input.mark || 0) * quantity * 100),
+      maxPremiumRisk: riskState.maxPremiumRisk
+    });
+    if (!accountRisk.approved) {
+      return this.denyPreSubmitRisk(input, broker, accountRisk);
     }
 
     const currentTradeCount = await this.countTradesToday(input.userId);
@@ -175,6 +212,10 @@ export class TradeExecutionService {
     });
     if (!dailyLimitRisk.approved) {
       return this.denyPreSubmitRisk(input, broker, dailyLimitRisk);
+    }
+
+    if (broker === 'none' || broker === 'simulated') {
+      return this.createSimulatedPosition(input, quantity, broker === 'simulated' ? 'Shadow trading mode' : 'Broker execution disabled');
     }
 
     tradingEventBus.publish({
@@ -237,6 +278,7 @@ export class TradeExecutionService {
   }
 
   private resolveBroker(settings: ExecutionSettings): ExecutionBroker {
+    if (settings.shadow_trading_enabled === 'true') return 'simulated';
     const configured = settings.execution_broker as ExecutionBroker | undefined;
     if (configured === 'wealthsimple_snaptrade' && settings.snaptrade_auto_trade === 'true') return 'wealthsimple_snaptrade';
 
@@ -246,6 +288,12 @@ export class TradeExecutionService {
 
   private parsePositiveInt(value: string | undefined, fallback: number, max: number): number {
     const parsed = parseInt(value || '', 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+    return Math.min(parsed, max);
+  }
+
+  private parsePositiveNumber(value: string | undefined, fallback: number, max: number): number {
+    const parsed = Number(value || '');
     if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
     return Math.min(parsed, max);
   }
@@ -313,6 +361,67 @@ export class TradeExecutionService {
            OR execution_broker IN ('alpaca_paper', 'wealthsimple_snaptrade', 'simulated')
          )`,
       [userId]
+    );
+    return Number(rows[0]?.count || 0);
+  }
+
+  private async getRiskState(userId: number, settings: ExecutionSettings) {
+    const maxDailyLoss = this.parsePositiveNumber(settings.max_daily_loss_dollars, 200, 1_000_000);
+    const maxConsecutiveLosses = this.parsePositiveInt(settings.max_consecutive_losses, 3, 100);
+    const lossCooldownMinutes = this.parsePositiveInt(settings.loss_cooldown_minutes, 30, 24 * 60);
+    const maxPremiumRisk = this.parsePositiveNumber(settings.max_premium_risk_dollars, 500, 1_000_000);
+    const maxCorrelatedPositions = this.parsePositiveInt(settings.max_correlated_positions, 1, 20);
+    const { rows: pnlRows } = await this.fastify.pg.query(
+      `SELECT COALESCE(SUM(realized_pnl), 0)::numeric AS daily_pnl
+       FROM positions
+       WHERE user_id = $1
+         AND status = 'CLOSED'
+         AND updated_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'`,
+      [userId]
+    );
+    const { rows: recentRows } = await this.fastify.pg.query(
+      `SELECT realized_pnl, updated_at
+       FROM positions
+       WHERE user_id = $1 AND status = 'CLOSED' AND realized_pnl IS NOT NULL
+       ORDER BY updated_at DESC
+       LIMIT 50`,
+      [userId]
+    );
+    let consecutiveLosses = 0;
+    let lastLossAt: string | null = null;
+    for (const row of recentRows || []) {
+      if (Number(row.realized_pnl) < 0) {
+        consecutiveLosses += 1;
+        if (!lastLossAt) lastLossAt = row.updated_at;
+      } else {
+        break;
+      }
+    }
+    const cooldownUntil = consecutiveLosses >= maxConsecutiveLosses && lastLossAt
+      ? new Date(new Date(lastLossAt).getTime() + lossCooldownMinutes * 60_000).toISOString()
+      : null;
+    return {
+      dailyRealizedPnl: Number(pnlRows[0]?.daily_pnl || 0),
+      maxDailyLoss,
+      consecutiveLosses,
+      maxConsecutiveLosses,
+      cooldownUntil,
+      maxPremiumRisk,
+      maxCorrelatedPositions
+    };
+  }
+
+  private async countCorrelatedOpenPositions(userId: number, symbol: string): Promise<number> {
+    const normalized = String(symbol || '').toUpperCase();
+    const correlatedSymbols = ['SPY', 'QQQ'].includes(normalized) ? ['SPY', 'QQQ'] : [normalized];
+    const { rows } = await this.fastify.pg.query(
+      `SELECT COUNT(*)::int AS count
+       FROM positions
+       WHERE user_id = $1
+         AND symbol = ANY($2::text[])
+         AND status IN ('OPEN', 'PENDING_ORDER')
+         AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')`,
+      [userId, correlatedSymbols]
     );
     return Number(rows[0]?.count || 0);
   }
@@ -661,6 +770,19 @@ export class TradeExecutionService {
         entryQuoteValidation = validatedQuote;
         limitPrice = validatedQuote.protectedLimit.toFixed(2);
         orderType = 'LIMIT';
+        const maxPremiumRisk = this.parsePositiveNumber(settings.max_premium_risk_dollars, 500, 1_000_000);
+        const premiumRisk = validatedQuote.quote.mark * quantity * 100;
+        const premiumRiskAssessment = RiskDecisionService.evaluatePreSubmit({
+          signalId: input.signalId,
+          broker: 'wealthsimple_snaptrade',
+          side: input.winningSide,
+          contractLabel: this.contractLabel(input),
+          premiumRisk,
+          maxPremiumRisk
+        });
+        if (!premiumRiskAssessment.approved) {
+          return this.denyPreSubmitRisk(input, 'wealthsimple_snaptrade', premiumRiskAssessment);
+        }
       } catch (err: any) {
         const message = err.message || String(err);
         if (err.riskAssessment) {

@@ -266,6 +266,10 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
     execution_status: 'PENDING'
   });
   const dailyLimit = RiskDecisionService.forDailyTradeLimit(3, 3);
+  const dailyLoss = RiskDecisionService.forDailyLossLimit(-250, 200);
+  const cooldown = RiskDecisionService.forConsecutiveLosses(3, 3, new Date(Date.now() + 60_000).toISOString());
+  const premiumRisk = RiskDecisionService.forPremiumRisk(600, 500);
+  const correlated = RiskDecisionService.forCorrelatedExposure(1, 1, 'SPY/QQQ');
   const executionRealism = RiskDecisionService.forExecutionRealism({
     decision: {
       grade: {
@@ -367,6 +371,10 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(grade.allowed === false && grade.code === 'SETUP_GRADE_NOT_EXECUTABLE', 'Should block non-executable setup grade');
   assert(duplicate.allowed === false && duplicate.metadata?.duplicatePositionId === 679, 'Should block duplicate open entry with metadata');
   assert(dailyLimit.allowed === false && dailyLimit.code === 'DAILY_TRADE_LIMIT', 'Should block daily trade limit');
+  assert(dailyLoss.allowed === false && dailyLoss.code === 'DAILY_LOSS_LIMIT', 'Should block daily loss limit');
+  assert(cooldown.allowed === false && cooldown.code === 'CONSECUTIVE_LOSS_COOLDOWN', 'Should block consecutive-loss cooldown');
+  assert(premiumRisk.allowed === false && premiumRisk.code === 'PREMIUM_RISK_LIMIT', 'Should block premium risk limit');
+  assert(correlated.allowed === false && correlated.code === 'CORRELATED_EXPOSURE_LIMIT', 'Should block correlated exposure');
   assert(executionRealism.allowed === false && executionRealism.code === 'EXECUTION_REALISM_TOO_LOW', 'Should block low execution realism');
   assert(theoretical.allowed === false && theoretical.code === 'THEORETICAL_PRICING', 'Should block theoretical pricing');
   assert(liveAck.denials[0]?.code === 'LIVE_TRADING_NOT_ACKNOWLEDGED', 'Should block missing live acknowledgement');
@@ -380,6 +388,11 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(RiskDecisionService.forSetupGrade(42, 'A+ / FULL').allowed === true, 'Should allow A+ setup grade');
   assert(RiskDecisionService.forDailyTradeLimit(2, 3).allowed === true, 'Should allow under daily trade limit');
   assert(RiskDecisionService.forExecutionRealism({ decision: { grade: { executionRealism: { score: 80, executable: true, threshold: 70 } } } }).allowed === true, 'Should allow sufficient execution realism');
+}
+
+async function testShadowModeNeverResolvesToLiveBroker() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  assert(service.resolveBroker({ shadow_trading_enabled: 'true', snaptrade_auto_trade: 'true', execution_broker: 'wealthsimple_snaptrade' }) === 'simulated', 'Shadow mode should override live broker resolution');
 }
 
 async function testPreSubmitRiskDenialSkipsBeforeBrokerPath() {
@@ -480,6 +493,7 @@ async function runTests() {
   await testLiveExecutionSkipsLowExecutionRealismSignal();
   await testTheoreticalPricingDetectionCoversStoredShapes();
   await testRiskDecisionServiceCentralizesPreTradeBlocks();
+  await testShadowModeNeverResolvesToLiveBroker();
   await testPreSubmitRiskDenialSkipsBeforeBrokerPath();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   console.log('All TradeExecutionService broker lifecycle tests passed!');

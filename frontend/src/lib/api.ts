@@ -96,6 +96,10 @@ export interface Position {
   gamma?: number;
   vega?: number;
   iv?: number;
+  max_favorable_price?: number;
+  max_adverse_price?: number;
+  mfe_pct?: number;
+  mae_pct?: number;
 
   underlying_price?: number;
   analyzed_support?: number;
@@ -209,6 +213,8 @@ export interface TradeCommandCenterResponse {
     stopLoss: number | null;
     takeProfit: number | null;
     estimatedMaxLoss: number | null;
+    mfePct: number | null;
+    maePct: number | null;
     trim: {
       status: string | null;
       quantity: number | null;
@@ -1216,6 +1222,15 @@ export const api = {
       matchedUpdates: number;
       lastQuoteAt: string | null;
       lastMatchedAt: string | null;
+      lastError: string | null;
+    };
+    optionHistoryCapture?: AdapterHealth & {
+      status: string;
+      capturedQuotes: number;
+      persistedQuotes: number;
+      pendingQuotes: number;
+      lastCapturedAt: string | null;
+      lastPersistedAt: string | null;
       lastError: string | null;
     };
     streams: {
