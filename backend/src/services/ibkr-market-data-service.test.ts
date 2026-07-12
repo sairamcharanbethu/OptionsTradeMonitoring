@@ -1,6 +1,7 @@
 import '@fastify/postgres';
 import { EventEmitter } from 'events';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
+import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -78,6 +79,25 @@ async function testMissingBidAskIsNonExecutableState() {
   assert(quote.spreadPct === null, 'Missing bid/ask should not invent spread pct');
 }
 
+async function testIndexContractUsesCboeIndexSecurityType() {
+  const service = new IbkrMarketDataService(createFastifyMock());
+  const contract = (service as any).indexContract('vix3m', 'CBOE');
+
+  assert(contract.symbol === 'VIX3M', `Expected uppercase index symbol, got ${contract.symbol}`);
+  assert(contract.secType === 'IND', `Expected IBKR index security type, got ${contract.secType}`);
+  assert(contract.exchange === 'CBOE', `Expected CBOE exchange, got ${contract.exchange}`);
+}
+
+async function testPaperModeResolvesPaperPortForHealthChecks() {
+  const pg = {
+    query: async () => ({ rows: [{ key: 'ibkr_gateway_mode', value: 'paper' }] })
+  };
+  const config = await getIbkrGatewayConfig(pg);
+
+  assert(config.mode === 'paper', `Expected paper mode, got ${config.mode}`);
+  assert(config.port === 4004, `Expected paper port 4004, got ${config.port}`);
+}
+
 async function testNoTickSnapshotResetsSharedConnection() {
   const service = new IbkrMarketDataService(createFastifyMock());
   const fakeIb = new EventEmitter() as any;
@@ -108,6 +128,8 @@ async function runTests() {
   await testOsiTickerParsing();
   await testQuoteNormalization();
   await testMissingBidAskIsNonExecutableState();
+  await testIndexContractUsesCboeIndexSecurityType();
+  await testPaperModeResolvesPaperPortForHealthChecks();
   await testNoTickSnapshotResetsSharedConnection();
   console.log('All IbkrMarketDataService normalization tests passed!');
 }

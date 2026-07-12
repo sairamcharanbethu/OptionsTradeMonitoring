@@ -260,21 +260,23 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
     });
 
     const ibkr = services.marketData?.ibkr;
+    const ibkrPort = ibkr?.port || (ibkr?.mode === 'paper' ? 4004 : 4003);
+    const ibkrMode = ibkr?.mode || (ibkrPort === 4004 ? 'paper' : 'live');
     items.push({
       id: 'market:ibkr',
       area: 'Market Data',
       title: 'IBKR Gateway',
       status: ibkr?.status || 'N/A',
       severity: ibkr?.lastError ? 'critical' : severityForStatus(ibkr?.status),
-      endpoint: `${ibkr?.host || 'ib_gateway'}:${ibkr?.port || 4003}`,
+      endpoint: `${ibkr?.host || 'ib_gateway'}:${ibkrPort}`,
       latencyMs: ibkr?.latencyMs ?? null,
       freshnessMs: ibkr?.freshnessMs ?? null,
       lastSeen: adapterLastSeen(ibkr, services.generatedAt),
       evidence: ibkr?.degradedReason || ibkr?.lastError || null,
-      cause: statusSummary(ibkr?.status, ibkr?.degradedReason || ibkr?.lastError, 'IBKR Gateway is not reachable or live market data is unavailable.'),
+      cause: statusSummary(ibkr?.status, ibkr?.degradedReason || ibkr?.lastError, `IBKR ${ibkrMode} Gateway is not reachable or market data is unavailable.`),
       nextStep: isHealthyStatus(ibkr?.status)
-        ? 'No action needed. IBKR live market data is reachable.'
-        : 'Verify IB Gateway is logged in live mode, port 4003 is reachable, and live data subscriptions are active.',
+        ? `No action needed. IBKR ${ibkrMode} market data is reachable on port ${ibkrPort}.`
+        : `Verify IB Gateway is logged in ${ibkrMode} mode, port ${ibkrPort} is reachable, and market-data subscriptions are active.`,
       actionCommand: 'Run the IBKR TypeScript smoke test from the backend container.'
     });
 

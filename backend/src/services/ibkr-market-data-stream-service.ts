@@ -38,6 +38,7 @@ export class IbkrMarketDataStreamService extends EventEmitter {
   private nextRequestId = Number(process.env.IBKR_STREAM_REQUEST_ID_START || 80_000);
   private host = process.env.IBKR_HOST || 'ib_gateway';
   private port = Number(process.env.IBKR_PORT || 4003);
+  private mode: 'live' | 'paper' = String(process.env.IBKR_GATEWAY_MODE || '').toLowerCase() === 'paper' ? 'paper' : 'live';
   private readonly clientId = Number(process.env.IBKR_CLIENT_ID_STREAM || 22);
   private marketDataType = Number(process.env.IBKR_MARKET_DATA_TYPE || 1);
   private connectionKey: string | null = null;
@@ -107,6 +108,7 @@ export class IbkrMarketDataStreamService extends EventEmitter {
       status: this.isConnected ? 'UP' : 'DEGRADED',
       connected: this.isConnected,
       provider: 'ibkr',
+      mode: this.mode,
       host: this.host,
       port: this.port,
       marketDataType: this.marketDataType,
@@ -197,6 +199,7 @@ export class IbkrMarketDataStreamService extends EventEmitter {
     const config = await getIbkrGatewayConfig((this.fastify as any).pg);
     this.host = config.host;
     this.port = config.port;
+    this.mode = config.mode;
     this.marketDataType = config.marketDataType;
     return config.key;
   }

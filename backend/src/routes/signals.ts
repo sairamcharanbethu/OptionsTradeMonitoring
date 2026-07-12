@@ -216,6 +216,8 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
             generatedAt: { type: 'string', format: 'date-time' },
             vixQuote: { type: 'number', nullable: true },
             vixChangePercent: { type: 'number', nullable: true },
+            vix3mQuote: { type: 'number', nullable: true },
+            vixTermStructure: { type: 'object', nullable: true, additionalProperties: true },
             tenYearYield: { type: 'number', nullable: true },
             tenYearChangePercent: { type: 'number', nullable: true },
             tenYearChangeBps: { type: 'number', nullable: true },

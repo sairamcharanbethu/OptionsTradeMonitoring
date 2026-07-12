@@ -39,6 +39,23 @@ function macroSnapshot(overrides: Record<string, any>) {
   };
 }
 
+async function testVixTermStructureRequiresContango() {
+  const scanner = createScanner();
+
+  const strongContango = scanner.assessVixTermStructure(20, 22, 1.05);
+  assert(strongContango.status === 'STRONG_CONTANGO', `Expected strong contango, got ${strongContango.status}`);
+  assert(strongContango.ratio === 1.1, `Expected ratio 1.1, got ${strongContango.ratio}`);
+  assert(strongContango.blocker === null, 'Strong contango should not block entries');
+
+  const neutral = scanner.assessVixTermStructure(20, 20.4, 1.05);
+  assert(neutral.status === 'NEUTRAL', `Expected neutral term structure, got ${neutral.status}`);
+  assert(Boolean(neutral.blocker), 'Neutral term structure should block entries');
+
+  const unavailable = scanner.assessVixTermStructure(20, null, 1.05);
+  assert(unavailable.status === 'UNAVAILABLE', `Expected unavailable term structure, got ${unavailable.status}`);
+  assert(Boolean(unavailable.blocker), 'Unavailable term structure should block entries');
+}
+
 async function testIBKRMissingVolumeDoesNotRejectLiquidCandidate() {
   const scanner = createScanner();
 
@@ -1617,6 +1634,7 @@ async function testBlockedDecisionSnapshotCapturesBlockersAndNoOptionSelection()
 
 async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
+  await testVixTermStructureRequiresContango();
   await testIBKRMissingVolumeDoesNotRejectLiquidCandidate();
   await testIBKRKnownLowVolumeStillRejectsCandidate();
   await testIBKRStrongVolumeOffsetsMissingOpenInterest();

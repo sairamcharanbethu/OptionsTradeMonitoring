@@ -25,6 +25,7 @@ import { adminRoutes } from './routes/admin';
 import { snaptradeRoutes } from './routes/snaptrade';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { normalizeAdapterHealth } from './lib/adapter-health';
+import { getIbkrGatewayConfig } from './lib/ibkr-config';
 
 function loadEnvFile(filePath: string) {
   if (!fs.existsSync(filePath)) return;
@@ -726,6 +727,11 @@ const start = async () => {
     fastify.get('/api/services/health', { preHandler: fastify.authenticate }, async (request) => {
       const { id: userId } = (request as any).user;
       const generatedAt = new Date().toISOString();
+      const resolvedIbkrConfig = await getIbkrGatewayConfig((fastify as any).pg).catch(() => ({
+        mode: String(process.env.IBKR_GATEWAY_MODE || '').toLowerCase() === 'paper' ? 'paper' : 'live',
+        host: process.env.IBKR_HOST || 'ib_gateway',
+        port: Number(process.env.IBKR_PORT || 4003)
+      }));
       const alpacaHealth = alpacaMarketDataStreamer.getHealth();
       const ibkrStreamHealth = ibkrMarketDataStreamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
@@ -736,8 +742,9 @@ const start = async () => {
             status: 'DOWN',
             connected: false,
             provider: 'ibkr',
-            host: process.env.IBKR_HOST || 'ib_gateway',
-            port: Number(process.env.IBKR_PORT || 4003),
+            mode: resolvedIbkrConfig.mode,
+            host: resolvedIbkrConfig.host,
+            port: resolvedIbkrConfig.port,
             latencyMs: null,
             lastError: err.message || String(err)
           })),
@@ -746,8 +753,9 @@ const start = async () => {
             status: 'DOWN',
             connected: false,
             provider: 'ibkr',
-            host: process.env.IBKR_HOST || 'ib_gateway',
-            port: Number(process.env.IBKR_PORT || 4003),
+            mode: resolvedIbkrConfig.mode,
+            host: resolvedIbkrConfig.host,
+            port: resolvedIbkrConfig.port,
             latencyMs: null,
             lastError: 'IBKR health check timed out'
           })

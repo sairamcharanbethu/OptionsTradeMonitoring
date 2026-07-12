@@ -15,6 +15,7 @@ import { IbkrMarketDataService, IbkrOptionChainQuote } from './ibkr-market-data-
 import { SignalDecision, SignalGradeDiagnostics, tradingEventBus } from '../lib/trading-events';
 import { normalizeAdapterHealth } from '../lib/adapter-health';
 import { getNewYorkMarketState } from '../lib/market-calendar';
+import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 
@@ -255,6 +256,7 @@ type MacroRegimeAssessment = {
   contributors: string[];
   assets: {
     vix: MacroAssetSnapshot;
+    vix3m?: MacroAssetSnapshot;
     tenYear: MacroAssetSnapshot;
     dxy: MacroAssetSnapshot;
     oil: MacroAssetSnapshot;
@@ -266,6 +268,15 @@ export type LiveMacroSnapshot = {
   generatedAt: string;
   vixQuote: number | null;
   vixChangePercent: number | null;
+  vix3mQuote: number | null;
+  vixTermStructure: {
+    vix: number | null;
+    vix3m: number | null;
+    ratio: number | null;
+    minimumRatio: number;
+    status: 'STRONG_CONTANGO' | 'CONTANGO' | 'NEUTRAL' | 'BACKWARDATION' | 'UNAVAILABLE';
+    blocker: string | null;
+  };
   tenYearYield: number | null;
   tenYearChangePercent: number | null;
   tenYearChangeBps: number | null;
@@ -274,6 +285,7 @@ export type LiveMacroSnapshot = {
   gold: MacroAssetSnapshot;
   assets: {
     vix: MacroAssetSnapshot;
+    vix3m: MacroAssetSnapshot;
     tenYear: MacroAssetSnapshot;
     dxy: MacroAssetSnapshot;
     oil: MacroAssetSnapshot;
@@ -1155,7 +1167,7 @@ Rules:
     const tenYearChangeBps = macroSnapshot.tenYearChangeBps;
 
     if (vixPrice === null) {
-      noTradeReasons.push('VIX data unavailable from Yahoo response');
+      noTradeReasons.push('VIX data unavailable from IBKR response');
     }
 
     const hasBullishInternals = bullishInternals >= 2;
@@ -1239,6 +1251,7 @@ Rules:
       winningSide,
       currentMinutes,
       vix: vixSnapshot,
+      vix3m: macroSnapshot.assets.vix3m,
       tenYear: tenYearSnapshot,
       dxy: dxySnapshot,
       oil: oilSnapshot,
@@ -1395,6 +1408,8 @@ Rules:
     const macroSnapshotPayload = {
       vixQuote: vixPrice,
       vixChangePercent: vixChangePct,
+      vix3mQuote: macroSnapshot.vix3mQuote,
+      vixTermStructure: macroSnapshot.vixTermStructure,
       tenYearYield,
       tenYearChangePercent: tenYearChangePct,
       tenYearChangeBps,
@@ -3068,6 +3083,62 @@ Rules:
     });
   }
 
+  private async fetchIbkrIndexMacroSnapshot(symbol: string, label: string): Promise<MacroAssetSnapshot> {
+    try {
+      const quote = await new IbkrMarketDataService(this.fastify).getIndexQuote(symbol);
+      return this.buildMacroSnapshot({
+        symbol,
+        label,
+        value: quote.mark,
+        previousClose: quote.close > 0 ? quote.close : null,
+        source: 'ibkr'
+      });
+    } catch (err: any) {
+      const error = err.message || String(err);
+      this.fastify.log.warn(`[SignalScannerService] Failed to fetch macro ${label} from IBKR: ${error}`);
+      return this.buildMacroSnapshot({
+        symbol,
+        label,
+        value: null,
+        previousClose: null,
+        source: 'ibkr',
+        error
+      });
+    }
+  }
+
+  public assessVixTermStructure(vix: number | null, vix3m: number | null, minimumRatio = 1.05) {
+    const ratio = vix !== null && vix > 0 && vix3m !== null && vix3m > 0
+      ? Number((vix3m / vix).toFixed(4))
+      : null;
+    const safeMinimumRatio = Number.isFinite(minimumRatio) && minimumRatio > 0 ? minimumRatio : 1.05;
+    let status: 'STRONG_CONTANGO' | 'CONTANGO' | 'NEUTRAL' | 'BACKWARDATION' | 'UNAVAILABLE' = 'UNAVAILABLE';
+    let blocker: string | null = null;
+
+    if (ratio === null) {
+      blocker = 'VIX term structure unavailable — VIX/VIX3M data required before new entries';
+    } else if (ratio >= 1.1) {
+      status = 'STRONG_CONTANGO';
+    } else if (ratio >= safeMinimumRatio) {
+      status = 'CONTANGO';
+    } else if (ratio < 1) {
+      status = 'BACKWARDATION';
+      blocker = `VIX term structure is backwardated (${ratio.toFixed(2)}); minimum contango ratio is ${safeMinimumRatio.toFixed(2)}`;
+    } else {
+      status = 'NEUTRAL';
+      blocker = `VIX term structure is neutral (${ratio.toFixed(2)}); minimum contango ratio is ${safeMinimumRatio.toFixed(2)}`;
+    }
+
+    return {
+      vix,
+      vix3m,
+      ratio,
+      minimumRatio: safeMinimumRatio,
+      status,
+      blocker
+    };
+  }
+
   public async getCurrentMacroSnapshot(options: {
     forceRefresh?: boolean;
     currentMinutes?: number;
@@ -3079,8 +3150,9 @@ Rules:
       return this.liveMacroSnapshot;
     }
 
-    const [vixSnapshot, rawTenYearSnapshot, dxySnapshot, oilSnapshot, goldSnapshot] = await Promise.all([
-      this.fetchYahooMacroSnapshot('^VIX', 'VIX'),
+    const [vixSnapshot, vix3mSnapshot, rawTenYearSnapshot, dxySnapshot, oilSnapshot, goldSnapshot] = await Promise.all([
+      this.fetchIbkrIndexMacroSnapshot('VIX', 'VIX'),
+      this.fetchIbkrIndexMacroSnapshot('VIX3M', 'VIX3M'),
       this.fetchYahooMacroSnapshot('^TNX', 'US 10Y'),
       this.fetchYahooMacroSnapshot(['DX-Y.NYB', 'UUP'], 'DXY'),
       this.fetchYahooMacroSnapshot('CL=F', 'Oil'),
@@ -3094,8 +3166,14 @@ Rules:
       changeBps: tenYearChangeBps
     };
     const currentMinutes = options.currentMinutes ?? this.getNyDateParts(options.now || new Date()).minutes;
+    const vixTermStructure = this.assessVixTermStructure(
+      vixSnapshot.value,
+      vix3mSnapshot.value,
+      Number(process.env.VIX_TERM_STRUCTURE_MIN_RATIO || 1.05)
+    );
     const assets = {
       vix: vixSnapshot,
+      vix3m: vix3mSnapshot,
       tenYear: tenYearSnapshot,
       dxy: dxySnapshot,
       oil: oilSnapshot,
@@ -3105,6 +3183,8 @@ Rules:
       generatedAt: (options.now || new Date()).toISOString(),
       vixQuote: vixSnapshot.value,
       vixChangePercent: vixSnapshot.changePct,
+      vix3mQuote: vix3mSnapshot.value,
+      vixTermStructure,
       tenYearYield: tenYearSnapshot.value,
       tenYearChangePercent: tenYearSnapshot.changePct,
       tenYearChangeBps,
@@ -3127,15 +3207,28 @@ Rules:
     winningSide: 'CALL' | 'PUT';
     currentMinutes: number;
     vix: MacroAssetSnapshot;
+    vix3m?: MacroAssetSnapshot;
     tenYear: MacroAssetSnapshot;
     dxy: MacroAssetSnapshot;
     oil: MacroAssetSnapshot;
     gold: MacroAssetSnapshot;
   }): MacroRegimeAssessment {
-    const { winningSide, currentMinutes, vix, tenYear, dxy, oil, gold } = input;
+    const { winningSide, currentMinutes, vix, vix3m, tenYear, dxy, oil, gold } = input;
     const blockers: string[] = [];
     const warnings: string[] = [];
     const contributors: string[] = [];
+    if (vix3m !== undefined) {
+      const vixTermStructure = this.assessVixTermStructure(
+        vix.value,
+        vix3m.value,
+        Number(process.env.VIX_TERM_STRUCTURE_MIN_RATIO || 1.05)
+      );
+      if (vixTermStructure.blocker) {
+        blockers.push(vixTermStructure.blocker);
+      } else {
+        contributors.push(`${vixTermStructure.status === 'STRONG_CONTANGO' ? 'Strong ' : ''}VIX contango ${vixTermStructure.ratio?.toFixed(2)} supports directional entries`);
+      }
+    }
     let score = 50;
     let rawAdjustment = 0;
 
@@ -3260,7 +3353,7 @@ Rules:
       blockers,
       warnings,
       contributors,
-      assets: { vix, tenYear, dxy, oil, gold }
+      assets: { vix, vix3m, tenYear, dxy, oil, gold }
     };
   }
 
@@ -4495,11 +4588,12 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       });
     }, !!settings.sscgex_password, 'https://sscgex.up.railway.app/api/gex/QQQ?strikes=10', 'sscgexPortal');
 
+    const ibkrConfig = await getIbkrGatewayConfig(this.fastify.pg);
     const ibkrCheck = checkLatency(async () => {
       const ibkr = new IbkrMarketDataService(this.fastify);
       const health = await ibkr.getHealth();
       if (!health.connected) throw new Error(health.lastError || 'IBKR unavailable');
-    }, true, `${process.env.IBKR_HOST || 'ib_gateway'}:${process.env.IBKR_PORT || 4003}`, 'ibkr');
+    }, true, `${ibkrConfig.host}:${ibkrConfig.port}`, 'ibkr');
 
     const openrouterCheck = checkLatency(async () => {
       const aiSettings = await this.aiService.getSettings(targetUserId);

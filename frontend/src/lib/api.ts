@@ -1153,6 +1153,7 @@ export const api = {
         status: string;
         connected: boolean;
         provider: string;
+        mode?: 'live' | 'paper';
         host?: string;
         port?: number;
         marketDataType?: number;
@@ -1167,6 +1168,7 @@ export const api = {
         status: string;
         connected: boolean;
         provider: string;
+        mode?: 'live' | 'paper';
         host?: string;
         port?: number;
         marketDataType?: number;

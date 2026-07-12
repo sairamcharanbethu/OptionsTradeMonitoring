@@ -26,6 +26,18 @@ export type IbkrOptionQuote = {
   raw: any;
 };
 
+export type IbkrIndexQuote = {
+  source: 'ibkr';
+  ticker: string;
+  bid: number;
+  ask: number;
+  last: number;
+  close: number;
+  mark: number;
+  timestamp: string | null;
+  raw: any;
+};
+
 export type IbkrOptionChainQuote = {
   source: 'ibkr_chain';
   ticker: string;
@@ -71,6 +83,7 @@ export class IbkrMarketDataService {
 
   private host = process.env.IBKR_HOST || 'ib_gateway';
   private port = Number(process.env.IBKR_PORT || 4003);
+  private mode: 'live' | 'paper' = String(process.env.IBKR_GATEWAY_MODE || '').toLowerCase() === 'paper' ? 'paper' : 'live';
   private readonly clientId = Number(process.env.IBKR_CLIENT_ID_MARKET_DATA || process.env.IBKR_CLIENT_ID || 21);
   private marketDataType = Number(process.env.IBKR_MARKET_DATA_TYPE || 1);
   private readonly requestTimeoutMs = Number(process.env.IBKR_REQUEST_TIMEOUT_MS || 12_000);
@@ -90,6 +103,7 @@ export class IbkrMarketDataService {
     const config = await getIbkrGatewayConfig((this.fastify as any).pg);
     this.host = config.host;
     this.port = config.port;
+    this.mode = config.mode;
     this.marketDataType = config.marketDataType;
     return config.key;
   }
@@ -104,6 +118,7 @@ export class IbkrMarketDataService {
           status: 'MARKET_CLOSED',
           connected: true,
           provider: 'ibkr',
+          mode: this.mode,
           host: this.host,
           port: this.port,
           marketDataType: this.marketDataType,
@@ -118,6 +133,7 @@ export class IbkrMarketDataService {
         status: connected ? 'UP' : 'DEGRADED',
         connected,
         provider: 'ibkr',
+        mode: this.mode,
         host: this.host,
         port: this.port,
         marketDataType: this.marketDataType,
@@ -130,6 +146,7 @@ export class IbkrMarketDataService {
         status: 'DOWN',
         connected: false,
         provider: 'ibkr',
+        mode: this.mode,
         host: this.host,
         port: this.port,
         marketDataType: this.marketDataType,
@@ -154,6 +171,36 @@ export class IbkrMarketDataService {
       throw new Error(`IBKR returned no usable ${symbol.toUpperCase()} quote`);
     }
     return normalized;
+  }
+
+  public async getIndexQuote(symbol: string, exchange = 'CBOE'): Promise<IbkrIndexQuote> {
+    const normalizedSymbol = symbol.toUpperCase();
+    const snapshot = await this.requestMarketData(
+      this.indexContract(normalizedSymbol, exchange),
+      '',
+      this.snapshotWaitMs,
+      `index ${normalizedSymbol}`
+    );
+    const bid = this.positiveNumber(snapshot.bid) || 0;
+    const ask = this.positiveNumber(snapshot.ask) || 0;
+    const last = this.positiveNumber(snapshot.last) || 0;
+    const close = this.positiveNumber(snapshot.close) || 0;
+    const mid = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
+    const mark = last || mid || close;
+    if (mark <= 0) {
+      throw new Error(`IBKR returned no usable ${normalizedSymbol} index quote`);
+    }
+    return {
+      source: 'ibkr',
+      ticker: normalizedSymbol,
+      bid,
+      ask,
+      last,
+      close,
+      mark,
+      timestamp: snapshot.timestamp || null,
+      raw: snapshot
+    };
   }
 
   public async getHistoricalBars(symbol: string, durationStr = '5 D', barSize = '5 mins'): Promise<IbkrHistoricalBar[]> {
@@ -607,6 +654,15 @@ export class IbkrMarketDataService {
       symbol: symbol.toUpperCase(),
       secType: SecType.STK,
       exchange: 'SMART',
+      currency: 'USD'
+    };
+  }
+
+  private indexContract(symbol: string, exchange: string) {
+    return {
+      symbol: symbol.toUpperCase(),
+      secType: SecType.IND,
+      exchange,
       currency: 'USD'
     };
   }
