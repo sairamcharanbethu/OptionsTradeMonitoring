@@ -550,18 +550,21 @@ export class IbkrMarketDataService {
         [EventName.tickPrice, (id: number, field: number, price: number) => {
           if (id !== reqId) return;
           receivedTick = true;
+          snapshot.timestamp = new Date().toISOString();
           const name = this.tickPriceFieldName(field);
           if (name) snapshot[name] = price;
         }],
         [EventName.tickSize, (id: number, field: number, size: number) => {
           if (id !== reqId) return;
           receivedTick = true;
+          snapshot.timestamp = new Date().toISOString();
           if (field === 8) snapshot.volume = size;
           if (field === 27 || field === 28) snapshot.openInterest = size;
         }],
         [EventName.tickOptionComputation, (id: number, _tickType: number, _tickAttrib: any, impliedVolatility: number, delta: number, _optPrice: number, _pvDividend: number, gamma: number, vega: number, theta: number) => {
           if (id !== reqId) return;
           receivedTick = true;
+          snapshot.timestamp = new Date().toISOString();
           if (Number.isFinite(impliedVolatility) && impliedVolatility > 0) snapshot.impliedVolatility = impliedVolatility;
           if (Number.isFinite(delta) && Math.abs(delta) <= 1) snapshot.delta = delta;
           if (Number.isFinite(gamma)) snapshot.gamma = gamma;

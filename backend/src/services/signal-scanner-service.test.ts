@@ -815,6 +815,54 @@ async function testLiveEntryRequiresIbkrCandleSource() {
   assert(blocker.includes('yahoo'), `Expected fallback source in blocker, got ${blocker}`);
 }
 
+async function testDirectionalDecisionRequiresMeaningfulEdge() {
+  const scanner = createScanner();
+
+  const tied = scanner.getDirectionalDecision(40, 40);
+  assert(tied.side === 'NONE', `Expected tied scores to produce NONE, got ${tied.side}`);
+  assert(tied.leader === 'PUT', `Expected deterministic diagnostic leader PUT on an exact tie, got ${tied.leader}`);
+  assert(tied.hasEdge === false, 'Exact tie should not have directional edge');
+
+  const clearCall = scanner.getDirectionalDecision(46, 40);
+  assert(clearCall.side === 'CALL', `Expected CALL for a six-point edge, got ${clearCall.side}`);
+  assert(clearCall.edge === 6, `Expected six-point edge, got ${clearCall.edge}`);
+  assert(clearCall.hasEdge === true, 'Six-point edge should be actionable for directional evaluation');
+}
+
+async function testClosedMarketUsesOneAuthoritativeBlocker() {
+  const scanner = createScanner();
+  const settings = { trading_start_time: '09:30', trading_cutoff_time: '16:00' };
+
+  assert(scanner.getMarketPhaseBlocker('PRE_MARKET', settings) === 'Before trade start time 09:30 ET', 'Pre-market blocker should identify the configured start time');
+  assert(scanner.getMarketPhaseBlocker('AFTER_CUTOFF', settings) === 'After trade cutoff 16:00 ET', 'After-cutoff blocker should identify the configured cutoff');
+  assert(scanner.getMarketPhaseBlocker('CLOSED', settings)?.startsWith('Market closed') === true, 'Closed-market blocker should be explicit');
+  assert(scanner.getMarketPhaseBlocker('OPEN', settings) === null, 'Open market should not have a market-phase blocker');
+}
+
+async function testLiveUnderlyingQuoteMustBeFreshAndTimestamped() {
+  const scanner = createScanner();
+  const freshQuote = {
+    source: 'ibkr',
+    ticker: 'SPY',
+    bid: 754.8,
+    ask: 754.9,
+    last: 754.85,
+    mid: 754.85,
+    mark: 754.85,
+    spreadPct: 0.01,
+    quoteAgeMs: 1_000,
+    timestamp: new Date().toISOString(),
+    raw: {}
+  };
+  assert(scanner.getLiveUnderlyingQuoteBlocker('SPY', freshQuote) === null, 'Fresh IBKR underlying quote should pass');
+
+  const staleQuote = { ...freshQuote, quoteAgeMs: 6_000 };
+  assert(scanner.getLiveUnderlyingQuoteBlocker('SPY', staleQuote)?.includes('stale') === true, 'Stale underlying quote should block live use');
+
+  const untimestampedQuote = { ...freshQuote, timestamp: null, quoteAgeMs: null };
+  assert(scanner.getLiveUnderlyingQuoteBlocker('SPY', untimestampedQuote)?.includes('timestamp') === true, 'Untimestamped underlying quote should block live use');
+}
+
 async function testCompletedFiveMinuteCandleWithinCurrentWindowIsFresh() {
   const scanner = createScanner();
   const candle = {
@@ -1714,6 +1762,9 @@ async function runTests() {
   await testScannerCandlesFallbackToYahooWhenAlpacaFails();
   await testStaleScannerCandlesProduceBlocker();
   await testLiveEntryRequiresIbkrCandleSource();
+  await testDirectionalDecisionRequiresMeaningfulEdge();
+  await testClosedMarketUsesOneAuthoritativeBlocker();
+  await testLiveUnderlyingQuoteMustBeFreshAndTimestamped();
   await testCompletedFiveMinuteCandleWithinCurrentWindowIsFresh();
   await testScannerCycleContextUsesFixedClock();
   await testFixedClockDrivesExpiryAndAfternoonThreshold();

@@ -11,7 +11,7 @@ import fs from 'fs';
 import { TradeExecutionService } from './trade-execution-service';
 import { TradeRedisService } from './trade-redis-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
-import { IbkrMarketDataService, IbkrOptionChainQuote } from './ibkr-market-data-service';
+import { IbkrMarketDataService, IbkrOptionChainQuote, IbkrOptionQuote } from './ibkr-market-data-service';
 import { SignalDecision, SignalGradeDiagnostics, tradingEventBus } from '../lib/trading-events';
 import { normalizeAdapterHealth } from '../lib/adapter-health';
 import { getNewYorkMarketState } from '../lib/market-calendar';
@@ -674,6 +674,35 @@ Rules:
     return 'OPEN';
   }
 
+  private getDirectionalDecision(callScore: number, putScore: number, minimumEdge = 5): {
+    leader: 'CALL' | 'PUT';
+    side: 'CALL' | 'PUT' | 'NONE';
+    edge: number;
+    minimumEdge: number;
+    hasEdge: boolean;
+  } {
+    const safeCallScore = Number.isFinite(callScore) ? callScore : 0;
+    const safePutScore = Number.isFinite(putScore) ? putScore : 0;
+    const safeMinimumEdge = Number.isFinite(minimumEdge) && minimumEdge >= 0 ? minimumEdge : 5;
+    const leader: 'CALL' | 'PUT' = safeCallScore > safePutScore ? 'CALL' : 'PUT';
+    const edge = Math.abs(safeCallScore - safePutScore);
+    const hasEdge = edge >= safeMinimumEdge;
+    return {
+      leader,
+      side: hasEdge ? leader : 'NONE',
+      edge,
+      minimumEdge: safeMinimumEdge,
+      hasEdge
+    };
+  }
+
+  private getMarketPhaseBlocker(marketPhase: ScannerMarketPhase, settings: any): string | null {
+    if (marketPhase === 'PRE_MARKET') return `Before trade start time ${settings.trading_start_time} ET`;
+    if (marketPhase === 'AFTER_CUTOFF') return `After trade cutoff ${settings.trading_cutoff_time} ET`;
+    if (marketPhase === 'CLOSED') return 'Market closed — no live 0DTE entries outside regular trading hours';
+    return null;
+  }
+
   private buildScannerCycleContext(input: {
     userId: number;
     symbols: string[];
@@ -876,18 +905,12 @@ Rules:
     const nyParts = cycle.nyParts;
 
     // 1. Check Trading Window Blocker
-    const startMinutes = this.parseTimeToMinutes(settings.trading_start_time, '09:30');
-    const cutoffMinutes = this.parseTimeToMinutes(settings.trading_cutoff_time, '16:00');
     const currentMinutes = nyParts.minutes;
 
     const noTradeReasons: string[] = [];
 
-    if (currentMinutes < startMinutes) {
-      noTradeReasons.push(`Before trade start time ${settings.trading_start_time} ET`);
-    }
-    if (currentMinutes >= cutoffMinutes) {
-      noTradeReasons.push(`After trade cutoff ${settings.trading_cutoff_time} ET`);
-    }
+    const marketPhaseBlocker = this.getMarketPhaseBlocker(cycle.marketPhase, settings);
+    if (marketPhaseBlocker) noTradeReasons.push(marketPhaseBlocker);
 
     // 2. Fetch GEX regime token and details
     let gexData: any = null;
@@ -1024,7 +1047,31 @@ Rules:
     const previous = sessionCandles[sessionCandles.length - 2] || sortedCandles[sortedCandles.length - 2];
     const closes = rthCandles.map(c => c.close);
 
-    const currentPrice = latest.close;
+    let liveUnderlyingQuote: IbkrOptionQuote | null = null;
+    let liveUnderlyingQuoteBlocker: string | null = null;
+    if (cycle.marketPhase === 'OPEN') {
+      try {
+        const ibkr = new IbkrMarketDataService(this.fastify);
+        liveUnderlyingQuote = await this.timeScannerPhase(
+          cycle,
+          `${symbol}.underlyingQuote`,
+          async () => {
+            await ibkr.assertLiveMarketData();
+            return ibkr.getUnderlyingQuote(symbol);
+          }
+        );
+        liveUnderlyingQuoteBlocker = this.getLiveUnderlyingQuoteBlocker(symbol, liveUnderlyingQuote);
+      } catch (err: any) {
+        liveUnderlyingQuoteBlocker = `Live IBKR spot unavailable for ${symbol}: ${err.message || String(err)}`;
+        this.fastify.log.warn(`[SignalScannerService] ${liveUnderlyingQuoteBlocker}`);
+      }
+      if (liveUnderlyingQuoteBlocker) {
+        noTradeReasons.push(liveUnderlyingQuoteBlocker);
+      }
+    }
+
+    const liveUnderlyingQuoteUsable = liveUnderlyingQuote !== null && liveUnderlyingQuoteBlocker === null;
+    const currentPrice = liveUnderlyingQuoteUsable ? liveUnderlyingQuote!.mark : latest.close;
     const candleFreshnessMs = this.getCandleFreshnessMs(latest, now);
     const candleFreshnessBlocker = this.getCandleFreshnessBlocker({
       source: candleFetch.source,
@@ -1250,7 +1297,12 @@ Rules:
 
     const callScore = callScoreParts.reduce((sum, item) => sum + item.points, 0);
     const putScore = putScoreParts.reduce((sum, item) => sum + item.points, 0);
-    const winningSide: 'CALL' | 'PUT' = callScore >= putScore ? 'CALL' : 'PUT';
+    const directionalDecision = this.getDirectionalDecision(callScore, putScore);
+    const winningSide = directionalDecision.leader;
+    const directionalSide = directionalDecision.side;
+    if (!directionalDecision.hasEdge) {
+      noTradeReasons.push(`No directional edge: CALL score ${callScore} vs PUT score ${putScore} (minimum edge ${directionalDecision.minimumEdge})`);
+    }
     const winningScore = winningSide === 'CALL' ? callScore : putScore;
     const macroRegime = this.assessMacroRegime({
       winningSide,
@@ -1271,11 +1323,13 @@ Rules:
     const maxVixForCalls = 30;
     const minVixForPuts = 13;
 
-    if (winningSide === 'CALL' && vixPrice !== null && vixPrice > maxVixForCalls) {
-      volatilityBlockers.push(`VIX ${vixPrice.toFixed(2)} is above call risk limit ${maxVixForCalls}`);
-    }
-    if (winningSide === 'PUT' && vixPrice !== null && vixPrice < minVixForPuts) {
-      volatilityBlockers.push(`VIX ${vixPrice.toFixed(2)} is below put volatility floor ${minVixForPuts}`);
+    if (directionalDecision.hasEdge) {
+      if (winningSide === 'CALL' && vixPrice !== null && vixPrice > maxVixForCalls) {
+        volatilityBlockers.push(`VIX ${vixPrice.toFixed(2)} is above call risk limit ${maxVixForCalls}`);
+      }
+      if (winningSide === 'PUT' && vixPrice !== null && vixPrice < minVixForPuts) {
+        volatilityBlockers.push(`VIX ${vixPrice.toFixed(2)} is below put volatility floor ${minVixForPuts}`);
+      }
     }
 
     volatilityBlockers.push(...this.buildVolatilityCompressionBlockers({
@@ -1286,60 +1340,66 @@ Rules:
       vixChangePct: vixSnapshot.changePct
     }));
 
-    if (winningSide === 'CALL' && hasBearishInternals) {
-      volatilityBlockers.push(`Mega-Caps are bearish. Avoid going long ${symbol}.`);
-    }
-    if (winningSide === 'PUT' && hasBullishInternals) {
-      volatilityBlockers.push(`Mega-Caps are bullish. Avoid shorting ${symbol}.`);
+    if (directionalDecision.hasEdge) {
+      if (winningSide === 'CALL' && hasBearishInternals) {
+        volatilityBlockers.push(`Mega-Caps are bearish. Avoid going long ${symbol}.`);
+      }
+      if (winningSide === 'PUT' && hasBullishInternals) {
+        volatilityBlockers.push(`Mega-Caps are bullish. Avoid shorting ${symbol}.`);
+      }
     }
 
     for (const blocker of macroRegime.blockers) {
       volatilityBlockers.push(blocker);
     }
 
-    volatilityBlockers.push(...this.buildGexProximityBlockers({
-      winningSide,
-      currentPrice,
-      callWall: qqqCallWall,
-      putWall: qqqPutWall,
-      kingNode: qqqKingNode,
-      floor: qqqFloor,
-      ceiling: qqqCeiling,
-      regime
-    }));
+    if (directionalDecision.hasEdge) {
+      volatilityBlockers.push(...this.buildGexProximityBlockers({
+        winningSide,
+        currentPrice,
+        callWall: qqqCallWall,
+        putWall: qqqPutWall,
+        kingNode: qqqKingNode,
+        floor: qqqFloor,
+        ceiling: qqqCeiling,
+        regime
+      }));
+    }
 
     // Append blockers to reasons
     for (const blocker of volatilityBlockers) {
       noTradeReasons.push(blocker);
     }
 
-    noTradeReasons.push(...this.buildMeanReversionTrendBlockers({
-      regime,
-      winningSide,
-      currentPrice,
-      latest,
-      previous,
-      emaShort,
-      emaLong,
-      openingRangeLow,
-      openingRangeHigh
-    }));
+    if (directionalDecision.hasEdge) {
+      noTradeReasons.push(...this.buildMeanReversionTrendBlockers({
+        regime,
+        winningSide,
+        currentPrice,
+        latest,
+        previous,
+        emaShort,
+        emaLong,
+        openingRangeLow,
+        openingRangeHigh
+      }));
 
-    noTradeReasons.push(...this.buildStrictSetupModelBlockers({
-      winningSide,
-      currentPrice,
-      vwap,
-      emaShort,
-      emaLong,
-      latest,
-      previous,
-      hasBullishVolumeBreakout,
-      hasBearishVolumeBreakout,
-      volumeAnomaly,
-      gexRegime: qqqGexRegime,
-      flowDirection: qqqFlowDirection,
-      flipStrike: qqqGexFlip
-    }));
+      noTradeReasons.push(...this.buildStrictSetupModelBlockers({
+        winningSide,
+        currentPrice,
+        vwap,
+        emaShort,
+        emaLong,
+        latest,
+        previous,
+        hasBullishVolumeBreakout,
+        hasBearishVolumeBreakout,
+        volumeAnomaly,
+        gexRegime: qqqGexRegime,
+        flowDirection: qqqFlowDirection,
+        flipStrike: qqqGexFlip
+      }));
+    }
 
     if (winningScore < dynamicMinScore) {
       noTradeReasons.push(`Best setup score ${winningScore} is below dynamic minimum ${dynamicMinScore}`);
@@ -1465,6 +1525,15 @@ Rules:
         sessionChangePct: Number(sessionChangePct.toFixed(4)),
         candleChangePct: Number(candleChangePct.toFixed(4))
       },
+      spot: {
+        source: liveUnderlyingQuoteUsable ? 'ibkr' : 'completed_candle_fallback',
+        liveMark: liveUnderlyingQuote?.mark ?? null,
+        quoteAgeMs: liveUnderlyingQuote?.quoteAgeMs ?? null,
+        timestamp: liveUnderlyingQuote?.timestamp ?? null,
+        valueUsed: Number(currentPrice.toFixed(2)),
+        candleClose: Number(latest.close.toFixed(2)),
+        blocker: liveUnderlyingQuoteBlocker
+      },
       configSnapshot,
       macroSnapshot: macroSnapshotPayload,
       gexSnapshot: gexSnapshotPayload,
@@ -1482,12 +1551,19 @@ Rules:
         putScoreParts,
         callScore,
         putScore,
-        winningSide,
+        winningSide: directionalSide,
+        scoreLeader: winningSide,
+        directionalEdge: directionalDecision.edge,
+        directionalEdgeMinimum: directionalDecision.minimumEdge,
         winningScore,
         dynamicMinScore,
         macroThresholdAdjustment: macroRegime.thresholdAdjustment
       }
     };
+
+    if (cycle.marketPhase !== 'OPEN') {
+      noTradeReasons.splice(0, noTradeReasons.length, marketPhaseBlocker || 'Market closed — no live 0DTE entries outside regular trading hours');
+    }
 
     const isActionable = noTradeReasons.length === 0;
 
@@ -2841,6 +2917,22 @@ Rules:
     if (candleFetch.source === 'ibkr') return null;
     const reason = candleFetch.fallbackReason ? ` (${candleFetch.fallbackReason})` : '';
     return `Live entry blocked: IBKR live candles required; received ${candleFetch.source} candle data${reason}`;
+  }
+
+  private getLiveUnderlyingQuoteBlocker(symbol: string, quote: IbkrOptionQuote | null): string | null {
+    if (!quote || !Number.isFinite(quote.mark) || quote.mark <= 0) {
+      return `Live IBKR spot unavailable for ${symbol}`;
+    }
+
+    const maxAgeMs = Number(process.env.IBKR_UNDERLYING_QUOTE_MAX_AGE_MS || 5_000);
+    const safeMaxAgeMs = Number.isFinite(maxAgeMs) && maxAgeMs > 0 ? maxAgeMs : 5_000;
+    if (!quote.timestamp || quote.quoteAgeMs === null || !Number.isFinite(quote.quoteAgeMs)) {
+      return `Live IBKR spot timestamp unavailable for ${symbol}`;
+    }
+    if (quote.quoteAgeMs > safeMaxAgeMs) {
+      return `Live IBKR spot stale for ${symbol}: quote is ${Math.round(quote.quoteAgeMs / 1000)}s old`;
+    }
+    return null;
   }
 
   private getCandleFreshnessMs(candle: Candle, now: Date, intervalMinutes = 5): number {

@@ -1,7 +1,10 @@
 import '@fastify/postgres';
 import { EventEmitter } from 'events';
+import * as ibPkg from '@stoqey/ib';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
+
+const { EventName } = ibPkg as any;
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -123,6 +126,33 @@ async function testNoTickSnapshotResetsSharedConnection() {
   assert((IbkrMarketDataService as any).connectedPromise === null, 'No-tick snapshot should clear connection promise');
 }
 
+async function testTickTimestampRecordsArrivalTime() {
+  const service = new IbkrMarketDataService(createFastifyMock());
+  const fakeIb = new EventEmitter() as any;
+  let requestStartedAt = 0;
+  fakeIb.reqMktData = (reqId: number) => {
+    requestStartedAt = Date.now();
+    setImmediate(() => fakeIb.emit(EventName.tickPrice, reqId, 4, 754.85));
+  };
+  fakeIb.cancelMktData = () => {};
+  fakeIb.disconnect = () => {};
+
+  (IbkrMarketDataService as any).sharedApi = fakeIb;
+  (IbkrMarketDataService as any).connectedPromise = Promise.resolve();
+  (IbkrMarketDataService as any).connectionKey = 'live:ib_gateway:4003:1';
+
+  const snapshot = await (service as any).requestMarketData({}, '', 50, 'test tick timestamp');
+  assert(snapshot.last === 754.85, `Expected test tick to populate last price, got ${snapshot.last}`);
+  assert(typeof snapshot.timestamp === 'string', 'Tick snapshot should include an arrival timestamp');
+  const timestampMs = Date.parse(snapshot.timestamp);
+  assert(timestampMs >= requestStartedAt, 'Tick timestamp should be recorded at or after request start');
+  assert(Date.now() - timestampMs < 1_000, 'Tick timestamp should reflect recent tick arrival, not request age');
+
+  (IbkrMarketDataService as any).sharedApi = null;
+  (IbkrMarketDataService as any).connectedPromise = null;
+  (IbkrMarketDataService as any).connectionKey = null;
+}
+
 async function runTests() {
   console.log('Running IbkrMarketDataService normalization tests...');
   await testOsiTickerParsing();
@@ -131,6 +161,7 @@ async function runTests() {
   await testIndexContractUsesCboeIndexSecurityType();
   await testPaperModeResolvesPaperPortForHealthChecks();
   await testNoTickSnapshotResetsSharedConnection();
+  await testTickTimestampRecordsArrivalTime();
   console.log('All IbkrMarketDataService normalization tests passed!');
 }
 
