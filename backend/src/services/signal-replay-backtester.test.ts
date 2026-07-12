@@ -345,6 +345,26 @@ async function testVixResearchReportRequiresComparableSample() {
   assert(report.delta.totalPnl === -20, `Expected PnL delta -20, got ${report.delta.totalPnl}`);
 }
 
+async function testHistoricalVixBackfillUsesSignalTimeBars() {
+  const backtester = createBacktester();
+  const calls: string[] = [];
+  (backtester as any).ibkrMarketData = {
+    getHistoricalIndexBars: async (symbol: string) => {
+      calls.push(symbol);
+      return [{ start: '2026-06-22T13:45:00.000Z', open: 0, high: 0, low: 0, close: symbol === 'VIX' ? 20 : 22, volume: 0 }];
+    }
+  };
+  const signal = createSignal();
+  const summary = await (backtester as any).backfillHistoricalVixTermStructure([signal]);
+
+  assert(summary.backfilled === 1, `Expected one historical VIX backfill, got ${summary.backfilled}`);
+  assert(summary.unavailable === 0, `Expected no historical VIX backfill failures, got ${summary.unavailable}`);
+  assert(calls.sort().join(',') === 'VIX,VIX3M', `Expected VIX and VIX3M history requests, got ${calls.join(',')}`);
+  const replayTermStructure = (signal as any).replayVixTermStructure;
+  assert(replayTermStructure.ratio === 1.1, `Expected historical ratio 1.1, got ${replayTermStructure.ratio}`);
+  assert((backtester as any).getScenarioSkipReason('vix_contango', signal) === null, 'Historical contango evidence should make the signal eligible');
+}
+
 async function testStoredSignalDecisionDrivesReplayMetadata() {
   const backtester = createBacktester();
   const signal = createSignal({
@@ -823,6 +843,7 @@ async function runTests() {
   await testMacroStrictSkipsWeakMacroScore();
   await testVixContangoScenarioRequiresStoredTermStructure();
   await testVixResearchReportRequiresComparableSample();
+  await testHistoricalVixBackfillUsesSignalTimeBars();
   await testStoredSignalDecisionDrivesReplayMetadata();
   await testParitySummaryReportsDecisionGaps();
   await testSnapshotDriftReportUsesStoredDecisionSnapshot();

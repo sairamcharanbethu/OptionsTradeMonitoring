@@ -801,6 +801,20 @@ async function testStaleScannerCandlesProduceBlocker() {
   assert(blocker?.includes('Candle data stale from yahoo'), `Expected stale candle blocker, got ${blocker}`);
 }
 
+async function testLiveEntryRequiresIbkrCandleSource() {
+  const scanner = createScanner();
+
+  assert(scanner.getLiveCandleSourceBlocker({ source: 'ibkr', candles: [], fetchedAt: new Date().toISOString(), fallbackReason: null }) === null, 'IBKR candles should be eligible for live-source validation');
+  const blocker = scanner.getLiveCandleSourceBlocker({
+    source: 'yahoo',
+    candles: [],
+    fetchedAt: new Date().toISOString(),
+    fallbackReason: 'IBKR bars failed'
+  });
+  assert(blocker.includes('IBKR live candles required'), `Expected IBKR source blocker, got ${blocker}`);
+  assert(blocker.includes('yahoo'), `Expected fallback source in blocker, got ${blocker}`);
+}
+
 async function testCompletedFiveMinuteCandleWithinCurrentWindowIsFresh() {
   const scanner = createScanner();
   const candle = {
@@ -1699,6 +1713,7 @@ async function runTests() {
   await testScannerAlpacaSettingsCredentialsBeatEnvCredentials();
   await testScannerCandlesFallbackToYahooWhenAlpacaFails();
   await testStaleScannerCandlesProduceBlocker();
+  await testLiveEntryRequiresIbkrCandleSource();
   await testCompletedFiveMinuteCandleWithinCurrentWindowIsFresh();
   await testScannerCycleContextUsesFixedClock();
   await testFixedClockDrivesExpiryAndAfternoonThreshold();

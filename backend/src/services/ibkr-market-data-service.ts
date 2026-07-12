@@ -129,8 +129,9 @@ export class IbkrMarketDataService {
       }
       const quote = await this.getUnderlyingQuote('SPY');
       const connected = quote.mark > 0;
+      const liveData = this.marketDataType === 1;
       return {
-        status: connected ? 'UP' : 'DEGRADED',
+        status: connected && liveData ? 'UP' : 'DEGRADED',
         connected,
         provider: 'ibkr',
         mode: this.mode,
@@ -138,7 +139,9 @@ export class IbkrMarketDataService {
         port: this.port,
         marketDataType: this.marketDataType,
         latencyMs: Date.now() - startedAt,
-        lastError: connected ? null : 'IBKR connected but SPY quote did not return a usable mark',
+        lastError: !liveData
+          ? `IBKR market data type ${this.marketDataType} is not live; expected marketDataType=1`
+          : connected ? null : 'IBKR connected but SPY quote did not return a usable mark',
         marketState
       };
     } catch (err: any) {
@@ -173,6 +176,13 @@ export class IbkrMarketDataService {
     return normalized;
   }
 
+  public async assertLiveMarketData(): Promise<void> {
+    await this.ensureConnected();
+    if (this.marketDataType !== 1) {
+      throw new Error(`IBKR market data type ${this.marketDataType} is not live; expected marketDataType=1`);
+    }
+  }
+
   public async getIndexQuote(symbol: string, exchange = 'CBOE'): Promise<IbkrIndexQuote> {
     const normalizedSymbol = symbol.toUpperCase();
     const snapshot = await this.requestMarketData(
@@ -205,6 +215,23 @@ export class IbkrMarketDataService {
 
   public async getHistoricalBars(symbol: string, durationStr = '5 D', barSize = '5 mins'): Promise<IbkrHistoricalBar[]> {
     return this.getHistoricalBarsForContract(this.stockContract(symbol), symbol, '', durationStr, barSize);
+  }
+
+  public async getHistoricalIndexBars(
+    symbol: string,
+    endTime: Date | string = '',
+    durationStr = '1 D',
+    barSize = '5 mins',
+    exchange = 'CBOE'
+  ): Promise<IbkrHistoricalBar[]> {
+    const normalizedSymbol = symbol.toUpperCase();
+    return this.getHistoricalBarsForContract(
+      this.indexContract(normalizedSymbol, exchange),
+      normalizedSymbol,
+      this.formatHistoricalEndTime(endTime),
+      durationStr,
+      barSize
+    );
   }
 
   public async getOptionHistoricalBars(

@@ -112,7 +112,7 @@ export default function ResearchPage() {
               <h2 className="text-xl font-semibold tracking-tight">Strategy Research</h2>
               <Badge variant="outline" className="gap-1"><FlaskConical className="h-3 w-3" /> Hermes lab</Badge>
             </div>
-            <p className="break-words text-sm text-muted-foreground">Replay stored signals against realistic IBKR option history and test one change at a time.</p>
+            <p className="break-words text-sm text-muted-foreground">Replay stored signals against realistic IBKR option and signal-time macro history, testing one change at a time.</p>
           </div>
         </div>
         <Button type="button" variant="outline" className="w-full gap-2 sm:w-auto" onClick={runReplay} disabled={loading}>
@@ -144,7 +144,7 @@ export default function ResearchPage() {
           <CardContent className="flex min-h-[260px] flex-col items-center justify-center px-6 text-center">
             <Beaker className="mb-3 h-8 w-8 text-muted-foreground" />
             <h3 className="font-semibold">Run a controlled experiment</h3>
-            <p className="mt-2 max-w-lg text-sm text-muted-foreground">The first experiment compares every usable stored signal with the same signal set filtered to stored VIX3M/VIX contango at or above 1.05.</p>
+            <p className="mt-2 max-w-lg text-sm text-muted-foreground">The first experiment compares every usable stored signal with the same signal set filtered to stored or signal-time IBKR VIX3M/VIX contango at or above 1.05.</p>
           </CardContent>
         </Card>
       )}
@@ -160,7 +160,7 @@ export default function ResearchPage() {
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Metric label="Signals loaded" value={String(report.signalsLoaded)} detail={`${report.signalsUsable} with usable contracts`} />
-            <Metric label="Term structure coverage" value={`${report.research.signalsWithTermStructure}/${report.signalsLoaded}`} detail={`${report.research.signalsMissingTermStructure} missing stored VIX3M/VIX`} />
+            <Metric label="Term structure coverage" value={`${report.research.signalsWithTermStructure}/${report.signalsLoaded}`} detail={`${report.research.signalsBackfilledFromIbkr} backfilled from IBKR; ${report.research.signalsUnavailableForBackfill} unavailable`} />
             <Metric label="Contango floor" value={`${report.research.minimumRatio.toFixed(2)}x`} detail="VIX3M ÷ VIX" />
             <Metric label="Candidate trades" value={String(report.research.candidate.trades)} detail={`Minimum review sample ${report.research.minimumComparableTrades}`} />
           </div>

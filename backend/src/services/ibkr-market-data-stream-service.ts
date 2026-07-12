@@ -104,8 +104,9 @@ export class IbkrMarketDataStreamService extends EventEmitter {
   }
 
   public getHealth() {
+    const liveData = this.marketDataType === 1;
     return {
-      status: this.isConnected ? 'UP' : 'DEGRADED',
+      status: this.isConnected && liveData ? 'UP' : 'DEGRADED',
       connected: this.isConnected,
       provider: 'ibkr',
       mode: this.mode,
@@ -114,7 +115,9 @@ export class IbkrMarketDataStreamService extends EventEmitter {
       marketDataType: this.marketDataType,
       activeSubscriptions: this.subscriptionsByKey.size,
       lastMessageAt: this.lastMessageAt,
-      lastError: this.lastError,
+      lastError: !liveData
+        ? `IBKR market data type ${this.marketDataType} is not live; expected marketDataType=1`
+        : this.lastError,
       reconnectAttempts: this.reconnectAttempts
     };
   }

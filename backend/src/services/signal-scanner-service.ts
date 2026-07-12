@@ -947,7 +947,8 @@ Rules:
       }
     });
 
-    // 3. Fetch price candles (prefer Alpaca official bars, Yahoo fallback)
+    // 3. Fetch price candles. Non-IBKR fallback data is retained for diagnostics,
+    // but getLiveCandleSourceBlocker below prevents it from driving live entries.
     let candleFetch: CandleFetchResult;
     try {
       candleFetch = await this.timeScannerPhase(cycle, `${symbol}.candles`, () => this.fetchScannerCandles({
@@ -1031,6 +1032,10 @@ Rules:
     });
     if (candleFreshnessBlocker) {
       noTradeReasons.push(candleFreshnessBlocker);
+    }
+    const liveCandleSourceBlocker = this.getLiveCandleSourceBlocker(candleFetch);
+    if (liveCandleSourceBlocker) {
+      noTradeReasons.push(liveCandleSourceBlocker);
     }
 
     // Technical calculations
@@ -2762,6 +2767,7 @@ Rules:
 
     try {
       const ibkr = new IbkrMarketDataService(this.fastify);
+      await ibkr.assertLiveMarketData();
       const bars = await ibkr.getHistoricalBars(input.symbol, '5 D', '5 mins');
       const candles = this.parseIbkrHistoricalBars(bars);
       if (candles.length > 0) {
@@ -2829,6 +2835,12 @@ Rules:
       fetchedAt: input.now.toISOString(),
       fallbackReason
     };
+  }
+
+  private getLiveCandleSourceBlocker(candleFetch: CandleFetchResult): string | null {
+    if (candleFetch.source === 'ibkr') return null;
+    const reason = candleFetch.fallbackReason ? ` (${candleFetch.fallbackReason})` : '';
+    return `Live entry blocked: IBKR live candles required; received ${candleFetch.source} candle data${reason}`;
   }
 
   private getCandleFreshnessMs(candle: Candle, now: Date, intervalMinutes = 5): number {

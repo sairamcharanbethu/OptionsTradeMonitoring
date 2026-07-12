@@ -23,6 +23,12 @@ type ReplaySignal = {
   option_details: any;
   volatility: any;
   no_trade_reasons: string[] | null;
+  replayVixTermStructure?: any;
+};
+
+type ReplayVixBackfillSummary = {
+  backfilled: number;
+  unavailable: number;
 };
 
 type ReplayConfig = {
@@ -171,6 +177,8 @@ type ReplayResearchReport = {
   minimumRatio: number;
   signalsWithTermStructure: number;
   signalsMissingTermStructure: number;
+  signalsBackfilledFromIbkr: number;
+  signalsUnavailableForBackfill: number;
   minimumComparableTrades: number;
   status: 'INSUFFICIENT_DATA' | 'READY_FOR_REVIEW';
   baseline: {
@@ -294,6 +302,7 @@ export class SignalReplayBacktester {
     const config = this.normalizeConfig(input);
     const signals = await this.loadSignals(config);
     const usableSignals = signals.filter((signal) => this.resolveContract(signal) !== null);
+    const historicalVixBackfill = await this.backfillHistoricalVixTermStructure(usableSignals);
     const missingOptionData = signals.length - usableSignals.length;
     const parity = this.buildParitySummary(signals);
     const snapshotDrift = this.buildSnapshotDriftReport(signals);
@@ -328,7 +337,7 @@ export class SignalReplayBacktester {
       },
       {
         name: 'vix_contango',
-        description: 'Requires a stored VIX3M/VIX ratio at or above the configured 1.05 contango floor.',
+        description: 'Requires stored or signal-time IBKR historical VIX3M/VIX evidence at or above the configured 1.05 contango floor.',
         trades: [],
         skippedSignals: 0,
         skippedReasons: {},
@@ -392,7 +401,7 @@ export class SignalReplayBacktester {
     const vixContango = scenarios.find((scenario) => scenario.name === 'vix_contango') as ReplayScenario;
     const calibration = this.buildCalibrationReport(baseline.trades);
     const attribution = this.buildAttributionReport(baseline.trades);
-    const research = this.buildVixTermStructureResearchReport(signals, baseline, vixContango);
+    const research = this.buildVixTermStructureResearchReport(signals, baseline, vixContango, historicalVixBackfill);
 
     return {
       config,
@@ -1188,6 +1197,7 @@ export class SignalReplayBacktester {
 
   private getVixTermStructure(signal: ReplaySignal): any | null {
     const candidates = [
+      signal.replayVixTermStructure,
       signal.option_details?.decisionSnapshot?.macroSnapshot?.vixTermStructure,
       signal.option_details?.macroSnapshot?.vixTermStructure,
       signal.volatility?.vixTermStructure,
@@ -1196,8 +1206,97 @@ export class SignalReplayBacktester {
     return candidates.find((candidate) => candidate && typeof candidate === 'object') || null;
   }
 
-  private buildVixTermStructureResearchReport(signals: ReplaySignal[], baseline: ReplayScenario, candidate: ReplayScenario): ReplayResearchReport {
-    const termStructureSignals = signals.filter((signal) => this.getVixTermStructure(signal));
+  private async backfillHistoricalVixTermStructure(signals: ReplaySignal[]): Promise<ReplayVixBackfillSummary> {
+    const signalsNeedingBackfill = signals.filter((signal) => !this.hasUsableVixTermStructure(signal));
+    if (signalsNeedingBackfill.length === 0) return { backfilled: 0, unavailable: 0 };
+
+    const historyByDate = new Map<string, Promise<{ vix: ReplayBar[]; vix3m: ReplayBar[] }>>();
+    const loadDateHistory = (dateKey: string) => {
+      const cached = historyByDate.get(dateKey);
+      if (cached) return cached;
+      const request = Promise.all([
+        this.ibkrMarketData.getHistoricalIndexBars('VIX', this.dateAtEt(dateKey, 16, 0), '1 D', '5 mins').catch((err: any) => {
+          this.fastify.log.warn(`[SignalReplayBacktester] IBKR VIX history unavailable for ${dateKey}: ${err.message || String(err)}`);
+          return [];
+        }),
+        this.ibkrMarketData.getHistoricalIndexBars('VIX3M', this.dateAtEt(dateKey, 16, 0), '1 D', '5 mins').catch((err: any) => {
+          this.fastify.log.warn(`[SignalReplayBacktester] IBKR VIX3M history unavailable for ${dateKey}: ${err.message || String(err)}`);
+          return [];
+        })
+      ]).then(([vix, vix3m]) => ({ vix, vix3m }));
+      historyByDate.set(dateKey, request);
+      return request;
+    };
+
+    let backfilled = 0;
+    let unavailable = 0;
+    for (const signal of signalsNeedingBackfill) {
+      const dateKey = this.getSignalDate(signal);
+      const signalTime = new Date(signal.created_at);
+      if (!Number.isFinite(signalTime.getTime())) {
+        unavailable++;
+        continue;
+      }
+      const history = await loadDateHistory(dateKey);
+      const vixBar = this.latestHistoricalBarAtOrBefore(history.vix, signalTime, dateKey);
+      const vix3mBar = this.latestHistoricalBarAtOrBefore(history.vix3m, signalTime, dateKey);
+      const vix = vixBar ? this.finiteNumber(vixBar.close) : null;
+      const vix3m = vix3mBar ? this.finiteNumber(vix3mBar.close) : null;
+      if (vix === null || vix3m === null || vix <= 0 || vix3m <= 0) {
+        unavailable++;
+        continue;
+      }
+
+      const ratio = Number((vix3m / vix).toFixed(4));
+      const minimumRatio = 1.05;
+      signal.replayVixTermStructure = {
+        vix,
+        vix3m,
+        ratio,
+        minimumRatio,
+        status: ratio >= 1.1 ? 'STRONG_CONTANGO' : ratio >= minimumRatio ? 'CONTANGO' : 'NEUTRAL',
+        blocker: ratio >= minimumRatio ? null : 'VIX term structure is neutral',
+        source: 'ibkr_historical',
+        capturedAt: vixBar && vix3mBar
+          ? new Date(Math.max(new Date(vixBar.start).getTime(), new Date(vix3mBar.start).getTime())).toISOString()
+          : signalTime.toISOString()
+      };
+      backfilled++;
+    }
+
+    return { backfilled, unavailable };
+  }
+
+  private hasUsableVixTermStructure(signal: ReplaySignal): boolean {
+    const termStructure = this.getVixTermStructure(signal);
+    return this.finiteNumber(termStructure?.vix) !== null &&
+      this.finiteNumber(termStructure?.vix3m) !== null &&
+      this.finiteNumber(termStructure?.ratio) !== null;
+  }
+
+  private latestHistoricalBarAtOrBefore(bars: ReplayBar[], signalTime: Date, dateKey: string): ReplayBar | null {
+    return bars
+      .map((bar) => ({ bar, time: this.parseBarTime(bar.start, dateKey) }))
+      .filter((item): item is { bar: ReplayBar; time: Date } => item.time instanceof Date && this.getNewYorkDateKey(item.time) === dateKey && item.time.getTime() <= signalTime.getTime())
+      .sort((a, b) => b.time.getTime() - a.time.getTime())[0]?.bar || null;
+  }
+
+  private getNewYorkDateKey(date: Date): string {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(date);
+  }
+
+  private buildVixTermStructureResearchReport(
+    signals: ReplaySignal[],
+    baseline: ReplayScenario,
+    candidate: ReplayScenario,
+    historicalBackfill: ReplayVixBackfillSummary = { backfilled: 0, unavailable: 0 }
+  ): ReplayResearchReport {
+    const termStructureSignals = signals.filter((signal) => this.hasUsableVixTermStructure(signal));
     const minimumRatio = termStructureSignals
       .map((signal) => this.finiteNumber(this.getVixTermStructure(signal)?.minimumRatio))
       .find((value): value is number => value !== null) ?? 1.05;
@@ -1220,11 +1319,15 @@ export class SignalReplayBacktester {
     };
     const notes = [
       'This is a comparison report, not an automatic strategy approval.',
-      'The candidate uses only stored VIX/VIX3M evidence and does not refetch current macro data.',
-      'Historical signals without term-structure evidence are excluded from the candidate scenario.'
+      `IBKR historical backfill added VIX/VIX3M evidence to ${historicalBackfill.backfilled} signals; ${historicalBackfill.unavailable} remained unavailable.`,
+      'The candidate uses stored or signal-time IBKR historical VIX/VIX3M evidence; it does not use current macro data for past signals.',
+      'Signals without usable term-structure evidence are excluded from the candidate scenario.'
     ];
     if (candidateMetrics.trades < minimumComparableTrades) {
-      notes.push(`Candidate has ${candidateMetrics.trades} trades; at least ${minimumComparableTrades} are required before review.`);
+      const exclusions = Object.entries(candidate.skippedReasons || {})
+        .map(([reason, count]) => `${reason}=${count}`)
+        .join(', ');
+      notes.push(`Candidate has ${candidateMetrics.trades} trades; at least ${minimumComparableTrades} are required before review${exclusions ? ` (${exclusions})` : ''}.`);
     }
 
     return {
@@ -1233,6 +1336,8 @@ export class SignalReplayBacktester {
       minimumRatio,
       signalsWithTermStructure: termStructureSignals.length,
       signalsMissingTermStructure: signals.length - termStructureSignals.length,
+      signalsBackfilledFromIbkr: historicalBackfill.backfilled,
+      signalsUnavailableForBackfill: historicalBackfill.unavailable,
       minimumComparableTrades,
       status: candidateMetrics.trades >= minimumComparableTrades ? 'READY_FOR_REVIEW' : 'INSUFFICIENT_DATA',
       baseline: baselineMetrics,

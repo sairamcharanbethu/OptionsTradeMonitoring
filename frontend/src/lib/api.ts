@@ -60,6 +60,8 @@ export interface SignalReplayResponse {
     minimumRatio: number;
     signalsWithTermStructure: number;
     signalsMissingTermStructure: number;
+    signalsBackfilledFromIbkr: number;
+    signalsUnavailableForBackfill: number;
     minimumComparableTrades: number;
     status: 'INSUFFICIENT_DATA' | 'READY_FOR_REVIEW';
     baseline: Pick<SignalReplayScenario['summary'], 'trades' | 'winRate' | 'totalPnl' | 'profitFactor' | 'maxDrawdown'>;
