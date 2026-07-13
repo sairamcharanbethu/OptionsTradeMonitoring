@@ -56,6 +56,28 @@ async function testVixTermStructureRequiresContango() {
   assert(Boolean(unavailable.blocker), 'Unavailable term structure should block entries');
 }
 
+async function testVixFallsBackToYahooFinanceWhenIbkrIsNotSubscribed() {
+  const scanner = createScanner();
+  (scanner as any).fetchIbkrIndexMacroSnapshot = async () => macroSnapshot({
+    symbol: 'VIX',
+    label: 'VIX',
+    source: 'ibkr',
+    error: 'IBKR request failed (354): not subscribed'
+  });
+  (scanner as any).fetchYahooMacroSnapshot = async () => macroSnapshot({
+    symbol: '^VIX',
+    label: 'VIX',
+    value: 16.72,
+    previousClose: 15.03,
+    source: 'yahoo'
+  });
+
+  const result = await (scanner as any).fetchVixMacroSnapshot('VIX', 'VIX', '^VIX');
+  assert(result.value === 16.72, `Expected Yahoo Finance VIX value, got ${result.value}`);
+  assert(result.source === 'yahoo_finance_fallback', `Expected Yahoo Finance fallback source, got ${result.source}`);
+  assert(result.error === null, 'Successful Yahoo Finance fallback should clear the IBKR error');
+}
+
 async function testIBKRMissingVolumeDoesNotRejectLiquidCandidate() {
   const scanner = createScanner();
 
@@ -1743,6 +1765,7 @@ async function testBlockedDecisionSnapshotCapturesBlockersAndNoOptionSelection()
 async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
   await testVixTermStructureRequiresContango();
+  await testVixFallsBackToYahooFinanceWhenIbkrIsNotSubscribed();
   await testIBKRMissingVolumeDoesNotRejectLiquidCandidate();
   await testIBKRKnownLowVolumeStillRejectsCandidate();
   await testIBKRStrongVolumeOffsetsMissingOpenInterest();

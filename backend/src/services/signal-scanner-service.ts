@@ -3241,6 +3241,25 @@ Rules:
     }
   }
 
+  private async fetchVixMacroSnapshot(symbol: string, label: string, yahooSymbol: string): Promise<MacroAssetSnapshot> {
+    const ibkrSnapshot = await this.fetchIbkrIndexMacroSnapshot(symbol, label);
+    if (ibkrSnapshot.value !== null) return ibkrSnapshot;
+
+    const yahooSnapshot = await this.fetchYahooMacroSnapshot(yahooSymbol, label);
+    if (yahooSnapshot.value !== null) {
+      return {
+        ...yahooSnapshot,
+        source: 'yahoo_finance_fallback',
+        error: null
+      };
+    }
+
+    return {
+      ...ibkrSnapshot,
+      error: [ibkrSnapshot.error, yahooSnapshot.error].filter(Boolean).join('; ') || 'IBKR and Yahoo Finance returned no usable value'
+    };
+  }
+
   public assessVixTermStructure(vix: number | null, vix3m: number | null, minimumRatio = 1.05) {
     const ratio = vix !== null && vix > 0 && vix3m !== null && vix3m > 0
       ? Number((vix3m / vix).toFixed(4))
@@ -3285,8 +3304,8 @@ Rules:
     }
 
     const [vixSnapshot, vix3mSnapshot, rawTenYearSnapshot, dxySnapshot, oilSnapshot, goldSnapshot] = await Promise.all([
-      this.fetchIbkrIndexMacroSnapshot('VIX', 'VIX'),
-      this.fetchIbkrIndexMacroSnapshot('VIX3M', 'VIX3M'),
+      this.fetchVixMacroSnapshot('VIX', 'VIX', '^VIX'),
+      this.fetchVixMacroSnapshot('VIX3M', 'VIX3M', '^VIX3M'),
       this.fetchYahooMacroSnapshot('^TNX', 'US 10Y'),
       this.fetchYahooMacroSnapshot(['DX-Y.NYB', 'UUP'], 'DXY'),
       this.fetchYahooMacroSnapshot('CL=F', 'Oil'),
