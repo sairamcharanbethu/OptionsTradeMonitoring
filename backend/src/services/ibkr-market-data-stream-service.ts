@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { EventEmitter } from 'events';
 import * as ibPkg from '@stoqey/ib';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
+import { getNewYorkMarketState } from '../lib/market-calendar';
 
 const { IBApi, EventName, SecType } = ibPkg as any;
 
@@ -21,6 +22,14 @@ type StreamSubscription = {
   snapshot: Record<string, any>;
 };
 
+type LatestUnderlyingQuote = {
+  bid: number;
+  ask: number;
+  last: number;
+  mark: number;
+  timestamp: string;
+};
+
 export class IbkrMarketDataStreamService extends EventEmitter {
   private ib: any = null;
   private connectedPromise: Promise<void> | null = null;
@@ -31,6 +40,7 @@ export class IbkrMarketDataStreamService extends EventEmitter {
   private subscriptionsByKey: Map<string, StreamSubscription> = new Map();
   private subscriptionsByReqId: Map<number, StreamSubscription> = new Map();
   private latestUnderlyingPrices: Map<string, number> = new Map();
+  private latestUnderlyingQuotes: Map<string, LatestUnderlyingQuote> = new Map();
   private isConnected = false;
   private lastMessageAt: string | null = null;
   private lastError: string | null = null;
@@ -42,6 +52,10 @@ export class IbkrMarketDataStreamService extends EventEmitter {
   private mode: 'live' | 'paper' = String(process.env.IBKR_GATEWAY_MODE || '').toLowerCase() === 'paper' ? 'paper' : 'live';
   private readonly clientId = Number(process.env.IBKR_CLIENT_ID_STREAM || 22);
   private marketDataType = Number(process.env.IBKR_MARKET_DATA_TYPE || 1);
+  private readonly requiredUnderlyings = String(process.env.IBKR_STREAM_UNDERLYINGS || 'SPY,QQQ')
+    .split(',')
+    .map((symbol) => symbol.trim().toUpperCase())
+    .filter(Boolean);
   private connectionKey: string | null = null;
   private readonly requestTimeoutMs = Number(process.env.IBKR_REQUEST_TIMEOUT_MS || 12_000);
   private readonly MAX_RECONNECT_DELAY = 60000;
@@ -106,8 +120,13 @@ export class IbkrMarketDataStreamService extends EventEmitter {
 
   public getHealth() {
     const liveData = this.marketDataType === 1;
+    const marketState = getNewYorkMarketState();
+    const lastMessageAgeMs = this.lastMessageAt ? Date.now() - Date.parse(this.lastMessageAt) : null;
+    const freshData = !marketState.isOpen || (lastMessageAgeMs !== null && lastMessageAgeMs <= 15_000);
     return {
-      status: this.isConnected && liveData ? 'UP' : 'DEGRADED',
+      status: !marketState.isOpen && this.isConnected
+        ? 'MARKET_CLOSED'
+        : this.isConnected && liveData && freshData ? 'UP' : 'DEGRADED',
       connected: this.isConnected,
       provider: 'ibkr',
       mode: this.mode,
@@ -118,9 +137,17 @@ export class IbkrMarketDataStreamService extends EventEmitter {
       lastMessageAt: this.lastMessageAt,
       lastError: !liveData
         ? `IBKR market data type ${this.marketDataType} is not live; expected marketDataType=1`
-        : this.lastError,
+        : this.lastError || (marketState.isOpen && !freshData ? 'IBKR stream has no recent market-data tick' : null),
+      lastMessageAgeMs,
       reconnectAttempts: this.reconnectAttempts
     };
+  }
+
+  public getLatestUnderlyingQuote(symbol: string, maxAgeMs = 15_000): LatestUnderlyingQuote | null {
+    const quote = this.latestUnderlyingQuotes.get(String(symbol || '').toUpperCase());
+    if (!quote) return null;
+    const ageMs = Date.now() - Date.parse(quote.timestamp);
+    return Number.isFinite(ageMs) && ageMs <= maxAgeMs ? { ...quote } : null;
   }
 
   private async refreshActiveContracts() {
@@ -146,7 +173,10 @@ export class IbkrMarketDataStreamService extends EventEmitter {
       next.set(this.contractKey(contract), contract);
     }
     this.activeContracts = next;
-    this.activeUnderlyings = new Set([...this.activeContracts.values()].map((contract) => contract.symbol));
+    this.activeUnderlyings = new Set([
+      ...this.requiredUnderlyings,
+      ...[...this.activeContracts.values()].map((contract) => contract.symbol)
+    ]);
   }
 
   private async ensureConnected(): Promise<void> {
@@ -368,7 +398,16 @@ export class IbkrMarketDataStreamService extends EventEmitter {
     if (price === null) return;
 
     if (subscription.type === 'stock') {
-      this.latestUnderlyingPrices.set(subscription.symbol.toUpperCase(), price);
+      const symbol = subscription.symbol.toUpperCase();
+      const timestamp = new Date().toISOString();
+      this.latestUnderlyingPrices.set(symbol, price);
+      this.latestUnderlyingQuotes.set(symbol, {
+        bid: bid ?? 0,
+        ask: ask ?? 0,
+        last: last ?? 0,
+        mark: price,
+        timestamp
+      });
     }
 
     this.lastMessageAt = new Date().toISOString();

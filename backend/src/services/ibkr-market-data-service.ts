@@ -80,6 +80,8 @@ export class IbkrMarketDataService {
   private static connectedPromise: Promise<void> | null = null;
   private static nextRequestId = Number(process.env.IBKR_REQUEST_ID_START || 50_000);
   private static connectionKey: string | null = null;
+  private static healthCache = new Map<string, { expiresAt: number; result: any }>();
+  private static healthInFlight = new Map<string, Promise<any>>();
 
   private host = process.env.IBKR_HOST || 'ib_gateway';
   private port = Number(process.env.IBKR_PORT || 4003);
@@ -111,39 +113,32 @@ export class IbkrMarketDataService {
   public async getHealth() {
     const startedAt = Date.now();
     try {
-      await this.ensureConnected();
+      const connectionKey = await this.refreshRuntimeConfig();
       const marketState = getNewYorkMarketState();
-      if (!marketState.isOpen) {
-        return {
-          status: 'MARKET_CLOSED',
-          connected: true,
-          provider: 'ibkr',
-          mode: this.mode,
-          host: this.host,
-          port: this.port,
-          marketDataType: this.marketDataType,
-          latencyMs: Date.now() - startedAt,
-          lastError: null,
-          marketState
-        };
+      const cacheKey = `${connectionKey}:${marketState.isOpen}`;
+      const cached = IbkrMarketDataService.healthCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return { ...cached.result, latencyMs: Date.now() - startedAt };
       }
-      const quote = await this.getUnderlyingQuote('SPY');
-      const connected = quote.mark > 0;
-      const liveData = this.marketDataType === 1;
-      return {
-        status: connected && liveData ? 'UP' : 'DEGRADED',
-        connected,
-        provider: 'ibkr',
-        mode: this.mode,
-        host: this.host,
-        port: this.port,
-        marketDataType: this.marketDataType,
-        latencyMs: Date.now() - startedAt,
-        lastError: !liveData
-          ? `IBKR market data type ${this.marketDataType} is not live; expected marketDataType=1`
-          : connected ? null : 'IBKR connected but SPY quote did not return a usable mark',
-        marketState
-      };
+
+      const currentCheck = IbkrMarketDataService.healthInFlight.get(cacheKey);
+      if (currentCheck) {
+        const result = await currentCheck;
+        return { ...result, latencyMs: Date.now() - startedAt };
+      }
+
+      const check = this.evaluateHealth(marketState);
+      IbkrMarketDataService.healthInFlight.set(cacheKey, check);
+      try {
+        const result = await check;
+        IbkrMarketDataService.healthCache.set(cacheKey, {
+          expiresAt: Date.now() + 5_000,
+          result
+        });
+        return { ...result, latencyMs: Date.now() - startedAt };
+      } finally {
+        IbkrMarketDataService.healthInFlight.delete(cacheKey);
+      }
     } catch (err: any) {
       return {
         status: 'DOWN',
@@ -157,6 +152,64 @@ export class IbkrMarketDataService {
         lastError: err.message || String(err)
       };
     }
+  }
+
+  private async evaluateHealth(marketState: ReturnType<typeof getNewYorkMarketState>) {
+    if (!marketState.isOpen) {
+      return {
+        status: 'MARKET_CLOSED',
+        connected: true,
+        provider: 'ibkr',
+        mode: this.mode,
+        host: this.host,
+        port: this.port,
+        marketDataType: this.marketDataType,
+        lastError: null,
+        marketState
+      };
+    }
+
+    const stream = (this.fastify as any).ibkrMarketDataStreamer;
+    const streamHealth = stream?.getHealth?.();
+    const streamQuote = stream?.getLatestUnderlyingQuote?.('SPY');
+    if (streamHealth?.connected && streamQuote) {
+      const liveData = this.marketDataType === 1;
+      return {
+        status: liveData ? 'UP' : 'DEGRADED',
+        connected: true,
+        provider: 'ibkr',
+        mode: this.mode,
+        host: this.host,
+        port: this.port,
+        marketDataType: this.marketDataType,
+        lastError: !liveData
+          ? `IBKR market data type ${this.marketDataType} is not live; expected marketDataType=1`
+          : null,
+        marketState,
+        quoteTimestamp: streamQuote.timestamp,
+        quoteSource: 'ibkr_stream'
+      };
+    }
+
+    await this.ensureConnected();
+    const quote = await this.getUnderlyingQuote('SPY');
+    const connected = quote.mark > 0;
+    const liveData = this.marketDataType === 1;
+    return {
+      status: connected && liveData ? 'UP' : 'DEGRADED',
+      connected,
+      provider: 'ibkr',
+      mode: this.mode,
+      host: this.host,
+      port: this.port,
+      marketDataType: this.marketDataType,
+      lastError: !liveData
+        ? `IBKR market data type ${this.marketDataType} is not live; expected marketDataType=1`
+        : connected ? null : 'IBKR connected but SPY quote did not return a usable mark',
+      marketState,
+      quoteTimestamp: quote.timestamp,
+      quoteSource: 'ibkr_snapshot'
+    };
   }
 
   public async getUnderlyingQuote(symbol: string): Promise<IbkrOptionQuote> {
@@ -291,7 +344,6 @@ export class IbkrMarketDataService {
         if (rows.length > 0) {
           resolve();
         } else {
-          IbkrMarketDataService.resetConnection();
           reject(new Error(`IBKR historical bars timed out for ${label}`));
         }
       }, this.requestTimeoutMs);
@@ -546,7 +598,15 @@ export class IbkrMarketDataService {
     let receivedTick = false;
 
     await new Promise<void>((resolve, reject) => {
-      const cleanup = this.registerRequest(reqId, reject, [
+      let settled = false;
+      let timeout: NodeJS.Timeout | null = null;
+      const rejectRequest = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        reject(err);
+      };
+      const cleanup = this.registerRequest(reqId, rejectRequest, [
         [EventName.tickPrice, (id: number, field: number, price: number) => {
           if (id !== reqId) return;
           receivedTick = true;
@@ -572,21 +632,19 @@ export class IbkrMarketDataService {
           if (Number.isFinite(theta)) snapshot.theta = theta;
         }]
       ]);
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         cleanup.cleanup();
         try { ib.cancelMktData(reqId); } catch {}
-        if (!receivedTick) {
-          IbkrMarketDataService.resetConnection();
-        }
+        if (!receivedTick) this.fastify.log.warn(`[IBKR] No market-data tick received for ${label} within ${waitMs}ms.`);
         resolve();
       }, waitMs);
       try {
         ib.reqMktData(reqId, contract, genericTicks, false, false);
       } catch (err) {
-        clearTimeout(timeout);
         cleanup.cleanup();
-        IbkrMarketDataService.resetConnection();
-        reject(err);
+        rejectRequest(err as Error);
       }
     });
 

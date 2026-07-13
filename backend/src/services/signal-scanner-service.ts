@@ -1226,7 +1226,9 @@ Rules:
     const tenYearChangeBps = macroSnapshot.tenYearChangeBps;
 
     if (vixPrice === null) {
-      noTradeReasons.push('VIX data unavailable from IBKR response');
+      noTradeReasons.push(vixSnapshot.error
+        ? `VIX data unavailable from IBKR: ${vixSnapshot.error}`
+        : 'VIX data unavailable from IBKR response');
     }
 
     const hasBullishInternals = bullishInternals >= 2;

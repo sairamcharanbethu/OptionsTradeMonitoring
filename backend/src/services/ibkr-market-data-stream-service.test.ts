@@ -59,6 +59,20 @@ async function testOptionQuotePayloadShape() {
   assert(emitted.underlyingPrice === 754.88, `Expected latest underlying price, got ${emitted.underlyingPrice}`);
 }
 
+async function testFreshUnderlyingQuoteIsAvailableToHealthChecks() {
+  const service = new IbkrMarketDataStreamService(createFastifyMock());
+  (service as any).emitQuote({
+    reqId: 80002,
+    type: 'stock',
+    symbol: 'SPY',
+    snapshot: { bid: 749.10, ask: 749.20, last: 749.15 }
+  });
+
+  const quote = service.getLatestUnderlyingQuote('SPY');
+  assert(quote !== null, 'Fresh SPY stream quote should be available');
+  assert(quote?.mark === 749.15, `Expected SPY stream mark 749.15, got ${quote?.mark}`);
+}
+
 async function testContractKeyAndOsiSymbol() {
   const service = new IbkrMarketDataStreamService(createFastifyMock());
   const contract = (service as any).toStreamContract('spy', 745, 'CALL', '2026-07-06');
@@ -106,6 +120,7 @@ async function testDisconnectSchedulesReconnect() {
 async function runTests() {
   console.log('Running IbkrMarketDataStreamService tests...');
   await testOptionQuotePayloadShape();
+  await testFreshUnderlyingQuoteIsAvailableToHealthChecks();
   await testContractKeyAndOsiSymbol();
   await testTemporarySubscriptionsUseContractKeys();
   await testDisconnectSchedulesReconnect();

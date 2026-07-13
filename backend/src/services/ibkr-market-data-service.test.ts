@@ -101,7 +101,7 @@ async function testPaperModeResolvesPaperPortForHealthChecks() {
   assert(config.port === 4004, `Expected paper port 4004, got ${config.port}`);
 }
 
-async function testNoTickSnapshotResetsSharedConnection() {
+async function testNoTickSnapshotKeepsSharedConnection() {
   const service = new IbkrMarketDataService(createFastifyMock());
   const fakeIb = new EventEmitter() as any;
   let canceledReqId: number | null = null;
@@ -121,9 +121,13 @@ async function testNoTickSnapshotResetsSharedConnection() {
   await (service as any).requestMarketData({}, '', 1, 'test no ticks');
 
   assert(canceledReqId !== null, 'No-tick snapshot should cancel market data request');
-  assert(disconnectCount === 1, `No-tick snapshot should disconnect stale shared API, got ${disconnectCount}`);
-  assert((IbkrMarketDataService as any).sharedApi === null, 'No-tick snapshot should clear shared API');
-  assert((IbkrMarketDataService as any).connectedPromise === null, 'No-tick snapshot should clear connection promise');
+  assert(disconnectCount === 0, `No-tick snapshot should not force-disconnect shared API, got ${disconnectCount}`);
+  assert((IbkrMarketDataService as any).sharedApi === fakeIb, 'No-tick snapshot should preserve shared API for later requests');
+  assert((IbkrMarketDataService as any).connectedPromise !== null, 'No-tick snapshot should preserve connection promise');
+
+  (IbkrMarketDataService as any).sharedApi = null;
+  (IbkrMarketDataService as any).connectedPromise = null;
+  (IbkrMarketDataService as any).connectionKey = null;
 }
 
 async function testTickTimestampRecordsArrivalTime() {
@@ -160,7 +164,7 @@ async function runTests() {
   await testMissingBidAskIsNonExecutableState();
   await testIndexContractUsesCboeIndexSecurityType();
   await testPaperModeResolvesPaperPortForHealthChecks();
-  await testNoTickSnapshotResetsSharedConnection();
+  await testNoTickSnapshotKeepsSharedConnection();
   await testTickTimestampRecordsArrivalTime();
   console.log('All IbkrMarketDataService normalization tests passed!');
 }
