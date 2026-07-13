@@ -52,8 +52,49 @@ export interface SignalReplayScenario {
 export interface SignalReplayResponse {
   config: SignalReplayRequest;
   signalsLoaded: number;
+  generatedSignalsLoaded: number;
+  blockedSignalsLoaded: number;
   signalsUsable: number;
   missingOptionData: number;
+  blockedReplay: {
+    blockedSignals: number;
+    withContracts: number;
+    replayedTrades: number;
+    missingContract: number;
+    missingPriceHistory: number;
+    wins: number;
+    losses: number;
+    winRate: number;
+    totalPnl: number;
+    averagePnl: number;
+    attribution: Array<{
+      category: string;
+      blockedSignals: number;
+      replayedTrades: number;
+      wins: number;
+      losses: number;
+      winRate: number;
+      totalPnl: number;
+    }>;
+    examples: Array<{
+      signalId: number;
+      date: string;
+      symbol: string;
+      side: 'CALL' | 'PUT';
+      optionTicker: string;
+      blockers: string[];
+      outcome: 'WIN' | 'LOSS';
+      pnl: number;
+      exitReason: string;
+    }>;
+    ai: {
+      status: 'INSUFFICIENT_EVIDENCE' | 'READY' | 'UNAVAILABLE';
+      verdict: string | null;
+      analysis: string | null;
+      recommendations: string[];
+      generatedAt: string | null;
+    };
+  };
   research: {
     experiment: 'vix_term_structure';
     candidateScenario: 'vix_contango';

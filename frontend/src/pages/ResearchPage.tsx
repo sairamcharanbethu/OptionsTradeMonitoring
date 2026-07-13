@@ -52,6 +52,10 @@ function scenarioLabel(name: string) {
   return name === 'vix_contango' ? 'VIX contango' : name.replace(/_/g, ' ');
 }
 
+function blockerLabel(category: string) {
+  return category.replace(/_/g, ' ');
+}
+
 function ScenarioRow({ scenario }: { scenario: SignalReplayScenario }) {
   return (
     <div className="grid gap-2 border-t border-border py-3 text-sm md:grid-cols-[1.2fr_repeat(5,minmax(0,1fr))] md:items-center">
@@ -159,11 +163,44 @@ export default function ResearchPage() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Metric label="Signals loaded" value={String(report.signalsLoaded)} detail={`${report.signalsUsable} with usable contracts`} />
-            <Metric label="Term structure coverage" value={`${report.research.signalsWithTermStructure}/${report.signalsLoaded}`} detail={`${report.research.signalsBackfilledFromIbkr} backfilled from IBKR; ${report.research.signalsUnavailableForBackfill} unavailable`} />
+            <Metric label="Signals loaded" value={String(report.signalsLoaded)} detail={`${report.generatedSignalsLoaded} generated · ${report.blockedSignalsLoaded} blocked`} />
+            <Metric label="Term structure coverage" value={`${report.research.signalsWithTermStructure}/${report.generatedSignalsLoaded}`} detail={`${report.research.signalsBackfilledFromIbkr} backfilled from IBKR; ${report.research.signalsUnavailableForBackfill} unavailable`} />
             <Metric label="Contango floor" value={`${report.research.minimumRatio.toFixed(2)}x`} detail="VIX3M ÷ VIX" />
             <Metric label="Candidate trades" value={String(report.research.candidate.trades)} detail={`Minimum review sample ${report.research.minimumComparableTrades}`} />
           </div>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="text-base">Blocked trade counterfactual replay</CardTitle>
+                <Badge variant="outline">Research only</Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <p className="mb-4 text-sm text-muted-foreground">Hermes replays the contract that was available when the scanner blocked the setup. This evidence does not approve trades or change live gates.</p>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                <Metric label="Blocked scans" value={String(report.blockedReplay.blockedSignals)} />
+                <Metric label="Replayed trades" value={String(report.blockedReplay.replayedTrades)} detail={`${report.blockedReplay.missingPriceHistory} missing price history`} />
+                <Metric label="Win rate" value={percent(report.blockedReplay.winRate)} />
+                <Metric label="Counterfactual P&L" value={currency(report.blockedReplay.totalPnl)} tone={numberTone(report.blockedReplay.totalPnl)} />
+                <Metric label="AI verdict" value={report.blockedReplay.ai.verdict || report.blockedReplay.ai.status.replace(/_/g, ' ')} />
+              </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.4fr]">
+                <div className="rounded-md border border-border bg-muted/20 p-3">
+                  <div className="text-xs font-semibold text-muted-foreground">Blocker attribution</div>
+                  <div className="mt-2 space-y-1 text-sm">
+                    {report.blockedReplay.attribution.length === 0 && <div className="text-muted-foreground">No blocked evidence in this range.</div>}
+                    {report.blockedReplay.attribution.map((item) => <div key={item.category} className="flex items-center justify-between gap-3"><span className="capitalize text-muted-foreground">{blockerLabel(item.category)}</span><span className="font-mono">{item.replayedTrades}/{item.blockedSignals} · {percent(item.winRate)} · {currency(item.totalPnl)}</span></div>)}
+                  </div>
+                </div>
+                <div className="rounded-md border border-border bg-muted/20 p-3">
+                  <div className="text-xs font-semibold text-muted-foreground">AI research readout</div>
+                  <div className="mt-2 text-sm text-muted-foreground">{report.blockedReplay.ai.analysis || (report.blockedReplay.ai.status === 'INSUFFICIENT_EVIDENCE' ? 'No blocked trade had both a usable contract and replayable option history.' : 'AI readout unavailable; use the blocker attribution and replay totals.')}</div>
+                  {report.blockedReplay.ai.recommendations.length > 0 && <ul className="mt-2 space-y-1 text-sm text-muted-foreground">{report.blockedReplay.ai.recommendations.map((recommendation) => <li key={recommendation} className="flex gap-2"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/70" /><span>{recommendation}</span></li>)}</ul>}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-base">Baseline vs VIX contango</CardTitle></CardHeader>

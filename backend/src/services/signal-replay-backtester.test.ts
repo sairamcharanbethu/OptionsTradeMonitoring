@@ -395,6 +395,80 @@ async function testScannerLogFallbackBuildsReplaySignal() {
   assert((backtester as any).getScenarioSkipReason('vix_contango', signal) === null, 'Scanner log should preserve macro evidence');
 }
 
+async function testBlockedScannerLogPreservesCounterfactualContract() {
+  const backtester = createBacktester();
+  const signal = (backtester as any).scannerLogToReplaySignal({
+    id: 89,
+    symbol: 'SPY',
+    outcome: 'BLOCKED',
+    created_at: '2026-06-22T13:45:00.000Z',
+    indicators: {
+      decisionSnapshot: createDecisionSnapshot({
+        status: 'BLOCKED',
+        blockers: ['PUT volume 100 did not exceed threshold 200'],
+        finalDecision: {
+          counterfactual: true,
+          signalDecision: createDecision({
+            signalId: undefined,
+            symbol: 'SPY',
+            side: 'PUT',
+            contract: { ticker: 'SPY260622P00550000', strike: 550, expiry: '2026-06-22' },
+            quote: { mark: 1, bid: 0.99, ask: 1.01, spreadPct: 2, volume: 100, openInterest: 1000 }
+          })
+        }
+      })
+    },
+    no_trade_reasons: ['PUT volume 100 did not exceed threshold 200']
+  });
+
+  assert(signal !== null, 'Blocked scanner log should become a replay signal');
+  assert(signal.blocked === true, 'Replay signal should retain blocked status');
+  assert((backtester as any).resolveContract(signal)?.right === 'put', 'Blocked replay should retain hypothetical PUT contract');
+  assert(signal.option_details.configSnapshot !== undefined, 'Blocked replay should retain scanner replay settings');
+}
+
+async function testBlockedReplayAttributesOutcomeAndUsesAIResearchOnly() {
+  const backtester = createBacktester();
+  (backtester as any).ibkrMarketData = {
+    getOptionHistoricalBars: async () => [{
+      start: '2026-06-22T13:45:00.000Z',
+      open: 1,
+      high: 1.2,
+      low: 0.98,
+      close: 1.15,
+      volume: 100
+    }]
+  };
+  (backtester as any).aiService = {
+    askTradingJSON: async () => ({
+      verdict: 'KEEP_BLOCKED',
+      analysis: 'The blocked sample is too small to justify changing the gate.',
+      recommendations: ['Collect more comparable blocked replays.']
+    })
+  };
+  const signal = createSignal({
+    id: -89,
+    signal_type: 'PUT',
+    option_details: {
+      ticker: 'QQQ260622P00741000',
+      mark: 1,
+      decision: createDecision({ signalId: undefined, side: 'PUT', contract: { ticker: 'QQQ260622P00741000', strike: 741, expiry: '2026-06-22' } }),
+      decisionSnapshot: { blockers: ['PUT volume 100 did not exceed threshold 200'] }
+    },
+    no_trade_reasons: ['PUT volume 100 did not exceed threshold 200'],
+    blocked: true
+  });
+
+  const summary = await (backtester as any).replayBlockedSignals(7, [signal], createConfig(), new Map());
+
+  assert(summary.blockedSignals === 1, `Expected one blocked scan, got ${summary.blockedSignals}`);
+  assert(summary.replayedTrades === 1, `Expected one counterfactual replay, got ${summary.replayedTrades}`);
+  assert(summary.wins === 1, `Expected one counterfactual win, got ${summary.wins}`);
+  assert(summary.attribution[0].category === 'volume_confirmation', 'Expected volume blocker attribution');
+  assert(summary.ai.status === 'READY', 'Expected AI research readout to be ready');
+  assert(summary.ai.verdict === 'KEEP_BLOCKED', 'Expected AI verdict to be preserved');
+}
+
 async function testStoredSignalDecisionDrivesReplayMetadata() {
   const backtester = createBacktester();
   const signal = createSignal({
@@ -875,6 +949,8 @@ async function runTests() {
   await testVixResearchReportRequiresComparableSample();
   await testHistoricalVixBackfillUsesSignalTimeBars();
   await testScannerLogFallbackBuildsReplaySignal();
+  await testBlockedScannerLogPreservesCounterfactualContract();
+  await testBlockedReplayAttributesOutcomeAndUsesAIResearchOnly();
   await testStoredSignalDecisionDrivesReplayMetadata();
   await testParitySummaryReportsDecisionGaps();
   await testSnapshotDriftReportUsesStoredDecisionSnapshot();

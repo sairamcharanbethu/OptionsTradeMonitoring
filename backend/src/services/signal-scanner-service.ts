@@ -2273,12 +2273,76 @@ Rules:
         []
       ]);
     } else {
+      let blockedCounterfactual: any = null;
+      if (cycle.marketPhase === 'OPEN') {
+        try {
+          blockedCounterfactual = await this.buildBlockedCounterfactualOption({
+            userId,
+            symbol,
+            winningSide: winningSide as 'CALL' | 'PUT',
+            currentPrice,
+            marketDate: nyParts.dateStr,
+            minutes: nyParts.minutes,
+            expiryMode: settings.day_trading_expiry_mode || 'adaptive',
+            strikeOffset: parseInt(settings.strike_offset, 10) || 0,
+            forceRefresh: cycle.force,
+            minOptionMark,
+            maxBidAskSpreadPct,
+            minOptionVolume,
+            minOpenInterest
+          });
+        } catch (err: any) {
+          this.fastify.log.warn(`[SignalScannerService] Blocked counterfactual option capture failed for ${symbol}: ${err.message || String(err)}`);
+        }
+      }
+
+      const blockedContract = cycle.marketPhase === 'OPEN' ? (blockedCounterfactual?.contract || {
+        ticker: this.buildOsiTicker(
+          symbol,
+          this.getTargetDayTradeExpiry(nyParts.dateStr, nyParts.minutes, settings.day_trading_expiry_mode || 'adaptive'),
+          winningSide as 'CALL' | 'PUT',
+          Math.round(currentPrice)
+        ),
+        strike: Math.round(currentPrice),
+        expiry: this.getTargetDayTradeExpiry(nyParts.dateStr, nyParts.minutes, settings.day_trading_expiry_mode || 'adaptive')
+      }) : { ticker: null, strike: null, expiry: null };
+      const blockedQuote = blockedCounterfactual?.quote || {};
+      const blockedSignalDecision = {
+        symbol,
+        side: winningSide,
+        createdAt: cycle.startedAt,
+        contract: blockedContract,
+        quote: {
+          mark: blockedQuote.mark ?? null,
+          bid: blockedQuote.bid ?? null,
+          ask: blockedQuote.ask ?? null,
+          spreadPct: blockedQuote.spreadPct ?? null,
+          volume: blockedQuote.volume ?? null,
+          openInterest: blockedQuote.openInterest ?? null,
+          usingTheoreticalPricing: false
+        },
+        grade: {
+          finalConfidence: winningScore,
+          setupGrade: 'BLOCKED',
+          executable: false,
+          blockers: noTradeReasons,
+          reasons: noTradeReasons
+        }
+      };
       const blockedDecisionSnapshot = this.buildDecisionSnapshot({
         ...decisionSnapshotBase,
         cycle: this.getCycleSnapshot(cycle, symbol),
         status: 'BLOCKED',
-        optionSelection: null,
-        finalDecision: null,
+        optionSelection: {
+          counterfactual: blockedCounterfactual,
+          candidateSelection: blockedCounterfactual?.candidateSelection || null
+        },
+        finalDecision: {
+          counterfactual: true,
+          signalDecision: blockedSignalDecision,
+          finalConfidence: winningScore,
+          setupGrade: 'BLOCKED'
+        },
         blockers: noTradeReasons
       });
 
@@ -3082,6 +3146,134 @@ Rules:
         snaptradeAutoTrade: settings.snaptrade_auto_trade === 'true'
       }
     };
+  }
+
+  private async buildBlockedCounterfactualOption(input: {
+    userId: number;
+    symbol: string;
+    winningSide: 'CALL' | 'PUT';
+    currentPrice: number;
+    marketDate: string;
+    minutes: number;
+    expiryMode: string;
+    strikeOffset: number;
+    forceRefresh: boolean;
+    minOptionMark: number;
+    maxBidAskSpreadPct: number;
+    minOptionVolume: number;
+    minOpenInterest: number;
+  }): Promise<Record<string, any>> {
+    const expiry = this.getTargetDayTradeExpiry(input.marketDate, input.minutes, input.expiryMode);
+    const defaultStrike = Math.round(input.currentPrice);
+    const defaultContract = {
+      ticker: this.buildOsiTicker(input.symbol, expiry, input.winningSide, defaultStrike),
+      strike: defaultStrike,
+      expiry
+    };
+    const fallback = {
+      source: 'counterfactual_default',
+      selected: false,
+      contract: defaultContract,
+      quote: {
+        bid: null,
+        ask: null,
+        spreadPct: null,
+        mark: null,
+        volume: null,
+        openInterest: null
+      },
+      candidateSelection: null,
+      error: null
+    };
+
+    try {
+      const chainSnapshot = await this.getCachedOptionChainSnapshot({
+        userId: input.userId,
+        symbol: input.symbol,
+        expiration: expiry,
+        side: input.winningSide,
+        windowKey: `${input.marketDate}:${Math.floor(input.minutes / 5) * 5}`,
+        forceRefresh: input.forceRefresh
+      });
+      const parsed = chainSnapshot.chain
+        .map((quote) => ({ ticker: quote.ticker, strike: quote.strike, expiry: quote.expiration }))
+        .filter((candidate, idx, arr) => Number.isFinite(candidate.strike) && arr.findIndex((other) => other.ticker === candidate.ticker) === idx)
+        .sort((a, b) => a.strike - b.strike);
+      if (parsed.length === 0) {
+        return { ...fallback, error: 'IBKR returned an empty option chain', candidateSelection: { source: 'ibkr_chain', cache: chainSnapshot.cache, candidates: [] } };
+      }
+
+      let atmIdx = 0;
+      let minDistance = Infinity;
+      for (let index = 0; index < parsed.length; index++) {
+        const distance = Math.abs(parsed[index].strike - input.currentPrice);
+        if (distance < minDistance) {
+          minDistance = distance;
+          atmIdx = index;
+        }
+      }
+      const preferredIdx = Math.max(
+        0,
+        Math.min(parsed.length - 1, input.winningSide === 'CALL' ? atmIdx + input.strikeOffset : atmIdx - input.strikeOffset)
+      );
+      const preferredStrike = parsed[preferredIdx]?.strike || parsed[atmIdx]?.strike || defaultStrike;
+      const candidates = this.getContractWindow(parsed, atmIdx, input.winningSide, input.strikeOffset);
+      const selection = this.fetchBestIBKROptionCandidate({
+        chain: chainSnapshot.chain,
+        candidates,
+        preferredStrike,
+        minOptionMark: input.minOptionMark,
+        maxBidAskSpreadPct: input.maxBidAskSpreadPct,
+        minOptionVolume: input.minOptionVolume,
+        minOpenInterest: input.minOpenInterest
+      });
+      const selected = selection.selected || selection.ranked[0] || null;
+      if (!selected) {
+        return { ...fallback, error: 'IBKR returned no replayable option candidate', candidateSelection: { source: 'ibkr_chain', cache: chainSnapshot.cache, preferredStrike, candidates: [] } };
+      }
+
+      return {
+        source: 'ibkr_chain_counterfactual',
+        selected: Boolean(selection.selected),
+        contract: { ticker: selected.ticker, strike: selected.strike, expiry: selected.expiry },
+        quote: {
+          bid: selected.bid,
+          ask: selected.ask,
+          spreadPct: selected.spreadPct,
+          mark: selected.mark,
+          volume: selected.volume,
+          openInterest: selected.openInterest
+        },
+        candidateSelection: {
+          source: 'ibkr_chain',
+          cache: chainSnapshot.cache,
+          preferredStrike,
+          selectedScore: selection.selected?.score ?? null,
+          selectedReasons: selection.selected?.reasons ?? [],
+          candidates: selection.ranked.slice(0, 9).map((candidate) => ({
+            ticker: candidate.ticker,
+            strike: candidate.strike,
+            bid: candidate.bid,
+            ask: candidate.ask,
+            mark: candidate.mark,
+            spreadPct: candidate.spreadPct,
+            volume: candidate.volume,
+            openInterest: candidate.openInterest,
+            delta: candidate.delta ?? null,
+            gamma: candidate.gamma ?? null,
+            theta: candidate.theta ?? null,
+            impliedVolatility: candidate.impliedVolatility ?? null,
+            failedFilters: candidate.failedFilters,
+            score: candidate.score,
+            reasons: candidate.reasons
+          }))
+        },
+        rejected: !selection.selected,
+        rejectionReasons: selected.failedFilters.length > 0 ? selected.failedFilters : selected.reasons
+      };
+    } catch (err: any) {
+      return { ...fallback, error: err.message || String(err) };
+    }
   }
 
   private buildSignalDecision(input: {

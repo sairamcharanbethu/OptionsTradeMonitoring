@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { SignalDecision } from '../lib/trading-events';
+import { AIService } from './ai-service';
 import { IbkrMarketDataService, IbkrOptionContract } from './ibkr-market-data-service';
 
 type ReplayBar = {
@@ -23,7 +24,50 @@ type ReplaySignal = {
   option_details: any;
   volatility: any;
   no_trade_reasons: string[] | null;
+  blocked?: boolean;
   replayVixTermStructure?: any;
+};
+
+type BlockedReplayAttribution = {
+  category: string;
+  blockedSignals: number;
+  replayedTrades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+};
+
+type BlockedReplaySummary = {
+  blockedSignals: number;
+  withContracts: number;
+  replayedTrades: number;
+  missingContract: number;
+  missingPriceHistory: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+  averagePnl: number;
+  attribution: BlockedReplayAttribution[];
+  examples: Array<{
+    signalId: number;
+    date: string;
+    symbol: string;
+    side: 'CALL' | 'PUT';
+    optionTicker: string;
+    blockers: string[];
+    outcome: 'WIN' | 'LOSS';
+    pnl: number;
+    exitReason: string;
+  }>;
+  ai: {
+    status: 'INSUFFICIENT_EVIDENCE' | 'READY' | 'UNAVAILABLE';
+    verdict: string | null;
+    analysis: string | null;
+    recommendations: string[];
+    generatedAt: string | null;
+  };
 };
 
 type ReplayVixBackfillSummary = {
@@ -282,16 +326,21 @@ type ReplaySummary = {
 
 export class SignalReplayBacktester {
   private ibkrMarketData: IbkrMarketDataService;
+  private aiService: AIService;
 
   constructor(private fastify: FastifyInstance) {
     this.ibkrMarketData = new IbkrMarketDataService(fastify);
+    this.aiService = new AIService(fastify);
   }
 
   public async run(userId: number, input: Partial<ReplayConfig>): Promise<{
     config: ReplayConfig;
     signalsLoaded: number;
+    generatedSignalsLoaded: number;
+    blockedSignalsLoaded: number;
     signalsUsable: number;
     missingOptionData: number;
+    blockedReplay: BlockedReplaySummary;
     parity: ReplayParitySummary;
     snapshotDrift: ReplaySnapshotDriftReport;
     calibration: ReplayCalibrationReport;
@@ -301,9 +350,11 @@ export class SignalReplayBacktester {
   }> {
     const config = this.normalizeConfig(input);
     const signals = await this.loadSignals(config);
-    const usableSignals = signals.filter((signal) => this.resolveContract(signal) !== null);
+    const blockedSignals = signals.filter((signal) => signal.blocked === true);
+    const generatedSignals = signals.filter((signal) => signal.blocked !== true);
+    const usableSignals = generatedSignals.filter((signal) => this.resolveContract(signal) !== null);
     const historicalVixBackfill = await this.backfillHistoricalVixTermStructure(usableSignals);
-    const missingOptionData = signals.length - usableSignals.length;
+    const missingOptionData = generatedSignals.length - usableSignals.length;
     const parity = this.buildParitySummary(signals);
     const snapshotDrift = this.buildSnapshotDriftReport(signals);
 
@@ -371,23 +422,7 @@ export class SignalReplayBacktester {
         const cacheKey = `${contract.symbol}:${contract.expiration}:${contract.right}:${contract.strike}:${dateKey}:${signalConfig.interval}`;
         let bars = historyCache.get(cacheKey);
         if (!bars) {
-          try {
-            bars = await this.ibkrMarketData.getOptionHistoricalBars(
-              contract,
-              this.dateAtEt(dateKey, 16, 0),
-              this.historyDuration(signalConfig.interval),
-              this.historyBarSize(signalConfig.interval)
-            );
-          } catch (err: any) {
-            this.fastify.log.warn(`[SignalReplayBacktester] IBKR history unavailable for ${cacheKey}: ${err.message || String(err)}`);
-            bars = [];
-          }
-          if (bars.length === 0) {
-            bars = await this.getCapturedOptionBars(contract, dateKey, signalConfig.interval);
-            if (bars.length > 0) {
-              this.fastify.log.info(`[SignalReplayBacktester] Using ${bars.length} captured option bars for ${cacheKey}.`);
-            }
-          }
+          bars = await this.loadOptionReplayBars(contract, dateKey, signalConfig.interval, cacheKey);
           historyCache.set(cacheKey, bars);
         }
 
@@ -407,13 +442,17 @@ export class SignalReplayBacktester {
     const vixContango = scenarios.find((scenario) => scenario.name === 'vix_contango') as ReplayScenario;
     const calibration = this.buildCalibrationReport(baseline.trades);
     const attribution = this.buildAttributionReport(baseline.trades);
-    const research = this.buildVixTermStructureResearchReport(signals, baseline, vixContango, historicalVixBackfill);
+    const research = this.buildVixTermStructureResearchReport(generatedSignals, baseline, vixContango, historicalVixBackfill);
+    const blockedReplay = await this.replayBlockedSignals(userId, blockedSignals, config, historyCache);
 
     return {
       config,
       signalsLoaded: signals.length,
+      generatedSignalsLoaded: generatedSignals.length,
+      blockedSignalsLoaded: blockedSignals.length,
       signalsUsable: usableSignals.length,
       missingOptionData,
+      blockedReplay,
       parity,
       snapshotDrift,
       calibration,
@@ -475,9 +514,9 @@ export class SignalReplayBacktester {
       params
     );
     const { rows: scannerLogRows } = await (this.fastify as any).pg.query(
-      `SELECT id, symbol, indicators, no_trade_reasons, created_at
+      `SELECT id, symbol, indicators, outcome, no_trade_reasons, created_at
        FROM scanner_logs
-       WHERE outcome = 'SIGNAL_GENERATED'
+       WHERE outcome IN ('SIGNAL_GENERATED', 'BLOCKED')
          AND created_at::date >= $1
          AND created_at::date <= $2
          ${symbolFilter}
@@ -502,6 +541,32 @@ export class SignalReplayBacktester {
       .filter((signal) => signal.signal_type === 'CALL' || signal.signal_type === 'PUT')
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
       .slice(0, config.maxSignals);
+  }
+
+  private async loadOptionReplayBars(
+    contract: IbkrOptionContract,
+    dateKey: string,
+    interval: string,
+    cacheKey: string
+  ): Promise<ReplayBar[]> {
+    let bars: ReplayBar[] = [];
+    try {
+      bars = await this.ibkrMarketData.getOptionHistoricalBars(
+        contract,
+        this.dateAtEt(dateKey, 16, 0),
+        this.historyDuration(interval),
+        this.historyBarSize(interval)
+      );
+    } catch (err: any) {
+      this.fastify.log.warn(`[SignalReplayBacktester] IBKR history unavailable for ${cacheKey}: ${err.message || String(err)}`);
+    }
+    if (bars.length === 0) {
+      bars = await this.getCapturedOptionBars(contract, dateKey, interval);
+      if (bars.length > 0) {
+        this.fastify.log.info(`[SignalReplayBacktester] Using ${bars.length} captured option bars for ${cacheKey}.`);
+      }
+    }
+    return bars;
   }
 
   private async getCapturedOptionBars(contract: IbkrOptionContract, dateKey: string, interval: string): Promise<ReplayBar[]> {
@@ -584,14 +649,181 @@ export class SignalReplayBacktester {
         mark: quote.mark ?? null,
         decision,
         decisionSnapshot,
+        configSnapshot: decisionSnapshot?.configSnapshot || null,
         candidateSelection: decisionSnapshot?.optionSelection?.candidateSelection || null
       },
       volatility: {
         ...macroSnapshot,
         macroRegime
       },
-      no_trade_reasons: Array.isArray(row.no_trade_reasons) ? row.no_trade_reasons : []
+      no_trade_reasons: Array.isArray(row.no_trade_reasons) ? row.no_trade_reasons : [],
+      blocked: String(row.outcome || '').toUpperCase() === 'BLOCKED'
     };
+  }
+
+  private async replayBlockedSignals(
+    userId: number,
+    signals: ReplaySignal[],
+    config: ReplayConfig,
+    historyCache: Map<string, ReplayBar[]>
+  ): Promise<BlockedReplaySummary> {
+    const attribution = new Map<string, BlockedReplayAttribution>();
+    const trades: ReplayTrade[] = [];
+    let withContracts = 0;
+    let missingContract = 0;
+    let missingPriceHistory = 0;
+
+    for (const signal of signals) {
+      const blockers = this.getBlockedReasons(signal);
+      const categories = new Set(blockers.map((reason) => this.blockedReasonCategory(reason)));
+      for (const category of categories) {
+        const current = attribution.get(category) || {
+          category,
+          blockedSignals: 0,
+          replayedTrades: 0,
+          wins: 0,
+          losses: 0,
+          winRate: 0,
+          totalPnl: 0
+        };
+        current.blockedSignals++;
+        attribution.set(category, current);
+      }
+
+      const contract = this.resolveContract(signal);
+      if (!contract) {
+        missingContract++;
+        continue;
+      }
+      withContracts++;
+      const signalConfig = this.getSignalReplayConfig(signal, config);
+      const dateKey = this.getSignalDate(signal);
+      const cacheKey = `${contract.symbol}:${contract.expiration}:${contract.right}:${contract.strike}:${dateKey}:${signalConfig.interval}`;
+      let bars = historyCache.get(cacheKey);
+      if (!bars) {
+        bars = await this.loadOptionReplayBars(contract, dateKey, signalConfig.interval, cacheKey);
+        historyCache.set(cacheKey, bars);
+      }
+
+      const trade = this.simulateTrade(signal, contract, bars, signalConfig);
+      if (!trade) {
+        missingPriceHistory++;
+        continue;
+      }
+      trades.push(trade);
+      const tradeCategories = categories.size > 0 ? categories : new Set(['other']);
+      for (const category of tradeCategories) {
+        const current = attribution.get(category) || {
+          category,
+          blockedSignals: 0,
+          replayedTrades: 0,
+          wins: 0,
+          losses: 0,
+          winRate: 0,
+          totalPnl: 0
+        };
+        current.replayedTrades++;
+        if (trade.pnl > 0) current.wins++;
+        else current.losses++;
+        current.totalPnl = Number((current.totalPnl + trade.pnl).toFixed(2));
+        current.winRate = Number(((current.wins / current.replayedTrades) * 100).toFixed(2));
+        attribution.set(category, current);
+      }
+    }
+
+    const wins = trades.filter((trade) => trade.pnl > 0).length;
+    const losses = trades.length - wins;
+    const summary: BlockedReplaySummary = {
+      blockedSignals: signals.length,
+      withContracts,
+      replayedTrades: trades.length,
+      missingContract,
+      missingPriceHistory,
+      wins,
+      losses,
+      winRate: trades.length > 0 ? Number(((wins / trades.length) * 100).toFixed(2)) : 0,
+      totalPnl: Number(trades.reduce((sum, trade) => sum + trade.pnl, 0).toFixed(2)),
+      averagePnl: trades.length > 0 ? Number((trades.reduce((sum, trade) => sum + trade.pnl, 0) / trades.length).toFixed(2)) : 0,
+      attribution: [...attribution.values()].sort((a, b) => b.replayedTrades - a.replayedTrades || b.blockedSignals - a.blockedSignals),
+      examples: trades.slice(0, 12).map((trade) => {
+        const signal = signals.find((candidate) => candidate.id === trade.signalId);
+        return {
+          signalId: trade.signalId,
+          date: trade.date,
+          symbol: trade.symbol,
+          side: trade.side,
+          optionTicker: trade.optionTicker,
+          blockers: signal ? this.getBlockedReasons(signal).slice(0, 4) : [],
+          outcome: trade.pnl > 0 ? 'WIN' : 'LOSS',
+          pnl: trade.pnl,
+          exitReason: trade.exitReason
+        };
+      }),
+      ai: {
+        status: trades.length > 0 ? 'UNAVAILABLE' : 'INSUFFICIENT_EVIDENCE',
+        verdict: null,
+        analysis: null,
+        recommendations: [],
+        generatedAt: null
+      }
+    };
+
+    if (trades.length === 0) return summary;
+
+    try {
+      const prompt = [
+        'You are reviewing a research-only counterfactual replay of blocked 0DTE options candidates.',
+        'Do not recommend live execution, automatic gate changes, or lowering a blocker from this sample alone.',
+        'Assess whether the evidence suggests keeping the blocker, researching a narrower exception, or collecting more data.',
+        'Return JSON with exactly: verdict (KEEP_BLOCKED, RESEARCH_FILTER, or INSUFFICIENT_EVIDENCE), analysis (concise evidence-based paragraph), recommendations (array of short strings).',
+        JSON.stringify({
+          blockedSignals: summary.blockedSignals,
+          replayedTrades: summary.replayedTrades,
+          missingContract: summary.missingContract,
+          missingPriceHistory: summary.missingPriceHistory,
+          wins: summary.wins,
+          losses: summary.losses,
+          winRate: summary.winRate,
+          totalPnl: summary.totalPnl,
+          averagePnl: summary.averagePnl,
+          blockerAttribution: summary.attribution,
+          examples: summary.examples
+        })
+      ].join('\n');
+      const aiResult = await this.aiService.askTradingJSON(prompt, userId, 900);
+      summary.ai = {
+        status: 'READY',
+        verdict: typeof aiResult.verdict === 'string' ? aiResult.verdict : null,
+        analysis: typeof aiResult.analysis === 'string' ? aiResult.analysis : null,
+        recommendations: Array.isArray(aiResult.recommendations)
+          ? aiResult.recommendations.filter((recommendation: any) => typeof recommendation === 'string').slice(0, 5)
+          : [],
+        generatedAt: new Date().toISOString()
+      };
+    } catch (err: any) {
+      this.fastify.log.warn(`[SignalReplayBacktester] Blocked replay AI unavailable: ${err.message || String(err)}`);
+    }
+
+    return summary;
+  }
+
+  private getBlockedReasons(signal: ReplaySignal): string[] {
+    const snapshotBlockers = signal.option_details?.decisionSnapshot?.blockers;
+    const reasons = signal.no_trade_reasons?.length ? signal.no_trade_reasons : snapshotBlockers;
+    return Array.isArray(reasons) ? reasons.filter((reason) => typeof reason === 'string' && reason.trim()) : [];
+  }
+
+  private blockedReasonCategory(reason: string): string {
+    if (/mega-caps|macro|risk.off|avoid shorting/i.test(reason)) return 'macro_direction';
+    if (/pinned|put wall|call wall|king node|gex range/i.test(reason)) return 'gex_pin';
+    if (/gamma direction|gamma flip/i.test(reason)) return 'gamma_alignment';
+    if (/volume|rvol|high-volume|anomaly/i.test(reason)) return 'volume_confirmation';
+    if (/ema\d|trend|price > ema|price < ema/i.test(reason)) return 'trend_alignment';
+    if (/breakdown|reclaim|rejection|prior candle|confirmation/i.test(reason)) return 'price_confirmation';
+    if (/score|dynamic minimum/i.test(reason)) return 'score_threshold';
+    if (/vix|term structure|contango/i.test(reason)) return 'volatility_gate';
+    if (/stale|unavailable|ibkr|market data|candle/i.test(reason)) return 'data_quality';
+    return 'other';
   }
 
   private mergeReplaySignals(canonical: ReplaySignal, fallback: ReplaySignal): ReplaySignal {
@@ -600,6 +832,7 @@ export class SignalReplayBacktester {
     return {
       ...fallback,
       ...canonical,
+      blocked: canonical.blocked ?? fallback.blocked,
       option_details: {
         ...fallbackDetails,
         ...canonicalDetails,
