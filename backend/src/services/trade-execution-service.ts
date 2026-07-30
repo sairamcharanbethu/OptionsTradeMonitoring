@@ -366,8 +366,8 @@ export class TradeExecutionService {
        WHERE user_id = $1
          AND created_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'
          AND (
-           account_id IN ('alpaca_paper', 'simulated')
-           OR execution_broker IN ('alpaca_paper', 'wealthsimple_snaptrade', 'simulated')
+           account_id = 'simulated'
+           OR execution_broker IN ('wealthsimple_snaptrade', 'simulated')
          )`,
       [userId]
     );
@@ -485,16 +485,11 @@ export class TradeExecutionService {
 
     if (summary.closed > 0 || summary.supersededPending > 0) {
       await this.invalidateUserCaches(input.userId);
-      const streamers = [
-        (this.fastify as any).ibkrMarketDataStreamer,
-        (this.fastify as any).alpacaMarketDataStreamer
-      ];
-      for (const streamer of streamers) {
-        if (streamer?.syncSubscriptions) {
-          streamer.syncSubscriptions().catch((err: any) => {
-            this.fastify.log.warn(`[TradeExecutionService] Failed to refresh stream subscriptions after superseded cleanup: ${err.message}`);
-          });
-        }
+      const streamer = (this.fastify as any).ibkrMarketDataStreamer;
+      if (streamer?.syncSubscriptions) {
+        streamer.syncSubscriptions().catch((err: any) => {
+          this.fastify.log.warn(`[TradeExecutionService] Failed to refresh stream subscriptions after superseded cleanup: ${err.message}`);
+        });
       }
     }
 
@@ -965,16 +960,11 @@ export class TradeExecutionService {
       ]
     );
 
-    const streamers = [
-      (this.fastify as any).ibkrMarketDataStreamer,
-      (this.fastify as any).alpacaMarketDataStreamer
-    ];
-    for (const streamer of streamers) {
-      if (streamer?.syncSubscriptions) {
-        streamer.syncSubscriptions().catch((err: any) => {
-          this.fastify.log.warn(`[TradeExecutionService] Failed to refresh stream subscriptions: ${err.message}`);
-        });
-      }
+    const streamer = (this.fastify as any).ibkrMarketDataStreamer;
+    if (streamer?.syncSubscriptions) {
+      streamer.syncSubscriptions().catch((err: any) => {
+        this.fastify.log.warn(`[TradeExecutionService] Failed to refresh stream subscriptions: ${err.message}`);
+      });
     }
 
     return rows[0] || null;

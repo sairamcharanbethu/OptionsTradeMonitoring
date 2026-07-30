@@ -668,124 +668,11 @@ async function testScannerUsesOnlyCompletedCandles() {
   assert(afterClose.length === 2, `Expected 2 completed candles after 13:45 bar close, got ${afterClose.length}`);
 }
 
-async function testScannerCandlesPreferAlpacaBarsWhenCredentialsExist() {
-  const scanner = createScanner();
-  let yahooCalled = false;
-  const result = await scanner.fetchScannerCandles({
-    symbol: 'QQQ',
-    now: new Date('2026-06-22T14:00:00.000Z'),
-    settings: {
-      alpaca_key_id: 'key',
-      alpaca_secret_key: 'secret'
-    },
-    alpacaGet: async () => ({
-      data: {
-        bars: {
-          QQQ: [{
-            t: '2026-06-22T13:55:00Z',
-            o: 741,
-            h: 742,
-            l: 740.5,
-            c: 741.5,
-            v: 1000
-          }]
-        }
-      }
-    }),
-    yahooChart: async () => {
-      yahooCalled = true;
-      return { quotes: [] };
-    }
-  });
-
-  assert(result.source === 'alpaca', `Expected Alpaca candle source, got ${result.source}`);
-  assert(result.candles.length === 1, `Expected one Alpaca candle, got ${result.candles.length}`);
-  assert(result.candles[0].close === 741.5, `Expected Alpaca close 741.5, got ${result.candles[0].close}`);
-  assert(yahooCalled === false, 'Yahoo fallback should not run when Alpaca bars are usable');
-}
-
-async function testScannerCandlesUseAlpacaEnvCredentialsFallback() {
-  const scanner = createScanner();
-  const previousKey = process.env.ALPACA_KEY;
-  const previousSecret = process.env.ALPACA_SECRET;
-  process.env.ALPACA_KEY = 'env-key';
-  process.env.ALPACA_SECRET = 'env-secret';
-
-  try {
-    let receivedKey = '';
-    let receivedSecret = '';
-    const result = await scanner.fetchScannerCandles({
-      symbol: 'QQQ',
-      now: new Date('2026-06-22T14:00:00.000Z'),
-      settings: {},
-      alpacaGet: async (_url: string, options: any) => {
-        receivedKey = options.headers['APCA-API-KEY-ID'];
-        receivedSecret = options.headers['APCA-API-SECRET-KEY'];
-        return {
-          data: {
-            bars: {
-              QQQ: [{
-                t: '2026-06-22T13:55:00Z',
-                o: 741,
-                h: 742,
-                l: 740.5,
-                c: 741.5,
-                v: 1000
-              }]
-            }
-          }
-        };
-      },
-      yahooChart: async () => ({ quotes: [] })
-    });
-
-    assert(result.source === 'alpaca', `Expected Alpaca env candle source, got ${result.source}`);
-    assert(receivedKey === 'env-key', `Expected env Alpaca key, got ${receivedKey}`);
-    assert(receivedSecret === 'env-secret', `Expected env Alpaca secret, got ${receivedSecret}`);
-  } finally {
-    if (previousKey === undefined) delete process.env.ALPACA_KEY;
-    else process.env.ALPACA_KEY = previousKey;
-    if (previousSecret === undefined) delete process.env.ALPACA_SECRET;
-    else process.env.ALPACA_SECRET = previousSecret;
-  }
-}
-
-async function testScannerAlpacaSettingsCredentialsBeatEnvCredentials() {
-  const scanner = createScanner();
-  const previousKey = process.env.ALPACA_KEY;
-  const previousSecret = process.env.ALPACA_SECRET;
-  process.env.ALPACA_KEY = 'env-key';
-  process.env.ALPACA_SECRET = 'env-secret';
-
-  try {
-    const credentials = scanner.getAlpacaMarketDataCredentials({
-      alpaca_key_id: 'settings-key',
-      alpaca_secret_key: 'settings-secret'
-    });
-
-    assert(credentials.source === 'settings', `Expected settings credential source, got ${credentials.source}`);
-    assert(credentials.keyId === 'settings-key', `Expected settings key, got ${credentials.keyId}`);
-    assert(credentials.secretKey === 'settings-secret', `Expected settings secret, got ${credentials.secretKey}`);
-  } finally {
-    if (previousKey === undefined) delete process.env.ALPACA_KEY;
-    else process.env.ALPACA_KEY = previousKey;
-    if (previousSecret === undefined) delete process.env.ALPACA_SECRET;
-    else process.env.ALPACA_SECRET = previousSecret;
-  }
-}
-
-async function testScannerCandlesFallbackToYahooWhenAlpacaFails() {
+async function testScannerCandlesFallbackToYahooWhenIbkrFails() {
   const scanner = createScanner();
   const result = await scanner.fetchScannerCandles({
     symbol: 'QQQ',
     now: new Date('2026-06-22T14:00:00.000Z'),
-    settings: {
-      alpaca_key_id: 'key',
-      alpaca_secret_key: 'secret'
-    },
-    alpacaGet: async () => {
-      throw new Error('alpaca unavailable');
-    },
     yahooChart: async () => ({
       quotes: [{
         date: new Date('2026-06-22T13:55:00.000Z'),
@@ -799,7 +686,7 @@ async function testScannerCandlesFallbackToYahooWhenAlpacaFails() {
   });
 
   assert(result.source === 'yahoo', `Expected Yahoo fallback source, got ${result.source}`);
-  assert(result.fallbackReason.includes('alpaca unavailable'), `Expected Alpaca failure reason, got ${result.fallbackReason}`);
+  assert(result.fallbackReason.includes('IBKR bars failed'), `Expected IBKR failure reason, got ${result.fallbackReason}`);
   assert(result.candles[0].close === 741.4, `Expected Yahoo close 741.4, got ${result.candles[0].close}`);
 }
 
@@ -1647,7 +1534,7 @@ async function testSignalConfigSnapshotCapturesReplayAndExecutionSettings() {
     execution_broker: 'wealthsimple_snaptrade',
     order_type: 'LIMIT',
     entry_slippage_pct: '4',
-    alpaca_auto_trade_mode: 'instant',
+    auto_trade_mode: 'instant',
     snaptrade_auto_trade: 'true'
   }, {
     minOptionMark: 0.3,
@@ -1779,10 +1666,7 @@ async function runTests() {
   await testOptionChainCacheIgnoresStaleSnapshotAfterTtl();
   await testOptionChainCacheBypassesSnapshotOnForceRefresh();
   await testScannerUsesOnlyCompletedCandles();
-  await testScannerCandlesPreferAlpacaBarsWhenCredentialsExist();
-  await testScannerCandlesUseAlpacaEnvCredentialsFallback();
-  await testScannerAlpacaSettingsCredentialsBeatEnvCredentials();
-  await testScannerCandlesFallbackToYahooWhenAlpacaFails();
+  await testScannerCandlesFallbackToYahooWhenIbkrFails();
   await testStaleScannerCandlesProduceBlocker();
   await testLiveEntryRequiresIbkrCandleSource();
   await testDirectionalDecisionRequiresMeaningfulEdge();

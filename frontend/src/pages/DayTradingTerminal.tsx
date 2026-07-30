@@ -42,7 +42,6 @@ interface ApiHealthState {
   ibkr: { status: string; latencyMs: number | null };
   openRouter: { status: string; latencyMs: number | null };
   discord: { status: string; latencyMs: number | null };
-  alpaca?: { status: string; latencyMs: number | null };
 }
 
 interface ServiceHealthState {
@@ -57,14 +56,6 @@ interface ServiceHealthState {
     lastError: string | null;
   };
   streams: {
-    alpaca: {
-      status: string;
-      connected: boolean;
-      feed?: string;
-      activeSubscriptions: number;
-      lastMessageAt: string | null;
-      reconnectAttempts: number;
-    };
     ibkr: {
       status: string;
       connected: boolean;
@@ -114,14 +105,6 @@ const defaultServiceHealth: ServiceHealthState = {
     lastError: null
   },
   streams: {
-    alpaca: {
-      status: 'N/A',
-      connected: false,
-      feed: undefined,
-      activeSubscriptions: 0,
-      lastMessageAt: null,
-      reconnectAttempts: 0
-    },
     ibkr: {
       status: 'N/A',
       connected: false,
@@ -309,8 +292,6 @@ const renderTokenUsageBadge = (usage: any) => {
 
 const getExecutionBrokerLabel = (broker?: string | null) => {
   switch (broker) {
-    case 'alpaca_paper':
-      return 'Alpaca Paper (removed)';
     case 'wealthsimple_snaptrade':
       return 'Wealthsimple Live';
     case 'simulated':
@@ -909,7 +890,7 @@ function EngineFlowPanel({
   websocketConnected: boolean;
   brokerLabel: string;
 }) {
-  const feedConnected = Boolean(serviceHealth.streams.ibkr.connected || serviceHealth.streams.alpaca.connected);
+  const feedConnected = Boolean(serviceHealth.streams.ibkr.connected);
   const scannerTone = getStatusTone(serviceHealth.scanner.status, serviceHealth.scanner.status === 'RUNNING');
   const scoringTone: OpsTone = latestSignal ? 'ok' : latestLog ? 'warning' : 'idle';
   const executionTone: OpsTone = canTradeNow ? 'ok' : latestActionableSignal ? 'warning' : 'idle';
@@ -963,12 +944,6 @@ function EngineFlowPanel({
       status: serviceHealth.streams.ibkr.status,
       detail: `${serviceHealth.streams.ibkr.activeSubscriptions || 0} subs`,
       connected: serviceHealth.streams.ibkr.connected
-    },
-    {
-      label: 'Alpaca WS',
-      status: serviceHealth.streams.alpaca.status,
-      detail: `${serviceHealth.streams.alpaca.activeSubscriptions || 0} subs`,
-      connected: serviceHealth.streams.alpaca.connected
     },
     { label: 'OpenRouter', status: healthData.openRouter.status, detail: `${healthData.openRouter.latencyMs || 0}ms` },
     { label: 'Discord', status: healthData.discord.status, detail: `${healthData.discord.latencyMs || 0}ms` },
@@ -1079,8 +1054,7 @@ export default function DayTradingTerminal() {
     sscgexPortal: { status: 'UP', latencyMs: 140 },
     ibkr: { status: 'UP', latencyMs: 110 },
     openRouter: { status: 'UP', latencyMs: 310 },
-    discord: { status: 'UP', latencyMs: 120 },
-    alpaca: { status: 'N/A', latencyMs: 0 }
+    discord: { status: 'UP', latencyMs: 120 }
   });
   const [serviceHealth, setServiceHealth] = useState<ServiceHealthState>(defaultServiceHealth);
   const [healthLoading, setHealthLoading] = useState(false);

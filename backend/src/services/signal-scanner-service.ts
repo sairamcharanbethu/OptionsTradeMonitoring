@@ -120,7 +120,7 @@ type VolumeAnomaly = {
   triggerVolume: number;
 };
 
-type CandleSource = 'ibkr' | 'alpaca' | 'yahoo';
+type CandleSource = 'ibkr' | 'yahoo';
 
 type CandleFetchResult = {
   candles: Candle[];
@@ -213,7 +213,6 @@ type ScannerCycleContext = {
 };
 
 type OptionQuoteCandidate = OptionContractCandidate & {
-  alpacaTicker: string;
   source?: string;
   bid: number | null;
   ask: number | null;
@@ -856,9 +855,7 @@ Rules:
       day_trading_ai_model: 'deepseek/deepseek-chat',
       day_trading_coach_model: 'deepseek/deepseek-chat',
       execution_broker: 'none',
-      alpaca_key_id: '',
-      alpaca_secret_key: '',
-      alpaca_auto_trade_mode: 'instant',
+      auto_trade_mode: 'instant',
       snaptrade_auto_trade: 'false',
       snaptrade_trading_account_id: '',
       max_trades_per_day: '2',
@@ -986,8 +983,7 @@ Rules:
     try {
       candleFetch = await this.timeScannerPhase(cycle, `${symbol}.candles`, () => this.fetchScannerCandles({
         symbol,
-        now,
-        settings
+        now
       }));
     } catch (err: any) {
       this.fastify.log.error(`[SignalScannerService] Candle fetch failed for ${symbol}: ${err.message}`);
@@ -1151,68 +1147,22 @@ Rules:
     let microsoftPct: number | null = null;
     let nvidiaPct: number | null = null;
 
-    let fetchedFromAlpaca = false;
-    const alpacaCredentials = this.getAlpacaMarketDataCredentials(settings);
-
     await this.timeScannerPhase(cycle, `${symbol}.internals`, async () => {
-      if (alpacaCredentials.keyId && alpacaCredentials.secretKey) {
-        try {
-          this.fastify.log.info('[SignalScannerService] Fetching mega-caps snapshots from Alpaca...');
-          const stockUrl = 'https://data.alpaca.markets/v2/stocks/snapshots?symbols=AAPL,MSFT,NVDA';
-          const stockRes = await axios.get(stockUrl, {
-            headers: {
-              'APCA-API-KEY-ID': alpacaCredentials.keyId,
-              'APCA-API-SECRET-KEY': alpacaCredentials.secretKey
-            },
-            timeout: 5000
-          });
+      try {
+        const internals = await (yahooFinance as any).quote(['AAPL', 'MSFT', 'NVDA']);
+        const internalsList = Array.isArray(internals) ? internals : [internals];
 
-          const stockData = stockRes.data as any;
-          const processAlpacaStock = (sym: string) => {
-            const snap = stockData[sym];
-            if (!snap) return null;
-            const current = snap.latestTrade?.p || snap.latestQuote?.ap || 0;
-            const prev = snap.prevDailyBar?.c || 0;
-            if (current > 0 && prev > 0) {
-              return Number((((current - prev) / prev) * 100).toFixed(2));
-            }
-            return null;
-          };
+        for (const stock of internalsList) {
+          const change = stock.regularMarketChangePercent ?? 0;
+          if (stock.symbol === 'AAPL') applePct = change;
+          if (stock.symbol === 'MSFT') microsoftPct = change;
+          if (stock.symbol === 'NVDA') nvidiaPct = change;
 
-          applePct = processAlpacaStock('AAPL');
-          microsoftPct = processAlpacaStock('MSFT');
-          nvidiaPct = processAlpacaStock('NVDA');
-
-          if (applePct !== null && microsoftPct !== null && nvidiaPct !== null) {
-            fetchedFromAlpaca = true;
-            this.fastify.log.info(`[SignalScannerService] Mega-caps fetched from Alpaca: AAPL=${applePct}%, MSFT=${microsoftPct}%, NVDA=${nvidiaPct}%`);
-
-            if (applePct > 0) bullishInternals++; else if (applePct < 0) bearishInternals++;
-            if (microsoftPct > 0) bullishInternals++; else if (microsoftPct < 0) bearishInternals++;
-            if (nvidiaPct > 0) bullishInternals++; else if (nvidiaPct < 0) bearishInternals++;
-          }
-        } catch (err: any) {
-          this.fastify.log.warn(`[SignalScannerService] Failed to fetch mega-caps from Alpaca: ${err.message}`);
+          if (change > 0) bullishInternals++;
+          if (change < 0) bearishInternals++;
         }
-      }
-
-      if (!fetchedFromAlpaca) {
-        try {
-          const internals = await (yahooFinance as any).quote(['AAPL', 'MSFT', 'NVDA']);
-          const internalsList = Array.isArray(internals) ? internals : [internals];
-
-          for (const stock of internalsList) {
-            const change = stock.regularMarketChangePercent ?? 0;
-            if (stock.symbol === 'AAPL') applePct = change;
-            if (stock.symbol === 'MSFT') microsoftPct = change;
-            if (stock.symbol === 'NVDA') nvidiaPct = change;
-
-            if (change > 0) bullishInternals++;
-            if (change < 0) bearishInternals++;
-          }
-        } catch (internalErr: any) {
-          this.fastify.log.warn(`[SignalScannerService] Yahoo mega-caps check failed: ${internalErr.message}`);
-        }
+      } catch (internalErr: any) {
+        this.fastify.log.warn(`[SignalScannerService] Yahoo mega-caps check failed: ${internalErr.message}`);
       }
     });
 
@@ -2072,7 +2022,7 @@ Rules:
       }
 
       // ── Broker Auto-Trade Execution (Instant Entry, pre-AI) ──
-      const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
+      const autoTradeMode = settings.auto_trade_mode || 'instant';
       if (this.isAutoExecutionEnabled(settings) && autoTradeMode === 'instant') {
         if (autoExecutionBlockers.length > 0) {
           if (executionBlockers.length === 0 && this.hasEntryTriggerBlocker(autoExecutionBlockers)) {
@@ -2845,22 +2795,6 @@ Rules:
     return dynamicMinScore;
   }
 
-  private getAlpacaMarketDataCredentials(settings: any): { keyId: string; secretKey: string; source: 'settings' | 'env' | 'missing' } {
-    const settingsKeyId = settings.alpaca_key_id?.trim();
-    const settingsSecretKey = settings.alpaca_secret_key?.trim();
-    if (settingsKeyId && settingsSecretKey) {
-      return { keyId: settingsKeyId, secretKey: settingsSecretKey, source: 'settings' };
-    }
-
-    const envKeyId = process.env.ALPACA_KEY?.trim() || process.env.APCA_API_KEY_ID?.trim() || '';
-    const envSecretKey = process.env.ALPACA_SECRET?.trim() || process.env.APCA_API_SECRET_KEY?.trim() || '';
-    if (envKeyId && envSecretKey) {
-      return { keyId: envKeyId, secretKey: envSecretKey, source: 'env' };
-    }
-
-    return { keyId: '', secretKey: '', source: 'missing' };
-  }
-
   private normalizeCandleQuote(quote: any, dateValue: any): Candle | null {
     const open = this.toNumber(quote.open ?? quote.o);
     const high = this.toNumber(quote.high ?? quote.h);
@@ -2888,14 +2822,6 @@ Rules:
     };
   }
 
-  private parseAlpacaBars(data: any, symbol: string): Candle[] {
-    const bars = data?.bars?.[symbol] || data?.bars?.[symbol.toUpperCase()] || [];
-    if (!Array.isArray(bars)) return [];
-    return bars
-      .map((bar: any) => this.normalizeCandleQuote(bar, bar.t))
-      .filter((candle: Candle | null): candle is Candle => candle !== null);
-  }
-
   private parseYahooChartQuotes(quotes: any[]): Candle[] {
     return quotes
       .map((quote: any) => this.normalizeCandleQuote(quote, quote.date))
@@ -2917,14 +2843,10 @@ Rules:
   private async fetchScannerCandles(input: {
     symbol: string;
     now: Date;
-    settings: any;
-    alpacaGet?: typeof axios.get;
     yahooChart?: (symbol: string, options: any) => Promise<any>;
   }): Promise<CandleFetchResult> {
     const fiveDaysAgo = new Date(input.now);
     fiveDaysAgo.setDate(input.now.getDate() - 5);
-    const alpacaCredentials = this.getAlpacaMarketDataCredentials(input.settings);
-    const alpacaGet = input.alpacaGet || axios.get;
     const yahooChart = input.yahooChart || ((symbol: string, options: any) => (yahooFinance as any).chart(symbol, options));
     let fallbackReason: string | null = null;
 
@@ -2945,40 +2867,6 @@ Rules:
     } catch (err: any) {
       fallbackReason = `IBKR bars failed: ${err.message || String(err)}`;
       this.fastify.log.warn(`[SignalScannerService] ${fallbackReason}`);
-    }
-
-    if (alpacaCredentials.keyId && alpacaCredentials.secretKey) {
-      try {
-        const response = await alpacaGet('https://data.alpaca.markets/v2/stocks/bars', {
-          headers: {
-            'APCA-API-KEY-ID': alpacaCredentials.keyId,
-            'APCA-API-SECRET-KEY': alpacaCredentials.secretKey
-          },
-          params: {
-            symbols: input.symbol,
-            timeframe: '5Min',
-            start: fiveDaysAgo.toISOString(),
-            end: input.now.toISOString(),
-            adjustment: 'raw'
-          },
-          timeout: 8000
-        });
-        const candles = this.parseAlpacaBars(response.data, input.symbol);
-        if (candles.length > 0) {
-          return {
-            candles,
-            source: 'alpaca',
-            fetchedAt: input.now.toISOString(),
-            fallbackReason: null
-          };
-        }
-        fallbackReason = 'Alpaca returned no usable bars';
-      } catch (err: any) {
-        fallbackReason = `Alpaca bars failed: ${err.message || String(err)}`;
-        this.fastify.log.warn(`[SignalScannerService] ${fallbackReason}`);
-      }
-    } else {
-      fallbackReason = 'Alpaca market data credentials unavailable';
     }
 
     const chartData = await yahooChart(input.symbol, {
@@ -3145,7 +3033,7 @@ Rules:
         broker: settings.execution_broker || 'none',
         orderType: settings.order_type || 'LIMIT',
         entrySlippagePct: this.positiveNumberSetting(settings.entry_slippage_pct, 3),
-        autoTradeMode: settings.alpaca_auto_trade_mode || 'instant',
+        autoTradeMode: settings.auto_trade_mode || 'instant',
         snaptradeAutoTrade: settings.snaptrade_auto_trade === 'true'
       }
     };
@@ -4136,7 +4024,6 @@ Rules:
       const quote = chainByTicker.get(candidate.ticker);
       const base = {
         ...candidate,
-        alpacaTicker: candidate.ticker,
         source: quote?.source ?? 'ibkr_chain',
         bid: quote?.bid ?? null,
         ask: quote?.ask ?? null,
@@ -4662,7 +4549,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       this.fastify.log.info(`[SignalScannerService] Signal #${signalId} enriched with AI commentary. Token usage tracked.`);
 
       // ── Broker Auto-Trade Execution (AI-Confirmed Entry, post-AI) ──
-      const autoTradeMode = settings.alpaca_auto_trade_mode || 'instant';
+      const autoTradeMode = settings.auto_trade_mode || 'instant';
       if (finalVerdict === 'GO' && this.isAutoExecutionEnabled(settings) && autoTradeMode === 'ai_confirmed') {
         await this.executeSignalForEligibleUsers({
           userId,
@@ -5157,7 +5044,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       const targetSettings = await this.getSettingsForUser(targetUserId);
       if (targetSettings.day_trading_enabled !== 'true') continue;
       if (!this.isAutoExecutionEnabled(targetSettings)) continue;
-      if ((targetSettings.alpaca_auto_trade_mode || 'instant') !== autoTradeMode) continue;
+      if ((targetSettings.auto_trade_mode || 'instant') !== autoTradeMode) continue;
 
       const symbols = String(targetSettings.day_trading_symbols || '')
         .split(',')

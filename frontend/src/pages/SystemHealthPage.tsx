@@ -280,31 +280,24 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       actionCommand: 'Run the IBKR TypeScript smoke test from the backend container.'
     });
 
-    Object.entries(services.streams || {}).forEach(([name, stream]) => {
-      const isActive = services.liveExitMonitor?.provider === name || Boolean(stream?.connected || (stream?.activeSubscriptions ?? 0) > 0 || stream?.lastMessageAt);
-      const streamTitle = name === 'ibkr' ? 'IBKR' : 'Alpaca';
-      const streamEndpoint = name === 'ibkr'
-        ? 'IBKR Gateway TCP market-data stream'
-        : 'Alpaca market-data stream';
+    const stream = services.streams?.ibkr;
+    if (stream) {
+      const isActive = services.liveExitMonitor?.provider === 'ibkr' || Boolean(stream.connected || (stream.activeSubscriptions ?? 0) > 0 || stream.lastMessageAt);
       items.push({
-        id: `stream:${name}`,
+        id: 'stream:ibkr',
         area: 'Stream',
-        title: `${streamTitle} Quote Stream`,
-        status: isActive ? stream?.status || 'N/A' : 'DISABLED',
-        severity: isActive && stream?.lastError ? 'critical' : severityForStatus(isActive ? stream?.status : 'DISABLED'),
-        endpoint: streamEndpoint,
-        freshnessMs: stream?.freshnessMs ?? null,
-        lastSeen: adapterLastSeen(stream, stream?.lastMessageAt || services.generatedAt),
-        evidence: stream?.degradedReason || stream?.lastError || `${stream?.activeSubscriptions ?? 0} active subscriptions, ${stream?.reconnectAttempts ?? 0} reconnect attempts`,
-        cause: stream?.degradedReason || stream?.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream?.degradedReason || stream?.lastError) : statusSummary(isActive ? stream?.status : 'DISABLED', null, 'Stream status and subscription state.'),
-        nextStep: name === 'ibkr'
-          ? 'Confirm IB Gateway is logged in and open/manual option contracts are subscribed.'
-          : 'Alpaca stream is optional unless selected as active provider.',
-        actionCommand: name === 'ibkr'
-          ? 'Check IBKR_HOST, IBKR_PORT, and live market-data subscriptions.'
-          : 'No action needed unless Alpaca is intentionally used as active provider.'
+        title: 'IBKR Quote Stream',
+        status: isActive ? stream.status || 'N/A' : 'DISABLED',
+        severity: isActive && stream.lastError ? 'critical' : severityForStatus(isActive ? stream.status : 'DISABLED'),
+        endpoint: 'IBKR Gateway TCP market-data stream',
+        freshnessMs: stream.freshnessMs ?? null,
+        lastSeen: adapterLastSeen(stream, stream.lastMessageAt || services.generatedAt),
+        evidence: stream.degradedReason || stream.lastError || `${stream.activeSubscriptions ?? 0} active subscriptions, ${stream.reconnectAttempts ?? 0} reconnect attempts`,
+        cause: stream.degradedReason || stream.lastError ? causeFromError('Quote stream connection or message parsing failed.', stream.degradedReason || stream.lastError) : statusSummary(isActive ? stream.status : 'DISABLED', null, 'Stream status and subscription state.'),
+        nextStep: 'Confirm IB Gateway is logged in and open/manual option contracts are subscribed.',
+        actionCommand: 'Check IBKR_HOST, IBKR_PORT, and live market-data subscriptions.'
       });
-    });
+    }
 
     const broker = services.snaptradePendingOrders;
     items.push({
@@ -567,9 +560,7 @@ export default function SystemHealthPage() {
   const rootCauseItems = problematicEndpoints.slice(0, 4);
   const statusLabel = failures.length > 0 ? 'Action Required' : warnings.length > 0 ? 'Watch Closely' : 'All Systems Normal';
   const statusSeverity: HealthSeverity = failures.length > 0 ? 'critical' : warnings.length > 0 ? 'warning' : 'ok';
-  const activeProvider = services?.liveExitMonitor?.provider === 'ibkr'
-    ? services?.streams?.ibkr
-    : services?.streams?.alpaca;
+  const activeProvider = services?.streams?.ibkr;
 
   return (
     <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">

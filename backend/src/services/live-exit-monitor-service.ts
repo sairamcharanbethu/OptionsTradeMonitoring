@@ -184,7 +184,6 @@ export class LiveExitMonitorService {
 
   private getStreamHealth(): any {
     if (this.provider === 'ibkr') return (this.fastify as any).ibkrMarketDataStreamer?.getHealth?.();
-    if (this.provider === 'alpaca') return (this.fastify as any).alpacaMarketDataStreamer?.getHealth?.();
     return null;
   }
 

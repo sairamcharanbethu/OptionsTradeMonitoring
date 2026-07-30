@@ -144,7 +144,7 @@ Status: completed in current work.
 
 ## Completed Task 8: Adapter Health Contracts And Freshness
 
-Goal: normalize health and freshness for Yahoo, IBKR, Alpaca, SnapTrade, GEX, OpenRouter, Discord, Redis, and Postgres.
+Goal: normalize health and freshness for Yahoo, IBKR, SnapTrade, GEX, OpenRouter, Discord, Redis, and Postgres.
 
 Implementation:
 - Define one adapter health shape: `status`, `latencyMs`, `lastGoodAt`, `lastError`, `freshnessMs`, `degradedReason`, and `source`.

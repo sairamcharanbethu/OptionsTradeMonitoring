@@ -1275,16 +1275,6 @@ export const api = {
       lastError: string | null;
     };
     streams: {
-      alpaca: AdapterHealth & {
-        status: string;
-        connected: boolean;
-        provider: string;
-        feed?: string;
-        activeSubscriptions: number;
-        lastMessageAt: string | null;
-        lastError: string | null;
-        reconnectAttempts: number;
-      };
       ibkr: AdapterHealth & {
         status: string;
         connected: boolean;

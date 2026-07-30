@@ -326,7 +326,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             const loadedIbkrMode = normalizeIbkrGatewayMode(data.ibkr_gateway_mode || 'live');
             setIbkrGatewayMode(loadedIbkrMode);
             setIbkrPort(data.ibkr_port || defaultIbkrPort(loadedIbkrMode));
-            setExecutionBroker(data.execution_broker === 'alpaca_paper' ? 'none' : data.execution_broker || 'none');
+            setExecutionBroker(data.execution_broker === 'wealthsimple_snaptrade' ? 'wealthsimple_snaptrade' : 'none');
             setSnaptradeAutoTrade(data.snaptrade_auto_trade === 'true');
             setSnaptradeTradingAccountId(data.snaptrade_trading_account_id || '');
             setMaxTradesPerDay(data.max_trades_per_day || '2');
@@ -585,8 +585,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 snaptrade_trading_account_id: snaptradeTradingAccountId,
                 ibkr_gateway_mode: ibkrGatewayMode,
                 ibkr_port: ibkrPort || defaultIbkrPort(ibkrGatewayMode),
-                alpaca_auto_trade: 'false',
-                execution_broker: executionBroker === 'alpaca_paper' ? 'none' : executionBroker,
+                execution_broker: executionBroker,
                 max_trades_per_day: maxTradesPerDay,
                 contracts_per_trade: contractsPerTrade,
                 max_daily_loss_dollars: maxDailyLossDollars,

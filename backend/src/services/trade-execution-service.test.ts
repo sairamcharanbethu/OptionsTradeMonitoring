@@ -70,7 +70,7 @@ async function testIBKRQuoteAllowsProtectedLimit() {
 
   const validation = await (service as any).validateEntryQuote(
     input,
-    { alpaca_key_id: '', alpaca_secret_key: '' },
+    {},
     'QQQ260616P00738000',
     2.05,
     '7:wealthsimple-account'
@@ -120,7 +120,6 @@ async function testSnapTradeQuoteIsNotUsedForEntryValidation() {
 
   (service as any).getSignalOptionDetails = async () => ({ mark: 2 });
   (service as any).fetchIbkrOptionQuote = async () => null;
-  (service as any).fetchAlpacaOptionSnapshot = async () => null;
   (service as any).fetchSnapTradeOptionQuote = async () => {
     snapTradeQuoteCalled = true;
     throw new Error('SnapTrade quote endpoint should not be called');

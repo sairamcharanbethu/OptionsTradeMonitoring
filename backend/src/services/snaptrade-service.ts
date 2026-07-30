@@ -1037,16 +1037,11 @@ export class SnaptradeService {
             await redis.del(`USER_STATS:${userId}`);
             await redis.del(`SNAPTRADE_PORTFOLIO:${userId}`);
 
-            const streamers = [
-                (this.fastify as any).ibkrMarketDataStreamer,
-                (this.fastify as any).alpacaMarketDataStreamer
-            ];
-            for (const streamer of streamers) {
-                if (streamer?.syncSubscriptions) {
-                    streamer.syncSubscriptions().catch((err: any) => {
-                        this.fastify.log.warn(`[SnaptradeService] Failed to refresh stream subscriptions after pending sync: ${err.message}`);
-                    });
-                }
+            const streamer = (this.fastify as any).ibkrMarketDataStreamer;
+            if (streamer?.syncSubscriptions) {
+                streamer.syncSubscriptions().catch((err: any) => {
+                    this.fastify.log.warn(`[SnaptradeService] Failed to refresh stream subscriptions after pending sync: ${err.message}`);
+                });
             }
         }
 

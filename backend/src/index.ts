@@ -663,10 +663,6 @@ const start = async () => {
     await fastify.register(import('@fastify/websocket'));
     const { redis } = await import('./lib/redis');
 
-    const { AlpacaMarketDataStreamService } = await import('./services/alpaca-market-data-stream-service');
-    const alpacaMarketDataStreamer = new AlpacaMarketDataStreamService(fastify);
-    fastify.decorate('alpacaMarketDataStreamer', alpacaMarketDataStreamer);
-
     const { IbkrMarketDataStreamService } = await import('./services/ibkr-market-data-stream-service');
     const ibkrMarketDataStreamer = new IbkrMarketDataStreamService(fastify);
     fastify.decorate('ibkrMarketDataStreamer', ibkrMarketDataStreamer);
@@ -827,7 +823,6 @@ const start = async () => {
       await liveExitMonitor.handleQuote(quote);
     };
 
-    alpacaMarketDataStreamer.on('quote', handleStreamQuote);
     ibkrMarketDataStreamer.on('quote', handleStreamQuote);
 
     fastify.get('/api/services/health', { preHandler: fastify.authenticate }, async (request) => {
@@ -838,7 +833,6 @@ const start = async () => {
         host: process.env.IBKR_HOST || 'ib_gateway',
         port: Number(process.env.IBKR_PORT || 4003)
       }));
-      const alpacaHealth = alpacaMarketDataStreamer.getHealth();
       const ibkrStreamHealth = ibkrMarketDataStreamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
       const optionHistoryHealth = optionMarketHistoryCapture.getHealth();
@@ -914,7 +908,6 @@ const start = async () => {
         liveExitMonitor: normalizeAdapterHealth('liveExitMonitor', liveExitHealth, generatedAt),
         optionHistoryCapture: normalizeAdapterHealth('optionHistoryCapture', optionHistoryHealth, generatedAt),
         streams: {
-          alpaca: normalizeAdapterHealth('alpaca', alpacaHealth, generatedAt),
           ibkr: normalizeAdapterHealth('ibkrStream', ibkrStreamHealth, generatedAt)
         },
         marketData: {
@@ -1126,15 +1119,6 @@ const start = async () => {
         await optionMarketHistoryCapture.rehydrateRecentSignals?.();
       } catch (err: any) {
         fastify.log.warn(`[Stream] IBKR option market data stream failed to start: ${err.message}`);
-      }
-
-      if (!liveExitStreamStarted) {
-        const alpacaStreamStarted = await alpacaMarketDataStreamer.start();
-        if (alpacaStreamStarted) {
-          liveExitMonitor.start('alpaca');
-          fastify.log.info('[Stream] Alpaca option market data stream enabled for live exit monitoring.');
-          liveExitStreamStarted = true;
-        }
       }
 
       if (!liveExitStreamStarted) {

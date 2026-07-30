@@ -349,7 +349,7 @@ export default function TradesPage() {
                 SnapTrade only
               </Badge>
             </div>
-            <p className="text-sm text-muted-foreground">Alpaca is used only for live option pricing and stream updates.</p>
+            <p className="text-sm text-muted-foreground">IBKR provides live option pricing and stream updates.</p>
           </div>
         </div>
         <Button variant="outline" className="gap-2" onClick={() => { refreshOpen(); refreshClosed(); }}>
