@@ -19,7 +19,7 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  trade-staging-backend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:latest
     build:
       context: ./backend
@@ -31,7 +31,7 @@ services:
       NODE_ENV: ${NODE_ENV:-production}
       DATABASE_URL: ${DATABASE_URL}
       BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://trade-staging-redis:6379
       JWT_SECRET: ${JWT_SECRET}
       PORT: ${PORT}
       N8N_ALERT_WEBHOOK_URL: ${N8N_ALERT_WEBHOOK_URL}
@@ -58,7 +58,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      trade-staging-redis:
         condition: service_healthy
     networks:
       - ssmedia_ssmedia_net
@@ -69,7 +69,7 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
+  trade-staging-redis:
     image: redis:alpine
     restart: always
     ports:
@@ -184,7 +184,7 @@ services:
       - ssmedia_ssmedia_net
       - default
 
-  frontend:
+  trade-staging-frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
     build:
       context: ./frontend
@@ -197,7 +197,7 @@ services:
     ports:
       - "${PORT_FRONTEND:-3000}:80"
     depends_on:
-      backend:
+      trade-staging-backend:
         condition: service_healthy
     networks:
       - ssmedia_ssmedia_net
