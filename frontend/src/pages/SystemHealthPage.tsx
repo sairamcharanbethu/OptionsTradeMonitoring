@@ -241,7 +241,7 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       evidence: services.poller?.degradedReason || (services.poller?.running ? null : 'Poller reports stopped.'),
       cause: services.poller?.degradedReason || (services.poller?.running ? 'Poller is running.' : 'Fallback market sync loop is not running.'),
       nextStep: 'Restart backend if the poller should be active.',
-      actionCommand: 'docker compose restart backend'
+      actionCommand: 'docker compose restart trade-staging-backend'
     });
 
     items.push({
@@ -342,13 +342,13 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       title: 'Trade Redis',
       status: services.tradeRedis?.status || 'N/A',
       severity: services.tradeRedis?.status === 'DEGRADED' ? 'warning' : severityForStatus(services.tradeRedis?.status),
-      endpoint: 'redis://redis:6379',
+      endpoint: 'redis://trade-staging-redis:6379',
       freshnessMs: services.tradeRedis?.freshnessMs ?? null,
       lastSeen: adapterLastSeen(services.tradeRedis, services.tradeRedis?.generatedAt || services.generatedAt),
       evidence: services.tradeRedis?.degradedReason || services.tradeRedis?.metrics || null,
       cause: services.tradeRedis?.degradedReason || (services.tradeRedis?.status === 'DEGRADED' ? 'Redis is reachable but queue/lock telemetry indicates degradation.' : 'Redis cache, locks, and broker sync queue.'),
       nextStep: 'Check Redis container health, queue depth, and lock denial spikes.',
-      actionCommand: 'docker compose ps redis && docker compose logs --tail=80 redis'
+      actionCommand: 'docker compose ps trade-staging-redis && docker compose logs --tail=80 trade-staging-redis'
     });
 
     if (services.postgres) {
@@ -365,7 +365,7 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
         evidence: services.postgres.degradedReason || services.postgres.lastError || null,
         cause: statusSummary(services.postgres.status, services.postgres.degradedReason || services.postgres.lastError, 'Database connectivity check needs attention.'),
         nextStep: 'Check database network path, credentials, and primary host reachability.',
-        actionCommand: 'docker compose logs --tail=80 backend'
+        actionCommand: 'docker compose logs --tail=80 trade-staging-backend'
       });
     }
   }
