@@ -208,6 +208,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     // Day Trading State
     const [dayTradingEnabled, setDayTradingEnabled] = useState(true);
     const [dayTradingSymbols, setDayTradingSymbols] = useState('QQQ,SPY');
+    const [strategyMaxTotalDebitDollars, setStrategyMaxTotalDebitDollars] = useState('500');
+    const [strategyPreferredContracts, setStrategyPreferredContracts] = useState('1');
+    const [strategyMaxContracts, setStrategyMaxContracts] = useState('1');
     const [strikeOffset, setStrikeOffset] = useState('0');
     const [minSignalScore, setMinSignalScore] = useState('70');
     const [tradingStartTime, setTradingStartTime] = useState('09:30');
@@ -345,6 +348,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
             setDayTradingSymbols(data.day_trading_symbols || 'QQQ,SPY');
+            setStrategyMaxTotalDebitDollars(data.strategy_max_total_debit_dollars || '500');
+            setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
+            setStrategyMaxContracts(data.strategy_max_contracts || '1');
             setStrikeOffset(data.strike_offset || '0');
             setMinSignalScore(data.min_signal_score || '70');
             setTradingStartTime(data.trading_start_time || '09:30');
@@ -611,6 +617,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             };
             if (isAdmin) {
                 settingsPayload.mcp_trading_enabled = mcpTradingEnabled ? 'true' : 'false';
+                settingsPayload.strategy_max_total_debit_dollars = strategyMaxTotalDebitDollars;
+                settingsPayload.strategy_preferred_contracts = strategyPreferredContracts;
+                settingsPayload.strategy_max_contracts = strategyMaxContracts;
             }
             await api.updateSettings(settingsPayload);
             queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -868,6 +877,46 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     <SelectItem value="2">OTM 2 Strikes (+2)</SelectItem>
                                                 </SelectContent>
                                             </Select>
+                                        </div>
+
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="strategyMaxDebit">Strategy Max Total Debit ($)</Label>
+                                            <Input
+                                                id="strategyMaxDebit"
+                                                type="number"
+                                                min="1"
+                                                value={strategyMaxTotalDebitDollars}
+                                                onChange={(e) => setStrategyMaxTotalDebitDollars(e.target.value)}
+                                                disabled={!isAdmin}
+                                            />
+                                            <p className="text-[10px] text-muted-foreground">Global signal-only-v2 contract-selection budget.</p>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="strategyPreferredContracts">Preferred Contracts</Label>
+                                                <Input
+                                                    id="strategyPreferredContracts"
+                                                    type="number"
+                                                    min="1"
+                                                    max="5"
+                                                    value={strategyPreferredContracts}
+                                                    onChange={(e) => setStrategyPreferredContracts(e.target.value)}
+                                                    disabled={!isAdmin}
+                                                />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="strategyMaxContracts">Contract Ceiling</Label>
+                                                <Input
+                                                    id="strategyMaxContracts"
+                                                    type="number"
+                                                    min="1"
+                                                    max="5"
+                                                    value={strategyMaxContracts}
+                                                    onChange={(e) => setStrategyMaxContracts(e.target.value)}
+                                                    disabled={!isAdmin}
+                                                />
+                                            </div>
                                         </div>
 
                                         <div className="grid grid-cols-2 gap-3">

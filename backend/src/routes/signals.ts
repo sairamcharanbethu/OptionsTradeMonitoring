@@ -49,6 +49,14 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
               execution_status: { type: 'string', nullable: true },
               execution_error: { type: 'string', nullable: true },
               contracts_requested: { type: 'integer', nullable: true },
+              engine_version: { type: 'string', nullable: true },
+              strategy_name: { type: 'string', nullable: true },
+              strategy_setup_id: { type: 'string', nullable: true },
+              lifecycle_status: { type: 'string', nullable: true },
+              entry_allowed: { type: 'boolean' },
+              activated_at: { type: 'string', format: 'date-time', nullable: true },
+              policy_fingerprint: { type: 'string', nullable: true },
+              strategy_snapshot: { type: 'object', nullable: true, additionalProperties: true },
               created_at: { type: 'string', format: 'date-time' }
             }
           }
@@ -132,6 +140,14 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
           sue.execution_status,
           sue.execution_error,
           sue.contracts_requested,
+          s.engine_version,
+          s.strategy_name,
+          s.strategy_setup_id,
+          s.lifecycle_status,
+          s.entry_allowed,
+          s.activated_at,
+          s.policy_fingerprint,
+          s.strategy_snapshot,
           s.created_at 
         FROM signals s
         LEFT JOIN signal_user_executions sue
@@ -242,6 +258,26 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     }
   });
 
+  fastify.get('/strategy-state', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Get current signal-only-v2 strategy state',
+      security: [{ bearerAuth: [] }],
+      response: {
+        200: {
+          type: 'object',
+          additionalProperties: true
+        }
+      }
+    }
+  }, async (_request, reply) => {
+    const strategyEngine = (fastify as any).strategyEngine;
+    if (!strategyEngine) {
+      return (reply as any).code(503).send({ error: 'Strategy engine adapter not initialized' });
+    }
+    return strategyEngine.getCurrentState();
+  });
+
   // PUT /api/signals/:id/status - Update signal status
   fastify.put('/:id/status', {
     schema: {
@@ -285,6 +321,10 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
       const { id: userId } = (request as any).user;
 
       if (status === 'EXECUTED') {
+        const strategyEngine = (fastify as any).strategyEngine;
+        if (strategyEngine?.assertSignalExecutable) {
+          await strategyEngine.assertSignalExecutable(id);
+        }
         const scanner = (fastify as any).scanner;
         if (!scanner) {
           return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
@@ -325,7 +365,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
       }
     } catch (err: any) {
       fastify.log.error(err);
-      return (reply as any).code(500).send({ error: err.message || 'Failed to update signal status' });
+      return (reply as any).code(err.statusCode || 500).send({ error: err.message || 'Failed to update signal status' });
     }
   });
 

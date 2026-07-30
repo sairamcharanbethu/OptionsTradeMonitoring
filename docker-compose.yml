@@ -48,7 +48,13 @@ services:
       IBKR_CLIENT_ID_MARKET_DATA: ${IBKR_CLIENT_ID_MARKET_DATA:-21}
       IBKR_CLIENT_ID_STREAM: ${IBKR_CLIENT_ID_STREAM:-22}
       IBKR_MARKET_DATA_TYPE: ${IBKR_MARKET_DATA_TYPE:-1}
+      STRATEGY_DATA_DIR: /strategy-data/trade
+      STRATEGY_MAX_TOTAL_DEBIT_DOLLARS: ${STRATEGY_MAX_TOTAL_DEBIT_DOLLARS:-500}
+      STRATEGY_PREFERRED_CONTRACTS: ${STRATEGY_PREFERRED_CONTRACTS:-1}
+      STRATEGY_MAX_CONTRACTS: ${STRATEGY_MAX_CONTRACTS:-1}
       VIX_TERM_STRUCTURE_MIN_RATIO: ${VIX_TERM_STRUCTURE_MIN_RATIO:-1.05}
+    volumes:
+      - strategy-data:/strategy-data
     depends_on:
       db:
         condition: service_healthy
@@ -75,6 +81,108 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  zerogex-prefetch:
+    build:
+      context: ./strategy-engine
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      ZEROGEX_API_KEY: ${ZEROGEX_API_KEY}
+    volumes:
+      - strategy-data:/data
+    command:
+      - python3
+      - zerogex_prefetch_service.py
+      - --symbol
+      - SPY
+      - --mode
+      - primary
+      - --output-file
+      - /data/trade/zerogex.json
+      - --health-file
+      - /data/trade/zerogex-health.json
+      - --interval
+      - "5"
+      - --context-interval
+      - "15"
+      - --deep-interval
+      - "30"
+      - --timeout
+      - "10"
+    networks:
+      - default
+
+  strategy-engine:
+    build:
+      context: ./strategy-engine
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - strategy-data:/data
+    command:
+      - python3
+      - trade_prefetch_service.py
+      - --host
+      - ${IBKR_HOST:-ib_gateway}
+      - --port
+      - ${IBKR_PORT:-4003}
+      - --client-id
+      - ${IBKR_CLIENT_ID_STRATEGY:-23}
+      - --symbols
+      - SPY
+      - --data-type
+      - ${STRATEGY_IBKR_DATA_TYPE:-live}
+      - --primary-gex-source
+      - zerogex
+      - --sscgex-enabled
+      - "false"
+      - --zerogex-enabled
+      - "true"
+      - --zerogex-structure-context
+      - "true"
+      - --zerogex-flow-context
+      - "true"
+      - --zerogex-session-levels
+      - "true"
+      - --zerogex-late-day-forced-flow
+      - "true"
+      - --local-gex-fallback
+      - "false"
+      - --option-max-total-debit-dollars
+      - ${STRATEGY_MAX_TOTAL_DEBIT_DOLLARS:-500}
+      - --option-preferred-contracts
+      - ${STRATEGY_PREFERRED_CONTRACTS:-1}
+      - --option-max-otm-steps
+      - "6"
+      - --option-min-abs-delta
+      - "0.15"
+      - --option-max-spread-pct
+      - "5"
+      - --paper-exit-target
+      - "2"
+      - --same-side-reentry-cooldown-seconds
+      - "900"
+      - --max-tracking-gap-seconds
+      - "30"
+      - --output-dir
+      - /data/trade
+      - --policy-file
+      - /data/trade/policy.json
+      - --gex-file
+      - /data/disabled-sscgex.json
+      - --heatmap-file
+      - /data/disabled-heatmap.json
+      - --zerogex-file
+      - /data/trade/zerogex.json
+      - --interval
+      - "0.25"
+    depends_on:
+      zerogex-prefetch:
+        condition: service_started
+    networks:
+      - ssmedia_ssmedia_net
+      - default
 
   frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
@@ -106,3 +214,4 @@ networks:
 
 volumes:
   db-data:
+  strategy-data:

@@ -71,11 +71,11 @@ export default function StrategyGuidePage() {
         <RuleCard title="Entry Strategy" detail="Only high-quality scanner setups should reach execution." icon={Workflow}>
           <BulletList
             items={[
-              'The scanner now requires one strict setup model: Gamma/GEX direction, EMA stack, VWAP alignment, volume confirmation, and trigger confirmation.',
-              'RSI, macro, mega-cap internals, and nearby levels remain context. They cannot override a missing core setup pillar.',
+              'signal-only-v2 trades SPY only. Completed 5-minute and 15-minute structure establishes a setup; completed 1-minute bars normally time activation.',
+              'Continuation, multi-timeframe trend-break/reversal, and GEX-rejection plans freeze their trigger, invalidation, targets, and exact option contract before activation.',
+              'ZeroGEX is authoritative for GEX regime, flip, and walls, but local price structure remains the activation authority. ZeroGEX STAND_DOWN is context, not a veto.',
               'The app blocks duplicate entries for the same user, symbol, side, strike, and expiration while an OPEN or PENDING_ORDER position already exists.',
-              'If an opposite-side position exists, the app tries to clean it up first. Broker-review exit states block the new entry until Wealthsimple status is verified.',
-              'After 1:00 PM ET, the scanner selects 1DTE instead of 0DTE to reduce same-day expiry pressure. High-impact event days block 0DTE auto-entry.'
+              'After 1:00 PM ET, the engine selects the next listed expiry. New entries stop and open exposure must flatten at 3:55 PM ET.'
             ]}
           />
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -88,14 +88,14 @@ export default function StrategyGuidePage() {
           </div>
         </RuleCard>
 
-        <RuleCard title="High-Probability Setup Model" detail="Every executable setup must pass the same core checklist." icon={Target}>
+        <RuleCard title="Lifecycle and Freshness" detail="A setup is executable only during a fresh ACTIVE entry window." icon={Target}>
           <BulletList
             items={[
-              'Gamma/GEX direction: CALL needs bullish flow or price above gamma flip; PUT needs bearish flow or price below gamma flip.',
-              'EMA stack: CALL needs price > EMA9 > EMA21. PUT needs price < EMA9 < EMA21.',
-              'VWAP alignment: CALL needs price above or reclaiming VWAP. PUT needs price below or rejecting VWAP.',
-              'Volume confirmation: CALL needs a high-volume green candle. PUT needs a high-volume red candle.',
-              'Trigger confirmation: CALL needs reclaim or break above the prior candle high. PUT needs breakdown or rejection below the prior candle low.'
+              'WAIT and WATCH are observational. ARMED freezes the plan. ACTIVE opens a 60-second entry window; MANAGE and terminal states never authorize a new entry.',
+              'Entries fail closed when market data, provider timestamps, GEX, or the selected option quote is stale, future-dated, incomplete, or illiquid.',
+              'A move already extended beyond 0.75R is tracked but not entered. Spent walls with less than 1.5R runway block entry.',
+              'T1 moves protection to the frozen trigger. T2 normally completes the paper lifecycle; premium lock and structural invalidation can close it earlier.',
+              'Every close starts a 15-minute same-side cooldown and requires a new structural reset before re-entry.'
             ]}
           />
           <div className="mt-4 grid gap-3 sm:grid-cols-2">

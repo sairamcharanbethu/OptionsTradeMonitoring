@@ -1405,6 +1405,12 @@ export const api = {
     }));
   },
 
+  async getStrategyState(): Promise<StrategyEngineState> {
+    const res = await authFetch(`${API_BASE}/signals/strategy-state?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch strategy state');
+    return res.json();
+  },
+
   async updateSignalStatus(id: number, status: 'PENDING' | 'EXECUTED' | 'CANCELLED'): Promise<{
     id: number;
     status: string;
@@ -1614,6 +1620,24 @@ export interface Signal {
     classifier?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
     coach?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
   } | null;
+  engine_version?: string | null;
+  strategy_name?: string | null;
+  strategy_setup_id?: string | null;
+  lifecycle_status?: string | null;
+  entry_allowed?: boolean;
+  activated_at?: string | null;
+  policy_fingerprint?: string | null;
+  strategy_snapshot?: Record<string, any> | null;
+}
+
+export interface StrategyEngineState {
+  mode: 'legacy' | 'shadow' | 'primary';
+  setupId: string | null;
+  receivedAt: string | null;
+  ageSeconds: number | null;
+  error: string | null;
+  health: Record<string, any> | null;
+  signal: Record<string, any> | null;
 }
 
 export interface ScannerLog {

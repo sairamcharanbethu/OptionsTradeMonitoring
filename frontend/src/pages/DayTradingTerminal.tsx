@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, useTradeUsage, useLiveMacroMetrics, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { useSignals, useSettings, useScannerLogs, useSnaptradePortfolio, useTradeUsage, useLiveMacroMetrics, useStrategyState, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { api, Signal, ScannerLog, LiveMacroMetrics } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
@@ -364,6 +364,9 @@ const getSetupGradeKey = (setupGrade?: string | null) => {
 };
 
 const isExecutableSetupGrade = (signal?: Signal | null) => {
+  if (signal?.engine_version === 'signal-only-v2') {
+    return signal.lifecycle_status === 'ACTIVE' && signal.entry_allowed === true;
+  }
   const grade = getSetupGradeKey(signal?.setup_grade);
   return grade === 'A+' || grade === 'A';
 };
@@ -1027,6 +1030,7 @@ export default function DayTradingTerminal() {
   const [fastPollUntil, setFastPollUntil] = useState<number>(0);
   const pollInterval = Date.now() < fastPollUntil ? 3000 : 10000;
   const { data: signals = [], isLoading, isFetching, refetch } = useSignals(pollInterval);
+  const { data: strategyState } = useStrategyState(1000);
   const { data: logs = [], isLoading: logsLoading, isFetching: logsFetching, refetch: refetchLogs } = useScannerLogs(pollInterval);
   const { data: liveMacroMetrics, refetch: refetchLiveMacroMetrics } = useLiveMacroMetrics(Math.max(10000, pollInterval));
   const { data: settings = {} } = useSettings();
@@ -1047,6 +1051,10 @@ export default function DayTradingTerminal() {
       if (lastMessage.type === 'NEW_SCAN_LOG') {
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.scannerLogs });
         setCountdown(300);
+      }
+      if (lastMessage.type === 'STRATEGY_STATE_CHANGED') {
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyState });
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
       }
       if (lastMessage.type === 'SETTINGS_UPDATED') {
         queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -1256,7 +1264,9 @@ export default function DayTradingTerminal() {
       const signal = signals.find(s => s.id === id) || null;
       if (signal) {
         if (!isExecutableSetupGrade(signal)) {
-          alert(`Only A and A+ setups can be executed. This setup is ${signal.setup_grade || 'ungraded'}.`);
+          alert(signal.engine_version === 'signal-only-v2'
+            ? 'This signal-only-v2 setup is not inside a fresh ACTIVE entry window.'
+            : `Only A and A+ setups can be executed. This setup is ${signal.setup_grade || 'ungraded'}.`);
           return;
         }
         setExecuteDialogSignal(signal);
@@ -1409,7 +1419,11 @@ export default function DayTradingTerminal() {
     isScannerMarketClosed ? `Outside ${scannerWindowLabel}` : null,
     remainingTrades <= 0 ? 'Daily trade limit reached' : null,
     ...missingLiveExecutionItems,
-    signal && !isExecutableSetupGrade(signal) ? `Setup grade ${signal.setup_grade || 'N/A'} is below A/A+` : null,
+    signal && !isExecutableSetupGrade(signal)
+      ? signal.engine_version === 'signal-only-v2'
+        ? `Lifecycle ${signal.lifecycle_status || 'WAIT'} is not entry-eligible`
+        : `Setup grade ${signal.setup_grade || 'N/A'} is below A/A+`
+      : null,
     signal?.execution_error ? signal.execution_error : null,
     ...((signal?.no_trade_reasons || []).slice(0, 3)),
     !signal ? 'No pending setup' : null
@@ -1434,6 +1448,26 @@ export default function DayTradingTerminal() {
 
   return (
     <div className="terminal-scanline motion-enter flex max-w-full flex-col gap-3 overflow-x-hidden rounded-lg border border-emerald-500/20 bg-zinc-950 p-2 text-emerald-400 shadow-[0_0_30px_rgba(16,185,129,0.05)] sm:p-3">
+      {strategyState?.mode !== 'legacy' && (
+        <div className={`flex flex-wrap items-center gap-2 rounded border px-3 py-2 text-[10px] ${
+          strategyState?.mode === 'primary'
+            ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-200'
+            : 'border-sky-500/30 bg-sky-950/20 text-sky-200'
+        }`}>
+          <span className="font-bold uppercase">signal-only-v2</span>
+          <span className="rounded border border-current/20 px-1.5 py-0.5 font-mono uppercase">
+            {strategyState?.mode || 'shadow'}
+          </span>
+          <span>SPY {strategyState?.signal?.state || 'WAIT'}</span>
+          <span>{strategyState?.signal?.favoring || 'no-trade'}</span>
+          <span>GEX {strategyState?.signal?.provider_roles?.primary || 'ZeroGEX'}</span>
+          {strategyState?.ageSeconds != null && <span>{strategyState.ageSeconds.toFixed(1)}s old</span>}
+          {(strategyState?.signal?.blockers?.length || 0) > 0 && (
+            <span className="text-amber-300">{strategyState?.signal?.blockers?.[0]}</span>
+          )}
+          {strategyState?.error && <span className="text-red-300">{strategyState.error}</span>}
+        </div>
+      )}
       
       {/* Top Banner & Timer Bar */}
       <div className="flex flex-col gap-3 border-b border-emerald-500/20 pb-3 xl:flex-row xl:items-center xl:justify-between">

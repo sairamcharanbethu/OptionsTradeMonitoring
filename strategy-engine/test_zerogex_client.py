@@ -1,0 +1,506 @@
+#!/usr/bin/env python3
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from zerogex_client import (
+    ADVANCED_ENDPOINTS,
+    ZeroGEXAuthError,
+    fetch_component_snapshot,
+    fetch_snapshot,
+    get_api_key,
+    normalize_snapshot,
+    render_text,
+)
+
+
+class ZeroGEXClientTest(unittest.TestCase):
+    def test_normalization_keeps_compact_research_fields(self) -> None:
+        snapshot = normalize_snapshot(
+            "spy",
+            {
+                "bias_score": -60.95,
+                "direction": "short",
+                "bias": {"code": "RANGE_FADE", "label": "Range Fade"},
+                "market_state": "CHOP",
+                "conviction_driven": False,
+                "timestamp": "2026-07-27T14:20:00+00:00",
+                "secret_internal_field": "discard",
+            },
+            {
+                "symbol": "SPY",
+                "gamma_flip": 747.66,
+                "call_wall": 745.0,
+                "put_wall": 740.0,
+                "unknown": "discard",
+            },
+            {
+                "signals": {
+                    "tape_flow_bias": {
+                        "score": -52.0,
+                        "direction": "bearish",
+                        "timestamp": "2026-07-27T14:20:00+00:00",
+                        "context_values": {"momentum_5bar": -0.001},
+                        "unknown": "discard",
+                    },
+                    "positioning_trap": None,
+                }
+            },
+            fetched_at=1_000.0,
+        )
+
+        self.assertEqual(snapshot["source"], "zerogex")
+        self.assertEqual(snapshot["mode"], "shadow")
+        self.assertEqual(snapshot["symbol"], "SPY")
+        self.assertNotIn("secret_internal_field", snapshot["trade_bias"])
+        self.assertNotIn("unknown", snapshot["gex_summary"])
+        self.assertNotIn(
+            "unknown", snapshot["basic_signals"]["tape_flow_bias"]
+        )
+        self.assertEqual(
+            snapshot["trade_bias"]["bias"]["code"],
+            "RANGE_FADE",
+        )
+        self.assertEqual(snapshot["trade_bias"]["market_state"], "CHOP")
+        self.assertFalse(snapshot["trade_bias"]["conviction_driven"])
+        self.assertEqual(
+            snapshot["basic_signals"]["tape_flow_bias"]["context_values"][
+                "momentum_5bar"
+            ],
+            -0.001,
+        )
+        self.assertIsNone(snapshot["basic_signals"]["positioning_trap"])
+
+    def test_advanced_normalization_promotes_nested_diagnostics(self) -> None:
+        snapshot = normalize_snapshot(
+            "SPY",
+            {},
+            {"symbol": "SPY"},
+            {"signals": {}},
+            advanced_signals={
+                "squeeze_setup": {
+                    "timestamp": "2026-07-27T17:02:00+00:00",
+                    "score": -78.54,
+                    "direction": "bearish",
+                    "context_values": {
+                        "triggered": True,
+                        "signal": "bearish_squeeze",
+                        "accel_dn": False,
+                        "accel_up": False,
+                        "momentum_5bar": -0.0004,
+                        "large_unused_blob": "discard",
+                    },
+                    "score_history": [{"score": -78.54}],
+                },
+                "zero_dte_position_imbalance": {
+                    "timestamp": "2026-07-27T17:02:00+00:00",
+                    "score": -75.0,
+                    "direction": "bearish",
+                    "context_values": {
+                        "triggered": True,
+                        "flow_source": "zero_dte",
+                        "tod_multiplier": 0.9,
+                    },
+                },
+                "range_break_imminence": {
+                    "timestamp": "2026-07-27T17:02:00+00:00",
+                    "score": -66.0,
+                    "direction": "bearish",
+                    "context_values": {
+                        "triggered": True,
+                        "label": "Break Watch",
+                        "imminence": 70.73,
+                        "trap": {
+                            "range_low": 736.2,
+                            "range_high": 737.4,
+                            "near_low_pct": 0.01,
+                        },
+                    },
+                },
+            },
+        )
+
+        squeeze = snapshot["advanced_signals"]["squeeze_setup"]
+        self.assertTrue(squeeze["triggered"])
+        self.assertFalse(squeeze["accel_dn"])
+        self.assertNotIn("score_history", squeeze)
+        self.assertNotIn(
+            "large_unused_blob",
+            squeeze["context_values"],
+        )
+        zero_dte = snapshot["advanced_signals"][
+            "zero_dte_position_imbalance"
+        ]
+        self.assertEqual(zero_dte["flow_source"], "zero_dte")
+        range_break = snapshot["advanced_signals"][
+            "range_break_imminence"
+        ]
+        self.assertEqual(range_break["label"], "Break Watch")
+        self.assertEqual(
+            range_break["context_values"]["trap"]["range_low"],
+            736.2,
+        )
+
+    def test_normalization_sanitizes_playbook_order_fields(self) -> None:
+        snapshot = normalize_snapshot(
+            "SPY",
+            {},
+            {"symbol": "SPY"},
+            {"signals": {}},
+            playbook={
+                "timestamp": "2026-07-27T15:00:00+00:00",
+                "action": "BUY_PUT_DEBIT",
+                "pattern": "opening_range_break",
+                "direction": "bearish",
+                "confidence": 0.72,
+                "rationale": "Price structure confirmed.",
+                "legs": [{"right": "P", "strike": 738}],
+                "entry": {"ref_price": 738},
+                "near_misses": [],
+            },
+        )
+
+        playbook = snapshot["playbook"]
+        self.assertEqual(playbook["state"], "candidate")
+        self.assertEqual(playbook["direction"], "bearish")
+        self.assertNotIn("action", playbook)
+        self.assertNotIn("legs", playbook)
+        self.assertNotIn("entry", playbook)
+
+    def test_fetch_uses_documented_core_read_endpoints(self) -> None:
+        calls = []
+
+        def request_json(path, params, **kwargs):
+            calls.append((path, params, kwargs["api_key"]))
+            if path.endswith("trade-bias"):
+                return {"direction": "short"}
+            if path.endswith("summary"):
+                return {"symbol": "SPY"}
+            if path.endswith("/basic"):
+                return {"signals": {}}
+            if path.endswith("/score"):
+                return {"composite_score": 55, "components": {}}
+            if path.endswith("/quote"):
+                return {
+                    "timestamp": "2026-07-27T16:00:00Z",
+                    "symbol": "SPY",
+                    "close": "738.00",
+                }
+            if path.endswith("/historical"):
+                return [
+                    {
+                        "timestamp": "2026-07-27T15:59:00Z",
+                        "symbol": "SPY",
+                        "open": "737.90",
+                        "high": "738.10",
+                        "low": "737.80",
+                        "close": "738.00",
+                        "volume": 1000,
+                    }
+                ]
+            return {"action": "STAND_DOWN", "near_misses": []}
+
+        snapshot = fetch_snapshot(
+            "spy",
+            api_key="test-key",
+            request_json=request_json,
+            include_extended=False,
+        )
+
+        self.assertCountEqual(
+            [path for path, _, _ in calls],
+            [
+                "/api/signals/trade-bias",
+                "/api/gex/summary",
+                "/api/signals/basic",
+                "/api/signals/score",
+                "/api/signals/action",
+                "/api/market/quote",
+                "/api/market/historical",
+            ],
+        )
+        self.assertTrue(all(key == "test-key" for _, _, key in calls))
+        self.assertEqual(snapshot["symbol"], "SPY")
+        self.assertEqual(snapshot["playbook"]["state"], "stand_down")
+        self.assertEqual(snapshot["market_quote"]["close"], "738.00")
+        self.assertEqual(len(snapshot["market_bars"]), 1)
+
+    def test_market_bars_are_compact_and_sorted(self) -> None:
+        snapshot = normalize_snapshot(
+            "SPY",
+            {},
+            {"symbol": "SPY"},
+            {"signals": {}},
+            market_bars=[
+                {
+                    "timestamp": "2026-07-27T14:31:00Z",
+                    "symbol": "SPY",
+                    "close": "738.20",
+                    "secret": "drop",
+                },
+                {
+                    "timestamp": "2026-07-27T14:30:00Z",
+                    "symbol": "SPY",
+                    "close": "738.00",
+                },
+            ],
+        )
+        self.assertEqual(
+            [bar["timestamp"] for bar in snapshot["market_bars"]],
+            ["2026-07-27T14:30:00Z", "2026-07-27T14:31:00Z"],
+        )
+        self.assertNotIn("secret", snapshot["market_bars"][1])
+
+    def test_extended_fetch_covers_all_advanced_sources(self) -> None:
+        calls = []
+
+        def request_json(path, params, **kwargs):
+            calls.append(path)
+            if path.endswith("summary"):
+                return {"symbol": "SPY"}
+            if path.endswith("/basic"):
+                return {"signals": {}}
+            if path.endswith("/score"):
+                return {"composite_score": 55, "components": {}}
+            if path.endswith("/action"):
+                return {"action": "STAND_DOWN", "near_misses": []}
+            if path.endswith("historical-context"):
+                return {"metrics": {}}
+            return {}
+
+        fetch_snapshot(
+            "SPY",
+            api_key="test-key",
+            request_json=request_json,
+            include_extended=True,
+        )
+
+        self.assertTrue(
+            set(ADVANCED_ENDPOINTS.values()).issubset(set(calls))
+        )
+        self.assertIn("/api/gex/historical-context", calls)
+        self.assertIn("/api/market/volatility", calls)
+        self.assertIn("/api/gex/strike-profile-timeseries", calls)
+        self.assertIn("/api/flow/series", calls)
+        self.assertIn("/api/flow/smart-money", calls)
+        self.assertIn("/api/market/session-levels", calls)
+        self.assertIn("/api/technicals/dealer-hedging", calls)
+        self.assertIn("/api/forced-flow/levels", calls)
+
+    def test_component_fetches_keep_polling_lanes_independent(self) -> None:
+        calls = []
+
+        def request_json(path, params, **kwargs):
+            calls.append(path)
+            if path.endswith("/summary"):
+                return {"symbol": "SPY", "call_wall": 740}
+            if path.endswith("/basic"):
+                return {"signals": {}}
+            if path.endswith("/historical"):
+                return []
+            return {}
+
+        fast = fetch_component_snapshot(
+            "SPY",
+            lane="gex",
+            api_key="test-key",
+            request_json=request_json,
+        )
+        self.assertEqual(calls, ["/api/gex/summary"])
+        self.assertEqual(fast["gex_summary"]["call_wall"], 740)
+        self.assertEqual(fast["_fetched_components"], ["gex_summary"])
+
+        calls.clear()
+        core = fetch_component_snapshot(
+            "SPY",
+            lane="core",
+            api_key="test-key",
+            request_json=request_json,
+        )
+        self.assertNotIn("/api/gex/summary", calls)
+        self.assertNotIn("/api/gex/historical-context", calls)
+        self.assertIn("/api/signals/trade-bias", calls)
+        self.assertIn("/api/market/historical", calls)
+        self.assertNotIn("gex_summary", core["_fetched_components"])
+
+        calls.clear()
+        deep = fetch_component_snapshot(
+            "SPY",
+            lane="deep",
+            api_key="test-key",
+            request_json=request_json,
+        )
+        self.assertNotIn("/api/gex/summary", calls)
+        self.assertNotIn("/api/signals/trade-bias", calls)
+        self.assertIn("/api/gex/historical-context", calls)
+        self.assertIn("/api/gex/strike-profile-timeseries", calls)
+        self.assertNotIn("gex_summary", deep["_fetched_components"])
+
+    def test_component_fetch_rejects_unknown_lane(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown ZeroGEX polling lane"):
+            fetch_component_snapshot(
+                "SPY",
+                lane="slow",
+                api_key="test-key",
+                request_json=lambda *args, **kwargs: {},
+            )
+
+    def test_normalizes_structure_flow_and_session_context(self) -> None:
+        snapshot = normalize_snapshot(
+            "SPY",
+            {},
+            {
+                "symbol": "SPY",
+                "gamma_flip": 738,
+                "call_wall": 740,
+                "put_wall": 735,
+            },
+            {"signals": {}},
+            strike_profile=[
+                {
+                    "timestamp": "2026-07-28T14:00:00Z",
+                    "close": 738,
+                    "call_wall": 739,
+                    "put_wall": 735,
+                    "gamma_flip": 737.5,
+                    "strikes": [
+                        {
+                            "strike": 739,
+                            "net_gamma": 100,
+                            "call_gamma": 100,
+                            "put_gamma": -10,
+                        }
+                    ],
+                },
+                {
+                    "timestamp": "2026-07-28T14:19:00Z",
+                    "close": 739,
+                    "call_wall": 740,
+                    "put_wall": 735,
+                    "gamma_flip": 738,
+                    "strikes": [
+                        {
+                            "strike": 739,
+                            "net_gamma": 140,
+                            "call_gamma": 140,
+                            "put_gamma": -10,
+                        },
+                        {
+                            "strike": 740,
+                            "net_gamma": 180,
+                            "call_gamma": 180,
+                            "put_gamma": -5,
+                        },
+                    ],
+                },
+            ],
+            flow_series=[
+                {
+                    "timestamp": "2026-07-28T14:19:00Z",
+                    "call_premium_cum": 800,
+                    "put_premium_cum": 200,
+                    "net_premium_cum": 600,
+                }
+            ],
+            smart_money=[
+                {
+                    "timestamp": "2026-07-28T14:19:00Z",
+                    "option_type": "C",
+                    "trade_side": "BUY",
+                    "notional": 1000,
+                }
+            ],
+            session_levels={
+                "premarket_high": 739.5,
+                "premarket_low": 736.5,
+                "prev_session_high": 741,
+                "prev_session_low": 735,
+                "updated_at": "2026-07-28T14:19:00Z",
+            },
+            technicals={
+                "bars": [
+                    {
+                        "timestamp": "2026-07-28T14:19:00Z",
+                        "opening_range": {"orb_high": 739, "orb_low": 737},
+                        "momentum_divergence": {
+                            "divergence_signal": "bullish confirmation"
+                        },
+                    }
+                ]
+            },
+            dealer_hedging=[
+                {
+                    "timestamp": "2026-07-28T14:19:00Z",
+                    "expected_hedge_shares": -2_000_000,
+                    "hedge_pressure": "buy",
+                }
+            ],
+            forced_flow_levels={
+                "timestamp": "2026-07-28T14:19:00Z",
+                "zero_flow_level": 738.5,
+            },
+        )
+        self.assertEqual(snapshot["strike_context"]["status"], "ok")
+        self.assertEqual(
+            snapshot["strike_context"]["wall_strength"]["call"]["strike"],
+            740,
+        )
+        self.assertEqual(snapshot["flow_context"]["direction"], "calls")
+        self.assertTrue(snapshot["flow_context"]["aligned"])
+        self.assertEqual(
+            snapshot["session_context"]["opening_range"]["orb_high"],
+            739,
+        )
+        self.assertEqual(
+            snapshot["dealer_hedging"]["expected_hedge_shares"],
+            -2_000_000,
+        )
+        self.assertEqual(snapshot["forced_flow"]["zero_flow_level"], 738.5)
+
+    def test_api_key_can_be_read_from_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            env_file.write_text("ZEROGEX_API_KEY='local-test-key'\n")
+            with patch.dict(os.environ, {"ZEROGEX_API_KEY": ""}):
+                self.assertEqual(get_api_key(env_file), "local-test-key")
+
+    def test_missing_api_key_has_safe_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"ZEROGEX_API_KEY": ""}):
+                with self.assertRaises(ZeroGEXAuthError) as raised:
+                    get_api_key(Path(directory) / ".env")
+        self.assertNotIn("Bearer", str(raised.exception))
+
+    def test_text_output_is_explicitly_read_only_analytics(self) -> None:
+        text = render_text(
+            {
+                "symbol": "SPY",
+                "trade_bias": {
+                    "direction": "short",
+                    "bias_score": -60.95,
+                    "confidence": 52.42,
+                },
+                "gex_summary": {
+                    "gamma_flip": 747.66,
+                    "put_wall": 740.0,
+                    "call_wall": 745.0,
+                },
+                "advanced_signals": {
+                    "vol_expansion": {
+                        "expansion": 80.0,
+                        "direction_score": -75.0,
+                    }
+                },
+            }
+        )
+        self.assertIn("ZEROGEX ANALYTICS", text)
+        self.assertIn("SHORT", text)
+        self.assertIn("advanced=vol_expansion", text)
+        self.assertNotIn("test-key", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

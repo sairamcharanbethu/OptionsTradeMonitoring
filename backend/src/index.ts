@@ -206,6 +206,38 @@ const ensureSchema = async (instance: any) => {
     `);
 
     await instance.pg.query(`
+      ALTER TABLE signals
+        ADD COLUMN IF NOT EXISTS engine_version VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50),
+        ADD COLUMN IF NOT EXISTS strategy_setup_id UUID,
+        ADD COLUMN IF NOT EXISTS lifecycle_status VARCHAR(30),
+        ADD COLUMN IF NOT EXISTS entry_allowed BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS policy_fingerprint VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS strategy_snapshot JSONB;
+    `);
+
+    await instance.pg.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS signals_strategy_setup_id_idx
+      ON signals(strategy_setup_id)
+      WHERE strategy_setup_id IS NOT NULL;
+    `);
+
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS strategy_signal_events (
+        id BIGSERIAL PRIMARY KEY,
+        setup_id UUID,
+        engine_version VARCHAR(50) NOT NULL,
+        mode VARCHAR(20) NOT NULL,
+        lifecycle_status VARCHAR(30) NOT NULL,
+        event_fingerprint VARCHAR(64) NOT NULL UNIQUE,
+        policy_fingerprint VARCHAR(64),
+        signal_snapshot JSONB NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS signal_user_executions (
         signal_id INTEGER REFERENCES signals(id) ON DELETE CASCADE,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
@@ -623,6 +655,10 @@ const start = async () => {
     const scanner = new SignalScannerService(fastify);
     fastify.decorate('scanner', scanner);
 
+    const { StrategyEngineAdapter } = await import('./services/strategy-engine-adapter');
+    const strategyEngine = new StrategyEngineAdapter(fastify);
+    fastify.decorate('strategyEngine', strategyEngine);
+
     // --- WebSocket & Streaming Setup ---
     await fastify.register(import('@fastify/websocket'));
     const { redis } = await import('./lib/redis');
@@ -806,6 +842,7 @@ const start = async () => {
       const ibkrStreamHealth = ibkrMarketDataStreamer.getHealth();
       const liveExitHealth = liveExitMonitor.getHealth();
       const optionHistoryHealth = optionMarketHistoryCapture.getHealth();
+      const strategyHealth = strategyEngine.getCurrentState();
       const postgresStartedAt = Date.now();
       const [ibkrHealth, scannerHealth, tradeRedisHealth, postgresHealth] = await Promise.all([
         withTimeout(
@@ -889,6 +926,20 @@ const start = async () => {
         }, generatedAt),
         marketDataBuffer: normalizeAdapterHealth('marketDataBuffer', poller.getMarketDataBufferHealth(), generatedAt),
         scanner: normalizeAdapterHealth('signalScanner', scannerHealth, generatedAt),
+        strategyEngine: normalizeAdapterHealth('strategyEngine', {
+          status: strategyHealth.error
+            ? 'DEGRADED'
+            : strategyHealth.signal
+              ? 'UP'
+              : strategyHealth.mode === 'legacy'
+                ? 'DISABLED'
+                : 'STARTING',
+          mode: strategyHealth.mode,
+          connected: strategyHealth.health?.connected === true,
+          freshnessMs: strategyHealth.ageSeconds == null ? null : Math.round(strategyHealth.ageSeconds * 1000),
+          lastSeen: strategyHealth.receivedAt,
+          lastError: strategyHealth.error
+        }, generatedAt),
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),
         postgres: postgresHealth,
@@ -1052,7 +1103,12 @@ const start = async () => {
     const startBackgroundServices = async () => {
       fastify.log.info('[System] Starting background services...');
       poller.start();
-      scanner.start();
+      await strategyEngine.start();
+      if (strategyEngine.getMode() !== 'primary') {
+        scanner.start();
+      } else {
+        fastify.log.info('[SignalScannerService] Legacy scanner disabled because signal-only-v2 is primary.');
+      }
       setInterval(runQueuedBrokerSync, 3000);
       setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000);
       runSnaptradePendingOrderSync().catch((err: any) => {

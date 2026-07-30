@@ -319,9 +319,18 @@ export class TradeExecutionService {
 
   private async getSignalSetupGrade(signalId: number): Promise<string | null> {
     const { rows } = await this.fastify.pg.query(
-      'SELECT setup_grade FROM signals WHERE id = $1',
+      `SELECT setup_grade, engine_version, lifecycle_status, entry_allowed
+       FROM signals
+       WHERE id = $1`,
       [signalId]
     );
+    if (
+      rows[0]?.engine_version === 'signal-only-v2'
+      && rows[0]?.lifecycle_status === 'ACTIVE'
+      && rows[0]?.entry_allowed === true
+    ) {
+      return 'A+';
+    }
     return rows[0]?.setup_grade || null;
   }
 

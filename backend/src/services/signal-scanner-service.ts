@@ -841,6 +841,9 @@ Rules:
     const defaults = {
       day_trading_enabled: 'true',
       day_trading_symbols: 'QQQ,SPY',
+      strategy_max_total_debit_dollars: '500',
+      strategy_preferred_contracts: '1',
+      strategy_max_contracts: '1',
       sscgex_password: '',
       discord_webhook_url: '',
       discord_alerts_enabled: 'false',

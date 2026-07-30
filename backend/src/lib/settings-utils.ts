@@ -14,12 +14,24 @@ const GLOBAL_SETTING_KEYS = [
   'discord_webhook_url',
   'discord_alerts_enabled',
   'day_trading_symbols',
+  'strategy_max_total_debit_dollars',
+  'strategy_preferred_contracts',
+  'strategy_max_contracts',
   'mcp_trading_enabled',
   'day_trading_ai_provider',
   'day_trading_ai_model',
   'day_trading_coach_model'
 ];
-const ADMIN_ONLY_GLOBAL_SETTING_KEYS = ['day_trading_symbols', 'ibkr_gateway_mode', 'ibkr_host', 'ibkr_port', 'mcp_trading_enabled'];
+const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
+  'day_trading_symbols',
+  'strategy_max_total_debit_dollars',
+  'strategy_preferred_contracts',
+  'strategy_max_contracts',
+  'ibkr_gateway_mode',
+  'ibkr_host',
+  'ibkr_port',
+  'mcp_trading_enabled'
+];
 const SETTINGS_CACHE_TTL_SECONDS = Number(process.env.SETTINGS_CACHE_TTL_SECONDS || 300);
 const GLOBAL_SETTINGS_CACHE_KEY = 'SETTINGS:GLOBAL';
 const userSettingsCacheKey = (userId: number) => `SETTINGS:USER:${userId}`;
@@ -110,7 +122,12 @@ export function isGlobalSettingKey(key: string): boolean {
 }
 
 export function isPublicGlobalSettingKey(key: string): boolean {
-  return key === 'day_trading_symbols';
+  return [
+    'day_trading_symbols',
+    'strategy_max_total_debit_dollars',
+    'strategy_preferred_contracts',
+    'strategy_max_contracts'
+  ].includes(key);
 }
 
 export function resolveMcpTradingEnabled(settings: Record<string, string>, envValue = process.env.MCP_TRADING_ENABLED): boolean {
