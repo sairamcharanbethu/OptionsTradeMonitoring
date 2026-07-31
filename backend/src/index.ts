@@ -373,7 +373,16 @@ const ensureSchema = async (instance: any) => {
       { name: 'max_favorable_price', type: 'DECIMAL(10, 4)' },
       { name: 'max_adverse_price', type: 'DECIMAL(10, 4)' },
       { name: 'mfe_pct', type: 'DECIMAL(10, 4)' },
-      { name: 'mae_pct', type: 'DECIMAL(10, 4)' }
+      { name: 'mae_pct', type: 'DECIMAL(10, 4)' },
+      { name: 'signal_id', type: 'INTEGER' },
+      { name: 'strategy_setup_id', type: 'UUID' },
+      { name: 'strategy_engine_version', type: 'VARCHAR(50)' },
+      { name: 'strategy_lifecycle_status', type: 'VARCHAR(50)' },
+      { name: 'strategy_policy_fingerprint', type: 'VARCHAR(128)' },
+      { name: 'strategy_snapshot', type: 'JSONB' },
+      { name: 'strategy_managed', type: 'BOOLEAN DEFAULT FALSE' },
+      { name: 'strategy_exit_requested_at', type: 'TIMESTAMPTZ' },
+      { name: 'strategy_exit_reason', type: 'VARCHAR(50)' }
     ];
 
     for (const col of columns) {
@@ -404,8 +413,9 @@ const ensureSchema = async (instance: any) => {
     `);
     try {
       await instance.pg.query(`
-        CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_contract_per_user
-          ON positions (user_id, symbol, option_type, strike_price, expiration_date)
+        DROP INDEX IF EXISTS uniq_active_contract_per_user;
+        CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_contract_per_user_mode
+          ON positions (user_id, symbol, option_type, strike_price, expiration_date, (COALESCE(is_simulated, FALSE)))
           WHERE status IN ('OPEN', 'PENDING_ORDER');
       `);
     } catch (err: any) {
@@ -837,6 +847,14 @@ const start = async () => {
       const liveExitHealth = liveExitMonitor.getHealth();
       const optionHistoryHealth = optionMarketHistoryCapture.getHealth();
       const strategyHealth = strategyEngine.getCurrentState();
+      const strategyProviderAgeSeconds = strategyHealth.health?.updated_at
+        ? Math.max(0, Date.now() / 1000 - Number(strategyHealth.health.updated_at))
+        : null;
+      const strategyFresh = strategyHealth.ageSeconds !== null
+        && strategyHealth.ageSeconds <= 5
+        && strategyProviderAgeSeconds !== null
+        && strategyProviderAgeSeconds <= 5;
+      const strategyConnected = strategyHealth.health?.connected === true;
       const postgresStartedAt = Date.now();
       const [ibkrHealth, scannerHealth, tradeRedisHealth, postgresHealth] = await Promise.all([
         withTimeout(
@@ -921,17 +939,20 @@ const start = async () => {
         scanner: normalizeAdapterHealth('signalScanner', scannerHealth, generatedAt),
         strategyEngine: normalizeAdapterHealth('strategyEngine', {
           status: strategyHealth.error
-            ? 'DEGRADED'
-            : strategyHealth.signal
+            ? 'DOWN'
+            : strategyHealth.signal && strategyFresh && strategyConnected && strategyHealth.health?.status !== 'error'
               ? 'UP'
-              : strategyHealth.mode === 'legacy'
-                ? 'DISABLED'
-                : 'STARTING',
+              : strategyHealth.signal
+                ? 'DEGRADED'
+                : strategyHealth.mode === 'legacy'
+                  ? 'DISABLED'
+                  : 'STARTING',
           mode: strategyHealth.mode,
-          connected: strategyHealth.health?.connected === true,
+          connected: strategyConnected,
           freshnessMs: strategyHealth.ageSeconds == null ? null : Math.round(strategyHealth.ageSeconds * 1000),
+          providerFreshnessMs: strategyProviderAgeSeconds == null ? null : Math.round(strategyProviderAgeSeconds * 1000),
           lastSeen: strategyHealth.receivedAt,
-          lastError: strategyHealth.error
+          lastError: strategyHealth.error || strategyHealth.health?.error || strategyHealth.health?.last_error || null
         }, generatedAt),
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),

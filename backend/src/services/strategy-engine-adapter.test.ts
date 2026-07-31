@@ -70,6 +70,46 @@ async function runTests() {
     'A terminal signal phase must close the setup even when the top-level state is WAIT'
   );
 
+  const queries: Array<{ sql: string; values: any[] }> = [];
+  const persistenceAdapter = new StrategyEngineAdapter({
+    pg: {
+      query: async (sql: string, values: any[] = []) => {
+        queries.push({ sql, values });
+        return { rows: [] };
+      }
+    },
+    log: { info: () => undefined, warn: () => undefined }
+  } as any) as any;
+  persistenceAdapter.currentSetupId = '11111111-1111-4111-8111-111111111111';
+  await persistenceAdapter.persistPrimarySignal(signal({
+    state: 'ACTIVE',
+    lifecycle: { entry_allowed: true },
+    paper_policy: { exit_after_target: 2 },
+    call_setup: {
+      ...signal().call_setup,
+      option: {
+        ...signal().call_setup.option,
+        planned_contracts: 2,
+        planned_limit_price: 1.25,
+        planned_total_debit: 250
+      }
+    }
+  }));
+  const signalInsert = queries.find((query) => query.sql.includes('INSERT INTO signals'));
+  const positionUpdate = queries.find((query) => query.sql.includes('UPDATE positions'));
+  assert(signalInsert?.values[5] === 554, 'Persisted strategy target must honor paper exit target 2');
+  const persistedOption = JSON.parse(signalInsert?.values[13]);
+  assert(persistedOption.planned_contracts === 2, 'Persisted signal must retain planned contract quantity');
+  assert(positionUpdate?.values[2] === 554, 'Open strategy positions must follow the same target-2 lifecycle');
+
+  queries.length = 0;
+  await persistenceAdapter.persistPrimarySignal(signal({ state: 'WAIT', signal_phase: 'INVALIDATED' }));
+  assert(
+    queries.some((query) => query.sql.includes('strategy_exit_requested_at')),
+    'Terminal strategy state must request an exit for linked open positions'
+  );
+  const terminalPositionUpdate = queries.find((query) => query.sql.includes('strategy_exit_requested_at'));
+  assert(terminalPositionUpdate?.values[1] === 'INVALIDATED', 'Position exit reason must retain the terminal lifecycle state');
 }
 
 runTests()

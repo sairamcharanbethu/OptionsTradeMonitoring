@@ -392,6 +392,74 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
 async function testShadowModeNeverResolvesToLiveBroker() {
   const service = new TradeExecutionService(createFastifyMock()) as any;
   assert(service.resolveBroker({ shadow_trading_enabled: 'true', snaptrade_auto_trade: 'true', execution_broker: 'wealthsimple_snaptrade' }) === 'simulated', 'Shadow mode should override live broker resolution');
+  assert(service.resolveBroker({ snaptrade_auto_trade: 'true', execution_broker: 'none' }) === 'none', 'Explicit broker none must remain a live-trading kill switch');
+  assert(service.executionScopeSql('wealthsimple_snaptrade').includes("is_simulated, FALSE) = FALSE"), 'Live risk scope must exclude simulated positions');
+  assert(service.executionScopeSql('simulated').includes("is_simulated, FALSE) = TRUE"), 'Shadow risk scope must exclude live positions');
+}
+
+async function testStrategyPlanCapsConfiguredQuantity() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  let simulatedQuantity = 0;
+  const originalAcquireLock = TradeRedisService.acquireLock;
+  const originalReleaseLock = TradeRedisService.releaseLock;
+  (TradeRedisService as any).acquireLock = async () => ({ acquired: true, token: 'plan-lock' });
+  (TradeRedisService as any).releaseLock = async () => {};
+  try {
+    service.getSignalExecutionContract = async () => ({
+      engineVersion: 'signal-only-v2',
+      optionDetails: { planned_contracts: 2 }
+    });
+    service.getRiskState = async () => ({
+      dailyRealizedPnl: 0,
+      maxDailyLoss: 200,
+      consecutiveLosses: 0,
+      maxConsecutiveLosses: 3,
+      cooldownUntil: null,
+      maxPremiumRisk: 500,
+      maxCorrelatedPositions: 1
+    });
+    service.getExistingSignalExecution = async () => null;
+    service.getSignalSetupGrade = async () => 'A+';
+    service.findDuplicateOpenEntry = async () => null;
+    service.closeSupersededPositions = async () => ({ blocked: false, checked: 0, closed: 0, supersededPending: 0, errors: [], message: '' });
+    service.countCorrelatedOpenPositions = async () => 0;
+    service.countTradesToday = async () => 0;
+    service.createSimulatedPosition = async (_input: any, quantity: number) => {
+      simulatedQuantity = quantity;
+      return { success: true, broker: 'simulated', quantity };
+    };
+
+    await service.executeSignal(createSignalInput(), {
+      execution_broker: 'none',
+      contracts_per_trade: '5',
+      max_trades_per_day: '2'
+    });
+    assert(simulatedQuantity === 2, `Strategy plan should cap configured quantity at 2, got ${simulatedQuantity}`);
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+    (TradeRedisService as any).releaseLock = originalReleaseLock;
+  }
+}
+
+async function testStrategyDebitPlanUsesSubmittedLimit() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const details = {
+    setupId: 'strategy-setup',
+    planned_limit_price: 2.05,
+    strategy_max_total_debit_dollars: 410
+  };
+  assert(
+    service.getStrategyDebitPlanViolation(details, 2.05, 2) === null,
+    'Order at the planned limit and debit cap should pass'
+  );
+  assert(
+    service.getStrategyDebitPlanViolation(details, 2.06, 2)?.includes('exceeds strategy limit'),
+    'Submitted protected limit above the strategy limit must be blocked'
+  );
+  assert(
+    service.getStrategyDebitPlanViolation({ ...details, planned_limit_price: 3 }, 2.06, 2)?.includes('exceeds strategy debit cap'),
+    'Submitted protected-limit debit above the strategy cap must be blocked'
+  );
 }
 
 async function testPreSubmitRiskDenialSkipsBeforeBrokerPath() {
@@ -493,6 +561,8 @@ async function runTests() {
   await testTheoreticalPricingDetectionCoversStoredShapes();
   await testRiskDecisionServiceCentralizesPreTradeBlocks();
   await testShadowModeNeverResolvesToLiveBroker();
+  await testStrategyPlanCapsConfiguredQuantity();
+  await testStrategyDebitPlanUsesSubmittedLimit();
   await testPreSubmitRiskDenialSkipsBeforeBrokerPath();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   console.log('All TradeExecutionService broker lifecycle tests passed!');

@@ -561,6 +561,30 @@ class TradePrefetcher:
         self.last_bar_recovery_reason = None
         self._refresh_options(force_chain=True)
 
+    def _apply_runtime_ibkr_policy(self) -> None:
+        policy = _read_policy(getattr(self.args, "policy_file", None))
+        host = str(policy.get("ibkr_host") or self.args.host).strip()
+        port = int(policy.get("ibkr_port") or self.args.port)
+        data_type = str(policy.get("ibkr_data_type") or self.args.data_type).strip()
+        if data_type not in DATA_TYPES:
+            raise ValueError(f"Unsupported runtime IBKR data type: {data_type}")
+        if (
+            host == self.args.host
+            and port == self.args.port
+            and data_type == self.args.data_type
+        ):
+            return
+        if self.ib.isConnected():
+            self.ib.disconnect()
+        self._reset_option_state()
+        self.args.host = host
+        self.args.port = port
+        self.args.data_type = data_type
+        print(
+            f"trade-prefetch applying runtime IBKR config {host}:{port} ({data_type})",
+            flush=True,
+        )
+
     def _option_anchor_price(self) -> float:
         """Resolve a safe chain-selection anchor without requiring the first quote tick."""
         try:
@@ -1053,6 +1077,7 @@ class TradePrefetcher:
         try:
             while True:
                 try:
+                    self._apply_runtime_ibkr_policy()
                     if not self.ib.isConnected():
                         self.connect()
                     self._recover_stale_bars()

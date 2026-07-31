@@ -240,6 +240,7 @@ export class MarketPoller {
   private isPartialProfitTrim(position: any, exitTriggerType: ExitTriggerType): boolean {
     const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
     return exitTriggerType === 'TAKE_PROFIT'
+      && !position.strategy_managed
       && quantity > 1
       && String(position.profit_trim_status || '').toUpperCase() !== 'DONE';
   }
@@ -836,6 +837,15 @@ export class MarketPoller {
     let triggered = !isShortPremiumPosition && !noBidQuote && engineResult.triggered && engineResult.triggerType === 'TAKE_PROFIT';
     let triggerType: ExitTriggerType | undefined = triggered ? 'TAKE_PROFIT' : undefined;
     let lossAvoided = engineResult.lossAvoided;
+    if (position.strategy_managed && position.strategy_exit_requested_at) {
+      triggered = true;
+      triggerType = String(position.strategy_exit_reason || '').toUpperCase() === 'COMPLETED'
+        ? 'TAKE_PROFIT'
+        : 'STOP_LOSS';
+      this.fastify.log.info(
+        `[MarketPoller] Strategy lifecycle exit requested for position ${position.id}: ${position.strategy_exit_reason || 'terminal state'}`
+      );
+    }
 
     const entryPrice = Number(position.entry_price);
     const excursion = this.calculateTradeExcursion(position, price);

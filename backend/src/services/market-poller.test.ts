@@ -93,11 +93,24 @@ async function testTradeExcursionTracksLongAndShortPremium() {
   assert(shortFirst.mfePct === 25 && shortFirst.maePct === 0, `Expected short premium gain to be favorable, got ${JSON.stringify(shortFirst)}`);
 }
 
+async function testStrategyLifecycleExitDoesNotPartialTrim() {
+  const poller = createPoller();
+  assert(
+    poller.isPartialProfitTrim({ quantity: 4, strategy_managed: true }, 'TAKE_PROFIT') === false,
+    'A terminal strategy lifecycle exit must close the full planned position'
+  );
+  assert(
+    poller.isPartialProfitTrim({ quantity: 4, strategy_managed: false }, 'TAKE_PROFIT') === true,
+    'Legacy take-profit behavior should retain partial trimming'
+  );
+}
+
 async function runTests() {
   console.log('Running MarketPoller tests...');
   await testUnderlyingStopDirection();
   await testThetaStopMaxHoldWindows();
   await testTradeExcursionTracksLongAndShortPremium();
+  await testStrategyLifecycleExitDoesNotPartialTrim();
   console.log('All MarketPoller tests passed!');
 }
 

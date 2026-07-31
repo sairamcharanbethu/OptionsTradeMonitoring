@@ -25,6 +25,7 @@ interface ExecuteSignalInput {
 }
 
 interface ExecutionSettings {
+  day_trading_enabled?: string;
   execution_broker?: string;
   snaptrade_auto_trade?: string;
   snaptrade_trading_account_id?: string;
@@ -79,6 +80,7 @@ export class TradeExecutionService {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
     return {
+      day_trading_enabled: 'true',
       execution_broker: 'none',
       snaptrade_auto_trade: 'false',
       snaptrade_trading_account_id: '',
@@ -103,9 +105,24 @@ export class TradeExecutionService {
   public async executeSignal(input: ExecuteSignalInput, settingsOverride?: ExecutionSettings) {
     const settings = settingsOverride || await this.getSettingsForUser(input.userId);
     const broker = this.resolveBroker(settings);
-    const quantity = this.parsePositiveInt(settings.contracts_per_trade, 1, 100);
+    if (settings.day_trading_enabled === 'false') {
+      const message = 'Day trading is disabled in settings';
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      return { success: false, skipped: true, broker, message };
+    }
+    const signalContract = await this.getSignalExecutionContract(input.signalId);
+    const configuredQuantity = this.parsePositiveInt(settings.contracts_per_trade, 1, 100);
+    const plannedContracts = Number(signalContract.optionDetails?.planned_contracts || 0);
+    if (signalContract.engineVersion === 'signal-only-v2' && (!Number.isInteger(plannedContracts) || plannedContracts <= 0)) {
+      const message = 'Strategy execution plan is missing a valid planned contract quantity';
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      return { success: false, skipped: true, broker, message };
+    }
+    const quantity = signalContract.engineVersion === 'signal-only-v2'
+      ? Math.min(configuredQuantity, plannedContracts)
+      : configuredQuantity;
     const maxTradesPerDay = this.parsePositiveInt(settings.max_trades_per_day, 2, 100);
-    const riskState = await this.getRiskState(input.userId, settings);
+    const riskState = await this.getRiskState(input.userId, settings, broker);
 
     const existingExecution = await this.getExistingSignalExecution(input.userId, input.signalId);
     const existingExecutionRisk = RiskDecisionService.evaluatePreSubmit({
@@ -157,7 +174,7 @@ export class TradeExecutionService {
       }
     }
 
-    const duplicate = await this.findDuplicateOpenEntry(input);
+    const duplicate = await this.findDuplicateOpenEntry(input, broker);
     const duplicateRisk = RiskDecisionService.evaluatePreSubmit({
       signalId: input.signalId,
       broker,
@@ -174,7 +191,7 @@ export class TradeExecutionService {
       return { success: false, broker, message: supersededSummary.message, superseded: supersededSummary };
     }
 
-    const correlatedOpenPositions = await this.countCorrelatedOpenPositions(input.userId, input.symbol);
+    const correlatedOpenPositions = await this.countCorrelatedOpenPositions(input.userId, input.symbol, broker);
     const correlatedRisk = RiskDecisionService.evaluatePreSubmit({
       signalId: input.signalId,
       broker,
@@ -202,7 +219,7 @@ export class TradeExecutionService {
       return this.denyPreSubmitRisk(input, broker, accountRisk);
     }
 
-    const currentTradeCount = await this.countTradesToday(input.userId);
+    const currentTradeCount = await this.countTradesToday(input.userId, broker);
     const dailyLimitRisk = RiskDecisionService.evaluatePreSubmit({
       signalId: input.signalId,
       broker,
@@ -239,7 +256,7 @@ export class TradeExecutionService {
   public async getDailyTradeUsage(userId: number, settingsOverride?: ExecutionSettings) {
     const settings = settingsOverride || await this.getSettingsForUser(userId);
     const maxTradesPerDay = this.parsePositiveInt(settings.max_trades_per_day, 2, 100);
-    const used = await this.countTradesToday(userId);
+    const used = await this.countTradesToday(userId, this.resolveBroker(settings));
 
     return {
       used,
@@ -281,8 +298,6 @@ export class TradeExecutionService {
     if (settings.shadow_trading_enabled === 'true') return 'simulated';
     const configured = settings.execution_broker as ExecutionBroker | undefined;
     if (configured === 'wealthsimple_snaptrade' && settings.snaptrade_auto_trade === 'true') return 'wealthsimple_snaptrade';
-
-    if ((!configured || configured === 'none') && settings.snaptrade_auto_trade === 'true') return 'wealthsimple_snaptrade';
     return 'none';
   }
 
@@ -338,7 +353,13 @@ export class TradeExecutionService {
     return RiskDecisionService.isExecutableSetupGrade(setupGrade);
   }
 
-  private async findDuplicateOpenEntry(input: ExecuteSignalInput) {
+  private executionScopeSql(broker: ExecutionBroker): string {
+    return broker === 'wealthsimple_snaptrade'
+      ? "COALESCE(is_simulated, FALSE) = FALSE AND execution_broker = 'wealthsimple_snaptrade'"
+      : "(COALESCE(is_simulated, FALSE) = TRUE OR execution_broker = 'simulated' OR account_id = 'simulated')";
+  }
+
+  private async findDuplicateOpenEntry(input: ExecuteSignalInput, broker: ExecutionBroker) {
     const { rows } = await this.fastify.pg.query(
       `SELECT id, status, execution_status, broker_order_id
        FROM positions
@@ -348,6 +369,7 @@ export class TradeExecutionService {
          AND strike_price = $4
          AND expiration_date::date = $5::date
          AND status IN ('OPEN', 'PENDING_ORDER')
+         AND ${this.executionScopeSql(broker)}
        ORDER BY created_at DESC
        LIMIT 1`,
       [input.userId, input.symbol, input.winningSide, input.chosenStrike, input.chosenExpiry]
@@ -359,22 +381,19 @@ export class TradeExecutionService {
     return `${input.symbol} ${input.chosenExpiry} ${input.winningSide} ${input.chosenStrike}`;
   }
 
-  private async countTradesToday(userId: number): Promise<number> {
+  private async countTradesToday(userId: number, broker: ExecutionBroker): Promise<number> {
     const { rows } = await this.fastify.pg.query(
       `SELECT COUNT(*)::int AS count
        FROM positions
        WHERE user_id = $1
          AND created_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'
-         AND (
-           account_id = 'simulated'
-           OR execution_broker IN ('wealthsimple_snaptrade', 'simulated')
-         )`,
+         AND ${this.executionScopeSql(broker)}`,
       [userId]
     );
     return Number(rows[0]?.count || 0);
   }
 
-  private async getRiskState(userId: number, settings: ExecutionSettings) {
+  private async getRiskState(userId: number, settings: ExecutionSettings, broker: ExecutionBroker) {
     const maxDailyLoss = this.parsePositiveNumber(settings.max_daily_loss_dollars, 200, 1_000_000);
     const maxConsecutiveLosses = this.parsePositiveInt(settings.max_consecutive_losses, 3, 100);
     const lossCooldownMinutes = this.parsePositiveInt(settings.loss_cooldown_minutes, 30, 24 * 60);
@@ -385,13 +404,17 @@ export class TradeExecutionService {
        FROM positions
        WHERE user_id = $1
          AND status = 'CLOSED'
+         AND ${this.executionScopeSql(broker)}
          AND updated_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'`,
       [userId]
     );
     const { rows: recentRows } = await this.fastify.pg.query(
       `SELECT realized_pnl, updated_at
        FROM positions
-       WHERE user_id = $1 AND status = 'CLOSED' AND realized_pnl IS NOT NULL
+       WHERE user_id = $1
+         AND status = 'CLOSED'
+         AND realized_pnl IS NOT NULL
+         AND ${this.executionScopeSql(broker)}
        ORDER BY updated_at DESC
        LIMIT 50`,
       [userId]
@@ -420,7 +443,7 @@ export class TradeExecutionService {
     };
   }
 
-  private async countCorrelatedOpenPositions(userId: number, symbol: string): Promise<number> {
+  private async countCorrelatedOpenPositions(userId: number, symbol: string, broker: ExecutionBroker): Promise<number> {
     const normalized = String(symbol || '').toUpperCase();
     const correlatedSymbols = ['SPY', 'QQQ'].includes(normalized) ? ['SPY', 'QQQ'] : [normalized];
     const { rows } = await this.fastify.pg.query(
@@ -429,6 +452,7 @@ export class TradeExecutionService {
        WHERE user_id = $1
          AND symbol = ANY($2::text[])
          AND status IN ('OPEN', 'PENDING_ORDER')
+         AND ${this.executionScopeSql(broker)}
          AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')`,
       [userId, correlatedSymbols]
     );
@@ -443,6 +467,7 @@ export class TradeExecutionService {
          AND symbol = $2
          AND option_type <> $3
          AND status IN ('OPEN', 'PENDING_ORDER')
+         AND ${this.executionScopeSql(broker)}
          AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')
        ORDER BY created_at DESC`,
       [input.userId, input.symbol, input.winningSide]
@@ -631,20 +656,24 @@ export class TradeExecutionService {
   }
 
   private async getSignalOptionDetails(signalId: number): Promise<any> {
+    return (await this.getSignalExecutionContract(signalId)).optionDetails;
+  }
+
+  private async getSignalExecutionContract(signalId: number): Promise<{ engineVersion: string | null; optionDetails: any }> {
     const { rows } = await this.fastify.pg.query(
-      'SELECT option_details FROM signals WHERE id = $1',
+      'SELECT engine_version, option_details FROM signals WHERE id = $1',
       [signalId]
     );
     const raw = rows[0]?.option_details;
-    if (!raw) return {};
+    if (!raw) return { engineVersion: rows[0]?.engine_version || null, optionDetails: {} };
     if (typeof raw === 'string') {
       try {
-        return JSON.parse(raw);
+        return { engineVersion: rows[0]?.engine_version || null, optionDetails: JSON.parse(raw) };
       } catch {
-        return {};
+        return { engineVersion: rows[0]?.engine_version || null, optionDetails: {} };
       }
     }
-    return raw;
+    return { engineVersion: rows[0]?.engine_version || null, optionDetails: raw };
   }
 
   private async fetchIbkrOptionQuote(userId: number, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
@@ -774,8 +803,22 @@ export class TradeExecutionService {
         entryQuoteValidation = validatedQuote;
         limitPrice = validatedQuote.protectedLimit.toFixed(2);
         orderType = 'LIMIT';
+        const strategyDebitViolation = this.getStrategyDebitPlanViolation(
+          optionDetails,
+          validatedQuote.protectedLimit,
+          quantity
+        );
+        if (strategyDebitViolation) {
+          await this.markSignalExecutionFailure(input.userId, input.signalId, strategyDebitViolation, true);
+          return {
+            success: false,
+            skipped: true,
+            broker: 'wealthsimple_snaptrade',
+            message: strategyDebitViolation
+          };
+        }
         const maxPremiumRisk = this.parsePositiveNumber(settings.max_premium_risk_dollars, 500, 1_000_000);
-        const premiumRisk = validatedQuote.quote.mark * quantity * 100;
+        const premiumRisk = validatedQuote.protectedLimit * quantity * 100;
         const premiumRiskAssessment = RiskDecisionService.evaluatePreSubmit({
           signalId: input.signalId,
           broker: 'wealthsimple_snaptrade',
@@ -861,6 +904,20 @@ export class TradeExecutionService {
     }
   }
 
+  private getStrategyDebitPlanViolation(optionDetails: any, protectedLimit: number, quantity: number): string | null {
+    if (!optionDetails?.setupId) return null;
+    const plannedLimit = Number(optionDetails.planned_limit_price || 0);
+    if (plannedLimit > 0 && protectedLimit > plannedLimit + 0.005) {
+      return `Live protected limit $${protectedLimit.toFixed(2)} exceeds strategy limit $${plannedLimit.toFixed(2)}`;
+    }
+    const maxTotalDebit = Number(optionDetails.strategy_max_total_debit_dollars || 0);
+    const actualDebit = protectedLimit * quantity * 100;
+    if (maxTotalDebit > 0 && actualDebit > maxTotalDebit + 0.005) {
+      return `Live order debit $${actualDebit.toFixed(2)} exceeds strategy debit cap $${maxTotalDebit.toFixed(2)}`;
+    }
+    return null;
+  }
+
   private async createSimulatedPosition(input: ExecuteSignalInput, quantity: number, reason: string) {
     const position = await this.insertExecutedPosition(input, {
       quantity,
@@ -905,9 +962,20 @@ export class TradeExecutionService {
     takeProfitPct?: string;
     notes: string;
   }) {
+    const { rows: signalRows } = await this.fastify.pg.query(
+      `SELECT strategy_setup_id, engine_version, lifecycle_status, policy_fingerprint,
+              strategy_snapshot, option_details
+       FROM signals
+       WHERE id = $1`,
+      [input.signalId]
+    );
+    const signal = signalRows[0] || {};
+    const strategyManaged = signal.engine_version === 'signal-only-v2' && Boolean(signal.strategy_setup_id);
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
     const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
-    const configuredTakeProfitPct = this.parseOptionalPct(execution.takeProfitPct, 500);
+    const configuredTakeProfitPct = strategyManaged
+      ? null
+      : this.parseOptionalPct(execution.takeProfitPct, 500);
     const premiumTakeProfit = configuredTakeProfitPct !== null
       ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
       : null;
@@ -921,12 +989,16 @@ export class TradeExecutionService {
         broker_order_id, broker_trade_id, execution_account_id, execution_status, contracts_requested,
         entry_action, exit_action,
         suggested_stop_loss, suggested_take_profit_1,
+        signal_id, strategy_setup_id, strategy_engine_version,
+        strategy_lifecycle_status, strategy_policy_fingerprint,
+        strategy_snapshot, strategy_managed,
         created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
         $23, $24,
         $25, $26,
+        $27, $28, $29, $30, $31, $32, $33,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       RETURNING *`,
@@ -956,7 +1028,14 @@ export class TradeExecutionService {
         'BUY_TO_OPEN',
         'SELL_TO_CLOSE',
         input.stopUnderlying,
-        input.targetUnderlying
+        input.targetUnderlying,
+        input.signalId,
+        signal.strategy_setup_id || null,
+        signal.engine_version || null,
+        signal.lifecycle_status || null,
+        signal.policy_fingerprint || null,
+        signal.strategy_snapshot || null,
+        strategyManaged
       ]
     );
 

@@ -24,8 +24,13 @@ jobs:
         include:
           - service: backend
             context: ./backend
+            runtime: node
           - service: frontend
             context: ./frontend
+            runtime: node
+          - service: strategy-engine
+            context: ./strategy-engine
+            runtime: python
     permissions:
       contents: read
       packages: write
@@ -36,18 +41,33 @@ jobs:
           clean: true
 
       - uses: actions/setup-node@v4
+        if: matrix.runtime == 'node'
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: ${{ matrix.context }}/package-lock.json
 
-      - name: Install dependencies and build
+      - uses: actions/setup-python@v5
+        if: matrix.runtime == 'python'
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies, test, and build
+        if: matrix.runtime == 'node'
         run: |
           cd ${{ matrix.context }}
           npm ci --legacy-peer-deps
+          if [[ "${{ matrix.service }}" == "backend" ]]; then npm test; fi
           npm run build
         env:
           VITE_APP_BUILD_SHA: ${{ github.sha }}
+
+      - name: Test strategy engine
+        if: matrix.runtime == 'python'
+        run: |
+          cd ${{ matrix.context }}
+          python -m pip install -r requirements.txt
+          python -m unittest discover -s . -p 'test_*.py'
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -70,6 +90,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ steps.repo.outputs.lowercase }}-${{ matrix.service }}
           tags: |
+            type=raw,value=${{ github.sha }}
             type=sha
             type=raw,value=latest
 
@@ -139,7 +160,7 @@ jobs:
           scp -i ~/.ssh/deploy_key docker-compose.yml ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }}:${{ env.DEPLOY_PATH }}/
 
           # Deploy via SSH
-          ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "INFISICAL_TOKEN='${{ secrets.INFISICAL_TOKEN }}' ENV_NAME='${{ env.ENV_NAME }}' DEPLOY_PATH='${{ env.DEPLOY_PATH }}' COMPOSE_PROJECT_NAME='${{ env.COMPOSE_PROJECT_NAME }}' PORT_BACKEND='${{ env.PORT_BACKEND }}' PORT_FRONTEND='${{ env.PORT_FRONTEND }}' PORT_DB='${{ env.PORT_DB }}' PORT_REDIS='${{ env.PORT_REDIS }}' INFISICAL_ENV='${{ env.INFISICAL_ENV }}' INFISICAL_API_URL='https://cred.ssmedia.ca' bash -s" << 'DEPLOY_SCRIPT'
+          ssh -i ~/.ssh/deploy_key ${{ secrets.VPS_USERNAME }}@${{ secrets.VPS_HOST }} "INFISICAL_TOKEN='${{ secrets.INFISICAL_TOKEN }}' ENV_NAME='${{ env.ENV_NAME }}' DEPLOY_PATH='${{ env.DEPLOY_PATH }}' COMPOSE_PROJECT_NAME='${{ env.COMPOSE_PROJECT_NAME }}' PORT_BACKEND='${{ env.PORT_BACKEND }}' PORT_FRONTEND='${{ env.PORT_FRONTEND }}' PORT_DB='${{ env.PORT_DB }}' PORT_REDIS='${{ env.PORT_REDIS }}' INFISICAL_ENV='${{ env.INFISICAL_ENV }}' IMAGE_TAG='${{ github.sha }}' INFISICAL_API_URL='https://cred.ssmedia.ca' bash -s" << 'DEPLOY_SCRIPT'
             set -e
             cd ${{ env.DEPLOY_PATH }}
             
@@ -148,22 +169,22 @@ jobs:
             
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull trade-staging-backend trade-staging-frontend
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull trade-staging-backend trade-staging-frontend zerogex-prefetch strategy-engine
             
             export PORT_BACKEND=${{ env.PORT_BACKEND }}
             export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
             export PORT_DB=${{ env.PORT_DB }}
             export PORT_REDIS=${{ env.PORT_REDIS }}
+            export IMAGE_TAG=${{ github.sha }}
             
             if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
-              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --no-deps trade-staging-backend trade-staging-frontend db trade-staging-redis
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --wait --wait-timeout 180 --no-deps trade-staging-backend trade-staging-frontend db trade-staging-redis zerogex-prefetch strategy-engine
             else
               docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db || true
               docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db || true
-              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --remove-orphans --no-deps trade-staging-backend trade-staging-frontend trade-staging-redis
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --wait --wait-timeout 180 --remove-orphans --no-deps trade-staging-backend trade-staging-frontend trade-staging-redis zerogex-prefetch strategy-engine
             fi
-            
-            sleep 5
+
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
             docker image prune -f
           DEPLOY_SCRIPT

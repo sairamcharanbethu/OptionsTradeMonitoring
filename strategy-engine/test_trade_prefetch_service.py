@@ -448,6 +448,33 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         )
         self.assertIn("advanced_signals", signal["zerogex_shadow"])
 
+    def test_runtime_ibkr_policy_reconnects_on_admin_config_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_file = Path(tmp) / "policy.json"
+            policy_file.write_text(json.dumps({
+                "ibkr_host": "ib_gateway",
+                "ibkr_port": 4004,
+                "ibkr_data_type": "delayed",
+            }))
+            prefetcher = TradePrefetcher.__new__(TradePrefetcher)
+            prefetcher.args = SimpleNamespace(
+                policy_file=policy_file,
+                host="old-host",
+                port=4003,
+                data_type="live",
+            )
+            prefetcher.ib = Mock()
+            prefetcher.ib.isConnected.return_value = True
+            prefetcher._reset_option_state = Mock()
+
+            prefetcher._apply_runtime_ibkr_policy()
+
+            prefetcher.ib.disconnect.assert_called_once()
+            prefetcher._reset_option_state.assert_called_once()
+            self.assertEqual(prefetcher.args.host, "ib_gateway")
+            self.assertEqual(prefetcher.args.port, 4004)
+            self.assertEqual(prefetcher.args.data_type, "delayed")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,7 +20,7 @@ services:
       retries: 5
 
   trade-staging-backend:
-    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:latest
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:${IMAGE_TAG:-latest}
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -82,6 +82,7 @@ services:
       retries: 5
 
   zerogex-prefetch:
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
     build:
       context: ./strategy-engine
       dockerfile: Dockerfile
@@ -111,8 +112,15 @@ services:
       - "10"
     networks:
       - default
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') != 'error' and time.time()-float(h['updated_at']) < 45\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   strategy-engine:
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
     build:
       context: ./strategy-engine
       dockerfile: Dockerfile
@@ -182,9 +190,15 @@ services:
     networks:
       - ssmedia_ssmedia_net
       - default
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/health.json')); assert h.get('status') != 'error' and h.get('connected') is True and time.time()-float(h['updated_at']) < 10\""]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
 
   trade-staging-frontend:
-    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:latest
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:${IMAGE_TAG:-latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile

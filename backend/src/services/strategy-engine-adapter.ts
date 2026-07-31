@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { FastifyInstance } from 'fastify';
 import { getGlobalSettings } from '../lib/settings-utils';
+import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
 
@@ -233,6 +234,9 @@ export class StrategyEngineAdapter {
     const state = String(signal.state || 'WAIT');
     if (!this.currentSetupId) return;
     if (this.isTerminal(signal)) {
+      const terminalState = TERMINAL_STATES.has(state)
+        ? state
+        : String(signal.signal_phase || state);
       await (this.fastify as any).pg.query(
         `UPDATE signals
          SET lifecycle_status = $2,
@@ -240,7 +244,19 @@ export class StrategyEngineAdapter {
              strategy_snapshot = $3,
              status = CASE WHEN status IN ('PENDING', 'PENDING_TRIGGER') THEN 'CANCELLED' ELSE status END
          WHERE strategy_setup_id = $1`,
-        [this.currentSetupId, state, JSON.stringify(signal)]
+        [this.currentSetupId, terminalState, JSON.stringify(signal)]
+      );
+      await (this.fastify as any).pg.query(
+        `UPDATE positions
+         SET strategy_lifecycle_status = $2,
+             strategy_snapshot = $3,
+             strategy_exit_requested_at = COALESCE(strategy_exit_requested_at, CURRENT_TIMESTAMP),
+             strategy_exit_reason = $2,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE strategy_setup_id = $1
+           AND strategy_managed = TRUE
+           AND status = 'OPEN'`,
+        [this.currentSetupId, terminalState, JSON.stringify(signal)]
       );
       return;
     }
@@ -251,7 +267,9 @@ export class StrategyEngineAdapter {
     const option = setup.option || {};
     const lifecycle = signal.lifecycle || {};
     const expiry = this.normalizeExpiry(option.expiry);
-    const target = Array.isArray(setup.targets) ? setup.targets[0] : null;
+    const targets = Array.isArray(setup.targets) ? setup.targets : [];
+    const exitTargetNumber = Math.max(1, Number(signal.paper_policy?.exit_after_target || 2));
+    const target = targets[Math.min(exitTargetNumber, targets.length) - 1] ?? targets[0] ?? null;
     const confidence = Math.max(0, Math.min(100, Math.round(Number(signal.confidence_score || 0))));
     await (this.fastify as any).pg.query(
       `INSERT INTO signals (
@@ -296,6 +314,12 @@ export class StrategyEngineAdapter {
           mark: option.mid || null,
           bid: option.bid || null,
           ask: option.ask || null,
+          planned_contracts: option.planned_contracts || null,
+          planned_limit_price: option.planned_limit_price || null,
+          planned_total_debit: option.planned_total_debit || null,
+          strategy_max_total_debit_dollars: signal.strategy_policy?.strategy_max_total_debit_dollars || null,
+          targets,
+          exit_target_number: exitTargetNumber,
           setupId: this.currentSetupId,
           lifecycle
         }),
@@ -303,6 +327,28 @@ export class StrategyEngineAdapter {
         this.currentSetupId,
         lifecycle.entry_allowed === true,
         lifecycle.activated_at ? new Date(Number(lifecycle.activated_at) * 1000) : null,
+        signal.policy_fingerprint || null,
+        JSON.stringify(signal)
+      ]
+    );
+    await (this.fastify as any).pg.query(
+      `UPDATE positions
+       SET suggested_stop_loss = $2,
+           suggested_take_profit_1 = $3,
+           suggested_take_profit_2 = $4,
+           strategy_lifecycle_status = $5,
+           strategy_policy_fingerprint = $6,
+           strategy_snapshot = $7,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE strategy_setup_id = $1
+         AND strategy_managed = TRUE
+         AND status = 'OPEN'`,
+      [
+        this.currentSetupId,
+        setup.invalidation || null,
+        target,
+        targets[1] ?? null,
+        state,
         signal.policy_fingerprint || null,
         JSON.stringify(signal)
       ]
@@ -333,6 +379,13 @@ export class StrategyEngineAdapter {
 
   private async publishPolicy(): Promise<void> {
     const settings = await getGlobalSettings((this.fastify as any).pg);
+    const ibkr = await getIbkrGatewayConfig((this.fastify as any).pg);
+    const ibkrDataTypes: Record<number, string> = {
+      1: 'live',
+      2: 'frozen',
+      3: 'delayed',
+      4: 'delayed-frozen'
+    };
     const policy = {
       strategy_max_total_debit_dollars: this.numberInRange(
         settings.strategy_max_total_debit_dollars || process.env.STRATEGY_MAX_TOTAL_DEBIT_DOLLARS,
@@ -351,7 +404,10 @@ export class StrategyEngineAdapter {
         1,
         1,
         5
-      )
+      ),
+      ibkr_host: ibkr.host,
+      ibkr_port: ibkr.port,
+      ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live'
     };
     policy.strategy_preferred_contracts = Math.min(
       policy.strategy_preferred_contracts,
