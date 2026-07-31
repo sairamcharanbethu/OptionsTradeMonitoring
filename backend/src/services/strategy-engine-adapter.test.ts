@@ -76,22 +76,24 @@ async function runTests() {
     adapter.isTerminal(signal({ state: 'WAIT', signal_phase: 'INVALIDATED' })),
     'A terminal signal phase must close the setup even when the top-level state is WAIT'
   );
-  assert(
-    adapter.strategyAlert(signal())?.category === 'strategy-armed',
-    'ARMED lifecycle must produce one reliable setup alert'
-  );
-  assert(
-    adapter.strategyAlert(signal({ state: 'ACTIVE', lifecycle: { entry_allowed: true } }))?.category === 'strategy-active',
-    'ACTIVE lifecycle must notify that manual order review is available'
-  );
-  assert(
-    adapter.strategyAlert(signal({ state: 'MANAGE', lifecycle: { targets_hit: 1 } }))?.eventKey === 'target:1',
-    'Each newly reached strategy target must have a stable Discord dedupe key'
-  );
-  assert(
-    adapter.strategyAlert(signal({ state: 'FAILED', lifecycle: { close_reason: 'protected_invalidation' } }))?.category === 'strategy-stop',
-    'Invalidation must produce a critical stop notification'
-  );
+  const armedAlert = adapter.strategyAlert(signal());
+  assert(armedAlert?.category === 'strategy-armed', 'ARMED lifecycle must produce one reliable setup alert');
+  assert(armedAlert?.title.startsWith('WAIT'), 'ARMED notification must lead with the required trader action');
+  assert(armedAlert?.message.includes('DO NOT ENTER YET'), 'ARMED notification must explicitly prohibit early entry');
+  assert(armedAlert?.message.includes('5-minute, 15-minute, and 1-hour trends'), 'MTF notification must explain the setup in plain language');
+  assert(!armedAlert?.message.includes('MTF_TREND_BREAK'), 'Notification must not expose an unexplained internal strategy code');
+
+  const activeAlert = adapter.strategyAlert(signal({ state: 'ACTIVE', lifecycle: { entry_allowed: true } }));
+  assert(activeAlert?.category === 'strategy-active', 'ACTIVE lifecycle must notify that manual order review is available');
+  assert(activeAlert?.title.startsWith('REVIEW NOW'), 'ACTIVE notification must lead with the manual review action');
+  assert(activeAlert?.message.includes('manual approval'), 'ACTIVE notification must preserve the manual execution gate');
+  const targetAlert = adapter.strategyAlert(signal({ state: 'MANAGE', lifecycle: { targets_hit: 1 } }));
+  assert(targetAlert?.eventKey === 'target:1', 'Each newly reached strategy target must have a stable Discord dedupe key');
+  assert(targetAlert?.message.includes('DO NOT ADD A NEW POSITION'), 'Target notification must prohibit duplicate entry');
+
+  const stopAlert = adapter.strategyAlert(signal({ state: 'FAILED', lifecycle: { close_reason: 'protected_invalidation' } }));
+  assert(stopAlert?.category === 'strategy-stop', 'Invalidation must produce a critical stop notification');
+  assert(stopAlert?.message.includes('verify its exit status immediately'), 'Stop notification must tell the trader to reconcile any broker position');
 
   const credentialDirectory = await mkdtemp(path.join(os.tmpdir(), 'zerogex-credential-'));
   try {

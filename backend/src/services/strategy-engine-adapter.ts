@@ -382,19 +382,56 @@ export class StrategyEngineAdapter {
     const setup = side === 'CALL' ? signal.call_setup || {} : side === 'PUT' ? signal.put_setup || {} : {};
     const option = setup.option || {};
     const targetsHit = Math.max(0, Number(lifecycle.targets_hit || 0));
-    const closeReason = String(lifecycle.close_reason || signal.signal_phase || state).replace(/_/g, ' ');
+    const strategyNames: Record<string, string> = {
+      MTF_TREND_BREAK: 'multi-timeframe trend breakout',
+      MTF_REVERSAL: 'multi-timeframe reversal',
+      GEX_REJECTION: 'GEX level rejection',
+      CONTINUATION: 'trend continuation'
+    };
+    const strategyCode = String(signal.strategy || 'setup').toUpperCase();
+    const strategyName = strategyNames[strategyCode] || strategyCode.toLowerCase().replace(/_/g, ' ');
+    const direction = side === 'CALL' ? 'bullish CALL' : side === 'PUT' ? 'bearish PUT' : 'directional';
+    const price = (value: any) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? `$${parsed.toFixed(2)}` : 'unavailable';
+    };
+    const targetNumber = Math.max(1, Number(option.exit_target_number || signal.paper_policy?.exit_after_target || 2));
+    const targets = Array.isArray(setup.targets) ? setup.targets : [];
+    const target = targets[Math.min(targetNumber, targets.length) - 1] ?? targets[0];
+    const plannedContracts = Math.max(0, Number(option.planned_contracts || 0));
+    const plannedLimit = Math.max(0, Number(option.planned_limit_price || option.mark || 0));
+    const plannedDebit = Math.max(0, Number(option.planned_total_debit || (plannedContracts * plannedLimit * 100)));
+    const triggerVerb = side === 'PUT' ? 'falls to or below' : 'rises to or above';
+    const invalidationVerb = side === 'PUT' ? 'rises to or above' : 'falls to or below';
+    const contract = option.local_symbol || option.ticker || 'not selected yet';
+    const why = strategyCode === 'MTF_TREND_BREAK'
+      ? 'The 5-minute, 15-minute, and 1-hour trends point in the same direction, with price on the confirming side of VWAP.'
+      : Array.isArray(signal.confirmations) && signal.confirmations[0]
+        ? String(signal.confirmations[0])
+        : 'The strategy confirmation gates aligned.';
     const plan = [
-      side ? `${side} ${String(signal.strategy || 'setup')}` : String(signal.strategy || 'SPY setup'),
-      setup.trigger != null ? `trigger ${setup.trigger}` : null,
-      setup.invalidation != null ? `invalidation ${setup.invalidation}` : null,
-      option.local_symbol ? `contract ${option.local_symbol}` : null
-    ].filter(Boolean).join(' · ');
+      `Setup: ${direction} — ${strategyName}`,
+      `Why: ${why}`,
+      `Trigger: SPY ${triggerVerb} ${price(setup.trigger)}`,
+      `Invalidation: SPY ${invalidationVerb} ${price(setup.invalidation)}`,
+      `Target ${targetNumber}: ${price(target)}`,
+      `Contract: ${contract}`,
+      plannedContracts > 0 ? `Planned order: ${plannedContracts} contract${plannedContracts === 1 ? '' : 's'} at or below ${price(plannedLimit)} · maximum debit ${price(plannedDebit)}` : null
+    ].filter(Boolean).join('\n');
+    const rawCloseReason = String(lifecycle.close_reason || signal.signal_phase || state);
+    const closeReasons: Record<string, string> = {
+      protected_invalidation: 'SPY crossed the protected invalidation',
+      tracking_gap_abort: 'live strategy tracking was interrupted too long',
+      option_quote_stale: 'the selected option quote became stale',
+      completed: 'the planned target lifecycle completed'
+    };
+    const closeReason = closeReasons[rawCloseReason.toLowerCase()] || rawCloseReason.toLowerCase().replace(/_/g, ' ');
 
     if (['INVALIDATED', 'TRACKING_ABORTED', 'FAILED'].includes(state)
       || ['INVALIDATED', 'TRACKING_ABORTED', 'FAILED'].includes(String(signal.signal_phase || '').toUpperCase())) {
       return {
-        title: 'Strategy stop or invalidation',
-        message: `${plan}. The setup is closed: ${closeReason}. Do not open a new order.`,
+        title: state === 'INVALIDATED' ? `CLOSED — SPY ${side || ''} setup invalidated` : `CLOSED — SPY ${side || ''} tracking stopped`,
+        message: `ACTION: DO NOT ENTER OR RE-ENTER.\nReason: ${closeReason}.\nIf a broker position is still open, verify its exit status immediately.\n\n${plan}`,
         severity: 'critical',
         category: 'strategy-stop',
         eventKey: `stop:${state}:${closeReason}`
@@ -402,8 +439,8 @@ export class StrategyEngineAdapter {
     }
     if (state === 'COMPLETED') {
       return {
-        title: 'Strategy take-profit completed',
-        message: `${plan}. The planned target lifecycle completed. Confirm the broker exit and final fill.`,
+        title: `CLOSED — SPY ${side || ''} target complete`,
+        message: `ACTION: CONFIRM THE BROKER EXIT AND FINAL FILL.\nDo not submit another entry from this setup.\n\n${plan}`,
         severity: 'info',
         category: 'strategy-target',
         eventKey: `target:completed:${targetsHit}`
@@ -411,8 +448,8 @@ export class StrategyEngineAdapter {
     }
     if (targetsHit > 0) {
       return {
-        title: `Strategy target ${targetsHit} reached`,
-        message: `${plan}. Target ${targetsHit} is complete; continue with the protected strategy lifecycle.`,
+        title: `MANAGE — SPY target ${targetsHit} reached`,
+        message: `ACTION: DO NOT ADD A NEW POSITION.\nTarget ${targetsHit} was reached. Let the protected exit lifecycle continue and verify the broker position remains monitored.\n\n${plan}`,
         severity: 'info',
         category: 'strategy-target',
         eventKey: `target:${targetsHit}`
@@ -420,8 +457,8 @@ export class StrategyEngineAdapter {
     }
     if (state === 'ACTIVE') {
       return {
-        title: 'Strategy setup active',
-        message: `${plan}. The entry window is active. Manual approval and all execution limits still apply.`,
+        title: `REVIEW NOW — SPY ${side || ''} entry active`,
+        message: `ACTION: OPEN THE APP AND REVIEW THE PLANNED ORDER NOW.\nThe trigger and activation checks passed. Entry still requires manual approval, a fresh quote, and every hard risk limit.\n\n${plan}`,
         severity: 'warning',
         category: 'strategy-active',
         eventKey: 'active'
@@ -429,8 +466,8 @@ export class StrategyEngineAdapter {
     }
     if (state === 'ARMED') {
       return {
-        title: 'Strategy setup armed',
-        message: `${plan}. Wait for ACTIVE confirmation before reviewing an order.`,
+        title: `WAIT — SPY ${side || ''} setup forming`,
+        message: `ACTION: WAIT. DO NOT ENTER YET.\nThe plan is frozen, but the final activation checks have not passed. Enter only if the app changes this setup to ACTIVE.\n\n${plan}`,
         severity: 'info',
         category: 'strategy-armed',
         eventKey: 'armed'

@@ -184,6 +184,32 @@ const optionSide = (signal: Signal | null, strategySignal: Record<string, any> |
   return null;
 };
 
+const strategyDisplay = (strategy?: string | null) => {
+  const code = String(strategy || '').trim().toUpperCase();
+  const strategies: Record<string, { name: string; explanation: string }> = {
+    MTF_TREND_BREAK: {
+      name: 'Multi-timeframe trend breakout',
+      explanation: 'The 5-minute, 15-minute, and 1-hour trends point in the same direction, with SPY on the confirming side of VWAP.'
+    },
+    MTF_REVERSAL: {
+      name: 'Multi-timeframe reversal',
+      explanation: 'Short- and longer-term price structure aligned around a potential change in direction.'
+    },
+    GEX_REJECTION: {
+      name: 'GEX level rejection',
+      explanation: 'SPY rejected a fresh gamma level with confirmation from the 5-minute and 15-minute trends.'
+    },
+    CONTINUATION: {
+      name: 'Trend continuation',
+      explanation: 'SPY is attempting to resume the established move after holding its continuation structure.'
+    }
+  };
+  return strategies[code] || {
+    name: code ? code.toLowerCase().replace(/_/g, ' ') : 'Strategy setup',
+    explanation: 'The configured strategy confirmation gates produced this setup.'
+  };
+};
+
 const getExecutionMode = (settings: Record<string, string>) => {
   if (settings.shadow_trading_enabled === 'true') {
     return { label: 'Shadow simulation', live: false };
@@ -333,6 +359,7 @@ const PositionSummary = ({
 
 const HistorySetupCard = ({ setup }: { setup: StrategyHistorySetup }) => {
   const option = setup.option_details || {};
+  const strategy = strategyDisplay(setup.strategy_name);
   const terminalEvent = [...setup.lifecycle_events].reverse().find(event => event.closeReason || ['COMPLETED', 'INVALIDATED', 'FAILED', 'TRACKING_ABORTED'].includes(event.status));
   const finalEvent = setup.lifecycle_events[setup.lifecycle_events.length - 1];
   const plannedQuantity = Number(option.planned_contracts || setup.contracts_requested || 0);
@@ -349,7 +376,7 @@ const HistorySetupCard = ({ setup }: { setup: StrategyHistorySetup }) => {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${setup.side === 'CALL' ? 'bg-emerald-950/50 text-emerald-300' : 'bg-rose-950/50 text-rose-300'}`}>{setup.side}</span>
-            <span className="truncate text-xs font-semibold text-zinc-200">{setup.strategy_name || 'Strategy setup'}</span>
+            <span className="truncate text-xs font-semibold text-zinc-200">{strategy.name}</span>
           </div>
           <div className="mt-1 truncate font-mono text-[10px] text-zinc-500" title={contractName(option, setup.side)}>{contractName(option, setup.side)}</div>
         </div>
@@ -367,6 +394,9 @@ const HistorySetupCard = ({ setup }: { setup: StrategyHistorySetup }) => {
         </div>
       </summary>
       <div className="border-t border-zinc-800 px-3 py-3">
+        <div className="mb-3 rounded-md border border-zinc-800 bg-black/15 px-2.5 py-2 text-[10px] leading-relaxed text-zinc-400">
+          <span className="font-semibold text-zinc-300">Why it appeared:</span> {strategy.explanation}
+        </div>
         <div className="grid gap-3 sm:grid-cols-3">
           <div className="rounded-md bg-black/20 p-2.5 text-[10px] text-zinc-500">
             <div>Plan</div>
@@ -533,6 +563,8 @@ export default function DayTradingTerminal() {
   }) || null, [positions, currentSignal?.id, strategySetupId]);
   const lifecycleView = stateCopy(lifecycle, side);
   const currentTone = lifecycleTone(lifecycle);
+  const currentStrategyCode = strategySignal?.strategy || currentSignal?.strategy_name || null;
+  const currentStrategy = strategyDisplay(currentStrategyCode);
   const primaryGex = strategySignal?.gex || currentSignal?.gex || strategySignal?.zerogex_shadow || {};
   const gexAge = gexAgeSeconds(strategySignal || currentSignal?.strategy_snapshot || null);
   const staleReviewReason = !freshSnapshot
@@ -811,9 +843,19 @@ export default function DayTradingTerminal() {
                     {side}
                   </span>
                 )}
+                {currentStrategyCode && (
+                  <span className="rounded-md border border-current/15 bg-black/10 px-2 py-1 text-[10px] font-medium">
+                    {currentStrategy.name}
+                  </span>
+                )}
               </div>
               <h2 className="mt-3 text-2xl font-semibold tracking-[-0.025em] text-zinc-50 sm:text-3xl">{lifecycleView.title}</h2>
               <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">{lifecycleView.description}</p>
+              {currentStrategyCode && (
+                <div className="mt-3 max-w-2xl rounded-lg border border-current/10 bg-black/10 px-3 py-2 text-xs leading-relaxed text-zinc-300">
+                  <span className="font-semibold">Why this setup:</span> {currentStrategy.explanation}
+                </div>
+              )}
 
               <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-6 sm:grid-cols-4 sm:gap-x-4 sm:gap-y-3">
                 <Level label="SPY spot" value={strategySignal?.spot || currentSignal?.current_price} />
