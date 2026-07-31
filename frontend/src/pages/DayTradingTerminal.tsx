@@ -4,6 +4,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
   ArrowUpRight,
+  Bell,
+  BellOff,
   Check,
   ChevronDown,
   CircleAlert,
@@ -40,6 +42,7 @@ import {
 type LifecycleTone = 'idle' | 'armed' | 'active' | 'manage' | 'complete' | 'blocked';
 type ServicesHealth = Awaited<ReturnType<typeof api.getServicesHealth>>;
 const MAX_GEX_PROVIDER_AGE_SECONDS = 120;
+const BROWSER_SETUP_ALERTS_KEY = 'day-trading-browser-setup-alerts';
 
 const money = (value: unknown, decimals = 2) => {
   const number = Number(value);
@@ -506,12 +509,27 @@ export default function DayTradingTerminal() {
   const [healthError, setHealthError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [executeSignal, setExecuteSignal] = useState<Signal | null>(null);
+  const [dismissSignal, setDismissSignal] = useState<Signal | null>(null);
   const [executing, setExecuting] = useState(false);
+  const [dismissing, setDismissing] = useState(false);
+  const [clockNow, setClockNow] = useState(() => Date.now());
+  const [browserAlertsEnabled, setBrowserAlertsEnabled] = useState(() => (
+    typeof window !== 'undefined'
+    && typeof Notification !== 'undefined'
+    && Notification.permission === 'granted'
+    && window.localStorage.getItem(BROWSER_SETUP_ALERTS_KEY) === 'true'
+  ));
   const [actionMessage, setActionMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [riskAssessment, setRiskAssessment] = useState<SignalRiskAssessment | null>(null);
   const [riskLoading, setRiskLoading] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
   const riskRequestRef = useRef(0);
+  const lastAlertStateRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const strategySignal = strategyState?.signal || null;
   const strategySetupId = strategyState?.setupId || null;
@@ -531,13 +549,16 @@ export default function DayTradingTerminal() {
       || 'WAIT'
   ).toUpperCase();
   const side = optionSide(currentSignal, strategySignal);
+  const directionConfirmed = [
+    'ARMED', 'ACTIVE', 'MANAGE', 'EXTENDED', 'COMPLETED', 'INVALIDATED', 'TRACKING_ABORTED', 'FAILED'
+  ].includes(lifecycle);
   const setup = side === 'PUT'
     ? strategySignal?.put_setup
     : side === 'CALL'
       ? strategySignal?.call_setup
       : null;
   const option = currentSignal?.option_details || setup?.option || {};
-  const quoteAge = setup?.option?.quote_age_seconds == null ? Number.NaN : Number(setup.option.quote_age_seconds);
+  const baseQuoteAge = setup?.option?.quote_age_seconds == null ? Number.NaN : Number(setup.option.quote_age_seconds);
   const lifecycleData = strategySignal?.lifecycle || currentSignal?.strategy_snapshot?.lifecycle || {};
   const targets = Array.isArray(option.targets)
     ? option.targets
@@ -563,21 +584,38 @@ export default function DayTradingTerminal() {
   const plannedLimit = Number(option.planned_limit_price || option.mark || 0);
   const orderDebit = plannedLimit > 0 && plannedContracts > 0 ? plannedLimit * orderQuantity * 100 : 0;
   const strategyDebitLimit = Number(option.strategy_max_total_debit_dollars || settings.strategy_max_total_debit_dollars || 0);
-  const snapshotAge = Number(strategyState?.ageSeconds);
+  const baseSnapshotAge = Number(strategyState?.ageSeconds);
+  const snapshotGeneratedAt = Number(strategySignal?.generated_at);
+  const snapshotAge = Number.isFinite(snapshotGeneratedAt) && snapshotGeneratedAt > 0
+    ? Math.max(0, clockNow / 1000 - snapshotGeneratedAt)
+    : baseSnapshotAge;
+  const snapshotDrift = Number.isFinite(snapshotAge) && Number.isFinite(baseSnapshotAge)
+    ? Math.max(0, snapshotAge - baseSnapshotAge)
+    : 0;
+  const quoteAge = Number.isFinite(baseQuoteAge) ? baseQuoteAge + snapshotDrift : Number.NaN;
   const freshSnapshot = Number.isFinite(snapshotAge) && snapshotAge >= 0 && snapshotAge <= 20;
   const usageRemaining = Number(tradeUsage?.remaining ?? 0);
   const entryAllowed = currentSignal?.entry_allowed === true
     && currentSignal.lifecycle_status === 'ACTIVE'
     && lifecycleData.entry_allowed !== false;
   const signalDismissed = currentSignal?.status === 'CANCELLED';
+  const entryReviewAvailable = ['ARMED', 'ACTIVE'].includes(lifecycle) && !signalDismissed;
   const liveMissing = executionMode.live
     ? [
         settings.snaptrade_trading_account_id ? null : 'Select a Wealthsimple account',
         settings.live_trading_acknowledged === 'true' ? null : 'Acknowledge live trading'
       ].filter(Boolean) as string[]
     : [];
+  const primaryGex = strategySignal?.gex || currentSignal?.gex || strategySignal?.zerogex_shadow || {};
+  const gexAge = gexAgeSeconds(strategySignal || currentSignal?.strategy_snapshot || null);
+  const gexFresh = Number.isFinite(gexAge)
+    && gexAge >= 0
+    && gexAge <= MAX_GEX_PROVIDER_AGE_SECONDS
+    && !primaryGex.error
+    && strategySignal?.zerogex_shadow?.fresh !== false;
   const executionBlockers = [
     !dayTradingEnabled ? 'Day trading is disabled' : null,
+    services?.scanner?.marketOpen !== true ? 'Entry window is outside configured trading hours' : null,
     signalDismissed
       ? 'This setup is cancelled for your account'
       : currentSignal && currentSignal.status !== 'PENDING'
@@ -587,6 +625,7 @@ export default function DayTradingTerminal() {
     !entryAllowed ? 'Entry window is not open' : null,
     !freshSnapshot ? 'Strategy snapshot is stale' : null,
     !Number.isFinite(quoteAge) || quoteAge > 15 ? 'Selected option quote is stale or missing' : null,
+    !gexFresh ? 'Authoritative GEX snapshot is stale or missing' : null,
     usageRemaining <= 0 ? 'Daily trade limit reached' : null,
     plannedContracts <= 0 ? 'Strategy has no executable contract quantity' : null,
     ...liveMissing,
@@ -605,13 +644,6 @@ export default function DayTradingTerminal() {
   const currentTone = signalDismissed ? 'blocked' : lifecycleTone(lifecycle);
   const currentStrategyCode = strategySignal?.strategy || currentSignal?.strategy_name || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
-  const primaryGex = strategySignal?.gex || currentSignal?.gex || strategySignal?.zerogex_shadow || {};
-  const gexAge = gexAgeSeconds(strategySignal || currentSignal?.strategy_snapshot || null);
-  const gexFresh = Number.isFinite(gexAge)
-    && gexAge >= 0
-    && gexAge <= MAX_GEX_PROVIDER_AGE_SECONDS
-    && !primaryGex.error
-    && strategySignal?.zerogex_shadow?.fresh !== false;
   const spot = Number(strategySignal?.spot || currentSignal?.current_price);
   const trigger = Number(setup?.trigger || currentSignal?.entry_trigger);
   const invalidation = Number(setup?.invalidation || currentSignal?.stop_loss);
@@ -627,12 +659,14 @@ export default function DayTradingTerminal() {
   const heartbeatSummary = signalDismissed
     ? `The strategy engine remains ${lifecycle}, but this setup is closed for your account.`
     : lifecycle === 'ACTIVE'
-      ? `SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
+      ? `${canExecute ? '' : `${executionBlockers[0]}. `}SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
       : lifecycle === 'ARMED'
         ? `The setup is forming. SPY is ${spotVsTrigger}; entry remains locked until every confirmation passes.`
         : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
           ? 'A linked position is in management. Entry is closed while invalidation and target progression are monitored.'
-          : 'The strategy is monitoring SPY and has not opened a new entry window.';
+          : side
+            ? `The strategy currently favors ${side === 'CALL' ? 'calls' : 'puts'}, but no qualified entry exists.${strategyBlockers[0] ? ` Waiting on: ${strategyBlockers[0]}.` : ''} SPY is ${spotVsTrigger}.`
+            : 'The strategy is monitoring SPY and has not opened a new entry window.';
   const heartbeatLabel = signalDismissed
     ? 'Closed for your account'
     : canExecute
@@ -644,6 +678,26 @@ export default function DayTradingTerminal() {
           : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
             ? 'Position management'
             : 'Watching SPY';
+  const approvalStillCurrent = !executeSignal || executeSignal.id === currentSignal?.id;
+  const dismissStillCurrent = !dismissSignal || dismissSignal.id === currentSignal?.id;
+  const approvalWindows = [
+    20 - snapshotAge,
+    15 - quoteAge,
+    MAX_GEX_PROVIDER_AGE_SECONDS - gexAge
+  ];
+  const approvalSecondsRemaining = approvalWindows.every(Number.isFinite)
+    ? Math.max(0, Math.floor(Math.min(...approvalWindows)))
+    : 0;
+  const canConfirmExecution = Boolean(executeSignal && approvalStillCurrent && canExecute && approvalSecondsRemaining > 0);
+  const approvalBlocker = !approvalStillCurrent
+    ? 'The strategy published a different setup while this review was open.'
+    : executionBlockers[0] || (approvalSecondsRemaining <= 0 ? 'The approval data expired.' : null);
+  const scannerWindow = services?.scanner?.window;
+  const marketSessionLabel = services?.scanner?.marketOpen
+    ? `Regular session · entry cutoff ${scannerWindow?.cutoff || 'configured'} ET`
+    : services?.scanner?.enabled === false
+      ? 'Day trading disabled'
+      : `Market closed · next window ${scannerWindow?.start || 'configured'} ET`;
   const staleReviewReason = !freshSnapshot
     ? 'Strategy snapshot is stale'
     : !Number.isFinite(gexAge)
@@ -724,6 +778,46 @@ export default function DayTradingTerminal() {
     }
   }, [lastMessage, queryClient]);
 
+  useEffect(() => {
+    const alertState = `${strategySetupId || 'none'}:${lifecycle}`;
+    if (lastAlertStateRef.current === null) {
+      lastAlertStateRef.current = alertState;
+      return;
+    }
+    const changed = lastAlertStateRef.current !== alertState;
+    lastAlertStateRef.current = alertState;
+    if (!changed || !browserAlertsEnabled || !['ARMED', 'ACTIVE'].includes(lifecycle)) return;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    new Notification(`SPY setup ${lifecycle.toLowerCase()}`, {
+      body: lifecycle === 'ACTIVE'
+        ? `${side || 'Directional'} entry conditions are live. Open the app to review the protected order.`
+        : `${side || 'Directional'} setup is forming. Entry remains locked until ACTIVE.`
+    });
+  }, [browserAlertsEnabled, lifecycle, side, strategySetupId]);
+
+  const toggleBrowserAlerts = async () => {
+    if (browserAlertsEnabled) {
+      window.localStorage.setItem(BROWSER_SETUP_ALERTS_KEY, 'false');
+      setBrowserAlertsEnabled(false);
+      setActionMessage({ tone: 'success', text: 'Browser setup alerts disabled.' });
+      return;
+    }
+    if (typeof Notification === 'undefined') {
+      setActionMessage({ tone: 'error', text: 'This browser does not support setup notifications.' });
+      return;
+    }
+    const permission = Notification.permission === 'granted'
+      ? 'granted'
+      : await Notification.requestPermission();
+    if (permission !== 'granted') {
+      setActionMessage({ tone: 'error', text: 'Browser notification permission was not granted.' });
+      return;
+    }
+    window.localStorage.setItem(BROWSER_SETUP_ALERTS_KEY, 'true');
+    setBrowserAlertsEnabled(true);
+    setActionMessage({ tone: 'success', text: 'Browser alerts enabled for ARMED and ACTIVE setups.' });
+  };
+
   const requestExecution = () => {
     setActionMessage(null);
     if (!currentSignal || !canExecute) {
@@ -738,6 +832,10 @@ export default function DayTradingTerminal() {
 
   const confirmExecution = async () => {
     if (!executeSignal) return;
+    if (!canConfirmExecution) {
+      setActionMessage({ tone: 'error', text: approvalBlocker || 'This order review expired. Refresh the setup before trying again.' });
+      return;
+    }
     setExecuting(true);
     setActionMessage(null);
     try {
@@ -763,14 +861,23 @@ export default function DayTradingTerminal() {
   };
 
   const cancelSetup = async () => {
-    if (!currentSignal) return;
+    if (!dismissSignal) return;
+    if (!dismissStillCurrent) {
+      setActionMessage({ tone: 'error', text: 'The strategy changed before dismissal was confirmed. Review the new setup instead.' });
+      setDismissSignal(null);
+      return;
+    }
+    setDismissing(true);
     setActionMessage(null);
     try {
-      await api.updateSignalStatus(currentSignal.id, 'CANCELLED');
+      await api.updateSignalStatus(dismissSignal.id, 'CANCELLED');
       setActionMessage({ tone: 'success', text: 'Setup dismissed for this account.' });
+      setDismissSignal(null);
       await queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
     } catch (error: any) {
       setActionMessage({ tone: 'error', text: error.message || 'Could not dismiss this setup.' });
+    } finally {
+      setDismissing(false);
     }
   };
 
@@ -845,7 +952,7 @@ export default function DayTradingTerminal() {
               Follow the strategy lifecycle from setup formation through guarded execution and position management.
             </p>
           </div>
-          <div className="grid w-full grid-cols-2 gap-2 lg:w-auto">
+          <div className="grid w-full grid-cols-3 gap-2 lg:w-auto">
             <Link
               to="/system-health"
               className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100 active:translate-y-px"
@@ -854,6 +961,16 @@ export default function DayTradingTerminal() {
               System health
               <ArrowUpRight className="h-3 w-3" />
             </Link>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={toggleBrowserAlerts}
+              className="h-10 w-full border-zinc-800 bg-zinc-950 px-2 text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px"
+              title="Notify this browser when a setup becomes ARMED or ACTIVE"
+            >
+              {browserAlertsEnabled ? <Bell className="mr-1.5 h-3.5 w-3.5 text-emerald-400" /> : <BellOff className="mr-1.5 h-3.5 w-3.5" />}
+              Alerts
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -871,7 +988,7 @@ export default function DayTradingTerminal() {
           <Metric
             label="Strategy"
             value={strategyHealth?.status || (freshSnapshot ? 'LIVE' : 'STARTING')}
-            detail={relativeAge(strategyState?.ageSeconds)}
+            detail={relativeAge(snapshotAge)}
             tone={freshSnapshot ? 'text-emerald-300' : 'text-amber-300'}
           />
           <Metric
@@ -900,8 +1017,9 @@ export default function DayTradingTerminal() {
           />
           <Metric
             label="Market"
-            value={services?.scanner?.status === 'MARKET_CLOSED' ? 'Closed' : 'Monitoring'}
-            detail={time(services?.generatedAt)}
+            value={services?.scanner?.marketOpen ? 'Open' : 'Closed'}
+            detail={services?.scanner?.marketOpen ? `cutoff ${scannerWindow?.cutoff || '—'} ET` : scannerWindow?.now ? `${scannerWindow.now} ET` : time(services?.generatedAt)}
+            tone={services?.scanner?.marketOpen ? 'text-emerald-300' : 'text-zinc-400'}
           />
         </div>
 
@@ -916,11 +1034,13 @@ export default function DayTradingTerminal() {
                 )}
                 {side && (
                   <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${
-                    side === 'CALL'
-                      ? 'border-emerald-500/25 bg-emerald-950/30 text-emerald-200'
-                      : 'border-rose-500/25 bg-rose-950/30 text-rose-200'
+                    !directionConfirmed
+                      ? 'border-amber-500/20 bg-amber-950/15 text-amber-200'
+                      : side === 'CALL'
+                        ? 'border-emerald-500/25 bg-emerald-950/30 text-emerald-200'
+                        : 'border-rose-500/25 bg-rose-950/30 text-rose-200'
                   }`}>
-                    {side}
+                    {side}{directionConfirmed ? '' : ' bias'}
                   </span>
                 )}
                 {currentStrategyCode && (
@@ -928,28 +1048,33 @@ export default function DayTradingTerminal() {
                     {currentStrategy.name}
                   </span>
                 )}
+                <a href="#setup-history" className="text-[10px] font-medium text-zinc-500 transition-colors hover:text-zinc-300">History ↓</a>
               </div>
               <h2 className="mt-3 text-2xl font-semibold tracking-[-0.025em] text-zinc-50 sm:text-3xl">{lifecycleView.title}</h2>
               <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">{lifecycleView.description}</p>
               {currentStrategyCode && (
                 <div className="mt-3 max-w-2xl rounded-lg border border-current/10 bg-black/10 px-3 py-2 text-xs leading-relaxed text-zinc-300">
-                  <span className="font-semibold">{side === 'CALL' ? 'Bullish' : side === 'PUT' ? 'Bearish' : 'Directional'} alignment:</span> {currentStrategy.explanation}
+                  <span className="font-semibold">
+                    {directionConfirmed
+                      ? `${side === 'CALL' ? 'Bullish' : side === 'PUT' ? 'Bearish' : 'Directional'} alignment:`
+                      : `Current ${side === 'CALL' ? 'bullish' : side === 'PUT' ? 'bearish' : 'directional'} bias:`}
+                  </span>{' '}{currentStrategy.explanation}
                 </div>
               )}
 
               <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-6 sm:grid-cols-5 sm:gap-x-3 sm:gap-y-3">
                 <Level label="SPY spot" value={strategySignal?.spot || currentSignal?.current_price} />
-                <Level label="Entry trigger" value={setup?.trigger || currentSignal?.entry_trigger} tone="text-emerald-200" />
-                <Level label="Invalidation" value={setup?.invalidation || currentSignal?.stop_loss} tone="text-rose-200" />
-                <Level label="Target 1" value={targetOne} tone="text-sky-200" />
-                <Level label={`Target ${option.exit_target_number || 2}`} value={targetTwo} tone="text-sky-200" />
+                <Level label={directionConfirmed ? 'Entry trigger' : 'Potential trigger'} value={setup?.trigger || currentSignal?.entry_trigger} tone={directionConfirmed ? 'text-emerald-200' : 'text-zinc-300'} />
+                <Level label={directionConfirmed ? 'Invalidation' : 'Potential invalidation'} value={setup?.invalidation || currentSignal?.stop_loss} tone={directionConfirmed ? 'text-rose-200' : 'text-zinc-300'} />
+                <Level label={directionConfirmed ? 'Target 1' : 'Potential target 1'} value={targetOne} tone={directionConfirmed ? 'text-sky-200' : 'text-zinc-300'} />
+                <Level label={directionConfirmed ? `Target ${option.exit_target_number || 2}` : `Potential target ${option.exit_target_number || 2}`} value={targetTwo} tone={directionConfirmed ? 'text-sky-200' : 'text-zinc-300'} />
               </div>
 
               <div className="mt-4 rounded-lg border border-zinc-800/80 bg-zinc-950/45 p-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${signalDismissed ? 'bg-zinc-500' : freshSnapshot ? 'animate-pulse bg-emerald-400' : 'bg-amber-400'}`} />
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${signalDismissed ? 'bg-zinc-500' : lifecycle === 'ACTIVE' && canExecute ? 'animate-pulse bg-emerald-400' : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'}`} />
                       <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Setup heartbeat</span>
                       <span className={`text-[10px] font-semibold ${signalDismissed || !canExecute ? 'text-amber-300' : 'text-emerald-300'}`}>{heartbeatLabel}</span>
                     </div>
@@ -959,10 +1084,38 @@ export default function DayTradingTerminal() {
                     <span>Strategy {relativeAge(snapshotAge)}</span>
                     <span>Quote {Number.isFinite(quoteAge) ? `${number(quoteAge, 1)}s` : '—'}</span>
                     <span>GEX {Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'}</span>
-                    <span>R/R {Number.isFinite(rewardRisk) ? `${number(rewardRisk)}:1` : '—'}</span>
+                    <span>{directionConfirmed ? 'R/R' : 'Plan R/R'} {Number.isFinite(rewardRisk) ? `${number(rewardRisk)}:1` : '—'}</span>
                   </div>
                 </div>
+                <div className="mt-2 border-t border-zinc-800/70 pt-2 text-[10px] text-zinc-500">{marketSessionLabel}</div>
               </div>
+
+              {!directionConfirmed && side && (
+                <details className="group mt-3 rounded-lg border border-zinc-800/70 bg-black/10">
+                  <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-[10px] font-medium text-zinc-500">
+                    Compare CALL and PUT watch levels
+                    <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="grid gap-2 border-t border-zinc-800/70 p-2 sm:grid-cols-2">
+                    {([
+                      ['CALL', strategySignal?.call_setup],
+                      ['PUT', strategySignal?.put_setup]
+                    ] as const).map(([watchSide, watchSetup]) => (
+                      <div key={watchSide} className="rounded-md bg-zinc-950/55 p-2.5">
+                        <div className="flex items-center justify-between text-[10px]">
+                          <span className="font-semibold text-zinc-300">{watchSide}</span>
+                          <span className={side === watchSide ? 'text-amber-300' : 'text-zinc-600'}>{side === watchSide ? 'Current bias' : 'Alternate'}</span>
+                        </div>
+                        <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px] tabular-nums text-zinc-500">
+                          <span>Trigger<br /><span className="text-zinc-300">{money(watchSetup?.trigger)}</span></span>
+                          <span>Stop<br /><span className="text-zinc-300">{money(watchSetup?.invalidation)}</span></span>
+                          <span>T1<br /><span className="text-zinc-300">{money(watchSetup?.targets?.[0])}</span></span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
 
               {strategyBlockers.length > 0 && lifecycle !== 'ACTIVE' && (
                 <div className="mt-5 rounded-lg border border-amber-500/20 bg-black/15 px-3 py-3">
@@ -1022,7 +1175,7 @@ export default function DayTradingTerminal() {
                   {currentSignal && (
                     <button
                       type="button"
-                      onClick={cancelSetup}
+                      onClick={() => setDismissSignal(currentSignal)}
                       className="mt-3 w-full text-center text-xs text-zinc-500 transition-colors hover:text-zinc-300"
                     >
                       Dismiss this setup
@@ -1078,6 +1231,20 @@ export default function DayTradingTerminal() {
         </section>
       </section>
 
+      {lifecycle === 'ACTIVE' && !signalDismissed && (
+        <div className="sticky bottom-2 z-20 rounded-xl border border-zinc-700/90 bg-zinc-950/95 p-2 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur md:hidden">
+          <Button
+            className="h-11 w-full bg-emerald-500 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-500"
+            onClick={requestExecution}
+            disabled={!canExecute}
+          >
+            <Play className="mr-2 h-4 w-4" />
+            {canExecute ? `Review ${side || ''} order` : 'Entry blocked'}
+          </Button>
+          {!canExecute && <div className="mt-1.5 truncate px-1 text-center text-[10px] text-amber-300">{executionBlockers[0]}</div>}
+        </div>
+      )}
+
       {actionMessage && (
         <div className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm ${
           actionMessage.tone === 'success'
@@ -1102,7 +1269,7 @@ export default function DayTradingTerminal() {
         />
       )}
 
-      <section className="rounded-lg border border-zinc-800 bg-[#101216] px-2.5 py-2 sm:px-3">
+      {entryReviewAvailable && <section className="rounded-lg border border-zinc-800 bg-[#101216] px-2.5 py-2 sm:px-3">
         <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
           <div className="shrink-0 px-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Hard risk</div>
           <div className="grid min-w-0 flex-1 grid-cols-3 gap-1 sm:grid-cols-6 sm:gap-0 sm:divide-x sm:divide-zinc-800">
@@ -1114,9 +1281,9 @@ export default function DayTradingTerminal() {
             <CompactRiskMetric label="GEX age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} tone={Number.isFinite(gexAge) && !gexFresh ? 'text-rose-300' : 'text-zinc-100'} />
           </div>
         </div>
-      </section>
+      </section>}
 
-      <section className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
+      {entryReviewAvailable && <section className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">
@@ -1229,10 +1396,10 @@ export default function DayTradingTerminal() {
             {riskError || (currentSignal ? 'No AI review has been requested for this setup.' : 'A persisted strategy setup is required for AI review.')}
           </div>
         )}
-      </section>
+      </section>}
 
-      <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-        <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
+      <section className={entryReviewAvailable ? 'grid gap-4 lg:grid-cols-[1.1fr_0.9fr]' : ''}>
+        {entryReviewAvailable && <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Contract quality</div>
@@ -1269,7 +1436,7 @@ export default function DayTradingTerminal() {
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
             Entry remains blocked when the quote is older than 15 seconds or the spread fails the strategy quality gate.
           </p>
-        </article>
+        </article>}
 
         <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Why this setup</div>
@@ -1300,7 +1467,7 @@ export default function DayTradingTerminal() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
-        <article className="min-w-0 rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
+        <article id="setup-history" className="min-w-0 scroll-mt-4 rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
@@ -1330,24 +1497,29 @@ export default function DayTradingTerminal() {
           </div>
         </article>
 
-        <aside className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
-          <div className="flex items-start justify-between gap-3">
+        <details className="group rounded-xl border border-zinc-800 bg-[#101216]">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
               <h3 className="mt-1 text-base font-semibold text-zinc-100">Entry-critical services</h3>
-              <p className="mt-1 text-xs text-zinc-500">Refreshes every 10 seconds. Ages come from provider timestamps.</p>
+              <p className="mt-1 text-xs text-zinc-500">Collapsed by default · provider-timestamp ages</p>
             </div>
-            <Link to="/system-health" className="shrink-0 text-[10px] font-semibold text-sky-300 hover:text-sky-200">Full health →</Link>
-          </div>
-          <div className="mt-3">
-            {diagnostics.map(item => <DiagnosticRow key={item.label} {...item} />)}
-          </div>
-          {healthError && (
-            <div className="mt-3 rounded-lg border border-rose-500/20 bg-rose-950/10 px-3 py-2 text-xs text-rose-200">
-              Health refresh failed: {healthError}
+            <ChevronDown className="h-4 w-4 shrink-0 text-zinc-500 transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="border-t border-zinc-800 px-4 pb-4 sm:px-5 sm:pb-5">
+            <div className="mt-3 flex justify-end">
+              <Link to="/system-health" className="text-[10px] font-semibold text-sky-300 hover:text-sky-200">Full health →</Link>
             </div>
-          )}
-        </aside>
+            <div className="mt-1">
+              {diagnostics.map(item => <DiagnosticRow key={item.label} {...item} />)}
+            </div>
+            {healthError && (
+              <div className="mt-3 rounded-lg border border-rose-500/20 bg-rose-950/10 px-3 py-2 text-xs text-rose-200">
+                Health refresh failed: {healthError}
+              </div>
+            )}
+          </div>
+        </details>
       </section>
 
       {signalsLoading && !currentSignal && (
@@ -1356,6 +1528,31 @@ export default function DayTradingTerminal() {
           Loading strategy state
         </div>
       )}
+
+      <Dialog open={!!dismissSignal} onOpenChange={open => !open && !dismissing && setDismissSignal(null)}>
+        <DialogContent className="w-[calc(100%_-_1.5rem)] max-w-md border-zinc-800 bg-[#101216] text-zinc-100 sm:w-full">
+          <DialogHeader>
+            <DialogTitle className="text-xl tracking-[-0.02em]">Dismiss this setup?</DialogTitle>
+            <DialogDescription className="text-zinc-500">
+              This closes the current setup for your account. You will need to wait for a newly qualified setup before placing an entry.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 px-3 py-2.5 text-xs text-amber-200">
+            {dismissStillCurrent
+              ? 'No broker order will be sent or cancelled. Any existing position remains managed separately.'
+              : 'The strategy published a different setup while this confirmation was open. Close this dialog and review the new setup.'}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => setDismissSignal(null)} disabled={dismissing} className="text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">
+              Keep setup
+            </Button>
+            <Button onClick={cancelSetup} disabled={dismissing || !dismissStillCurrent} className="bg-zinc-200 font-semibold text-zinc-950 hover:bg-white">
+              {dismissing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Dismiss setup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!executeSignal} onOpenChange={open => !open && !executing && setExecuteSignal(null)}>
         <DialogContent className="max-h-[92dvh] w-[calc(100%_-_1.5rem)] max-w-lg overflow-y-auto border-zinc-800 bg-[#101216] text-zinc-100 sm:w-full">
@@ -1374,10 +1571,25 @@ export default function DayTradingTerminal() {
                   This sends a real order to the selected Wealthsimple account.
                 </div>
               )}
+              <div className={`rounded-lg border px-3 py-2.5 ${canConfirmExecution ? 'border-emerald-500/20 bg-emerald-950/10' : 'border-rose-500/25 bg-rose-950/10'}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className={`text-xs font-semibold ${canConfirmExecution ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    {canConfirmExecution ? `Approval data expires in ${approvalSecondsRemaining}s` : 'Order review expired'}
+                  </span>
+                  <span className="font-mono text-[10px] text-zinc-500">{marketSessionLabel}</span>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px] tabular-nums text-zinc-500">
+                  <span>Strategy<br /><span className="text-zinc-300">{number(snapshotAge, 1)}s</span></span>
+                  <span>Quote<br /><span className="text-zinc-300">{number(quoteAge, 1)}s · {Number.isFinite(spreadPct) ? `${number(spreadPct)}%` : '—'}</span></span>
+                  <span>GEX<br /><span className="text-zinc-300">{number(gexAge, 1)}s</span></span>
+                </div>
+                {!canConfirmExecution && <div className="mt-2 text-xs leading-relaxed text-rose-200">{approvalBlocker}</div>}
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-lg bg-zinc-950/65 p-3">
                   <div className="text-[10px] text-zinc-500">Contract</div>
-                  <div className="mt-1 break-all font-mono text-xs font-semibold text-zinc-100">{option.ticker || option.local_symbol || `SPY ${side}`}</div>
+                  <div className="mt-1 text-xs font-semibold text-zinc-100">{humanContractName(option, side)}</div>
+                  <div className="mt-1 break-all font-mono text-[9px] text-zinc-600">{option.ticker || option.local_symbol || `SPY ${side}`}</div>
                 </div>
                 <div className="rounded-lg bg-zinc-950/65 p-3">
                   <div className="text-[10px] text-zinc-500">Quantity</div>
@@ -1388,7 +1600,7 @@ export default function DayTradingTerminal() {
                   <div className="mt-1 font-mono text-sm font-semibold text-zinc-100">{money(plannedLimit)}</div>
                 </div>
                 <div className="rounded-lg bg-zinc-950/65 p-3">
-                  <div className="text-[10px] text-zinc-500">Order debit</div>
+                  <div className="text-[10px] text-zinc-500">Latest estimated debit</div>
                   <div className="mt-1 font-mono text-sm font-semibold text-zinc-100">{money(orderDebit)}</div>
                 </div>
                 <div className="col-span-2 rounded-lg bg-zinc-950/65 p-3">
@@ -1416,13 +1628,13 @@ export default function DayTradingTerminal() {
             </Button>
             <Button
               onClick={confirmExecution}
-              disabled={executing}
+              disabled={executing || !canConfirmExecution}
               className={executionMode.live
                 ? 'bg-amber-500 font-semibold text-zinc-950 hover:bg-amber-400'
                 : 'bg-emerald-500 font-semibold text-zinc-950 hover:bg-emerald-400'}
             >
               {executing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-              {executionMode.live ? 'Send live order' : 'Create simulation'}
+              {!canConfirmExecution ? 'Refresh setup to continue' : executionMode.live ? 'Send live order' : 'Create simulation'}
             </Button>
           </DialogFooter>
         </DialogContent>
