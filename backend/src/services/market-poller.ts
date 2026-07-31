@@ -809,6 +809,9 @@ export class MarketPoller {
   }
 
   private async processUpdate(position: any, price: number, greeks?: any, iv?: number, underlyingPrice?: number, quote?: ExitQuoteContext) {
+    // System paper positions are valued and exited exclusively by PaperTradingService.
+    // Keeping them out of the legacy poller prevents duplicate closes and broker calls.
+    if (position.execution_broker === 'system_paper') return;
     let analysis: any = {};
     let analysisDirty = false;
     try {

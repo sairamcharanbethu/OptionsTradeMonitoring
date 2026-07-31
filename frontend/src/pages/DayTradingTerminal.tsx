@@ -20,6 +20,7 @@ import {
 import {
   QUERY_KEYS,
   usePositions,
+  usePaperAccount,
   useSettings,
   useSignals,
   useStrategyHistory,
@@ -517,6 +518,7 @@ export default function DayTradingTerminal() {
   const { data: settings = {} } = useSettings();
   const { data: tradeUsage } = useTradeUsage();
   const { data: positions = [] } = usePositions(5000);
+  const { data: paperAccount, refetch: refetchPaperAccount } = usePaperAccount(5000);
   const { data: strategyHistory = [], isLoading: historyLoading, error: historyError, refetch: refetchHistory } = useStrategyHistory(15000);
   const [services, setServices] = useState<ServicesHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -535,6 +537,7 @@ export default function DayTradingTerminal() {
   const [actionMessage, setActionMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
   const [riskAssessment, setRiskAssessment] = useState<SignalRiskAssessment | null>(null);
   const [riskLoading, setRiskLoading] = useState(false);
+  const [paperUpdating, setPaperUpdating] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
   const riskRequestRef = useRef(0);
   const lastAlertStateRef = useRef<string | null>(null);
@@ -737,6 +740,7 @@ export default function DayTradingTerminal() {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions }),
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.tradeUsage }),
       refetchHistory(),
+      refetchPaperAccount(),
       fetchHealth()
     ]);
     setRefreshing(false);
@@ -789,6 +793,7 @@ export default function DayTradingTerminal() {
     if (['POSITION_UPDATED', 'TRADE_UPDATED'].includes(lastMessage.type)) {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyHistory });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.paperAccount });
     }
   }, [lastMessage, queryClient]);
 
@@ -830,6 +835,25 @@ export default function DayTradingTerminal() {
     window.localStorage.setItem(BROWSER_SETUP_ALERTS_KEY, 'true');
     setBrowserAlertsEnabled(true);
     setActionMessage({ tone: 'success', text: 'Browser alerts enabled for ARMED and ACTIVE setups.' });
+  };
+
+  const togglePaperAutomation = async () => {
+    if (!paperAccount?.canManage || paperUpdating) return;
+    const shouldActivate = paperAccount.account.automation_status !== 'ACTIVE';
+    setPaperUpdating(true);
+    setActionMessage(null);
+    try {
+      await api.setPaperAutomation(shouldActivate);
+      await refetchPaperAccount();
+      setActionMessage({
+        tone: 'success',
+        text: `System paper automation ${shouldActivate ? 'resumed' : 'paused'}. Open positions remain protected.`
+      });
+    } catch (error: any) {
+      setActionMessage({ tone: 'error', text: error.message || 'Could not update paper automation.' });
+    } finally {
+      setPaperUpdating(false);
+    }
   };
 
   const requestExecution = () => {
@@ -942,6 +966,13 @@ export default function DayTradingTerminal() {
       age: compactAge(services?.tradeRedis?.freshnessMs),
       detail: services?.tradeRedis?.lastError || `${services?.tradeRedis?.queueDepth ?? 0} queued events`,
       next: 'Check the Redis container and backend Redis URL.'
+    },
+    {
+      label: 'System paper trader',
+      status: services?.paperTrading?.status || paperAccount?.health.status || 'N/A',
+      age: services?.paperTrading?.lastProcessedAt ? dateTime(services.paperTrading.lastProcessedAt) : undefined,
+      detail: services?.paperTrading?.lastError || `${paperAccount?.account.automation_status || 'starting'} · shared $100K strategy account`,
+      next: 'Check strategy snapshots, the paper account schema, and the latest paper decision.'
     },
     {
       label: 'Postgres',
@@ -1247,6 +1278,99 @@ export default function DayTradingTerminal() {
           </div>
         </section>
       </section>
+
+      {paperAccount && (
+        <section className="rounded-xl border border-violet-500/20 bg-[#101216] p-4 sm:p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-300">System paper portfolio</span>
+                <Badge variant="outline" className={`text-[10px] ${
+                  paperAccount.account.automation_status === 'ACTIVE'
+                    ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-300'
+                    : 'border-amber-500/30 bg-amber-950/20 text-amber-300'
+                }`}>
+                  {paperAccount.account.automation_status}
+                </Badge>
+                <Badge variant="outline" className="border-zinc-700 bg-zinc-950 text-[10px] text-zinc-400">Paper only</Badge>
+              </div>
+              <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
+              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
+                Qualified setups are filled at protected market quotes. AI can select only a bounded risk tier and exit profile; live Wealthsimple orders still require manual confirmation.
+              </p>
+            </div>
+            {paperAccount.canManage && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 border-zinc-700 bg-zinc-950 text-xs text-zinc-300 hover:bg-zinc-900"
+                onClick={togglePaperAutomation}
+                disabled={paperUpdating}
+              >
+                {paperUpdating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                {paperAccount.account.automation_status === 'ACTIVE' ? 'Pause new entries' : 'Resume entries'}
+              </Button>
+            )}
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-x-4 border-y border-zinc-800 sm:grid-cols-5">
+            <Metric label="Equity" value={money(paperAccount.account.equity)} detail={`started ${money(paperAccount.account.initial_equity)}`} />
+            <Metric label="Cash" value={money(paperAccount.account.cash_balance)} detail={`${money(paperAccount.account.reserved_cash)} reserved`} />
+            <Metric
+              label="Today"
+              value={`${paperAccount.session.pnl >= 0 ? '+' : ''}${money(paperAccount.session.pnl)}`}
+              detail={`${number(paperAccount.session.pnlPct)}%`}
+              tone={paperAccount.session.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+            />
+            <Metric label="Trades today" value={`${paperAccount.session.entries} / ${paperAccount.limits.maxTradesPerDay}`} detail={`${paperAccount.session.entriesRemaining} remaining`} />
+            <Metric label="Open position" value={paperAccount.openPositions.length ? 'Managing' : 'Flat'} detail={paperAccount.health.lastProcessedAt ? `checked ${dateTime(paperAccount.health.lastProcessedAt)}` : 'waiting for snapshot'} />
+          </div>
+
+          {paperAccount.openPositions[0] ? (
+            <div className="mt-4 grid gap-3 rounded-lg border border-violet-500/15 bg-violet-950/10 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
+              <div className="min-w-0">
+                <div className="break-all font-mono text-sm font-semibold text-zinc-100">
+                  {paperAccount.openPositions[0].symbol} {paperAccount.openPositions[0].option_type} {money(paperAccount.openPositions[0].strike_price)}
+                </div>
+                <div className="mt-1 text-xs text-zinc-400">
+                  {paperAccount.openPositions[0].quantity} contract{Number(paperAccount.openPositions[0].quantity) === 1 ? '' : 's'} · {paperAccount.openPositions[0].risk_tier || 'bounded'} risk · {String(paperAccount.openPositions[0].exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
+                </div>
+              </div>
+              <div className="font-mono text-xs text-zinc-300">
+                {money(paperAccount.openPositions[0].entry_price)} → {money(paperAccount.openPositions[0].current_price)}
+              </div>
+            </div>
+          ) : paperAccount.recentDecisions[0] ? (
+            <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-3 text-xs leading-relaxed text-zinc-300">
+              <span className="font-semibold text-violet-300">Latest decision:</span>{' '}
+              {paperAccount.recentDecisions[0].decision} · {paperAccount.recentDecisions[0].source} · {paperAccount.recentDecisions[0].rationale || 'No rationale recorded'}
+            </div>
+          ) : (
+            <div className="mt-4 rounded-lg border border-dashed border-zinc-800 px-3 py-4 text-center text-xs text-zinc-500">
+              No paper decision yet. The account will evaluate the next fresh ACTIVE setup automatically.
+            </div>
+          )}
+
+          {paperAccount.monthlyReports.length > 0 && (
+            <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-xs font-medium text-zinc-400">
+                Monthly paper performance
+                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="divide-y divide-zinc-800 border-t border-zinc-800 px-3">
+                {paperAccount.monthlyReports.slice(0, 6).map(item => (
+                  <div key={item.month} className="grid grid-cols-4 gap-2 py-2.5 font-mono text-[11px] text-zinc-400">
+                    <span className="text-zinc-200">{item.month}</span>
+                    <span>{money(item.report.closingEquity)}</span>
+                    <span className={Number(item.report.returnPct) >= 0 ? 'text-emerald-300' : 'text-rose-300'}>{number(item.report.returnPct)}%</span>
+                    <span>{item.report.closedTrades || 0} trades</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </section>
+      )}
 
       {lifecycle === 'ACTIVE' && !signalDismissed && (
         <div className="sticky bottom-2 z-20 rounded-xl border border-zinc-700/90 bg-zinc-950/95 p-2 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur md:hidden">

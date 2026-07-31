@@ -14,6 +14,7 @@ export const QUERY_KEYS = {
     strategyState: ['strategyState'],
     strategyHistory: ['strategyHistory'],
     tradeUsage: ['tradeUsage'],
+    paperAccount: ['paperAccount'],
     history: (page: number, limit: number) => ['positionHistory', page, limit],
 };
 
@@ -129,6 +130,15 @@ export function useTradeUsage(refreshInterval = 30000) {
         queryFn: () => api.getTradeUsage(),
         refetchInterval: refreshInterval,
         staleTime: 5000,
+    });
+}
+
+export function usePaperAccount(refreshInterval = 5000) {
+    return useQuery({
+        queryKey: QUERY_KEYS.paperAccount,
+        queryFn: () => api.getPaperAccount(),
+        refetchInterval: refreshInterval,
+        staleTime: 2000,
     });
 }
 

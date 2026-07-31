@@ -18,6 +18,7 @@ import { tradeRoutes } from './routes/trades';
 import { backtestRoutes } from './routes/backtests';
 import { coveredCallRoutes } from './routes/covered-calls';
 import { manualEntryRoutes } from './routes/manual-entry';
+import { paperAccountRoutes } from './routes/paper-account';
 import { mcpRoutes } from './routes/mcp';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
@@ -333,6 +334,118 @@ const ensureSchema = async (instance: any) => {
         ON execution_telemetry (signal_id, occurred_at DESC);
     `);
 
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS paper_accounts (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(120) NOT NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'USD',
+        initial_equity NUMERIC(16, 2) NOT NULL,
+        cash_balance NUMERIC(16, 2) NOT NULL,
+        reserved_cash NUMERIC(16, 2) NOT NULL DEFAULT 0,
+        equity NUMERIC(16, 2) NOT NULL,
+        high_water_mark NUMERIC(16, 2) NOT NULL,
+        start_of_day_equity NUMERIC(16, 2) NOT NULL,
+        start_of_day_date DATE NOT NULL,
+        automation_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await instance.pg.query(`
+      INSERT INTO paper_accounts (
+        id, name, initial_equity, cash_balance, equity, high_water_mark,
+        start_of_day_equity, start_of_day_date
+      ) VALUES ('strategy-system', 'System Strategy Paper Account', 100000, 100000, 100000, 100000, 100000,
+                (NOW() AT TIME ZONE 'America/New_York')::date)
+      ON CONFLICT (id) DO NOTHING;
+    `);
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS paper_trade_decisions (
+        id BIGSERIAL PRIMARY KEY,
+        account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
+        setup_id UUID NOT NULL,
+        signal_id INTEGER,
+        decision VARCHAR(20) NOT NULL,
+        risk_tier VARCHAR(20) NOT NULL,
+        exit_profile VARCHAR(30) NOT NULL,
+        source VARCHAR(20) NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 0,
+        max_quantity INTEGER NOT NULL DEFAULT 0,
+        debit_budget NUMERIC(16, 2) NOT NULL DEFAULT 0,
+        protected_limit NUMERIC(12, 4),
+        model VARCHAR(160),
+        prompt_version VARCHAR(50) NOT NULL,
+        rationale TEXT,
+        risk_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+        evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (account_id, setup_id)
+      );
+    `);
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS paper_orders (
+        id BIGSERIAL PRIMARY KEY,
+        account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
+        decision_id BIGINT REFERENCES paper_trade_decisions(id),
+        position_id INTEGER,
+        setup_id UUID NOT NULL,
+        signal_id INTEGER,
+        intent VARCHAR(30) NOT NULL,
+        action VARCHAR(20) NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        osi_ticker VARCHAR(50) NOT NULL,
+        option_type VARCHAR(4) NOT NULL,
+        strike NUMERIC(12, 4) NOT NULL,
+        expiration DATE NOT NULL,
+        quantity INTEGER NOT NULL,
+        limit_price NUMERIC(12, 4),
+        fill_price NUMERIC(12, 4),
+        reserved_debit NUMERIC(16, 2) NOT NULL DEFAULT 0,
+        quote_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+        failure_reason TEXT,
+        expires_at TIMESTAMPTZ,
+        filled_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (account_id, setup_id, intent)
+      );
+    `);
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS paper_equity_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
+        equity NUMERIC(16, 2) NOT NULL,
+        cash_balance NUMERIC(16, 2) NOT NULL,
+        reserved_cash NUMERIC(16, 2) NOT NULL,
+        realized_pnl NUMERIC(16, 2) NOT NULL,
+        unrealized_pnl NUMERIC(16, 2) NOT NULL,
+        captured_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_paper_equity_account_time
+        ON paper_equity_snapshots (account_id, captured_at DESC);
+    `);
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS paper_monthly_reports (
+        id BIGSERIAL PRIMARY KEY,
+        account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
+        month VARCHAR(7) NOT NULL,
+        report JSONB NOT NULL,
+        generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        discord_sent_at TIMESTAMPTZ,
+        UNIQUE (account_id, month)
+      );
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_paper_orders_account_status
+        ON paper_orders (account_id, status, created_at DESC);
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_paper_decisions_account_created
+        ON paper_trade_decisions (account_id, created_at DESC);
+    `);
+
     // 3. Ensure all extra columns are added to positions table
     const columns = [
       { name: 'delta', type: 'DECIMAL(10, 4)' },
@@ -387,7 +500,9 @@ const ensureSchema = async (instance: any) => {
       { name: 'strategy_snapshot', type: 'JSONB' },
       { name: 'strategy_managed', type: 'BOOLEAN DEFAULT FALSE' },
       { name: 'strategy_exit_requested_at', type: 'TIMESTAMPTZ' },
-      { name: 'strategy_exit_reason', type: 'VARCHAR(50)' }
+      { name: 'strategy_exit_reason', type: 'VARCHAR(50)' },
+      { name: 'paper_account_id', type: 'VARCHAR(50)' },
+      { name: 'paper_decision_id', type: 'BIGINT' }
     ];
 
     for (const col of columns) {
@@ -395,6 +510,11 @@ const ensureSchema = async (instance: any) => {
         ALTER TABLE positions ADD COLUMN IF NOT EXISTS ${col.name} ${col.type};
       `);
     }
+
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_positions_paper_account_status
+        ON positions (paper_account_id, status, created_at DESC);
+    `);
 
     await instance.pg.query(`
       ALTER TABLE trade_events ADD COLUMN IF NOT EXISTS signal_id INTEGER;
@@ -671,8 +791,14 @@ const start = async () => {
     fastify.decorate('scanner', scanner);
 
     const { StrategyEngineAdapter } = await import('./services/strategy-engine-adapter');
+    const { PaperTradingService } = await import('./services/paper-trading-service');
+    const paperTrading = new PaperTradingService(fastify);
+    fastify.decorate('paperTrading', paperTrading);
+    fastify.addHook('onClose', async () => paperTrading.stop());
     const strategyEngine = new StrategyEngineAdapter(fastify);
     fastify.decorate('strategyEngine', strategyEngine);
+
+    fastify.register(paperAccountRoutes, { prefix: '/api/paper-account' });
 
     // --- WebSocket & Streaming Setup ---
     await fastify.register(import('@fastify/websocket'));
@@ -960,6 +1086,7 @@ const start = async () => {
           lastError: strategyHealth.error || strategyHealth.health?.error || strategyHealth.health?.last_error || null,
           transport: strategyHealth.transport
         }, generatedAt),
+        paperTrading: normalizeAdapterHealth('paperTrading', paperTrading.getHealth(), generatedAt),
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),
         postgres: postgresHealth,
@@ -1121,6 +1248,7 @@ const start = async () => {
     // Publish the settings-derived IBKR policy before the strategy container is
     // allowed to start, so it never opens a session against stale defaults.
     await strategyEngine.start();
+    paperTrading.start();
     await fastify.listen({ port, host: '0.0.0.0' });
 
     const startBackgroundServices = async () => {

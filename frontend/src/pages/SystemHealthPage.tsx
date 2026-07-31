@@ -276,6 +276,26 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       });
     }
 
+    if (services.paperTrading) {
+      const paper = services.paperTrading;
+      items.push({
+        id: 'service:paperTrading',
+        area: 'Trading',
+        title: 'System Paper Trader',
+        status: paper.status || 'N/A',
+        severity: paper.lastError ? 'critical' : severityForStatus(paper.status),
+        endpoint: `paper account: ${paper.accountId || 'strategy-system'}`,
+        freshnessMs: paper.freshnessMs ?? null,
+        lastSeen: adapterLastSeen(paper, paper.lastProcessedAt || services.generatedAt),
+        evidence: paper.degradedReason || paper.lastError || null,
+        cause: statusSummary(paper.status, paper.degradedReason || paper.lastError, 'Automatic paper decisions or position management need attention.'),
+        nextStep: isHealthyStatus(paper.status)
+          ? 'No action needed.'
+          : 'Check the latest strategy snapshot, paper decision, account ledger, and backend logs.',
+        actionCommand: 'docker compose logs --tail=120 trade-staging-backend'
+      });
+    }
+
     items.push({
       id: 'service:liveExitMonitor',
       area: 'Trading',
@@ -646,6 +666,7 @@ export default function SystemHealthPage() {
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Root Issues" value={`${failures.length}`} detail={`${warnings.length} warnings active`} icon={Search} />
         <MetricCard label="Strategy" value={services?.strategyEngine?.status || 'N/A'} detail={`${services?.strategyEngine?.mode || 'unknown'} mode`} icon={Zap} />
+        <MetricCard label="Paper Trader" value={services?.paperTrading?.status || 'N/A'} detail={services?.paperTrading?.lastProcessedAt ? `Updated ${formatRelativeTime(services.paperTrading.lastProcessedAt)}` : 'Waiting for a strategy snapshot'} icon={ShieldCheck} />
         <MetricCard label="Live Exit" value={services?.liveExitMonitor?.status || 'N/A'} detail={`${services?.liveExitMonitor?.matchedUpdates ?? 0} matched updates`} icon={Activity} />
         <MetricCard label="Option Capture" value={services?.optionHistoryCapture?.status || 'N/A'} detail={`${services?.optionHistoryCapture?.persistedQuotes ?? 0} persisted quotes`} icon={Database} />
         <MetricCard label="Active Stream" value={activeProvider?.connected ? 'Connected' : 'Disconnected'} detail={`${activeProvider?.activeSubscriptions ?? 0} subscriptions`} icon={Router} />
@@ -724,6 +745,7 @@ export default function SystemHealthPage() {
             <EvidenceBlock value={{
               scanner: services?.scanner || null,
               strategyEngine: services?.strategyEngine || null,
+              paperTrading: services?.paperTrading || null,
               snaptradePendingOrders: services?.snaptradePendingOrders || null
             }} />
             <EvidenceBlock value={{

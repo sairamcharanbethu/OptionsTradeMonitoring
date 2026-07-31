@@ -223,6 +223,32 @@ export interface AdapterHealth {
   source: string;
 }
 
+export interface PaperAccountSummary {
+  account: {
+    id: string;
+    name: string;
+    initial_equity: number | string;
+    cash_balance: number | string;
+    reserved_cash: number | string;
+    equity: number | string;
+    start_of_day_equity: number | string;
+    automation_status: 'ACTIVE' | 'PAUSED';
+    updated_at: string;
+  };
+  openPositions: Array<Position & {
+    risk_tier?: string;
+    exit_profile?: string;
+    decision_source?: string;
+  }>;
+  recentDecisions: Array<Record<string, any>>;
+  recentOrders: Array<Record<string, any>>;
+  monthlyReports: Array<{ month: string; report: Record<string, any>; generated_at: string }>;
+  session: { entries: number; entriesRemaining: number; pnl: number; pnlPct: number };
+  limits: { maxDebitPct: number; dailyLossPct: number; maxTradesPerDay: number; maxOpenPositions: number; maxContracts: number };
+  health: { status: string; lastProcessedAt: string | null; lastError: string | null };
+  canManage: boolean;
+}
+
 export interface RuntimeConfigItem {
   id: string;
   group: 'Deployment' | 'Market Data' | 'AI Service' | 'Broker Execution' | 'Alerts';
@@ -1324,6 +1350,12 @@ export const api = {
         filePollFallback: boolean;
       };
     };
+    paperTrading?: AdapterHealth & {
+      status: string;
+      accountId: string;
+      lastProcessedAt: string | null;
+      lastError: string | null;
+    };
     scanner: AdapterHealth & {
       status: string;
       enabled?: boolean;
@@ -1364,6 +1396,21 @@ export const api = {
   }> {
     const res = await authFetch(`${API_BASE}/services/health`);
     if (!res.ok) throw new Error('Failed to fetch runtime service health');
+    return res.json();
+  },
+
+  async getPaperAccount(): Promise<PaperAccountSummary> {
+    const res = await authFetch(`${API_BASE}/paper-account`);
+    if (!res.ok) throw new Error('Failed to fetch the system paper account');
+    return res.json();
+  },
+
+  async setPaperAutomation(active: boolean): Promise<any> {
+    const res = await authFetch(`${API_BASE}/paper-account/${active ? 'resume' : 'pause'}`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update paper automation');
+    }
     return res.json();
   },
 

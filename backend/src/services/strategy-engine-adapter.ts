@@ -262,6 +262,12 @@ export class StrategyEngineAdapter {
     this.lastReceivedAt = new Date().toISOString();
     this.lastError = null;
     this.updateSetupIdentity(signal);
+    const paperSetupId = this.currentSetupId;
+    if (paperSetupId && (this.fastify as any).paperTrading) {
+      (this.fastify as any).paperTrading.processSnapshot(signal, paperSetupId).catch((err: any) => {
+        this.fastify.log.warn(`[PaperTrading] Snapshot processing failed: ${err.message || String(err)}`);
+      });
+    }
     this.broadcast({
       type: 'STRATEGY_SNAPSHOT_UPDATED',
       data: this.getCurrentState()
