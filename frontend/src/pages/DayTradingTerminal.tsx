@@ -129,9 +129,9 @@ const stateCopy = (state: string, side: string | null) => {
 };
 
 const optionSide = (signal: Signal | null, strategySignal: Record<string, any> | null) => {
-  if (signal?.signal_type === 'CALL' || signal?.signal_type === 'PUT') return signal.signal_type;
   if (strategySignal?.favoring === 'calls') return 'CALL';
   if (strategySignal?.favoring === 'puts') return 'PUT';
+  if (signal?.signal_type === 'CALL' || signal?.signal_type === 'PUT') return signal.signal_type;
   return null;
 };
 
@@ -239,21 +239,18 @@ export default function DayTradingTerminal() {
   const strategySignal = strategyState?.signal || null;
   const strategySetupId = strategyState?.setupId || null;
   const currentSignal = useMemo(() => {
-    const strategyMatches = signals
-      .filter(signal => signal.symbol === 'SPY' && signal.engine_version === 'signal-only-v2')
-      .sort((a, b) => {
-        const aCurrent = strategySetupId && a.strategy_setup_id === strategySetupId ? 1 : 0;
-        const bCurrent = strategySetupId && b.strategy_setup_id === strategySetupId ? 1 : 0;
-        if (aCurrent !== bCurrent) return bCurrent - aCurrent;
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      });
-    return strategyMatches[0] || null;
+    if (!strategySetupId) return null;
+    return signals.find(signal => (
+      signal.symbol === 'SPY'
+      && signal.engine_version === 'signal-only-v2'
+      && signal.strategy_setup_id === strategySetupId
+    )) || null;
   }, [signals, strategySetupId]);
 
   const lifecycle = String(
-    currentSignal?.lifecycle_status
-      || strategySignal?.state
+    strategySignal?.state
       || strategySignal?.signal_phase
+      || currentSignal?.lifecycle_status
       || 'WAIT'
   ).toUpperCase();
   const side = optionSide(currentSignal, strategySignal);

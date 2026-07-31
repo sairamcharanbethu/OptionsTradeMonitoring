@@ -1426,7 +1426,7 @@ export const api = {
     const res = await authFetch(`${API_BASE}/signals/${id}/risk-assessment`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to generate AI risk assessment');
+      throw new Error(err.error || err.message || `AI risk assessment failed (${res.status})`);
     }
     return res.json();
   },
