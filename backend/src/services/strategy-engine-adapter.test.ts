@@ -1,4 +1,7 @@
 import { StrategyEngineAdapter } from './strategy-engine-adapter';
+import { mkdtemp, readFile, rm, stat } from 'fs/promises';
+import os from 'os';
+import path from 'path';
 
 function assert(condition: any, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -89,6 +92,23 @@ async function runTests() {
     adapter.strategyAlert(signal({ state: 'FAILED', lifecycle: { close_reason: 'protected_invalidation' } }))?.category === 'strategy-stop',
     'Invalidation must produce a critical stop notification'
   );
+
+  const credentialDirectory = await mkdtemp(path.join(os.tmpdir(), 'zerogex-credential-'));
+  try {
+    adapter.dataDir = credentialDirectory;
+    await adapter.publishZeroGexCredential('test-key');
+    const credentialPath = path.join(credentialDirectory, 'zerogex.env');
+    assert(
+      await readFile(credentialPath, 'utf8') === 'ZEROGEX_API_KEY=test-key\n',
+      'ZeroGEX credential must be published in the prefetch env-file format'
+    );
+    assert(
+      ((await stat(credentialPath)).mode & 0o777) === 0o600,
+      'ZeroGEX credential file must be readable only by its container user'
+    );
+  } finally {
+    await rm(credentialDirectory, { recursive: true, force: true });
+  }
 
   let activeRefreshes = 0;
   let maxActiveRefreshes = 0;

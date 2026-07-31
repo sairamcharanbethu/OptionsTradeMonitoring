@@ -34,6 +34,7 @@ export class StrategyEngineAdapter {
   private lastReceivedAt: string | null = null;
   private lastError: string | null = null;
   private lastPolicyFingerprint: string | null = null;
+  private lastZeroGexKeyFingerprint: string | null = null;
 
   constructor(private fastify: FastifyInstance) {
     this.dataDir = process.env.STRATEGY_DATA_DIR || '/strategy-data/trade';
@@ -616,6 +617,9 @@ export class StrategyEngineAdapter {
 
   private async publishPolicy(): Promise<void> {
     const settings = await getGlobalSettings((this.fastify as any).pg);
+    await this.publishZeroGexCredential(
+      String(settings.zerogex_api_key || process.env.ZEROGEX_API_KEY || '').trim()
+    );
     const ibkr = await getIbkrGatewayConfig((this.fastify as any).pg);
     const ibkrDataTypes: Record<number, string> = {
       1: 'live',
@@ -658,6 +662,27 @@ export class StrategyEngineAdapter {
     await fs.writeFile(temporary, JSON.stringify(policy));
     await fs.rename(temporary, target);
     this.lastPolicyFingerprint = fingerprint;
+  }
+
+  private async publishZeroGexCredential(apiKey: string): Promise<void> {
+    const fingerprint = this.hash(apiKey);
+    if (fingerprint === this.lastZeroGexKeyFingerprint) return;
+
+    await fs.mkdir(this.dataDir, { recursive: true });
+    const target = path.join(this.dataDir, 'zerogex.env');
+    if (!apiKey) {
+      await fs.unlink(target).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT') throw err;
+      });
+      this.lastZeroGexKeyFingerprint = fingerprint;
+      return;
+    }
+
+    const temporary = `${target}.tmp`;
+    await fs.writeFile(temporary, `ZEROGEX_API_KEY=${apiKey}\n`, { mode: 0o600 });
+    await fs.rename(temporary, target);
+    await fs.chmod(target, 0o600);
+    this.lastZeroGexKeyFingerprint = fingerprint;
   }
 
   private numberInRange(value: any, fallback: number, min: number, max: number): number {

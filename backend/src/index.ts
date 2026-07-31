@@ -238,6 +238,11 @@ const ensureSchema = async (instance: any) => {
     `);
 
     await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS strategy_signal_events_setup_created_idx
+      ON strategy_signal_events (setup_id, created_at ASC, id ASC);
+    `);
+
+    await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS signal_user_executions (
         signal_id INTEGER REFERENCES signals(id) ON DELETE CASCADE,
         user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,

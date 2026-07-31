@@ -12,6 +12,7 @@ export const QUERY_KEYS = {
     scannerLogs: ['scannerLogs'],
     liveMacroMetrics: ['liveMacroMetrics'],
     strategyState: ['strategyState'],
+    strategyHistory: ['strategyHistory'],
     tradeUsage: ['tradeUsage'],
     history: (page: number, limit: number) => ['positionHistory', page, limit],
 };
@@ -40,6 +41,15 @@ export function useStrategyState(refreshInterval = 10000) {
         queryFn: () => api.getStrategyState(),
         refetchInterval: refreshInterval,
         staleTime: 500,
+    });
+}
+
+export function useStrategyHistory(refreshInterval = 15000) {
+    return useQuery({
+        queryKey: QUERY_KEYS.strategyHistory,
+        queryFn: () => api.getStrategyHistory(),
+        refetchInterval: refreshInterval,
+        staleTime: 5000,
     });
 }
 

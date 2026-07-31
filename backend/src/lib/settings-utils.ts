@@ -7,6 +7,7 @@ const GLOBAL_SETTING_KEYS = [
   'ibkr_gateway_mode',
   'ibkr_host',
   'ibkr_port',
+  'zerogex_api_key',
   'discord_webhook_url',
   'discord_alerts_enabled',
   'day_trading_symbols',
@@ -26,6 +27,7 @@ const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
   'ibkr_gateway_mode',
   'ibkr_host',
   'ibkr_port',
+  'zerogex_api_key',
   'mcp_trading_enabled'
 ];
 const SETTINGS_CACHE_TTL_SECONDS = Number(process.env.SETTINGS_CACHE_TTL_SECONDS || 300);

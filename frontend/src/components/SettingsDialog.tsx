@@ -199,6 +199,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     // Config State
     const [provider, setProvider] = useState(DEFAULT_AI_PROVIDER);
     const [openRouterKey, setOpenRouterKey] = useState('');
+    const [zeroGexApiKey, setZeroGexApiKey] = useState('');
     const [model, setModel] = useState(DEFAULT_AI_MODEL);
     const [briefingFrequency, setBriefingFrequency] = useState('disabled');
     const [pollInterval, setPollInterval] = useState('60'); // Market Poll (Global)
@@ -315,6 +316,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             const appModel = data.ai_model || DEFAULT_AI_MODEL;
             setProvider(appProvider);
             setOpenRouterKey(data.openrouter_key || '');
+            setZeroGexApiKey('');
             setModel(appModel);
             setBriefingFrequency(data.briefing_frequency || 'disabled');
             setPollInterval(data.market_poll_interval || '60');
@@ -613,6 +615,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             };
             if (isAdmin) {
                 settingsPayload.mcp_trading_enabled = mcpTradingEnabled ? 'true' : 'false';
+                if (zeroGexApiKey.trim()) settingsPayload.zerogex_api_key = zeroGexApiKey.trim();
                 settingsPayload.strategy_max_total_debit_dollars = strategyMaxTotalDebitDollars;
                 settingsPayload.strategy_preferred_contracts = strategyPreferredContracts;
                 settingsPayload.strategy_max_contracts = strategyMaxContracts;
@@ -1242,6 +1245,23 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             placeholder="sk-or-..."
                                         />
                                     </div>
+
+                                    {isAdmin && (
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="zeroGexApiKey">ZeroGEX API Key</Label>
+                                            <Input
+                                                id="zeroGexApiKey"
+                                                type="password"
+                                                value={zeroGexApiKey}
+                                                onChange={(e) => setZeroGexApiKey(e.target.value)}
+                                                placeholder="Leave blank to keep the configured key"
+                                                autoComplete="new-password"
+                                            />
+                                            <p className="text-[10px] text-muted-foreground">
+                                                Admin-only. Saved server-side and shared only with the ZeroGEX prefetch service.
+                                            </p>
+                                        </div>
+                                    )}
 
                                 </div>
 

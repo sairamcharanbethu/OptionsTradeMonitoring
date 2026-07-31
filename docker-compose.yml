@@ -47,6 +47,7 @@ services:
       IBKR_CLIENT_ID_MARKET_DATA: ${IBKR_CLIENT_ID_MARKET_DATA:-21}
       IBKR_CLIENT_ID_STREAM: ${IBKR_CLIENT_ID_STREAM:-22}
       IBKR_MARKET_DATA_TYPE: ${IBKR_MARKET_DATA_TYPE:-1}
+      ZEROGEX_API_KEY: ${ZEROGEX_API_KEY:-}
       STRATEGY_DATA_DIR: /strategy-data/trade
       STRATEGY_MAX_TOTAL_DEBIT_DOLLARS: ${STRATEGY_MAX_TOTAL_DEBIT_DOLLARS:-500}
       STRATEGY_PREFERRED_CONTRACTS: ${STRATEGY_PREFERRED_CONTRACTS:-1}
@@ -90,8 +91,6 @@ services:
       context: ./strategy-engine
       dockerfile: Dockerfile
     restart: unless-stopped
-    environment:
-      ZEROGEX_API_KEY: ${ZEROGEX_API_KEY}
     volumes:
       - strategy-data:/data
     command:
@@ -101,6 +100,8 @@ services:
       - SPY
       - --mode
       - primary
+      - --env-file
+      - /data/trade/zerogex.env
       - --output-file
       - /data/trade/zerogex.json
       - --health-file
@@ -112,6 +113,8 @@ services:
       - --deep-interval
       - "30"
       - --timeout
+      - "10"
+      - --auth-error-interval
       - "10"
     networks:
       - default

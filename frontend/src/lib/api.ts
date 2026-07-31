@@ -1422,6 +1422,28 @@ export const api = {
     return res.json();
   },
 
+  async getStrategyHistory(): Promise<StrategyHistorySetup[]> {
+    const res = await authFetch(`${API_BASE}/signals/strategy-history?t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch strategy setup history');
+    const rows = await res.json();
+    return rows.map((row: any) => ({
+      ...row,
+      spot: row.spot == null ? null : Number(row.spot),
+      entry_trigger: row.entry_trigger == null ? null : Number(row.entry_trigger),
+      invalidation: row.invalidation == null ? null : Number(row.invalidation),
+      target: row.target == null ? null : Number(row.target),
+      confidence_score: Number(row.confidence_score || 0),
+      contracts_requested: row.contracts_requested == null ? null : Number(row.contracts_requested),
+      position_id: row.position_id == null ? null : Number(row.position_id),
+      entry_price: row.entry_price == null ? null : Number(row.entry_price),
+      position_current_price: row.position_current_price == null ? null : Number(row.position_current_price),
+      exit_price: row.exit_price == null ? null : Number(row.exit_price),
+      realized_pnl: row.realized_pnl == null ? null : Number(row.realized_pnl),
+      quantity: row.quantity == null ? null : Number(row.quantity),
+      lifecycle_events: Array.isArray(row.lifecycle_events) ? row.lifecycle_events : []
+    }));
+  },
+
   async getSignalRiskAssessment(id: number): Promise<SignalRiskAssessment> {
     const res = await authFetch(`${API_BASE}/signals/${id}/risk-assessment`);
     if (!res.ok) {
@@ -1669,6 +1691,52 @@ export interface SignalRiskAssessment {
   riskFlags: string[];
   maxPlannedLoss: number | null;
   generatedAt: string;
+}
+
+export interface StrategyLifecycleEvent {
+  id: number;
+  status: string;
+  state?: string | null;
+  phase?: string | null;
+  entryAllowed: boolean;
+  targetsHit: number;
+  closeReason?: string | null;
+  blockers: string[];
+  createdAt: string;
+}
+
+export interface StrategyHistorySetup {
+  id: number;
+  setup_id: string;
+  side: 'CALL' | 'PUT';
+  strategy_name?: string | null;
+  lifecycle_status: string;
+  signal_status: string;
+  spot?: number | null;
+  entry_trigger?: number | null;
+  invalidation?: number | null;
+  target?: number | null;
+  confidence_score: number;
+  option_details?: OptionDetailsJSON | null;
+  no_trade_reasons?: string[] | null;
+  created_at: string;
+  activated_at?: string | null;
+  user_execution_status?: string | null;
+  execution_broker?: string | null;
+  execution_status?: string | null;
+  execution_error?: string | null;
+  contracts_requested?: number | null;
+  position_id?: number | null;
+  position_status?: string | null;
+  entry_price?: number | null;
+  position_current_price?: number | null;
+  exit_price?: number | null;
+  realized_pnl?: number | null;
+  quantity?: number | null;
+  expiration_date?: string | null;
+  position_created_at?: string | null;
+  position_updated_at?: string | null;
+  lifecycle_events: StrategyLifecycleEvent[];
 }
 
 export interface StrategyEngineState {

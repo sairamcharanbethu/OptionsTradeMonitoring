@@ -16,6 +16,94 @@ const SignalIdSchema = z.object({
 export async function signalRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
 
+  fastify.get('/strategy-history', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Get strategy setup history',
+      description: 'Return recent signal-only setups with user execution, position outcome, and compact lifecycle events.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    try {
+      const { rows } = await fastify.pg.query(
+        `SELECT
+           s.id,
+           s.strategy_setup_id AS setup_id,
+           s.signal_type AS side,
+           s.strategy_name,
+           s.lifecycle_status,
+           s.status AS signal_status,
+           s.current_price::double precision AS spot,
+           s.entry_trigger::double precision,
+           s.stop_loss::double precision AS invalidation,
+           s.target_price::double precision AS target,
+           s.confidence_score,
+           s.option_details,
+           s.no_trade_reasons,
+           s.created_at,
+           s.activated_at,
+           sue.status AS user_execution_status,
+           sue.execution_broker,
+           sue.execution_status,
+           sue.execution_error,
+           sue.contracts_requested,
+           latest_position.id AS position_id,
+           latest_position.status AS position_status,
+           latest_position.entry_price::double precision,
+           latest_position.current_price::double precision AS position_current_price,
+           latest_position.exit_price::double precision,
+           latest_position.realized_pnl::double precision,
+           latest_position.quantity,
+           latest_position.expiration_date,
+           latest_position.created_at AS position_created_at,
+           latest_position.updated_at AS position_updated_at,
+           COALESCE(events.lifecycle_events, '[]'::json) AS lifecycle_events
+         FROM signals s
+         LEFT JOIN signal_user_executions sue
+           ON sue.signal_id = s.id AND sue.user_id = $1
+         LEFT JOIN LATERAL (
+           SELECT p.*
+           FROM positions p
+           WHERE p.user_id = $1
+             AND (
+               p.signal_id = s.id
+               OR (s.strategy_setup_id IS NOT NULL AND p.strategy_setup_id = s.strategy_setup_id)
+             )
+           ORDER BY p.created_at DESC
+           LIMIT 1
+         ) latest_position ON TRUE
+         LEFT JOIN LATERAL (
+           SELECT json_agg(
+             json_build_object(
+               'id', event.id,
+               'status', event.lifecycle_status,
+               'state', event.signal_snapshot->>'state',
+               'phase', event.signal_snapshot->>'signal_phase',
+               'entryAllowed', COALESCE((event.signal_snapshot->'lifecycle'->>'entry_allowed')::boolean, false),
+               'targetsHit', COALESCE((event.signal_snapshot->'lifecycle'->>'targets_hit')::integer, 0),
+               'closeReason', event.signal_snapshot->'lifecycle'->>'close_reason',
+               'blockers', COALESCE(event.signal_snapshot->'blockers', '[]'::jsonb),
+               'createdAt', event.created_at
+             )
+             ORDER BY event.created_at ASC, event.id ASC
+           ) AS lifecycle_events
+           FROM strategy_signal_events event
+           WHERE event.setup_id = s.strategy_setup_id
+         ) events ON TRUE
+         WHERE s.engine_version = 'signal-only-v2'
+           AND s.strategy_setup_id IS NOT NULL
+         ORDER BY s.created_at DESC
+         LIMIT 25`,
+        [userId]
+      );
+      return rows;
+    } catch (err: any) {
+      fastify.log.error(err);
+      return reply.code(500).send({ error: 'Failed to fetch strategy setup history' });
+    }
+  });
+
   fastify.get('/:id/risk-assessment', {
     schema: {
       tags: ['Signals'],

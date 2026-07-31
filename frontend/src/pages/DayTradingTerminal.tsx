@@ -18,14 +18,14 @@ import {
 import {
   QUERY_KEYS,
   usePositions,
-  useScannerLogs,
   useSettings,
   useSignals,
+  useStrategyHistory,
   useStrategyState,
   useTradeUsage
 } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { api, Position, Signal, SignalRiskAssessment } from '@/lib/api';
+import { api, OptionDetailsJSON, Position, Signal, SignalRiskAssessment, StrategyHistorySetup } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -58,12 +58,61 @@ const time = (value?: string | number | null) => {
     : '—';
 };
 
+const dateTime = (value?: string | number | null) => {
+  if (!value) return '—';
+  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : '—';
+};
+
+const duration = (startValue?: string | null, endValue?: string | null) => {
+  const start = startValue ? new Date(startValue).getTime() : Number.NaN;
+  const end = endValue ? new Date(endValue).getTime() : Date.now();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 'duration unavailable';
+  const seconds = Math.round((end - start) / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${(seconds / 3600).toFixed(1)}h`;
+};
+
 const relativeAge = (seconds: unknown) => {
   const age = Number(seconds);
   if (!Number.isFinite(age)) return 'No snapshot';
   if (age < 1) return 'Live';
   if (age < 60) return `${age.toFixed(1)}s ago`;
   return `${Math.round(age / 60)}m ago`;
+};
+
+const compactAge = (milliseconds: unknown) => {
+  const value = Number(milliseconds);
+  if (!Number.isFinite(value) || value < 0) return 'age unavailable';
+  return relativeAge(value / 1000);
+};
+
+const gexAgeSeconds = (signal: Record<string, any> | null) => {
+  const direct = Number(signal?.gex?.provider_age_seconds);
+  if (signal?.gex?.provider_age_seconds != null && Number.isFinite(direct)) return direct;
+  const shadow = signal?.zerogex_shadow || {};
+  const shadowAge = Number(shadow.provider_age_seconds);
+  if (shadow.provider_age_seconds != null && Number.isFinite(shadowAge)) return shadowAge;
+  const freshness = shadow.data_freshness?.gex_summary || {};
+  const freshnessAge = Number(freshness.adjusted_age_seconds ?? freshness.age_seconds);
+  if (Number.isFinite(freshnessAge)) return freshnessAge;
+  const timestamp = Number(signal?.gex?.provider_timestamp || signal?.gex?.fetched_at);
+  return Number.isFinite(timestamp) && timestamp > 0 ? Math.max(0, Date.now() / 1000 - timestamp) : Number.NaN;
+};
+
+const contractName = (option: OptionDetailsJSON | Record<string, any>, side: string | null) => (
+  option.ticker || option.local_symbol || (side ? `SPY ${side}` : 'No contract selected')
+);
+
+const levelDistance = (spot: unknown, level: unknown) => {
+  const current = Number(spot);
+  const target = Number(level);
+  if (!Number.isFinite(current) || !Number.isFinite(target)) return '—';
+  const distance = target - current;
+  return `${distance >= 0 ? '+' : '−'}$${Math.abs(distance).toFixed(2)}`;
 };
 
 const lifecycleTone = (state: string): LifecycleTone => {
@@ -178,20 +227,80 @@ const Level = ({
   </div>
 );
 
-const PositionSummary = ({ position }: { position: Position }) => {
+const PlannedEntryTicket = ({
+  option,
+  side,
+  quantity,
+  plannedLimit,
+  orderDebit,
+  quoteAge
+}: {
+  option: OptionDetailsJSON | Record<string, any>;
+  side: string | null;
+  quantity: number;
+  plannedLimit: number;
+  orderDebit: number;
+  quoteAge: number;
+}) => {
+  const quoteFresh = Number.isFinite(quoteAge) && quoteAge >= 0 && quoteAge <= 15;
+  return (
+    <div className="mt-4 rounded-lg border border-zinc-700/80 bg-zinc-950/55 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Planned entry ticket</div>
+          <div className="mt-1 break-all font-mono text-sm font-semibold text-zinc-100">{contractName(option, side)}</div>
+          <div className="mt-1 text-[10px] text-zinc-500">
+            {option.expiry || 'expiry unavailable'} · {side || 'side unavailable'} · strike {money(option.strike)}
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-md border px-2 py-1 text-[10px] font-semibold ${
+          quoteFresh
+            ? 'border-emerald-500/25 bg-emerald-950/30 text-emerald-300'
+            : 'border-rose-500/25 bg-rose-950/30 text-rose-300'
+        }`}>
+          {quoteFresh ? `${number(quoteAge, 1)}s fresh` : 'Quote stale'}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-x-4 border-t border-zinc-800 pt-2 sm:grid-cols-4 xl:grid-cols-2">
+        <Metric label="Quantity" value={`${quantity}`} />
+        <Metric label="Limit" value={money(plannedLimit)} />
+        <Metric label="Bid / ask" value={`${money(option.bid)} / ${money(option.ask)}`} />
+        <Metric label="Max debit" value={orderDebit > 0 ? money(orderDebit) : '—'} tone="text-amber-200" />
+      </div>
+      <div className="mt-1 text-[10px] text-zinc-500">
+        Spread {option.spreadPct != null ? `${number(option.spreadPct)}%` : 'unavailable'} · limit order only
+      </div>
+    </div>
+  );
+};
+
+const PositionSummary = ({
+  position,
+  option,
+  side,
+  spot,
+  invalidation,
+  target
+}: {
+  position: Position;
+  option: OptionDetailsJSON | Record<string, any>;
+  side: string | null;
+  spot: unknown;
+  invalidation: unknown;
+  target: unknown;
+}) => {
   const entry = Number(position.entry_price || 0);
   const current = Number(position.current_price || entry);
   const openPnl = (current - entry) * Number(position.quantity || 0) * 100;
+  const exactContract = option.ticker || option.local_symbol || `${position.symbol} ${position.option_type} ${money(position.strike_price)}`;
   return (
     <section className="rounded-xl border border-sky-500/25 bg-sky-950/10 p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
+        <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">Linked position</div>
-          <div className="mt-1 text-base font-semibold text-zinc-100">
-            {position.symbol} {position.option_type} {money(position.strike_price)}
-          </div>
+          <div className="mt-1 break-all font-mono text-sm font-semibold text-zinc-100">{exactContract}</div>
           <div className="mt-1 text-xs text-zinc-500">
-            {position.quantity} contract{Number(position.quantity) === 1 ? '' : 's'} · {position.execution_status || position.status}
+            {position.expiration_date || option.expiry || 'expiry unavailable'} · {position.quantity} contract{Number(position.quantity) === 1 ? '' : 's'} · {position.execution_broker || 'simulation'}
           </div>
         </div>
         <div className="text-left sm:text-right">
@@ -201,11 +310,17 @@ const PositionSummary = ({ position }: { position: Position }) => {
           <div className="text-[10px] text-zinc-500">estimated open P&amp;L</div>
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-x-4 border-t border-sky-500/15 pt-3 sm:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-x-4 border-t border-sky-500/15 pt-3 sm:grid-cols-5">
         <Metric label="Entry premium" value={money(position.entry_price)} />
         <Metric label="Current premium" value={money(position.current_price)} />
-        <Metric label="Protected stop" value={money(position.suggested_stop_loss)} />
-        <Metric label="Exit target" value={money(position.suggested_take_profit_1)} />
+        <Metric label="SPY now" value={money(spot)} />
+        <Metric label="Invalidation" value={money(invalidation)} detail={levelDistance(spot, invalidation)} tone="text-rose-200" />
+        <Metric label="Target" value={money(target)} detail={levelDistance(spot, target)} tone="text-sky-200" />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-500/15 bg-zinc-950/40 px-3 py-2 text-[10px]">
+        <span className="text-zinc-500">Broker state <span className="font-mono text-zinc-200">{position.execution_status || position.last_broker_order_status || position.status}</span></span>
+        <span className="text-zinc-500">Lifecycle <span className="font-mono text-zinc-200">{position.strategy_lifecycle_status || 'MANAGE'}</span></span>
+        <Link to={`/positions/${position.id}`} className="font-semibold text-sky-300 transition-colors hover:text-sky-200">Open details →</Link>
       </div>
       {position.execution_error && (
         <div className="mt-3 rounded-lg border border-rose-500/25 bg-rose-950/20 px-3 py-2 text-xs text-rose-200">
@@ -213,6 +328,104 @@ const PositionSummary = ({ position }: { position: Position }) => {
         </div>
       )}
     </section>
+  );
+};
+
+const HistorySetupCard = ({ setup }: { setup: StrategyHistorySetup }) => {
+  const option = setup.option_details || {};
+  const terminalEvent = [...setup.lifecycle_events].reverse().find(event => event.closeReason || ['COMPLETED', 'INVALIDATED', 'FAILED', 'TRACKING_ABORTED'].includes(event.status));
+  const finalEvent = setup.lifecycle_events[setup.lifecycle_events.length - 1];
+  const plannedQuantity = Number(option.planned_contracts || setup.contracts_requested || 0);
+  const plannedPrice = Number(option.planned_limit_price || option.mark || 0);
+  const plannedDebit = Number(option.planned_total_debit || (plannedQuantity > 0 && plannedPrice > 0 ? plannedQuantity * plannedPrice * 100 : 0));
+  const outcome = setup.position_status === 'CLOSED'
+    ? setup.realized_pnl == null ? 'Closed' : setup.realized_pnl >= 0 ? 'Closed · profit' : 'Closed · loss'
+    : setup.execution_status
+      ? setup.execution_status
+      : setup.lifecycle_status;
+  return (
+    <details className="group rounded-lg border border-zinc-800 bg-zinc-950/45">
+      <summary className="grid cursor-pointer list-none gap-3 px-3 py-3 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto] sm:items-center">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${setup.side === 'CALL' ? 'bg-emerald-950/50 text-emerald-300' : 'bg-rose-950/50 text-rose-300'}`}>{setup.side}</span>
+            <span className="truncate text-xs font-semibold text-zinc-200">{setup.strategy_name || 'Strategy setup'}</span>
+          </div>
+          <div className="mt-1 truncate font-mono text-[10px] text-zinc-500" title={contractName(option, setup.side)}>{contractName(option, setup.side)}</div>
+        </div>
+        <div className="grid grid-cols-3 gap-3 text-[10px]">
+          <div><div className="text-zinc-600">Trigger</div><div className="mt-0.5 font-mono text-zinc-300">{money(setup.entry_trigger)}</div></div>
+          <div><div className="text-zinc-600">Stop</div><div className="mt-0.5 font-mono text-rose-300">{money(setup.invalidation)}</div></div>
+          <div><div className="text-zinc-600">Target</div><div className="mt-0.5 font-mono text-sky-300">{money(setup.target)}</div></div>
+        </div>
+        <div className="flex items-center justify-between gap-3 sm:justify-end">
+          <div className="text-right">
+            <div className="text-[10px] font-semibold text-zinc-300">{outcome}</div>
+            <div className="mt-0.5 font-mono text-[10px] text-zinc-600">{dateTime(setup.created_at)}</div>
+          </div>
+          <ChevronDown className="h-4 w-4 shrink-0 text-zinc-600 transition-transform group-open:rotate-180" />
+        </div>
+      </summary>
+      <div className="border-t border-zinc-800 px-3 py-3">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-md bg-black/20 p-2.5 text-[10px] text-zinc-500">
+            <div>Plan</div>
+            <div className="mt-1 font-mono text-xs text-zinc-200">{plannedQuantity || '—'} × {money(plannedPrice)}</div>
+            <div className="mt-1">Debit {plannedDebit > 0 ? money(plannedDebit) : '—'}</div>
+          </div>
+          <div className="rounded-md bg-black/20 p-2.5 text-[10px] text-zinc-500">
+            <div>Execution</div>
+            <div className="mt-1 font-mono text-xs text-zinc-200">{setup.execution_status || setup.user_execution_status || 'Not submitted'}</div>
+            <div className="mt-1">{setup.execution_broker || 'No broker order'}</div>
+          </div>
+          <div className="rounded-md bg-black/20 p-2.5 text-[10px] text-zinc-500">
+            <div>Result</div>
+            <div className={`mt-1 font-mono text-xs ${setup.realized_pnl == null ? 'text-zinc-200' : setup.realized_pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+              {setup.realized_pnl == null ? setup.position_status || 'No position' : `${setup.realized_pnl >= 0 ? '+' : ''}${money(setup.realized_pnl)}`}
+            </div>
+            <div className="mt-1">{terminalEvent?.closeReason?.replace(/_/g, ' ') || 'No close reason recorded'} · {duration(setup.created_at, finalEvent?.createdAt || setup.position_updated_at)}</div>
+          </div>
+        </div>
+        <div className="mt-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Lifecycle timeline</div>
+        <div className="mt-2 space-y-0">
+          {setup.lifecycle_events.length > 0 ? setup.lifecycle_events.map((event, index) => (
+            <div key={event.id} className="grid grid-cols-[0.8rem_4.5rem_1fr] gap-2 text-[10px]">
+              <div className="relative flex justify-center">
+                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-sky-400" />
+                {index < setup.lifecycle_events.length - 1 && <span className="absolute bottom-0 top-2 w-px bg-zinc-800" />}
+              </div>
+              <div className="pb-2 font-mono text-zinc-600">{time(event.createdAt)}</div>
+              <div className="pb-2 text-zinc-300">
+                <span className="font-semibold">{event.state || event.status}</span>
+                {event.targetsHit > 0 ? ` · target ${event.targetsHit} hit` : ''}
+                {event.closeReason ? ` · ${event.closeReason.replace(/_/g, ' ')}` : ''}
+                {!event.closeReason && event.blockers?.[0] ? <div className="mt-0.5 text-zinc-600">{event.blockers[0]}</div> : null}
+              </div>
+            </div>
+          )) : <div className="text-xs text-zinc-600">No lifecycle events were recorded for this setup.</div>}
+        </div>
+        {setup.execution_error && <div className="mt-2 rounded-md border border-rose-500/20 bg-rose-950/15 px-2.5 py-2 text-xs text-rose-200">{setup.execution_error}</div>}
+      </div>
+    </details>
+  );
+};
+
+const DiagnosticRow = ({ label, status, age, detail, next }: { label: string; status: string; age?: string; detail: string; next: string }) => {
+  const normalized = status.toUpperCase();
+  const healthy = ['UP', 'OK', 'CONNECTED', 'LIVE'].includes(normalized);
+  const informational = ['IDLE', 'MARKET_CLOSED', 'N/A'].includes(normalized);
+  return (
+    <div className="border-b border-zinc-800/70 py-3 last:border-0">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-medium text-zinc-300">{label}</span>
+        <span className={`font-mono text-[10px] font-semibold ${healthy ? 'text-emerald-300' : informational ? 'text-zinc-400' : 'text-amber-300'}`}>{normalized}</span>
+      </div>
+      <div className="mt-1 flex items-start justify-between gap-3 text-[10px] leading-relaxed text-zinc-600">
+        <span>{detail}</span>
+        {age && <span className="shrink-0 font-mono">{age}</span>}
+      </div>
+      {!healthy && !informational && <div className="mt-1 text-[10px] leading-relaxed text-amber-300/80">Next: {next}</div>}
+    </div>
   );
 };
 
@@ -224,7 +437,7 @@ export default function DayTradingTerminal() {
   const { data: settings = {} } = useSettings();
   const { data: tradeUsage } = useTradeUsage();
   const { data: positions = [] } = usePositions(5000);
-  const { data: logs = [] } = useScannerLogs(15000);
+  const { data: strategyHistory = [], isLoading: historyLoading, error: historyError, refetch: refetchHistory } = useStrategyHistory(15000);
   const [services, setServices] = useState<ServicesHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -320,19 +533,16 @@ export default function DayTradingTerminal() {
   }) || null, [positions, currentSignal?.id, strategySetupId]);
   const lifecycleView = stateCopy(lifecycle, side);
   const currentTone = lifecycleTone(lifecycle);
-  const primaryGex = strategySignal?.gex || strategySignal?.zerogex_decision || currentSignal?.gex || {};
-  const gexAge = primaryGex.provider_age_seconds == null ? Number.NaN : Number(primaryGex.provider_age_seconds);
+  const primaryGex = strategySignal?.gex || currentSignal?.gex || strategySignal?.zerogex_shadow || {};
+  const gexAge = gexAgeSeconds(strategySignal || currentSignal?.strategy_snapshot || null);
   const staleReviewReason = !freshSnapshot
     ? 'Strategy snapshot is stale'
-    : Number.isFinite(gexAge) && gexAge > 20
+    : !Number.isFinite(gexAge)
+      ? 'GEX snapshot age is unavailable'
+      : gexAge > 20
       ? 'GEX snapshot is stale'
       : null;
   const reviewDataFresh = !staleReviewReason;
-  const recentSignals = signals
-    .filter(signal => signal.symbol === 'SPY' && signal.engine_version === 'signal-only-v2')
-    .slice(0, 8);
-  const recentLogs = logs.filter(log => log.symbol === 'SPY').slice(0, 6);
-
   const fetchHealth = async () => {
     try {
       setHealthError(null);
@@ -349,6 +559,7 @@ export default function DayTradingTerminal() {
       refetchStrategy(),
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions }),
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.tradeUsage }),
+      refetchHistory(),
       fetchHealth()
     ]);
     setRefreshing(false);
@@ -356,6 +567,8 @@ export default function DayTradingTerminal() {
 
   useEffect(() => {
     fetchHealth();
+    const timer = window.setInterval(fetchHealth, 10000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -391,12 +604,14 @@ export default function DayTradingTerminal() {
     if (lastMessage.type === 'STRATEGY_STATE_CHANGED') {
       if (lastMessage.data) queryClient.setQueryData(QUERY_KEYS.strategyState, lastMessage.data);
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyHistory });
     }
     if (['NEW_SIGNAL', 'SIGNAL_UPDATED'].includes(lastMessage.type)) {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
     }
     if (['POSITION_UPDATED', 'TRADE_UPDATED'].includes(lastMessage.type)) {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions });
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyHistory });
     }
   }, [lastMessage, queryClient]);
 
@@ -453,6 +668,59 @@ export default function DayTradingTerminal() {
   const strategyHealth = services?.strategyEngine;
   const ibkrHealth = services?.marketData?.ibkr || services?.streams?.ibkr;
   const systemReady = strategyHealth?.status === 'UP' && ibkrHealth?.connected === true;
+  const diagnostics = [
+    {
+      label: 'Strategy engine',
+      status: strategyHealth?.status || 'N/A',
+      age: compactAge(strategyHealth?.freshnessMs),
+      detail: strategyHealth?.lastError || strategyHealth?.degradedReason || `${strategyHealth?.mode || 'primary'} mode · ${strategyHealth?.connected ? 'provider connected' : 'provider disconnected'}`,
+      next: 'Check the strategy-engine container, IBKR connection, and snapshot timestamps.'
+    },
+    {
+      label: 'ZeroGEX',
+      status: Number.isFinite(gexAge) ? gexAge <= 20 ? 'UP' : 'DEGRADED' : 'DOWN',
+      age: Number.isFinite(gexAge) ? `${number(gexAge, 1)}s old` : 'age unavailable',
+      detail: Number.isFinite(gexAge)
+        ? `${String(primaryGex.regime || primaryGex.gamma_regime || 'GEX context')} · authoritative provider timestamp`
+        : 'No authoritative GEX timestamp.',
+      next: 'Check the ZeroGEX key and zerogex-prefetch health, then wait for a fresh snapshot.'
+    },
+    {
+      label: 'IBKR market data',
+      status: services?.marketData?.ibkr?.status || 'N/A',
+      age: services?.marketData?.ibkr?.latencyMs != null ? `${services.marketData.ibkr.latencyMs}ms` : undefined,
+      detail: services?.marketData?.ibkr?.lastError || `${services?.marketData?.ibkr?.mode || 'live'} · ${services?.marketData?.ibkr?.host || 'gateway'}:${services?.marketData?.ibkr?.port || '—'}`,
+      next: 'Restore Gateway API connectivity and confirm the configured host, port, and market-data entitlement.'
+    },
+    {
+      label: 'IBKR quote stream',
+      status: services?.streams?.ibkr?.status || 'N/A',
+      age: compactAge(services?.streams?.ibkr?.freshnessMs),
+      detail: services?.streams?.ibkr?.lastError || `${services?.streams?.ibkr?.activeSubscriptions || 0} active option subscriptions`,
+      next: 'Restore Gateway connectivity, then restart the backend quote stream.'
+    },
+    {
+      label: 'Live exit monitor',
+      status: services?.liveExitMonitor?.status || 'N/A',
+      age: compactAge(services?.liveExitMonitor?.freshnessMs),
+      detail: services?.liveExitMonitor?.lastError || `${services?.liveExitMonitor?.provider || 'no provider'} · ${services?.liveExitMonitor?.quotesProcessed || 0} quotes processed`,
+      next: 'Check open option subscriptions and restart the backend after the IBKR stream is healthy.'
+    },
+    {
+      label: 'Redis updates',
+      status: services?.tradeRedis?.status || 'N/A',
+      age: compactAge(services?.tradeRedis?.freshnessMs),
+      detail: services?.tradeRedis?.lastError || `${services?.tradeRedis?.queueDepth ?? 0} queued events`,
+      next: 'Check the Redis container and backend Redis URL.'
+    },
+    {
+      label: 'Postgres',
+      status: services?.postgres?.status || 'N/A',
+      age: services?.postgres?.latencyMs != null ? `${services.postgres.latencyMs}ms` : undefined,
+      detail: services?.postgres?.lastError || 'Signal, position, and lifecycle history available',
+      next: 'Check database reachability, credentials, and schema verification logs.'
+    }
+  ];
 
   return (
     <main className="mx-auto w-full max-w-[1440px] space-y-3 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4 sm:px-0 sm:pb-0">
@@ -577,6 +845,14 @@ export default function DayTradingTerminal() {
                   <p className="mt-1 text-xs leading-relaxed text-zinc-500">
                     Confirmation remains manual. The backend rechecks lifecycle, freshness, quote quality and debit limits.
                   </p>
+                  <PlannedEntryTicket
+                    option={option}
+                    side={side}
+                    quantity={orderQuantity}
+                    plannedLimit={plannedLimit}
+                    orderDebit={orderDebit}
+                    quoteAge={quoteAge}
+                  />
                   <Button
                     className="mt-5 h-11 w-full bg-emerald-500 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-500"
                     onClick={requestExecution}
@@ -597,6 +873,27 @@ export default function DayTradingTerminal() {
                       Dismiss this setup
                     </button>
                   )}
+                </>
+              ) : lifecycle === 'ARMED' ? (
+                <>
+                  <div className="mt-2 text-lg font-semibold text-zinc-50">Prepare, but stay flat</div>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                    The contract plan is visible for preparation. Entry remains locked until the lifecycle becomes ACTIVE.
+                  </p>
+                  {plannedContracts > 0 && (
+                    <PlannedEntryTicket
+                      option={option}
+                      side={side}
+                      quantity={orderQuantity}
+                      plannedLimit={plannedLimit}
+                      orderDebit={orderDebit}
+                      quoteAge={quoteAge}
+                    />
+                  )}
+                  <div className="mt-4 flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-950/15 px-3 py-2 text-xs text-amber-200">
+                    <Clock3 className="h-4 w-4" />
+                    Waiting for ACTIVE confirmation
+                  </div>
                 </>
               ) : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED' ? (
                 <>
@@ -639,7 +936,16 @@ export default function DayTradingTerminal() {
         </div>
       )}
 
-      {linkedPosition && <PositionSummary position={linkedPosition} />}
+      {linkedPosition && (
+        <PositionSummary
+          position={linkedPosition}
+          option={option}
+          side={side}
+          spot={strategySignal?.spot || currentSignal?.current_price || linkedPosition.underlying_price}
+          invalidation={setup?.invalidation || currentSignal?.stop_loss || linkedPosition.underlying_stop_price}
+          target={currentSignal?.target_price || targets[1] || targets[0]}
+        />
+      )}
 
       <section className="rounded-xl border border-zinc-800 bg-[#101216] px-4 py-3 sm:px-5">
         <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-x-6">
@@ -774,7 +1080,7 @@ export default function DayTradingTerminal() {
         <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Planned contract</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Contract quality</div>
               <h3 className="mt-1 break-all text-base font-semibold text-zinc-100">
                 {option.ticker || option.local_symbol || (side ? `SPY ${side}` : 'No contract selected')}
               </h3>
@@ -784,19 +1090,21 @@ export default function DayTradingTerminal() {
             </Badge>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-x-5 border-y border-zinc-800 py-2 sm:grid-cols-4">
-            <Metric label="Strike" value={money(option.strike)} />
-            <Metric label="Bid / ask" value={`${money(option.bid)} / ${money(option.ask)}`} />
-            <Metric label="Planned limit" value={money(plannedLimit)} />
+            <Metric label="Mark" value={money(option.mark)} />
+            <Metric label="Volume" value={option.volume != null ? number(option.volume, 0) : '—'} />
+            <Metric label="Open interest" value={option.openInterest != null ? number(option.openInterest, 0) : '—'} />
             <Metric label="Spread" value={option.spreadPct != null ? `${number(option.spreadPct)}%` : '—'} />
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <div className="rounded-lg bg-zinc-950/70 p-3">
-              <div className="text-[10px] text-zinc-500">Strategy quantity</div>
-              <div className="mt-1 font-mono text-lg font-semibold text-zinc-100">{plannedContracts || '—'}</div>
+              <div className="text-[10px] text-zinc-500">Quote freshness</div>
+              <div className={`mt-1 font-mono text-lg font-semibold ${Number.isFinite(quoteAge) && quoteAge <= 15 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                {Number.isFinite(quoteAge) ? `${number(quoteAge, 1)}s` : '—'}
+              </div>
             </div>
             <div className="rounded-lg bg-zinc-950/70 p-3">
-              <div className="text-[10px] text-zinc-500">Your maximum</div>
-              <div className="mt-1 font-mono text-lg font-semibold text-zinc-100">{configuredMaxContracts}</div>
+              <div className="text-[10px] text-zinc-500">Planned limit</div>
+              <div className="mt-1 font-mono text-lg font-semibold text-zinc-100">{money(plannedLimit)}</div>
             </div>
             <div className="rounded-lg bg-zinc-950/70 p-3">
               <div className="text-[10px] text-zinc-500">Order debit</div>
@@ -804,7 +1112,7 @@ export default function DayTradingTerminal() {
             </div>
           </div>
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-            Final quantity is the lower of the strategy plan and your maximum. Live execution cannot exceed the strategy limit or debit ceiling.
+            Entry remains blocked when the quote is older than 15 seconds or the spread fails the strategy quality gate.
           </p>
         </article>
 
@@ -831,74 +1139,60 @@ export default function DayTradingTerminal() {
           <div className="mt-4 grid grid-cols-1 gap-1 border-t border-zinc-800 pt-3 sm:grid-cols-3 sm:gap-2">
             <Metric label="GEX regime" value={String(primaryGex.regime || primaryGex.gamma_regime || '—')} />
             <Metric label="Gamma flip" value={money(primaryGex.flip || primaryGex.gamma_flip)} />
-            <Metric label="Provider age" value={primaryGex.provider_age_seconds != null ? `${number(primaryGex.provider_age_seconds, 1)}s` : '—'} />
+            <Metric label="Provider age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} />
           </div>
         </article>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-[#101216]">
-        <details className="group">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-4 sm:px-5">
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
+        <article className="min-w-0 rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <div className="text-sm font-semibold text-zinc-100">History and diagnostics</div>
-              <div className="mt-0.5 text-xs text-zinc-500">Previous signals, scanner evidence and runtime details</div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
+              <h3 className="mt-1 text-base font-semibold text-zinc-100">Plans, execution and outcome</h3>
+              <p className="mt-1 text-xs text-zinc-500">Each row is one strategy setup. Expand it for the complete lifecycle.</p>
             </div>
-            <ChevronDown className="h-4 w-4 text-zinc-500 transition-transform group-open:rotate-180" />
-          </summary>
-          <div className="grid gap-4 border-t border-zinc-800 p-4 sm:p-5 xl:grid-cols-3">
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-500">Recent lifecycle events</div>
-              <div className="mt-3 space-y-2">
-                {recentSignals.length > 0 ? recentSignals.map(signal => (
-                  <div key={signal.id} className="flex items-center justify-between gap-3 rounded-lg bg-zinc-950/60 px-3 py-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-zinc-200">#{signal.id} · {signal.signal_type}</div>
-                      <div className="mt-0.5 text-[10px] text-zinc-500">{time(signal.created_at)} · {signal.lifecycle_status || signal.status}</div>
-                    </div>
-                    <span className="shrink-0 font-mono text-[10px] text-zinc-400">{signal.confidence_score}%</span>
-                  </div>
-                )) : <div className="text-xs text-zinc-500">No strategy events yet.</div>}
-              </div>
-            </div>
-
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-500">Latest scanner evidence</div>
-              <div className="mt-3 space-y-2">
-                {recentLogs.length > 0 ? recentLogs.map(log => (
-                  <div key={log.id} className="rounded-lg bg-zinc-950/60 px-3 py-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-xs font-medium text-zinc-200">{log.outcome}</span>
-                      <span className="font-mono text-[10px] text-zinc-500">{time(log.created_at)}</span>
-                    </div>
-                    <div className="mt-1 truncate text-[10px] text-zinc-500">
-                      {log.no_trade_reasons?.[0] || `${log.regime} · SPY ${money(log.spot_price)}`}
-                    </div>
-                  </div>
-                )) : <div className="text-xs text-zinc-500">No scanner evidence available.</div>}
-              </div>
-            </div>
-
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-500">Runtime</div>
-              <div className="mt-3 space-y-2 text-xs">
-                {[
-                  ['Strategy', strategyHealth?.status || 'N/A'],
-                  ['IBKR market data', ibkrHealth?.status || 'N/A'],
-                  ['IBKR stream', services?.streams?.ibkr?.status || 'N/A'],
-                  ['Exit monitor', services?.liveExitMonitor?.status || 'N/A'],
-                  ['Redis', services?.tradeRedis?.status || 'N/A'],
-                  ['Postgres', services?.postgres?.status || 'N/A']
-                ].map(([label, value]) => (
-                  <div key={label} className="flex items-center justify-between gap-3 border-b border-zinc-800/70 py-2 last:border-0">
-                    <span className="text-zinc-500">{label}</span>
-                    <span className="font-mono text-zinc-200">{value}</span>
-                  </div>
-                ))}
-              </div>
-              {healthError && <div className="mt-3 text-xs text-rose-300">{healthError}</div>}
-            </div>
+            <Button variant="ghost" size="sm" className="h-8 justify-start px-2 text-[10px] text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => refetchHistory()}>
+              <RefreshCw className="mr-1.5 h-3 w-3" /> Refresh history
+            </Button>
           </div>
-        </details>
+          <div className="mt-4 space-y-2">
+            {historyLoading ? (
+              <div className="space-y-2">
+                {[0, 1, 2].map(item => <div key={item} className="h-[4.5rem] animate-pulse rounded-lg bg-zinc-900/70" />)}
+              </div>
+            ) : historyError ? (
+              <div className="rounded-lg border border-rose-500/20 bg-rose-950/10 px-3 py-3 text-xs text-rose-200">
+                Strategy history could not be loaded. Refresh after checking Postgres health.
+              </div>
+            ) : strategyHistory.length > 0 ? (
+              strategyHistory.map(setupHistory => <HistorySetupCard key={setupHistory.setup_id} setup={setupHistory} />)
+            ) : (
+              <div className="rounded-lg border border-dashed border-zinc-800 px-3 py-8 text-center text-xs text-zinc-500">
+                No strategy setups have been recorded yet.
+              </div>
+            )}
+          </div>
+        </article>
+
+        <aside className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
+              <h3 className="mt-1 text-base font-semibold text-zinc-100">Entry-critical services</h3>
+              <p className="mt-1 text-xs text-zinc-500">Refreshes every 10 seconds. Ages come from provider timestamps.</p>
+            </div>
+            <Link to="/system-health" className="shrink-0 text-[10px] font-semibold text-sky-300 hover:text-sky-200">Full health →</Link>
+          </div>
+          <div className="mt-3">
+            {diagnostics.map(item => <DiagnosticRow key={item.label} {...item} />)}
+          </div>
+          {healthError && (
+            <div className="mt-3 rounded-lg border border-rose-500/20 bg-rose-950/10 px-3 py-2 text-xs text-rose-200">
+              Health refresh failed: {healthError}
+            </div>
+          )}
+        </aside>
       </section>
 
       {signalsLoading && !currentSignal && (

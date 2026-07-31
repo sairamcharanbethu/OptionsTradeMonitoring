@@ -17,9 +17,10 @@ type RuntimeConfigItem = {
 };
 
 function redactGlobalSettingsForUser(settings: Record<string, string>, role?: string) {
-    if (role === 'ADMIN') return settings;
-
     const redacted = { ...settings };
+    delete redacted.zerogex_api_key;
+    if (role === 'ADMIN') return redacted;
+
     for (const key of Object.keys(redacted)) {
         if (isGlobalSettingKey(key) && !isPublicGlobalSettingKey(key)) {
             delete redacted[key];
@@ -176,6 +177,16 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     detail: '1 means live data. Delayed or frozen data should not be used for auto-entry.'
                 }),
                 runtimeItem({
+                    id: 'market:zerogex-key',
+                    group: 'Market Data',
+                    label: 'ZeroGEX API key',
+                    source: configured(settings.zerogex_api_key) ? 'settings' : configured(process.env.ZEROGEX_API_KEY) ? 'env' : 'default',
+                    status: secretStatus(settings.zerogex_api_key || process.env.ZEROGEX_API_KEY),
+                    secret: true,
+                    value: secretValue(settings.zerogex_api_key || process.env.ZEROGEX_API_KEY),
+                    detail: 'Used server-side by the ZeroGEX prefetch service. The key is never returned to the browser.'
+                }),
+                runtimeItem({
                     id: 'ai:provider',
                     group: 'AI Service',
                     label: 'AI provider',
@@ -313,6 +324,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     }
 
                     const trimmedValue = typeof value === 'string' ? value.trim() : value;
+                    if (key === 'zerogex_api_key' && /[\r\n]/.test(String(trimmedValue || ''))) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'ZeroGEX API key must be a single line' });
+                    }
                     await client.query(
                         `INSERT INTO settings (user_id, key, value, updated_at) 
                          VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
