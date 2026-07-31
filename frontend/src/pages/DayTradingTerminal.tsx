@@ -108,6 +108,27 @@ const contractName = (option: OptionDetailsJSON | Record<string, any>, side: str
   option.ticker || option.local_symbol || (side ? `SPY ${side}` : 'No contract selected')
 );
 
+const humanContractName = (option: OptionDetailsJSON | Record<string, any>, side: string | null) => {
+  const expiry = String(option.expiry || '').trim();
+  const expiryDate = expiry ? new Date(`${expiry}T12:00:00`) : null;
+  const expiryLabel = expiryDate && Number.isFinite(expiryDate.getTime())
+    ? expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : 'expiry unavailable';
+  const strike = Number(option.strike);
+  const strikeLabel = Number.isFinite(strike) ? `$${strike.toFixed(2).replace(/\.00$/, '')}` : 'strike unavailable';
+  const sideLabel = side ? `${side[0]}${side.slice(1).toLowerCase()}` : 'option';
+  return `SPY ${expiryLabel} ${strikeLabel} ${sideLabel}`;
+};
+
+const optionSpreadPct = (option: OptionDetailsJSON | Record<string, any>) => {
+  const supplied = Number(option.spreadPct ?? option.spread_pct);
+  if ((option.spreadPct != null || option.spread_pct != null) && Number.isFinite(supplied)) return supplied;
+  const bid = Number(option.bid);
+  const ask = Number(option.ask);
+  const midpoint = (bid + ask) / 2;
+  return bid > 0 && ask >= bid && midpoint > 0 ? ((ask - bid) / midpoint) * 100 : Number.NaN;
+};
+
 const levelDistance = (spot: unknown, level: unknown) => {
   const current = Number(spot);
   const target = Number(level);
@@ -168,6 +189,12 @@ const stateCopy = (state: string, side: string | null) => {
         eyebrow: 'Setup closed',
         title: state === 'INVALIDATED' ? 'Strategy invalidated' : 'Strategy tracking stopped',
         description: 'No new order is allowed. Review the exit and broker reconciliation state.'
+      };
+    case 'DISMISSED':
+      return {
+        eyebrow: 'Account state',
+        title: 'Setup closed for this account',
+        description: 'No order can be placed from this setup. Wait for the strategy engine to publish a new qualified setup.'
       };
     default:
       return {
@@ -277,15 +304,14 @@ const PlannedEntryTicket = ({
   quoteAge: number;
 }) => {
   const quoteFresh = Number.isFinite(quoteAge) && quoteAge >= 0 && quoteAge <= 15;
+  const spreadPct = optionSpreadPct(option);
   return (
     <div className="mt-4 rounded-lg border border-zinc-700/80 bg-zinc-950/55 p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Planned entry ticket</div>
-          <div className="mt-1 break-all font-mono text-sm font-semibold text-zinc-100">{contractName(option, side)}</div>
-          <div className="mt-1 text-[10px] text-zinc-500">
-            {option.expiry || 'expiry unavailable'} · {side || 'side unavailable'} · strike {money(option.strike)}
-          </div>
+          <div className="mt-1 text-sm font-semibold text-zinc-100">{humanContractName(option, side)}</div>
+          <div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{contractName(option, side)}</div>
         </div>
         <span className={`shrink-0 rounded-md border px-2 py-1 text-[10px] font-semibold ${
           quoteFresh
@@ -295,15 +321,15 @@ const PlannedEntryTicket = ({
           {quoteFresh ? `${number(quoteAge, 1)}s fresh` : 'Quote stale'}
         </span>
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-x-4 border-t border-zinc-800 pt-2 sm:grid-cols-4 xl:grid-cols-2">
-        <Metric label="Quantity" value={`${quantity}`} />
-        <Metric label="Limit" value={money(plannedLimit)} />
-        <Metric label="Bid / ask" value={`${money(option.bid)} / ${money(option.ask)}`} />
-        <Metric label="Max debit" value={orderDebit > 0 ? money(orderDebit) : '—'} tone="text-amber-200" />
+      <div className="mt-3 border-t border-zinc-800 pt-2">
+        <div className="font-mono text-xs font-semibold tabular-nums text-zinc-200">
+          {quantity} contract{quantity === 1 ? '' : 's'} · {money(plannedLimit)} limit · {orderDebit > 0 ? money(orderDebit) : '—'} max debit
+        </div>
+        <div className="mt-1 font-mono text-[10px] tabular-nums text-zinc-500">
+          {money(option.bid)} bid / {money(option.ask)} ask · {Number.isFinite(spreadPct) ? `${number(spreadPct)}% spread` : 'spread unavailable'}
+        </div>
       </div>
-      <div className="mt-1 text-[10px] text-zinc-500">
-        Spread {option.spreadPct != null ? `${number(option.spreadPct)}%` : 'unavailable'} · limit order only
-      </div>
+      <div className="mt-2 text-[10px] text-zinc-600">Protected limit order only</div>
     </div>
   );
 };
@@ -543,6 +569,7 @@ export default function DayTradingTerminal() {
   const entryAllowed = currentSignal?.entry_allowed === true
     && currentSignal.lifecycle_status === 'ACTIVE'
     && lifecycleData.entry_allowed !== false;
+  const signalDismissed = currentSignal?.status === 'CANCELLED';
   const liveMissing = executionMode.live
     ? [
         settings.snaptrade_trading_account_id ? null : 'Select a Wealthsimple account',
@@ -551,7 +578,11 @@ export default function DayTradingTerminal() {
     : [];
   const executionBlockers = [
     !dayTradingEnabled ? 'Day trading is disabled' : null,
-    currentSignal && currentSignal.status !== 'PENDING' ? `Signal is ${currentSignal.status.toLowerCase()}` : null,
+    signalDismissed
+      ? 'This setup is cancelled for your account'
+      : currentSignal && currentSignal.status !== 'PENDING'
+        ? `Signal is ${currentSignal.status.toLowerCase()}`
+        : null,
     lifecycle !== 'ACTIVE' ? `Lifecycle is ${lifecycle}` : null,
     !entryAllowed ? 'Entry window is not open' : null,
     !freshSnapshot ? 'Strategy snapshot is stale' : null,
@@ -569,8 +600,9 @@ export default function DayTradingTerminal() {
       || (strategySetupId && strategyPosition.strategy_setup_id === strategySetupId)
     );
   }) || null, [positions, currentSignal?.id, strategySetupId]);
-  const lifecycleView = stateCopy(lifecycle, side);
-  const currentTone = lifecycleTone(lifecycle);
+  const displayLifecycle = signalDismissed ? 'DISMISSED' : lifecycle;
+  const lifecycleView = stateCopy(displayLifecycle, side);
+  const currentTone = signalDismissed ? 'blocked' : lifecycleTone(lifecycle);
   const currentStrategyCode = strategySignal?.strategy || currentSignal?.strategy_name || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
   const primaryGex = strategySignal?.gex || currentSignal?.gex || strategySignal?.zerogex_shadow || {};
@@ -580,6 +612,38 @@ export default function DayTradingTerminal() {
     && gexAge <= MAX_GEX_PROVIDER_AGE_SECONDS
     && !primaryGex.error
     && strategySignal?.zerogex_shadow?.fresh !== false;
+  const spot = Number(strategySignal?.spot || currentSignal?.current_price);
+  const trigger = Number(setup?.trigger || currentSignal?.entry_trigger);
+  const invalidation = Number(setup?.invalidation || currentSignal?.stop_loss);
+  const targetOne = Number(targets[0]);
+  const targetTwo = Number(currentSignal?.target_price || targets[1] || targets[0]);
+  const riskDistance = side === 'PUT' ? invalidation - spot : spot - invalidation;
+  const rewardDistance = side === 'PUT' ? spot - targetTwo : targetTwo - spot;
+  const rewardRisk = riskDistance > 0 && rewardDistance > 0 ? rewardDistance / riskDistance : Number.NaN;
+  const spreadPct = optionSpreadPct(option);
+  const spotVsTrigger = Number.isFinite(spot) && Number.isFinite(trigger)
+    ? `${money(Math.abs(spot - trigger))} ${spot >= trigger ? 'above' : 'below'} trigger`
+    : 'trigger distance unavailable';
+  const heartbeatSummary = signalDismissed
+    ? `The strategy engine remains ${lifecycle}, but this setup is closed for your account.`
+    : lifecycle === 'ACTIVE'
+      ? `SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
+      : lifecycle === 'ARMED'
+        ? `The setup is forming. SPY is ${spotVsTrigger}; entry remains locked until every confirmation passes.`
+        : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
+          ? 'A linked position is in management. Entry is closed while invalidation and target progression are monitored.'
+          : 'The strategy is monitoring SPY and has not opened a new entry window.';
+  const heartbeatLabel = signalDismissed
+    ? 'Closed for your account'
+    : canExecute
+      ? 'Entry conditions live'
+      : lifecycle === 'ACTIVE'
+        ? 'Entry blocked'
+        : lifecycle === 'ARMED'
+          ? 'Setup forming'
+          : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
+            ? 'Position management'
+            : 'Watching SPY';
   const staleReviewReason = !freshSnapshot
     ? 'Strategy snapshot is stale'
     : !Number.isFinite(gexAge)
@@ -846,7 +910,10 @@ export default function DayTradingTerminal() {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-70">{lifecycleView.eyebrow}</span>
-                <span className="rounded-md border border-current/20 bg-black/15 px-2 py-1 font-mono text-[10px] font-semibold">{lifecycle}</span>
+                <span className="rounded-md border border-current/20 bg-black/15 px-2 py-1 font-mono text-[10px] font-semibold">{displayLifecycle}</span>
+                {signalDismissed && lifecycle === 'ACTIVE' && (
+                  <span className="text-[10px] font-medium text-zinc-500">Strategy engine ACTIVE</span>
+                )}
                 {side && (
                   <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${
                     side === 'CALL'
@@ -866,15 +933,35 @@ export default function DayTradingTerminal() {
               <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">{lifecycleView.description}</p>
               {currentStrategyCode && (
                 <div className="mt-3 max-w-2xl rounded-lg border border-current/10 bg-black/10 px-3 py-2 text-xs leading-relaxed text-zinc-300">
-                  <span className="font-semibold">Why this setup:</span> {currentStrategy.explanation}
+                  <span className="font-semibold">{side === 'CALL' ? 'Bullish' : side === 'PUT' ? 'Bearish' : 'Directional'} alignment:</span> {currentStrategy.explanation}
                 </div>
               )}
 
-              <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-6 sm:grid-cols-4 sm:gap-x-4 sm:gap-y-3">
+              <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-6 sm:grid-cols-5 sm:gap-x-3 sm:gap-y-3">
                 <Level label="SPY spot" value={strategySignal?.spot || currentSignal?.current_price} />
                 <Level label="Entry trigger" value={setup?.trigger || currentSignal?.entry_trigger} tone="text-emerald-200" />
                 <Level label="Invalidation" value={setup?.invalidation || currentSignal?.stop_loss} tone="text-rose-200" />
-                <Level label={`Target ${option.exit_target_number || 2}`} value={currentSignal?.target_price || targets[1] || targets[0]} tone="text-sky-200" />
+                <Level label="Target 1" value={targetOne} tone="text-sky-200" />
+                <Level label={`Target ${option.exit_target_number || 2}`} value={targetTwo} tone="text-sky-200" />
+              </div>
+
+              <div className="mt-4 rounded-lg border border-zinc-800/80 bg-zinc-950/45 p-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${signalDismissed ? 'bg-zinc-500' : freshSnapshot ? 'animate-pulse bg-emerald-400' : 'bg-amber-400'}`} />
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Setup heartbeat</span>
+                      <span className={`text-[10px] font-semibold ${signalDismissed || !canExecute ? 'text-amber-300' : 'text-emerald-300'}`}>{heartbeatLabel}</span>
+                    </div>
+                    <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-zinc-300">{heartbeatSummary}</p>
+                  </div>
+                  <div className="grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-zinc-500 sm:text-right">
+                    <span>Strategy {relativeAge(snapshotAge)}</span>
+                    <span>Quote {Number.isFinite(quoteAge) ? `${number(quoteAge, 1)}s` : '—'}</span>
+                    <span>GEX {Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'}</span>
+                    <span>R/R {Number.isFinite(rewardRisk) ? `${number(rewardRisk)}:1` : '—'}</span>
+                  </div>
+                </div>
               </div>
 
               {strategyBlockers.length > 0 && lifecycle !== 'ACTIVE' && (
@@ -894,7 +981,18 @@ export default function DayTradingTerminal() {
 
             <aside className="rounded-xl border border-zinc-800/90 bg-black/20 p-3.5 sm:p-4">
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Next action</div>
-              {lifecycle === 'ACTIVE' ? (
+              {signalDismissed ? (
+                <>
+                  <div className="mt-2 text-lg font-semibold text-zinc-50">No action available</div>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                    This setup is cancelled for your account. The engine may continue tracking it, but it cannot submit an order from this card.
+                  </p>
+                  <div className="mt-5 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
+                    <Clock3 className="h-4 w-4" />
+                    Wait for the next qualified setup
+                  </div>
+                </>
+              ) : lifecycle === 'ACTIVE' ? (
                 <>
                   <div className="mt-2 text-lg font-semibold text-zinc-50">Review the planned order</div>
                   <p className="mt-1 text-xs leading-relaxed text-zinc-500">
@@ -917,7 +1015,9 @@ export default function DayTradingTerminal() {
                     Review order
                   </Button>
                   {!canExecute && (
-                    <div className="mt-3 text-xs leading-relaxed text-amber-300">{executionBlockers[0]}</div>
+                    <div className="mt-3 space-y-1 text-xs leading-relaxed text-amber-300">
+                      {executionBlockers.slice(0, 3).map(blocker => <div key={blocker}>• {blocker}</div>)}
+                    </div>
                   )}
                   {currentSignal && (
                     <button
@@ -1148,7 +1248,7 @@ export default function DayTradingTerminal() {
             <Metric label="Mark" value={money(option.mark)} />
             <Metric label="Volume" value={option.volume != null ? number(option.volume, 0) : '—'} />
             <Metric label="Open interest" value={option.openInterest != null ? number(option.openInterest, 0) : '—'} />
-            <Metric label="Spread" value={option.spreadPct != null ? `${number(option.spreadPct)}%` : '—'} />
+            <Metric label="Spread" value={Number.isFinite(spreadPct) ? `${number(spreadPct)}%` : '—'} />
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <div className="rounded-lg bg-zinc-950/70 p-3">
