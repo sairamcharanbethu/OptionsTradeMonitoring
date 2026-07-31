@@ -241,8 +241,8 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
         };
     }
 
-    async askTradingJSON(prompt: string, userId?: number, maxTokens: number = 600): Promise<{ verdict: string; analysis: string; usage?: any; [key: string]: any }> {
-        const parsed = await this.generateJSONInternal(prompt, maxTokens, userId);
+    async askTradingJSON(prompt: string, userId?: number, maxTokens: number = 600, timeoutMs?: number): Promise<{ verdict: string; analysis: string; usage?: any; [key: string]: any }> {
+        const parsed = await this.generateJSONInternal(prompt, maxTokens, userId, timeoutMs);
         const analysis = parsed.analysis || parsed.rationale || parsed.reason || parsed.summary || '';
         return {
             verdict: parsed.verdict || parsed.mode || 'UNKNOWN',
@@ -315,10 +315,13 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
         }
     }
 
-    private async generateJSONInternal(prompt: string, maxTokens: number = 600, userId?: number): Promise<any> {
+    private async generateJSONInternal(prompt: string, maxTokens: number = 600, userId?: number, timeoutMs?: number): Promise<any> {
+        const controller = timeoutMs ? new AbortController() : null;
+        const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
         try {
             const settings = await this.getSettings(userId);
             let text = '';
+            let providerUsage: any = null;
             if (settings.ai_provider === 'openrouter') {
                 if (!settings.openrouter_key) throw new Error('OpenRouter selected but no API Key found.');
                 
@@ -328,6 +331,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 try {
                     response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                         method: 'POST',
+                        signal: controller?.signal,
                         headers: {
                             'Authorization': `Bearer ${settings.openrouter_key}`,
                             'HTTP-Referer': 'http://localhost:3000',
@@ -363,6 +367,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 if (!useJsonFormat) {
                     response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                         method: 'POST',
+                        signal: controller?.signal,
                         headers: {
                             'Authorization': `Bearer ${settings.openrouter_key}`,
                             'HTTP-Referer': 'http://localhost:3000',
@@ -388,10 +393,12 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
 
                 const data = await response.json() as any;
                 if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+                providerUsage = data.usage || null;
                 text = data.choices[0].message?.content;
             } else {
                 const response = await fetch(`${this.ollamaUrl}/api/generate`, {
                     method: 'POST',
+                    signal: controller?.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         model: settings.ai_model,
@@ -407,6 +414,11 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
 
                 if (!response.ok) throw new Error(`Ollama Error: ${response.statusText}`);
                 const result = await response.json();
+                providerUsage = {
+                    prompt_tokens: Number(result.prompt_eval_count || 0),
+                    completion_tokens: Number(result.eval_count || 0),
+                    total_tokens: Number(result.prompt_eval_count || 0) + Number(result.eval_count || 0)
+                };
                 text = result.response;
             }
 
@@ -425,20 +437,24 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             // Strip trailing commas from JSON arrays/objects to make parsing more robust
             cleanText = cleanText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']');
 
+            const withUsage = (value: any) => providerUsage
+                ? { ...value, usage: value?.usage || providerUsage }
+                : value;
+
             try {
-                return JSON.parse(cleanText);
+                return withUsage(JSON.parse(cleanText));
             } catch (e: any) {
                 // If direct parse fails, try to repair the JSON first (in case it was truncated)
                 try {
                     const repaired = this.repairJson(cleanText);
-                    return JSON.parse(repaired);
+                    return withUsage(JSON.parse(repaired));
                 } catch (repairError) {
                     // If repair fails, fall back to extracting and repairing the JSON block
                     const jsonMatch = cleanText.match(/\{[\s\S]*/);
                     if (jsonMatch) {
                         try {
                             const repairedMatch = this.repairJson(jsonMatch[0]);
-                            return JSON.parse(repairedMatch);
+                            return withUsage(JSON.parse(repairedMatch));
                         } catch (innerError) {
                             // ignore and throw original error
                         }
@@ -449,6 +465,8 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
         } catch (error: any) {
             this.fastify.log.error(error);
             throw new Error(`AI JSON Generation Failed: ${error.message}`);
+        } finally {
+            if (timeout) clearTimeout(timeout);
         }
     }
 

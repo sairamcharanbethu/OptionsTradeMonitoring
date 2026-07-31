@@ -375,6 +375,11 @@ const ensureSchema = async (instance: any) => {
         protected_limit NUMERIC(12, 4),
         model VARCHAR(160),
         prompt_version VARCHAR(50) NOT NULL,
+        ai_requested BOOLEAN NOT NULL DEFAULT FALSE,
+        ai_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
+        prompt_tokens INTEGER NOT NULL DEFAULT 0,
+        completion_tokens INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
         rationale TEXT,
         risk_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
         evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -382,6 +387,11 @@ const ensureSchema = async (instance: any) => {
         UNIQUE (account_id, setup_id)
       );
     `);
+    await instance.pg.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS ai_requested BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await instance.pg.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS ai_reasons JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+    await instance.pg.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS prompt_tokens INTEGER NOT NULL DEFAULT 0;`);
+    await instance.pg.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS completion_tokens INTEGER NOT NULL DEFAULT 0;`);
+    await instance.pg.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS total_tokens INTEGER NOT NULL DEFAULT 0;`);
     await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS paper_orders (
         id BIGSERIAL PRIMARY KEY,

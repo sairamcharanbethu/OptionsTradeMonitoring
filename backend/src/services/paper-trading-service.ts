@@ -4,9 +4,9 @@ import { DiscordAlertService } from './discord-alert-service';
 import { getGlobalSettings } from '../lib/settings-utils';
 
 const ACCOUNT_ID = 'strategy-system';
-const PROMPT_VERSION = 'paper-risk-v1';
-const ENTRY_TIMEOUT_MS = 60_000;
-const MAX_CONTRACTS = 5;
+const PROMPT_VERSION = 'paper-risk-v2';
+const MAX_DAILY_AI_CALLS = 3;
+const PAPER_TRAILING_STOP_PCT = 15;
 const ET_TIME = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false
 });
@@ -21,7 +21,7 @@ export type PaperDecision = {
   decision: 'TRADE' | 'SKIP';
   riskTier: RiskTier;
   exitProfile: ExitProfile;
-  source: 'AI' | 'FALLBACK';
+  source: 'AI' | 'RULES' | 'FALLBACK';
   rationale: string;
   riskFlags: string[];
 };
@@ -63,7 +63,7 @@ export class PaperTradingService {
 
   public async getAccountSummary(): Promise<Record<string, any>> {
     const account = await this.account();
-    const [positions, decisions, orders, reports, today] = await Promise.all([
+    const [positions, decisions, orders, reports, today, aiUsage] = await Promise.all([
       (this.fastify as any).pg.query(
         `SELECT p.*, ptd.risk_tier, ptd.exit_profile, ptd.source AS decision_source
          FROM positions p
@@ -81,10 +81,18 @@ export class PaperTradingService {
         `SELECT * FROM paper_monthly_reports WHERE account_id=$1 ORDER BY month DESC LIMIT 12`, [ACCOUNT_ID]
       ),
       (this.fastify as any).pg.query(
-        `SELECT COUNT(*) FILTER (WHERE intent='ENTRY' AND status='FILLED')::int AS entries,
-                COALESCE(SUM(CASE WHEN action='SELL_TO_CLOSE' THEN (fill_price * quantity * 100) ELSE 0 END),0) AS exit_proceeds
+        `SELECT COUNT(*) FILTER (WHERE intent='ENTRY' AND status='FILLED')::int AS entries
          FROM paper_orders
          WHERE account_id=$1 AND (created_at AT TIME ZONE 'America/New_York')::date=$2::date`,
+        [ACCOUNT_ID, ET_DATE.format(new Date())]
+      ),
+      (this.fastify as any).pg.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE ai_requested AND (created_at AT TIME ZONE 'America/New_York')::date=$2::date)::int AS daily_calls,
+           COALESCE(SUM(total_tokens) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date=$2::date),0)::int AS daily_tokens,
+           COUNT(*) FILTER (WHERE ai_requested AND date_trunc('month', created_at AT TIME ZONE 'America/New_York')=date_trunc('month', NOW() AT TIME ZONE 'America/New_York'))::int AS monthly_calls,
+           COALESCE(SUM(total_tokens) FILTER (WHERE date_trunc('month', created_at AT TIME ZONE 'America/New_York')=date_trunc('month', NOW() AT TIME ZONE 'America/New_York')),0)::int AS monthly_tokens
+         FROM paper_trade_decisions WHERE account_id=$1`,
         [ACCOUNT_ID, ET_DATE.format(new Date())]
       )
     ]);
@@ -97,17 +105,26 @@ export class PaperTradingService {
       recentOrders: orders.rows,
       monthlyReports: reports.rows,
       limits: {
-        maxDebitPct: 0.5,
-        dailyLossPct: 1,
-        maxTradesPerDay: 2,
+        maxDebitPct: null,
+        dailyLossPct: null,
+        maxTradesPerDay: null,
         maxOpenPositions: 1,
-        maxContracts: MAX_CONTRACTS
+        maxContracts: null,
+        trailingStopPct: PAPER_TRAILING_STOP_PCT
       },
       session: {
         entries: Number(today.rows[0]?.entries || 0),
-        entriesRemaining: Math.max(0, 2 - Number(today.rows[0]?.entries || 0)),
+        entriesRemaining: null,
         pnl: Number((equity - startOfDayEquity).toFixed(2)),
         pnlPct: startOfDayEquity > 0 ? Number((((equity - startOfDayEquity) / startOfDayEquity) * 100).toFixed(2)) : 0
+      },
+      aiUsage: {
+        dailyCalls: Number(aiUsage.rows[0]?.daily_calls || 0),
+        dailyCallLimit: MAX_DAILY_AI_CALLS,
+        dailyCallsRemaining: Math.max(0, MAX_DAILY_AI_CALLS - Number(aiUsage.rows[0]?.daily_calls || 0)),
+        dailyTokens: Number(aiUsage.rows[0]?.daily_tokens || 0),
+        monthlyCalls: Number(aiUsage.rows[0]?.monthly_calls || 0),
+        monthlyTokens: Number(aiUsage.rows[0]?.monthly_tokens || 0)
       },
       health: this.getHealth()
     };
@@ -167,14 +184,11 @@ export class PaperTradingService {
     }
   }
 
-  public static quantityForBudget(equity: number, availableCash: number, limitPrice: number, tier: RiskTier): { quantity: number; maxQuantity: number; debitBudget: number } {
-    const tierPct: Record<RiskTier, number> = { CAUTIOUS: 0.002, STANDARD: 0.0035, FULL: 0.005 };
-    const fullBudget = Math.max(0, Math.min(equity * 0.005, availableCash));
-    const debitBudget = Math.max(0, Math.min(equity * tierPct[tier], fullBudget));
+  public static quantityForTier(availableCash: number, limitPrice: number, tier: RiskTier): { quantity: number; maxAffordable: number } {
+    const desired: Record<RiskTier, number> = { CAUTIOUS: 1, STANDARD: 2, FULL: 3 };
     const contractDebit = limitPrice * 100;
-    const maxQuantity = contractDebit > 0 ? Math.max(0, Math.min(MAX_CONTRACTS, Math.floor(fullBudget / contractDebit))) : 0;
-    const quantity = contractDebit > 0 ? Math.max(0, Math.min(maxQuantity, Math.floor(debitBudget / contractDebit))) : 0;
-    return { quantity, maxQuantity, debitBudget: Number(debitBudget.toFixed(2)) };
+    const maxAffordable = contractDebit > 0 ? Math.max(0, Math.floor(Math.max(0, availableCash) / contractDebit)) : 0;
+    return { quantity: Math.min(desired[tier], maxAffordable), maxAffordable };
   }
 
   public static normalizeAIDecision(raw: any): PaperDecision | null {
@@ -192,6 +206,31 @@ export class PaperTradingService {
       rationale: String(raw?.rationale || raw?.analysis || '').slice(0, 500),
       riskFlags: (Array.isArray(raw?.risk_flags) ? raw.risk_flags : []).slice(0, 5).map((value: any) => String(value).slice(0, 180))
     };
+  }
+
+  public static normalizeTokenUsage(raw: any): { promptTokens: number; completionTokens: number; totalTokens: number } {
+    const promptTokens = Math.max(0, Number(raw?.prompt_tokens ?? raw?.promptTokens ?? 0) || 0);
+    const completionTokens = Math.max(0, Number(raw?.completion_tokens ?? raw?.completionTokens ?? 0) || 0);
+    const suppliedTotal = Math.max(0, Number(raw?.total_tokens ?? raw?.totalTokens ?? 0) || 0);
+    return {
+      promptTokens,
+      completionTokens,
+      totalTokens: suppliedTotal || promptTokens + completionTokens
+    };
+  }
+
+  public static aiReviewReasons(signal: Record<string, any>, option: Record<string, any>, etMinutes: number): string[] {
+    const reasons: string[] = [];
+    const confidence = Number(signal.confidence_score);
+    const spread = Number(option.spread_pct);
+    const rvol = Number(signal.market_context?.rvol_1m);
+    const zeroWarnings = signal.zerogex_decision?.gates?.[signal.favoring]?.warnings;
+    if (Number.isFinite(confidence) && confidence < 80) reasons.push(`borderline confidence ${confidence}`);
+    if (Number.isFinite(spread) && spread >= 8) reasons.push(`wider spread ${spread.toFixed(1)}%`);
+    if (Number.isFinite(rvol) && rvol > 0 && rvol < 1.2) reasons.push(`low relative volume ${rvol.toFixed(2)}`);
+    if (Array.isArray(zeroWarnings) && zeroWarnings.length > 0) reasons.push('ZeroGEX risk warnings');
+    if (etMinutes >= 14 * 60 + 30) reasons.push('late-session entry');
+    return reasons;
   }
 
   private optionFor(signal: Record<string, any>) {
@@ -228,43 +267,64 @@ export class PaperTradingService {
     );
     if (Number(openCount.rows[0]?.count || 0) >= 1) return;
     const today = ET_DATE.format(new Date());
-    const tradeCount = await (this.fastify as any).pg.query(
-      `SELECT COUNT(*)::int AS count FROM paper_orders
-       WHERE account_id = $1 AND intent = 'ENTRY' AND status = 'FILLED'
-         AND (filled_at AT TIME ZONE 'America/New_York')::date = $2::date`, [ACCOUNT_ID, today]
-    );
-    if (Number(tradeCount.rows[0]?.count || 0) >= 2) return;
-    const dayLoss = Number(account.equity) - Number(account.start_of_day_equity);
-    if (dayLoss <= -Math.abs(Number(account.start_of_day_equity) * 0.01)) return;
-
     const bid = Number(option.bid);
     const ask = Number(option.ask);
     const mid = Number(option.mid || (bid + ask) / 2);
     const protectedLimit = Number(Math.min(ask, mid + (ask - mid) * 0.20).toFixed(2));
+    const settings = await getGlobalSettings((this.fastify as any).pg);
+    const [etHour, etMinute] = ET_TIME.format(new Date()).split(':').map(Number);
+    const aiReasons = PaperTradingService.aiReviewReasons(signal, option, etHour * 60 + etMinute);
+    const confidence = Number(signal.confidence_score);
+    const rulesDecision: PaperDecision = {
+      decision: 'TRADE',
+      riskTier: Number.isFinite(confidence) && confidence >= 80 ? 'STANDARD' : 'CAUTIOUS',
+      exitProfile: 'BALANCED_T2',
+      source: 'RULES',
+      rationale: 'Clear setup; deterministic paper sizing used without an AI call.',
+      riskFlags: []
+    };
     const fallback: PaperDecision = {
       decision: 'TRADE', riskTier: 'CAUTIOUS', exitProfile: 'BALANCED_T2', source: 'FALLBACK',
-      rationale: 'AI was unavailable; conservative one-contract fallback applied.', riskFlags: ['AI sizing unavailable']
+      rationale: 'AI review was unavailable or budget-limited; one-contract fallback applied.', riskFlags: ['AI sizing unavailable']
     };
-    let bounded = fallback;
-    try {
-      const prompt = `Choose a bounded paper-trade risk tier and exit profile. Never invent prices, contracts, stops, or targets.
+    let bounded = rulesDecision;
+    let aiRequested = false;
+    let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    if (aiReasons.length > 0) {
+      const calls = await (this.fastify as any).pg.query(
+        `SELECT COUNT(*)::int AS count FROM paper_trade_decisions
+         WHERE account_id=$1 AND ai_requested=TRUE
+           AND (created_at AT TIME ZONE 'America/New_York')::date=$2::date`,
+        [ACCOUNT_ID, today]
+      );
+      const underBudget = Number(calls.rows[0]?.count || 0) < MAX_DAILY_AI_CALLS;
+      if (settings.day_trading_ai_enabled !== 'false' && underBudget) {
+        aiRequested = true;
+        try {
+          const prompt = `Resolve paper-risk ambiguity only. Never change the contract, SL, TP1, or TP2.
 Allowed risk_tier: CAUTIOUS, STANDARD, FULL. Allowed exit_profile: CONSERVATIVE_T1, BALANCED_T2. You may SKIP.
-${JSON.stringify({ strategy: signal.strategy, side, confidence: signal.confidence_score, confirmations: signal.confirmations || [], blockers: signal.blockers || [], gex: signal.gex || {}, zeroGex: signal.zerogex_decision || {}, spot: signal.spot, trigger: setup.trigger, invalidation: setup.invalidation, targets: setup.targets, option: { ticker: option.local_symbol, bid, ask, spreadPct: option.spread_pct, delta: option.delta, volume: option.volume }, account: { equity: Number(account.equity), cash: Number(account.cash_balance), reserved: Number(account.reserved_cash) } })}
+${JSON.stringify({ reasons: aiReasons, strategy: signal.strategy, side, confidence: signal.confidence_score, rvol: signal.market_context?.rvol_1m, gexRegime: signal.gex?.regime || signal.gex?.gamma_regime, zeroGexState: signal.zerogex_decision?.state || signal.zerogex_decision?.regime, spreadPct: option.spread_pct, delta: option.delta })}
 Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL","exit_profile":"CONSERVATIVE_T1|BALANCED_T2","rationale":"short","risk_flags":[]}`;
-      const raw = await Promise.race([
-        new AIService(this.fastify).askTradingJSON(prompt, undefined, 250),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('AI decision timeout')), 4000))
-      ]);
-      bounded = PaperTradingService.normalizeAIDecision(raw) || fallback;
-    } catch {
-      bounded = fallback;
+          const raw = await new AIService(this.fastify).askTradingJSON(prompt, undefined, 140, 4000);
+          tokenUsage = PaperTradingService.normalizeTokenUsage(raw?.usage);
+          bounded = PaperTradingService.normalizeAIDecision(raw) || fallback;
+        } catch {
+          bounded = fallback;
+        }
+      } else {
+        bounded = {
+          ...fallback,
+          rationale: underBudget
+            ? 'AI review is disabled; one-contract fallback applied.'
+            : `Daily AI call budget of ${MAX_DAILY_AI_CALLS} reached; one-contract fallback applied.`,
+          riskFlags: [underBudget ? 'AI review disabled' : 'Daily AI call budget reached']
+        };
+      }
     }
-    const sizing = PaperTradingService.quantityForBudget(
-      Number(account.equity), Number(account.cash_balance) - Number(account.reserved_cash), protectedLimit, bounded.riskTier
-    );
-    let quantity = bounded.source === 'FALLBACK' ? Math.min(1, sizing.maxQuantity) : sizing.quantity;
+    const availableCash = Number(account.cash_balance) - Number(account.reserved_cash);
+    const sizing = PaperTradingService.quantityForTier(availableCash, protectedLimit, bounded.riskTier);
+    let quantity = bounded.source === 'FALLBACK' ? Math.min(1, sizing.maxAffordable) : sizing.quantity;
     if (bounded.decision === 'SKIP') quantity = 0;
-    const settings = await getGlobalSettings((this.fastify as any).pg);
     const signalRow = await (this.fastify as any).pg.query(
       `SELECT id FROM signals WHERE strategy_setup_id = $1 ORDER BY created_at DESC LIMIT 1`, [setupId]
     );
@@ -272,13 +332,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       `INSERT INTO paper_trade_decisions (
          account_id, setup_id, signal_id, decision, risk_tier, exit_profile, source,
          quantity, max_quantity, debit_budget, protected_limit, model, prompt_version,
+         ai_requested, ai_reasons, prompt_tokens, completion_tokens, total_tokens,
          rationale, risk_flags, evidence
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        ON CONFLICT (account_id, setup_id) DO NOTHING RETURNING *`,
       [ACCOUNT_ID, setupId, signalRow.rows[0]?.id || null, bounded.decision, bounded.riskTier, bounded.exitProfile,
-        bounded.source, quantity, sizing.maxQuantity, sizing.debitBudget, protectedLimit,
-        settings.day_trading_ai_model || settings.ai_model || null, PROMPT_VERSION, bounded.rationale,
-        JSON.stringify(bounded.riskFlags), JSON.stringify({ generatedAt, quoteAgeSeconds: option.quote_age_seconds, bid, ask, mid, strategyState: signal.state })]
+        bounded.source, quantity, sizing.maxAffordable, 0, protectedLimit,
+        settings.day_trading_ai_model || settings.ai_model || null, PROMPT_VERSION,
+        aiRequested, JSON.stringify(aiReasons), tokenUsage.promptTokens, tokenUsage.completionTokens, tokenUsage.totalTokens,
+        bounded.rationale, JSON.stringify(bounded.riskFlags), JSON.stringify({ generatedAt, quoteAgeSeconds: option.quote_age_seconds, bid, ask, mid, strategyState: signal.state })]
     );
     const decisionRow = decisionInsert.rows[0];
     if (!decisionRow || quantity < 1 || bounded.decision === 'SKIP') return;
@@ -373,18 +435,26 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const positionResult = await client.query(
         `INSERT INTO positions (
            user_id, symbol, option_type, strike_price, expiration_date, entry_price, quantity,
-           stop_loss_trigger, current_price, status, is_simulated, account_id, execution_broker,
+           stop_loss_trigger, current_price, trailing_high_price, trailing_stop_loss_pct,
+           status, is_simulated, account_id, execution_broker,
            execution_status, contracts_requested, entry_action, exit_action, suggested_stop_loss,
            suggested_take_profit_1, suggested_take_profit_2, signal_id, strategy_setup_id,
            strategy_engine_version, strategy_lifecycle_status, strategy_snapshot, strategy_managed,
            paper_account_id, paper_decision_id, analysis_data, notes
-         ) VALUES (NULL,'SPY',$1,$2,$3,$4,$5,$6,$7,'OPEN',TRUE,$8,'system_paper','FILLED',$5,
+         ) VALUES (NULL,'SPY',$1,$2,$3,$4,$5,$6,$7,$4,15,'OPEN',TRUE,$8,'system_paper','FILLED',$5,
                    'BUY_TO_OPEN','SELL_TO_CLOSE',$9,$10,$11,$12,$13,'signal-only-v2','ACTIVE',$14,TRUE,$8,$15,$16,$17)
          RETURNING *`,
         [side, Number(order.strike), order.expiration, fillPrice, Number(order.quantity), Number((fillPrice * 0.8).toFixed(2)), Number(option.bid || fillPrice),
           ACCOUNT_ID, setup.invalidation || null, targets[0] || null, targets[1] || targets[0] || null,
           order.signal_id, setupId, JSON.stringify(signal), order.decision_id,
-          JSON.stringify({ exitProfile: order.exit_profile, originalQuantity: Number(order.quantity), t1Reached: false }),
+          JSON.stringify({
+            exitProfile: order.exit_profile,
+            originalQuantity: Number(order.quantity),
+            t1Reached: false,
+            trailingActive: false,
+            trailingHighPremium: fillPrice,
+            trailingStopPct: PAPER_TRAILING_STOP_PCT
+          }),
           `[System paper entry from setup ${setupId}]`]
       );
       await client.query(
@@ -473,9 +543,18 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const terminal = currentTerminal || storedTerminal;
       const hitT1 = sameSetup && t1 > 0 && (isCall ? spot >= t1 : spot <= t1);
       const hitT2 = sameSetup && t2 > 0 && (isCall ? spot >= t2 : spot <= t2);
+      const trailingHighPremium = Math.max(Number(position.trailing_high_price || position.entry_price), Number(analysis.trailingHighPremium || 0), bid);
+      analysis.trailingHighPremium = trailingHighPremium;
+      analysis.trailingStopPct = PAPER_TRAILING_STOP_PCT;
+      analysis.trailingActive = Boolean(analysis.t1Reached);
+      const trailingStopPremium = analysis.t1Reached
+        ? Number(Math.max(Number(position.entry_price), trailingHighPremium * (1 - PAPER_TRAILING_STOP_PCT / 100)).toFixed(2))
+        : null;
+      analysis.trailingStopPremium = trailingStopPremium;
       await (this.fastify as any).pg.query(
-        `UPDATE positions SET current_price=$1, underlying_price=$2, strategy_snapshot=$3, updated_at=NOW() WHERE id=$4`,
-        [bid, spot || null, JSON.stringify(signal), position.id]
+        `UPDATE positions SET current_price=$1, underlying_price=$2, strategy_snapshot=$3,
+           trailing_high_price=$4, trailing_stop_loss_pct=$5, analysis_data=$6, updated_at=NOW() WHERE id=$7`,
+        [bid, spot || null, JSON.stringify(signal), trailingHighPremium, PAPER_TRAILING_STOP_PCT, JSON.stringify(analysis), position.id]
       );
       if (invalidated || emergency || terminal) {
         await this.closePaperQuantity(position, Number(position.quantity), bid, invalidated ? 'INVALIDATION' : emergency ? 'EMERGENCY_PREMIUM_STOP' : 'STRATEGY_TERMINAL');
@@ -491,6 +570,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           const trim = original >= 2 ? Math.min(Number(position.quantity), Math.ceil(original / 2)) : 0;
           analysis.t1Reached = true;
           analysis.t1ReachedAt = new Date().toISOString();
+          analysis.trailingActive = true;
+          analysis.trailingStopPremium = Number(Math.max(Number(position.entry_price), trailingHighPremium * (1 - PAPER_TRAILING_STOP_PCT / 100)).toFixed(2));
           const currentSetup = isCall ? signal.call_setup : signal.put_setup;
           const storedSetup = isCall ? storedSnapshot.call_setup : storedSnapshot.put_setup;
           await (this.fastify as any).pg.query(
@@ -501,7 +582,17 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         }
         if (hitT2) {
           const current = await (this.fastify as any).pg.query('SELECT * FROM positions WHERE id=$1', [position.id]);
-          if (current.rows[0]?.status === 'OPEN') await this.closePaperQuantity(current.rows[0], Number(current.rows[0].quantity), bid, 'TARGET_2');
+          if (current.rows[0]?.status === 'OPEN') {
+            await this.closePaperQuantity(current.rows[0], Number(current.rows[0].quantity), bid, 'TARGET_2');
+            continue;
+          }
+        }
+        if (analysis.t1Reached && analysis.trailingStopPremium && bid <= Number(analysis.trailingStopPremium)) {
+          const current = await (this.fastify as any).pg.query('SELECT * FROM positions WHERE id=$1', [position.id]);
+          if (current.rows[0]?.status === 'OPEN') {
+            await this.closePaperQuantity(current.rows[0], Number(current.rows[0].quantity), bid, 'TRAILING_STOP');
+            continue;
+          }
         }
       }
       if (flattenDue) {
@@ -617,7 +708,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const [year, monthNumber] = month.split('-').map(Number);
     const next = `${monthNumber === 12 ? year + 1 : year}-${String(monthNumber === 12 ? 1 : monthNumber + 1).padStart(2, '0')}-01`;
     const { rows: trades } = await (this.fastify as any).pg.query(
-      `SELECT p.*, ptd.source AS ai_source, ptd.risk_tier, ptd.exit_profile
+      `SELECT p.*, ptd.source AS ai_source, ptd.risk_tier, ptd.exit_profile,
+              ptd.ai_requested, ptd.total_tokens
        FROM positions p JOIN paper_trade_decisions ptd ON ptd.id=p.paper_decision_id
        WHERE p.paper_account_id=$1 AND p.created_at >= $2::date AND p.created_at < $3::date`, [ACCOUNT_ID, start, next]
     );
@@ -648,6 +740,13 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
               COALESCE(AVG(CASE WHEN intent='ENTRY' AND status='FILLED' THEN fill_price-limit_price END),0) AS avg_slippage
        FROM paper_orders WHERE account_id=$1 AND created_at >= $2::date AND created_at < $3::date`, [ACCOUNT_ID, start, next]
     );
+    const decisionStats = await (this.fastify as any).pg.query(
+      `SELECT COUNT(*) FILTER (WHERE ai_requested)::int AS ai_calls,
+              COALESCE(SUM(total_tokens),0)::int AS ai_tokens
+       FROM paper_trade_decisions
+       WHERE account_id=$1 AND created_at >= $2::date AND created_at < $3::date`,
+      [ACCOUNT_ID, start, next]
+    );
     const report = {
       month, openingEquity, closingEquity,
       returnPct: openingEquity > 0 ? Number((((closingEquity - openingEquity) / openingEquity) * 100).toFixed(2)) : 0,
@@ -660,7 +759,10 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       fillRate: Number(orderStats.rows[0]?.attempts || 0) ? Number(((Number(orderStats.rows[0].fills) / Number(orderStats.rows[0].attempts)) * 100).toFixed(2)) : 0,
       averageEntryLimitDifference: Number(orderStats.rows[0]?.avg_slippage || 0),
       aiTrades: trades.filter((trade: any) => trade.ai_source === 'AI').length,
-      fallbackTrades: trades.filter((trade: any) => trade.ai_source === 'FALLBACK').length
+      rulesTrades: trades.filter((trade: any) => trade.ai_source === 'RULES').length,
+      fallbackTrades: trades.filter((trade: any) => trade.ai_source === 'FALLBACK').length,
+      aiCalls: Number(decisionStats.rows[0]?.ai_calls || 0),
+      aiTokens: Number(decisionStats.rows[0]?.ai_tokens || 0)
     };
     const inserted = await (this.fastify as any).pg.query(
       `INSERT INTO paper_monthly_reports (account_id,month,report) VALUES ($1,$2,$3)

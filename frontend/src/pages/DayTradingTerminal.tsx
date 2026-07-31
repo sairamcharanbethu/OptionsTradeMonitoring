@@ -1296,7 +1296,7 @@ export default function DayTradingTerminal() {
               </div>
               <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
-                Qualified setups are filled at protected market quotes. AI can select only a bounded risk tier and exit profile; live Wealthsimple orders still require manual confirmation.
+                Qualified setups are filled at protected market quotes with no paper trade-count or debit ceiling. Available cash and one concurrent position still preserve ledger integrity; live Wealthsimple orders remain manual.
               </p>
             </div>
             {paperAccount.canManage && (
@@ -1322,8 +1322,15 @@ export default function DayTradingTerminal() {
               detail={`${number(paperAccount.session.pnlPct)}%`}
               tone={paperAccount.session.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
             />
-            <Metric label="Trades today" value={`${paperAccount.session.entries} / ${paperAccount.limits.maxTradesPerDay}`} detail={`${paperAccount.session.entriesRemaining} remaining`} />
+            <Metric label="Trades today" value={`${paperAccount.session.entries} · unlimited`} detail="one position at a time" />
             <Metric label="Open position" value={paperAccount.openPositions.length ? 'Managing' : 'Flat'} detail={paperAccount.health.lastProcessedAt ? `checked ${dateTime(paperAccount.health.lastProcessedAt)}` : 'waiting for snapshot'} />
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-950/35 px-3 py-2 text-[11px] text-zinc-400">
+            <span>AI today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyCalls}/{paperAccount.aiUsage.dailyCallLimit}</span></span>
+            <span>Tokens today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyTokens.toLocaleString()}</span></span>
+            <span>Tokens this month <span className="font-mono text-zinc-200">{paperAccount.aiUsage.monthlyTokens.toLocaleString()}</span></span>
+            <span className="text-zinc-500">Clear setups use rules; AI is reserved for ambiguity.</span>
           </div>
 
           {paperAccount.openPositions[0] ? (
@@ -1334,6 +1341,9 @@ export default function DayTradingTerminal() {
                 </div>
                 <div className="mt-1 text-xs text-zinc-400">
                   {paperAccount.openPositions[0].quantity} contract{Number(paperAccount.openPositions[0].quantity) === 1 ? '' : 's'} · {paperAccount.openPositions[0].risk_tier || 'bounded'} risk · {String(paperAccount.openPositions[0].exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
+                </div>
+                <div className="mt-1 text-[11px] text-zinc-500">
+                  Structural SL → TP1 protection/trim → TP2 · {paperAccount.limits.trailingStopPct}% premium trail activates after TP1
                 </div>
               </div>
               <div className="font-mono text-xs text-zinc-300">

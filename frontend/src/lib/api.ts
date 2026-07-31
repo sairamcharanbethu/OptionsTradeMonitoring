@@ -243,8 +243,9 @@ export interface PaperAccountSummary {
   recentDecisions: Array<Record<string, any>>;
   recentOrders: Array<Record<string, any>>;
   monthlyReports: Array<{ month: string; report: Record<string, any>; generated_at: string }>;
-  session: { entries: number; entriesRemaining: number; pnl: number; pnlPct: number };
-  limits: { maxDebitPct: number; dailyLossPct: number; maxTradesPerDay: number; maxOpenPositions: number; maxContracts: number };
+  session: { entries: number; entriesRemaining: number | null; pnl: number; pnlPct: number };
+  limits: { maxDebitPct: number | null; dailyLossPct: number | null; maxTradesPerDay: number | null; maxOpenPositions: number; maxContracts: number | null; trailingStopPct: number };
+  aiUsage: { dailyCalls: number; dailyCallLimit: number; dailyCallsRemaining: number; dailyTokens: number; monthlyCalls: number; monthlyTokens: number };
   health: { status: string; lastProcessedAt: string | null; lastError: string | null };
   canManage: boolean;
 }
