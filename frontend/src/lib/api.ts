@@ -1253,7 +1253,6 @@ export const api = {
   // --- Day Trading Signals ---
   async getSignalsHealth(): Promise<{
     yahooFinance: AdapterHealth & { endpoint?: string; checkedAt?: string };
-    sscgexPortal: AdapterHealth & { endpoint?: string; checkedAt?: string };
     ibkr: AdapterHealth & { endpoint?: string; checkedAt?: string };
     openRouter: AdapterHealth & { endpoint?: string; checkedAt?: string };
     discord: AdapterHealth & { endpoint?: string; checkedAt?: string };

@@ -7,7 +7,6 @@ const GLOBAL_SETTING_KEYS = [
   'ibkr_gateway_mode',
   'ibkr_host',
   'ibkr_port',
-  'sscgex_password',
   'discord_webhook_url',
   'discord_alerts_enabled',
   'day_trading_symbols',

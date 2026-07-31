@@ -217,7 +217,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [tradingCutoffTime, setTradingCutoffTime] = useState('16:00');
     const [discordAlertsEnabled, setDiscordAlertsEnabled] = useState(false);
     const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
-    const [sscgexPassword, setSscgexPassword] = useState('');
     const [dayTradingAiEnabled, setDayTradingAiEnabled] = useState(true);
     const [executionBroker, setExecutionBroker] = useState('none');
     const [maxTradesPerDay, setMaxTradesPerDay] = useState('2');
@@ -357,7 +356,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setTradingCutoffTime(data.trading_cutoff_time || '16:00');
             setDiscordAlertsEnabled(data.discord_alerts_enabled === 'true');
             setDiscordWebhookUrl(data.discord_webhook_url || '');
-            setSscgexPassword(data.sscgex_password || '');
             setDayTradingAiEnabled(data.day_trading_ai_enabled !== 'false');
 
             try {
@@ -608,7 +606,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 trading_cutoff_time: tradingCutoffTime,
                 discord_alerts_enabled: discordAlertsEnabled ? 'true' : 'false',
                 discord_webhook_url: discordWebhookUrl,
-                sscgex_password: sscgexPassword,
                 day_trading_ai_enabled: dayTradingAiEnabled ? 'true' : 'false',
                 day_trading_ai_provider: provider,
                 day_trading_ai_model: model,
@@ -1246,16 +1243,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         />
                                     </div>
 
-                                    <div className="grid gap-2 pt-2">
-                                        <Label htmlFor="dtGexPassword">GEX Portal Password</Label>
-                                        <Input
-                                            id="dtGexPassword"
-                                            type="password"
-                                            value={sscgexPassword}
-                                            onChange={(e) => setSscgexPassword(e.target.value)}
-                                            placeholder="Enter GEX Portal Password"
-                                        />
-                                    </div>
                                 </div>
 
                                 {/* Discord Webhook */}

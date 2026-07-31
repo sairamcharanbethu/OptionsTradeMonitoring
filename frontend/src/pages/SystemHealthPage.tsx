@@ -150,7 +150,6 @@ const adapterLastSeen = (value: any, fallback?: string | null) => value?.lastGoo
 const apiLabel = (name: string) => {
   const labels: Record<string, string> = {
     yahooFinance: 'Yahoo Finance',
-    sscgexPortal: 'SSCGEX Portal',
     ibkr: 'IBKR Gateway',
     openRouter: 'OpenRouter AI',
     discord: 'Discord Webhook'
@@ -184,9 +183,7 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
             : 'Check credentials, entitlement, endpoint reachability, and upstream status.',
         actionCommand: name === 'openRouter'
           ? 'Check Settings -> AI model and OpenRouter key, then refresh this page.'
-          : name === 'sscgexPortal'
-            ? 'Check Settings -> SSCGEX password, then run a manual scan.'
-            : null
+          : null
       });
     });
   }
@@ -244,6 +241,33 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       actionCommand: 'docker compose restart trade-staging-backend'
     });
 
+    if (services.strategyEngine) {
+      const strategy = services.strategyEngine;
+      const strategyHealthy = strategy.status === 'UP' && strategy.connected === true;
+      items.push({
+        id: 'service:strategyEngine',
+        area: 'Strategy',
+        title: 'Strategy Engine',
+        status: strategy.status || 'N/A',
+        severity: strategy.lastError ? 'critical' : severityForStatus(strategy.status),
+        endpoint: `strategy-engine (${strategy.mode || 'unknown'} mode)`,
+        freshnessMs: strategy.freshnessMs ?? strategy.providerFreshnessMs ?? null,
+        lastSeen: adapterLastSeen(strategy, strategy.lastSeen || services.generatedAt),
+        evidence: strategy.degradedReason || strategy.lastError || {
+          connected: strategy.connected,
+          mode: strategy.mode,
+          providerFreshnessMs: strategy.providerFreshnessMs
+        },
+        cause: strategyHealthy
+          ? 'Strategy snapshots are connected and fresh.'
+          : statusSummary(strategy.status, strategy.degradedReason || strategy.lastError, 'Strategy snapshots are disconnected, stale, or still starting.'),
+        nextStep: strategyHealthy
+          ? 'No action needed.'
+          : 'Check the strategy-engine container, its IBKR endpoint, and health snapshot timestamps.',
+        actionCommand: 'docker compose ps strategy-engine && docker compose logs --tail=120 strategy-engine'
+      });
+    }
+
     items.push({
       id: 'service:liveExitMonitor',
       area: 'Trading',
@@ -254,9 +278,13 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
       freshnessMs: services.liveExitMonitor?.freshnessMs ?? null,
       lastSeen: adapterLastSeen(services.liveExitMonitor, services.liveExitMonitor?.lastQuoteAt || services.generatedAt),
       evidence: services.liveExitMonitor?.degradedReason || services.liveExitMonitor?.lastError || null,
-      cause: causeFromError('Live exit quote processing error.', services.liveExitMonitor?.degradedReason || services.liveExitMonitor?.lastError),
-      nextStep: 'Check the active stream, open option subscriptions, and quote timestamps.',
-      actionCommand: 'Open /system-health and compare Live Exit Monitor with the active stream last message time.'
+      cause: services.liveExitMonitor?.active === false
+        ? 'Live exit monitor did not attach to an IBKR quote stream during backend startup.'
+        : causeFromError('Live exit quote processing error.', services.liveExitMonitor?.degradedReason || services.liveExitMonitor?.lastError),
+      nextStep: services.liveExitMonitor?.active === false
+        ? 'Inspect the backend IBKR stream startup error, then restart the backend after Gateway connectivity is restored.'
+        : 'Check the active stream, open option subscriptions, and quote timestamps.',
+      actionCommand: 'docker compose logs --tail=120 trade-staging-backend && docker compose restart trade-staging-backend'
     });
 
     const ibkr = services.marketData?.ibkr;
@@ -609,6 +637,7 @@ export default function SystemHealthPage() {
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Root Issues" value={`${failures.length}`} detail={`${warnings.length} warnings active`} icon={Search} />
+        <MetricCard label="Strategy" value={services?.strategyEngine?.status || 'N/A'} detail={`${services?.strategyEngine?.mode || 'unknown'} mode`} icon={Zap} />
         <MetricCard label="Live Exit" value={services?.liveExitMonitor?.status || 'N/A'} detail={`${services?.liveExitMonitor?.matchedUpdates ?? 0} matched updates`} icon={Activity} />
         <MetricCard label="Option Capture" value={services?.optionHistoryCapture?.status || 'N/A'} detail={`${services?.optionHistoryCapture?.persistedQuotes ?? 0} persisted quotes`} icon={Database} />
         <MetricCard label="Active Stream" value={activeProvider?.connected ? 'Connected' : 'Disconnected'} detail={`${activeProvider?.activeSubscriptions ?? 0} subscriptions`} icon={Router} />
@@ -686,6 +715,7 @@ export default function SystemHealthPage() {
             }} />
             <EvidenceBlock value={{
               scanner: services?.scanner || null,
+              strategyEngine: services?.strategyEngine || null,
               snaptradePendingOrders: services?.snaptradePendingOrders || null
             }} />
             <EvidenceBlock value={{

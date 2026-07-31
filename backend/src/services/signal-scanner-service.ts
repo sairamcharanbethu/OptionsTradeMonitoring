@@ -606,19 +606,7 @@ Rules:
   }
 
   private async getPrimaryUserId(): Promise<number> {
-    // Use the first user with signal-critical credentials, then fall back to the first user.
-    const { rows } = await this.fastify.pg.query(`
-      SELECT user_id
-      FROM settings
-      WHERE key = 'sscgex_password' AND value IS NOT NULL AND value != ''
-      ORDER BY user_id ASC
-      LIMIT 1
-    `);
-    if (rows.length > 0) {
-      return rows[0].user_id;
-    }
-
-    // 2. Fallback to the first user in the users table
+    // Use the first user because signal-critical runtime settings are global.
     const { rows: users } = await this.fastify.pg.query(`
       SELECT id FROM users ORDER BY id ASC LIMIT 1
     `);
@@ -843,7 +831,6 @@ Rules:
       strategy_max_total_debit_dollars: '500',
       strategy_preferred_contracts: '1',
       strategy_max_contracts: '1',
-      sscgex_password: '',
       discord_webhook_url: '',
       discord_alerts_enabled: 'false',
       trading_start_time: '09:30',
@@ -919,63 +906,10 @@ Rules:
     const marketPhaseBlocker = this.getMarketPhaseBlocker(cycle.marketPhase, settings);
     if (marketPhaseBlocker) noTradeReasons.push(marketPhaseBlocker);
 
-    // 2. Fetch GEX regime token and details
+    // The current strategy engine owns GEX evaluation. Keep the legacy scanner
+    // fail-closed instead of calling the retired SSCGEX portal.
     let gexData: any = null;
     let gexAvailable = false;
-    const gexPromise = this.timeScannerPhase(cycle, `${symbol}.gex`, async () => {
-      if (settings.sscgex_password) {
-        try {
-          const tokenCacheKey = `CACHE:GEX_AUTH_TOKEN:${settings.sscgex_password}`;
-          let token = await redis.get(tokenCacheKey);
-
-          if (!token) {
-            this.fastify.log.info('[SignalScannerService] Fetching fresh GEX auth token...');
-            const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
-              password: settings.sscgex_password
-            }, { timeout: 8000 });
-            token = (tokenRes.data as any).token;
-            if (token) {
-              await redis.set(tokenCacheKey, token, 600); // cache for 10 minutes
-            }
-          }
-
-          if (token) {
-            const gexCacheKey = `CACHE:GEX_DATA:${symbol}`;
-            const cachedGexStr = await redis.get(gexCacheKey);
-            let fetchSucceeded = false;
-
-            try {
-              const gexRes = await axios.get(`https://sscgex.up.railway.app/api/gex/${symbol}?strikes=50`, {
-                headers: { Authorization: `Bearer ${token}` },
-                timeout: 8000
-              });
-              gexData = gexRes.data;
-              gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
-              if (gexAvailable) {
-                fetchSucceeded = true;
-                await redis.set(gexCacheKey, JSON.stringify(gexData), 60); // cache for 60 seconds
-              }
-            } catch (fetchErr: any) {
-              this.fastify.log.warn(`[SignalScannerService] Live GEX fetch failed for ${symbol}: ${fetchErr.message}. Checking fallback cache.`);
-            }
-
-            if (!fetchSucceeded && cachedGexStr) {
-              try {
-                gexData = JSON.parse(cachedGexStr);
-                gexAvailable = typeof gexData.spot === 'number' && Boolean(gexData.regime);
-                if (gexAvailable) {
-                  this.fastify.log.info(`[SignalScannerService] Successfully recovered GEX data from fallback cache for ${symbol}`);
-                }
-              } catch (err: any) {
-                this.fastify.log.error(`[SignalScannerService] Failed to parse cached GEX data: ${err.message}`);
-              }
-            }
-          }
-        } catch (err: any) {
-          this.fastify.log.warn(`[SignalScannerService] GEX Portal fetch failed for ${symbol}: ${err.message}`);
-        }
-      }
-    });
 
     // 3. Fetch price candles. Non-IBKR fallback data is retained for diagnostics,
     // but getLiveCandleSourceBlocker below prevents it from driving live entries.
@@ -990,9 +924,8 @@ Rules:
       return;
     }
 
-    await gexPromise;
     if (!gexAvailable) {
-      noTradeReasons.push('GEX data unavailable — regime unknown, skipping to prevent silent strategy flip');
+      noTradeReasons.push('Legacy scanner GEX is retired; strategy signals are produced by the strategy engine');
     }
 
     let sortedCandles = candleFetch.candles;
@@ -4773,20 +4706,8 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
 
   // Latency Healthcheck Evaluator
   public async runHealthCheck(userId: number): Promise<any> {
-    let targetUserId = userId;
-    let settings = await this.getSettingsForUser(targetUserId);
-
-    // If the logged-in user hasn't configured signal keys, try using the primary user settings.
-    if (!settings.sscgex_password) {
-      const primaryId = await this.getPrimaryUserId();
-      if (primaryId !== userId) {
-        const primarySettings = await this.getSettingsForUser(primaryId);
-        if (primarySettings.sscgex_password) {
-          targetUserId = primaryId;
-          settings = primarySettings;
-        }
-      }
-    }
+    const targetUserId = userId;
+    const settings = await this.getSettingsForUser(targetUserId);
 
     const checkLatency = async (
       fn: () => Promise<void>,
@@ -4818,17 +4739,6 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       await (yahooFinance as any).quote('QQQ');
     }, true, 'yahooFinance.quote(QQQ)', 'yahooFinance');
 
-    const sscgexCheck = checkLatency(async () => {
-      const tokenRes = await axios.post('https://sscgex.up.railway.app/api/auth', {
-        password: settings.sscgex_password
-      }, { timeout: 4000 });
-      const token = (tokenRes.data as any).token;
-      await axios.get('https://sscgex.up.railway.app/api/gex/QQQ?strikes=10', {
-        headers: { Authorization: `Bearer ${token}` },
-        timeout: 4000
-      });
-    }, !!settings.sscgex_password, 'https://sscgex.up.railway.app/api/gex/QQQ?strikes=10', 'sscgexPortal');
-
     const ibkrConfig = await getIbkrGatewayConfig(this.fastify.pg);
     const ibkrCheck = checkLatency(async () => {
       const ibkr = new IbkrMarketDataService(this.fastify);
@@ -4854,9 +4764,8 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       await axios.get(settings.discord_webhook_url, { timeout: 4000 });
     }, !!settings.discord_webhook_url, settings.discord_webhook_url ? 'configured Discord webhook URL' : undefined, 'discord');
 
-    const [yahoo, sscgex, ibkr, openrouter, discord] = await Promise.all([
+    const [yahoo, ibkr, openrouter, discord] = await Promise.all([
       yahooCheck,
-      sscgexCheck,
       ibkrCheck,
       openrouterCheck,
       discordCheck
@@ -4864,7 +4773,6 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
 
     return {
       yahooFinance: yahoo,
-      sscgexPortal: sscgex,
       ibkr,
       openRouter: openrouter,
       discord: discord
