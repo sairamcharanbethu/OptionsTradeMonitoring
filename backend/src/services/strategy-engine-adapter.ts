@@ -5,6 +5,7 @@ import { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
 import { getGlobalSettings } from '../lib/settings-utils';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
+import { DiscordAlertService } from './discord-alert-service';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
 
@@ -266,11 +267,16 @@ export class StrategyEngineAdapter {
 
     const eventFingerprint = this.eventFingerprint(signal);
     if (eventFingerprint === this.lastEventFingerprint) return;
-    await this.persistEvent(signal, eventFingerprint);
+    const eventInserted = await this.persistEvent(signal, eventFingerprint);
     this.lastEventFingerprint = eventFingerprint;
 
     if (this.mode === 'primary') {
       await this.persistPrimarySignal(signal);
+    }
+    if (eventInserted) {
+      this.notifyStrategyLifecycle(signal).catch((err: any) => {
+        this.fastify.log.warn(`[StrategyEngineAdapter] Discord lifecycle alert failed: ${err.message || String(err)}`);
+      });
     }
     this.broadcast({
       type: 'STRATEGY_STATE_CHANGED',
@@ -341,13 +347,14 @@ export class StrategyEngineAdapter {
     });
   }
 
-  private async persistEvent(signal: StrategySnapshot, eventFingerprint: string): Promise<void> {
-    await (this.fastify as any).pg.query(
+  private async persistEvent(signal: StrategySnapshot, eventFingerprint: string): Promise<boolean> {
+    const result = await (this.fastify as any).pg.query(
       `INSERT INTO strategy_signal_events (
          setup_id, engine_version, mode, lifecycle_status, event_fingerprint,
          policy_fingerprint, signal_snapshot
        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (event_fingerprint) DO NOTHING`,
+       ON CONFLICT (event_fingerprint) DO NOTHING
+       RETURNING id`,
       [
         this.currentSetupId,
         signal.engine_version,
@@ -358,6 +365,106 @@ export class StrategyEngineAdapter {
         JSON.stringify(signal)
       ]
     );
+    return (result.rows?.length || 0) > 0;
+  }
+
+  private strategyAlert(signal: StrategySnapshot): {
+    title: string;
+    message: string;
+    severity: 'info' | 'warning' | 'critical';
+    category: string;
+    eventKey: string;
+  } | null {
+    const state = String(signal.state || signal.signal_phase || 'WAIT').toUpperCase();
+    const lifecycle = signal.lifecycle || {};
+    const side = signal.favoring === 'calls' ? 'CALL' : signal.favoring === 'puts' ? 'PUT' : null;
+    const setup = side === 'CALL' ? signal.call_setup || {} : side === 'PUT' ? signal.put_setup || {} : {};
+    const option = setup.option || {};
+    const targetsHit = Math.max(0, Number(lifecycle.targets_hit || 0));
+    const closeReason = String(lifecycle.close_reason || signal.signal_phase || state).replace(/_/g, ' ');
+    const plan = [
+      side ? `${side} ${String(signal.strategy || 'setup')}` : String(signal.strategy || 'SPY setup'),
+      setup.trigger != null ? `trigger ${setup.trigger}` : null,
+      setup.invalidation != null ? `invalidation ${setup.invalidation}` : null,
+      option.local_symbol ? `contract ${option.local_symbol}` : null
+    ].filter(Boolean).join(' · ');
+
+    if (['INVALIDATED', 'TRACKING_ABORTED', 'FAILED'].includes(state)
+      || ['INVALIDATED', 'TRACKING_ABORTED', 'FAILED'].includes(String(signal.signal_phase || '').toUpperCase())) {
+      return {
+        title: 'Strategy stop or invalidation',
+        message: `${plan}. The setup is closed: ${closeReason}. Do not open a new order.`,
+        severity: 'critical',
+        category: 'strategy-stop',
+        eventKey: `stop:${state}:${closeReason}`
+      };
+    }
+    if (state === 'COMPLETED') {
+      return {
+        title: 'Strategy take-profit completed',
+        message: `${plan}. The planned target lifecycle completed. Confirm the broker exit and final fill.`,
+        severity: 'info',
+        category: 'strategy-target',
+        eventKey: `target:completed:${targetsHit}`
+      };
+    }
+    if (targetsHit > 0) {
+      return {
+        title: `Strategy target ${targetsHit} reached`,
+        message: `${plan}. Target ${targetsHit} is complete; continue with the protected strategy lifecycle.`,
+        severity: 'info',
+        category: 'strategy-target',
+        eventKey: `target:${targetsHit}`
+      };
+    }
+    if (state === 'ACTIVE') {
+      return {
+        title: 'Strategy setup active',
+        message: `${plan}. The entry window is active. Manual approval and all execution limits still apply.`,
+        severity: 'warning',
+        category: 'strategy-active',
+        eventKey: 'active'
+      };
+    }
+    if (state === 'ARMED') {
+      return {
+        title: 'Strategy setup armed',
+        message: `${plan}. Wait for ACTIVE confirmation before reviewing an order.`,
+        severity: 'info',
+        category: 'strategy-armed',
+        eventKey: 'armed'
+      };
+    }
+    return null;
+  }
+
+  private async notifyStrategyLifecycle(signal: StrategySnapshot): Promise<void> {
+    const alert = this.strategyAlert(signal);
+    const setupId = this.currentSetupId;
+    if (!alert || !setupId) return;
+    const [usersResult, signalResult] = await Promise.all([
+      (this.fastify as any).pg.query(
+        `SELECT DISTINCT user_id
+         FROM settings
+         WHERE key = 'day_trading_enabled' AND value = 'true'`
+      ),
+      (this.fastify as any).pg.query(
+        `SELECT id FROM signals WHERE strategy_setup_id = $1 LIMIT 1`,
+        [setupId]
+      )
+    ]);
+    const signalId = signalResult.rows?.[0]?.id || null;
+    const discord = new DiscordAlertService(this.fastify);
+    await Promise.allSettled((usersResult.rows || []).map((row: any) => discord.send({
+      userId: Number(row.user_id),
+      title: alert.title,
+      message: alert.message,
+      severity: alert.severity,
+      category: alert.category,
+      signalId,
+      dedupeKey: `strategy:${row.user_id}:${setupId}:${alert.eventKey}`,
+      dedupeSeconds: 86_400
+    })));
   }
 
   private async persistPrimarySignal(signal: StrategySnapshot): Promise<void> {

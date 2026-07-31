@@ -73,6 +73,22 @@ async function runTests() {
     adapter.isTerminal(signal({ state: 'WAIT', signal_phase: 'INVALIDATED' })),
     'A terminal signal phase must close the setup even when the top-level state is WAIT'
   );
+  assert(
+    adapter.strategyAlert(signal())?.category === 'strategy-armed',
+    'ARMED lifecycle must produce one reliable setup alert'
+  );
+  assert(
+    adapter.strategyAlert(signal({ state: 'ACTIVE', lifecycle: { entry_allowed: true } }))?.category === 'strategy-active',
+    'ACTIVE lifecycle must notify that manual order review is available'
+  );
+  assert(
+    adapter.strategyAlert(signal({ state: 'MANAGE', lifecycle: { targets_hit: 1 } }))?.eventKey === 'target:1',
+    'Each newly reached strategy target must have a stable Discord dedupe key'
+  );
+  assert(
+    adapter.strategyAlert(signal({ state: 'FAILED', lifecycle: { close_reason: 'protected_invalidation' } }))?.category === 'strategy-stop',
+    'Invalidation must produce a critical stop notification'
+  );
 
   let activeRefreshes = 0;
   let maxActiveRefreshes = 0;

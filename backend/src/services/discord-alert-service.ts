@@ -34,7 +34,7 @@ export class DiscordAlertService {
   constructor(private fastify: FastifyInstance) {}
 
   private async resolveWebhook(userId: number): Promise<string | null> {
-    const settings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
+    const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
 
     const userWebhook = String(settings.discord_webhook_url || '').trim();
     if (settings.discord_alerts_enabled === 'true' && userWebhook) return userWebhook;

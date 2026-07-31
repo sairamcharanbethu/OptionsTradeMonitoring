@@ -172,7 +172,7 @@ const Level = ({
   value: unknown;
   tone?: string;
 }) => (
-  <div className="min-w-0 border-l border-zinc-800 pl-3 first:border-l-0 first:pl-0">
+  <div className="min-w-0 rounded-lg bg-black/15 px-3 py-2 sm:rounded-none sm:border-l sm:border-zinc-800 sm:bg-transparent sm:py-0 sm:first:border-l-0 sm:first:pl-0">
     <div className="text-[10px] font-medium text-zinc-500">{label}</div>
     <div className={`mt-1 font-mono text-base font-semibold tabular-nums ${tone}`}>{money(value)}</div>
   </div>
@@ -458,7 +458,7 @@ export default function DayTradingTerminal() {
   const systemReady = strategyHealth?.status === 'UP' && ibkrHealth?.connected === true;
 
   return (
-    <main className="mx-auto w-full max-w-[1440px] space-y-4 text-zinc-100">
+    <main className="mx-auto w-full max-w-[1440px] space-y-3 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4 sm:px-0 sm:pb-0">
       <section className="overflow-hidden rounded-2xl border border-zinc-800/90 bg-[#0d0f12] shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
         <header className="flex flex-col gap-4 border-b border-zinc-800 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
@@ -471,10 +471,10 @@ export default function DayTradingTerminal() {
               Follow the strategy lifecycle from setup formation through guarded execution and position management.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid w-full grid-cols-2 gap-2 lg:w-auto">
             <Link
               to="/system-health"
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100"
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100 active:translate-y-px"
             >
               {systemReady ? <CircleCheck className="h-3.5 w-3.5 text-emerald-400" /> : <CircleAlert className="h-3.5 w-3.5 text-amber-400" />}
               System health
@@ -485,7 +485,7 @@ export default function DayTradingTerminal() {
               size="sm"
               onClick={refreshAll}
               disabled={refreshing}
-              className="h-9 border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
+              className="h-10 w-full border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px"
             >
               <RefreshCw className={`mr-2 h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
               Refresh
@@ -531,7 +531,7 @@ export default function DayTradingTerminal() {
           />
         </div>
 
-        <section className={`m-3 rounded-xl border p-4 sm:m-5 sm:p-6 ${toneClasses[currentTone]}`}>
+        <section className={`m-2.5 rounded-xl border p-3.5 sm:m-5 sm:p-6 ${toneClasses[currentTone]}`}>
           <div className="grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
@@ -550,7 +550,7 @@ export default function DayTradingTerminal() {
               <h2 className="mt-3 text-2xl font-semibold tracking-[-0.025em] text-zinc-50 sm:text-3xl">{lifecycleView.title}</h2>
               <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">{lifecycleView.description}</p>
 
-              <div className="mt-6 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
+              <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-6 sm:grid-cols-4 sm:gap-x-4 sm:gap-y-3">
                 <Level label="SPY spot" value={strategySignal?.spot || currentSignal?.current_price} />
                 <Level label="Entry trigger" value={setup?.trigger || currentSignal?.entry_trigger} tone="text-emerald-200" />
                 <Level label="Invalidation" value={setup?.invalidation || currentSignal?.stop_loss} tone="text-rose-200" />
@@ -572,7 +572,7 @@ export default function DayTradingTerminal() {
               )}
             </div>
 
-            <aside className="rounded-xl border border-zinc-800/90 bg-black/20 p-4">
+            <aside className="rounded-xl border border-zinc-800/90 bg-black/20 p-3.5 sm:p-4">
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Next action</div>
               {lifecycle === 'ACTIVE' ? (
                 <>
@@ -645,9 +645,9 @@ export default function DayTradingTerminal() {
       {linkedPosition && <PositionSummary position={linkedPosition} />}
 
       <section className="rounded-xl border border-zinc-800 bg-[#101216] px-4 py-3 sm:px-5">
-        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-x-6">
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Hard risk limits</div>
-          <div className="grid flex-1 grid-cols-2 gap-x-5 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="grid w-full flex-1 grid-cols-2 gap-x-4 sm:grid-cols-3 sm:gap-x-5 lg:grid-cols-6">
             <Metric label="Premium at risk" value={orderDebit > 0 ? money(orderDebit) : '—'} tone="text-amber-200" />
             <Metric label="Debit ceiling" value={strategyDebitLimit > 0 ? money(strategyDebitLimit) : '—'} />
             <Metric label="Quantity" value={`${orderQuantity}`} detail={`strategy planned ${plannedContracts || '—'}`} />
@@ -668,7 +668,7 @@ export default function DayTradingTerminal() {
             <h3 className="mt-1 text-base font-semibold text-zinc-100">Explain this setup in plain language</h3>
             <p className="mt-1 text-xs text-zinc-500">Runs only when requested. Hard strategy limits remain authoritative.</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full items-center gap-2 sm:w-auto">
             {riskAssessment && (
               <Badge variant="outline" className={`font-mono text-[10px] ${
                 riskAssessment.verdict === 'ALIGNED'
@@ -683,7 +683,7 @@ export default function DayTradingTerminal() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 border-sky-500/25 bg-sky-950/15 text-[10px] text-sky-200 hover:bg-sky-950/30"
+              className="h-10 flex-1 border-sky-500/25 bg-sky-950/15 text-xs text-sky-200 hover:bg-sky-950/30 active:translate-y-px sm:h-8 sm:flex-none sm:text-[10px]"
               onClick={runAdHocRiskReview}
               disabled={!currentSignal || riskLoading || settings.day_trading_ai_enabled === 'false' || !reviewDataFresh}
               title={staleReviewReason || 'Review the current setup using all available strategy and GEX evidence'}
@@ -775,7 +775,7 @@ export default function DayTradingTerminal() {
 
       <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Planned contract</div>
               <h3 className="mt-1 break-all text-base font-semibold text-zinc-100">
@@ -831,7 +831,7 @@ export default function DayTradingTerminal() {
               </div>
             )}
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-2 border-t border-zinc-800 pt-3">
+          <div className="mt-4 grid grid-cols-1 gap-1 border-t border-zinc-800 pt-3 sm:grid-cols-3 sm:gap-2">
             <Metric label="GEX regime" value={String(primaryGex.regime || primaryGex.gamma_regime || '—')} />
             <Metric label="Gamma flip" value={money(primaryGex.flip || primaryGex.gamma_flip)} />
             <Metric label="Provider age" value={primaryGex.provider_age_seconds != null ? `${number(primaryGex.provider_age_seconds, 1)}s` : '—'} />
@@ -912,7 +912,7 @@ export default function DayTradingTerminal() {
       )}
 
       <Dialog open={!!executeSignal} onOpenChange={open => !open && !executing && setExecuteSignal(null)}>
-        <DialogContent className="max-w-lg border-zinc-800 bg-[#101216] text-zinc-100">
+        <DialogContent className="max-h-[92dvh] w-[calc(100%_-_1.5rem)] max-w-lg overflow-y-auto border-zinc-800 bg-[#101216] text-zinc-100 sm:w-full">
           <DialogHeader>
             <DialogTitle className="text-xl tracking-[-0.02em]">Confirm {executionMode.live ? 'live' : 'simulated'} order</DialogTitle>
             <DialogDescription className="text-zinc-500">
