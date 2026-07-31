@@ -1,12 +1,141 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
+import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { AIService } from '../services/ai-service';
 
 const UpdateStatusSchema = z.object({
   status: z.enum(['PENDING', 'PENDING_TRIGGER', 'EXECUTED', 'CANCELLED'])
 });
 
+const SignalIdSchema = z.object({
+  id: z.coerce.number().int().positive()
+});
+
 export async function signalRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
+
+  fastify.get('/:id/risk-assessment', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Explain setup risk in plain language',
+      description: 'Generate an on-demand advisory AI risk assessment for a persisted strategy setup.',
+      security: [{ bearerAuth: [] }]
+    }
+  }, async (request, reply) => {
+    const parsed = SignalIdSchema.safeParse(request.params);
+    if (!parsed.success) return reply.code(400).send({ error: 'A valid signal id is required' });
+
+    const { id: userId } = (request as any).user;
+    const settings = await getSettingsWithGlobalFallback(fastify.pg, userId);
+    if (settings.day_trading_ai_enabled === 'false') {
+      return reply.code(409).send({ error: 'AI risk management is disabled in Day Trading settings' });
+    }
+
+    const { rows } = await fastify.pg.query(
+      `SELECT id, symbol, signal_type, current_price::double precision, entry_trigger::double precision,
+              stop_loss::double precision, target_price::double precision, confidence_score, setup_grade,
+              lifecycle_status, entry_allowed, no_trade_reasons, option_details, indicators, volatility, gex,
+              strategy_snapshot
+       FROM signals
+       WHERE id = $1 AND engine_version = 'signal-only-v2'
+       LIMIT 1`,
+      [parsed.data.id]
+    );
+    const signal = rows[0];
+    if (!signal) return reply.code(404).send({ error: 'Strategy setup not found' });
+
+    const option = signal.option_details || {};
+    const plannedContracts = Math.max(0, Number(option.planned_contracts || 0));
+    const plannedLimit = Math.max(0, Number(option.planned_limit_price || option.mark || 0));
+    const plannedDebit = Math.max(0, Number(option.planned_total_debit || (plannedLimit * plannedContracts * 100)));
+    const prompt = `You are an options day-trading risk explainer. Explain the supplied strategy setup in very simple language.
+You are advisory only. Never replace, loosen, or invent the strategy trigger, invalidation, target, quantity, debit ceiling, or manual approval.
+Do not promise an outcome. Describe a plausible path and the explicit failure condition.
+
+SETUP:
+${JSON.stringify({
+  symbol: signal.symbol,
+  side: signal.signal_type,
+  lifecycle: signal.lifecycle_status,
+  entryAllowed: signal.entry_allowed,
+  spot: signal.current_price,
+  trigger: signal.entry_trigger,
+  invalidation: signal.stop_loss,
+  target: signal.target_price,
+  confidence: signal.confidence_score,
+  grade: signal.setup_grade,
+  blockers: signal.no_trade_reasons || [],
+  option: {
+    ticker: option.ticker,
+    expiry: option.expiry,
+    strike: option.strike,
+    bid: option.bid,
+    ask: option.ask,
+    plannedLimit,
+    plannedContracts,
+    plannedDebit
+  },
+  technicals: signal.indicators || {},
+  volatility: signal.volatility || {},
+  strategyContext: {
+    strategy: signal.strategy_snapshot?.strategy,
+    state: signal.strategy_snapshot?.state,
+    phase: signal.strategy_snapshot?.signal_phase,
+    confirmations: signal.strategy_snapshot?.confirmations || signal.indicators?.confirmations || [],
+    blockers: signal.strategy_snapshot?.blockers || signal.no_trade_reasons || [],
+    lifecycle: signal.strategy_snapshot?.lifecycle || option.lifecycle || {},
+    gex: signal.strategy_snapshot?.gex || signal.gex || {},
+    zeroGexDecision: signal.strategy_snapshot?.zerogex_decision || {},
+    strategyPolicy: signal.strategy_snapshot?.strategy_policy || {},
+    paperPolicy: signal.strategy_snapshot?.paper_policy || {}
+  }
+})}
+
+Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and use plain English:
+{
+  "verdict":"ALIGNED|MIXED|CONFLICTED|WAIT",
+  "summary":"one sentence",
+  "likely_path":"one sentence describing what price must do next",
+  "if_right":"one sentence describing the planned favorable outcome",
+  "if_wrong":"one sentence anchored to the supplied invalidation",
+  "action":"one sentence stating the safest action now",
+  "gex_read":"one sentence explaining how GEX supports or conflicts with the setup",
+  "supporting_factors":["up to three short facts from supplied data"],
+  "risk_flags":["up to three short risks from supplied data"]
+}`;
+
+    try {
+      const raw = await new AIService(fastify).askTradingJSON(prompt, userId, 350);
+      const allowedVerdicts = new Set(['ALIGNED', 'MIXED', 'CONFLICTED', 'WAIT']);
+      const plain = (value: unknown, fallback: string) => {
+        const text = String(value || '').replace(/\s+/g, ' ').trim();
+        return (text || fallback).slice(0, 220);
+      };
+      const assessment = {
+        verdict: allowedVerdicts.has(String(raw.verdict).toUpperCase()) ? String(raw.verdict).toUpperCase() : 'MIXED',
+        summary: plain(raw.summary || raw.analysis, 'Treat this setup cautiously and follow the frozen strategy plan.'),
+        likelyPath: plain(raw.likely_path, 'Wait for the strategy trigger and confirmation before considering entry.'),
+        ifRight: plain(raw.if_right, 'The position should progress toward the strategy target while protection remains active.'),
+        ifWrong: plain(raw.if_wrong, signal.stop_loss ? `The setup fails if SPY reaches ${signal.stop_loss}.` : 'Exit when the strategy invalidates the setup.'),
+        action: plain(raw.action, signal.entry_allowed ? 'Use only the planned size and protected limit.' : 'Stay flat until the strategy permits entry.'),
+        gexRead: plain(raw.gex_read, 'GEX does not provide a clear additional edge for this setup.'),
+        supportingFactors: (Array.isArray(raw.supporting_factors) ? raw.supporting_factors : [])
+          .slice(0, 3)
+          .map((value: unknown) => plain(value, ''))
+          .filter(Boolean),
+        riskFlags: (Array.isArray(raw.risk_flags) ? raw.risk_flags : [])
+          .slice(0, 3)
+          .map((value: unknown) => plain(value, ''))
+          .filter(Boolean),
+        maxPlannedLoss: plannedDebit > 0 ? Number(plannedDebit.toFixed(2)) : null,
+        generatedAt: new Date().toISOString()
+      };
+      return assessment;
+    } catch (err: any) {
+      fastify.log.warn(`[Signals] AI risk assessment failed for signal #${signal.id}: ${err.message || String(err)}`);
+      return reply.code(502).send({ error: err.message || 'AI risk assessment failed' });
+    }
+  });
 
   // GET /api/signals - Fetch latest 100 signals
   fastify.get('/', {

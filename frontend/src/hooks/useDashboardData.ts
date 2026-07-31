@@ -34,7 +34,7 @@ export function useSignals(refreshInterval = 5000) {
     });
 }
 
-export function useStrategyState(refreshInterval = 1000) {
+export function useStrategyState(refreshInterval = 10000) {
     return useQuery({
         queryKey: QUERY_KEYS.strategyState,
         queryFn: () => api.getStrategyState(),

@@ -70,6 +70,20 @@ async function runTests() {
     'A terminal signal phase must close the setup even when the top-level state is WAIT'
   );
 
+  let activeRefreshes = 0;
+  let maxActiveRefreshes = 0;
+  let refreshCalls = 0;
+  adapter.poll = async () => {
+    refreshCalls += 1;
+    activeRefreshes += 1;
+    maxActiveRefreshes = Math.max(maxActiveRefreshes, activeRefreshes);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    activeRefreshes -= 1;
+  };
+  await Promise.all([adapter.requestRefresh(), adapter.requestRefresh()]);
+  assert(refreshCalls === 2, 'A Redis event received during refresh must queue one follow-up file read');
+  assert(maxActiveRefreshes === 1, 'Strategy snapshot refreshes must never overlap');
+
   const queries: Array<{ sql: string; values: any[] }> = [];
   const persistenceAdapter = new StrategyEngineAdapter({
     pg: {

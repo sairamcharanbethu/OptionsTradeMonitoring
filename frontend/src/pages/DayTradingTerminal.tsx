@@ -25,7 +25,7 @@ import {
   useTradeUsage
 } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { api, Position, Signal } from '@/lib/api';
+import { api, Position, Signal, SignalRiskAssessment } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -218,19 +218,22 @@ const PositionSummary = ({ position }: { position: Position }) => {
 
 export default function DayTradingTerminal() {
   const queryClient = useQueryClient();
+  const { isConnected, lastMessage } = useWebSocket();
   const { data: signals = [], isLoading: signalsLoading, refetch: refetchSignals } = useSignals(5000);
-  const { data: strategyState, refetch: refetchStrategy } = useStrategyState(1000);
+  const { data: strategyState, refetch: refetchStrategy } = useStrategyState(isConnected ? 10000 : 1000);
   const { data: settings = {} } = useSettings();
   const { data: tradeUsage } = useTradeUsage();
   const { data: positions = [] } = usePositions(5000);
   const { data: logs = [] } = useScannerLogs(15000);
-  const { isConnected, lastMessage } = useWebSocket();
   const [services, setServices] = useState<ServicesHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [executeSignal, setExecuteSignal] = useState<Signal | null>(null);
   const [executing, setExecuting] = useState(false);
   const [actionMessage, setActionMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+  const [riskAssessment, setRiskAssessment] = useState<SignalRiskAssessment | null>(null);
+  const [riskLoading, setRiskLoading] = useState(false);
+  const [riskError, setRiskError] = useState<string | null>(null);
 
   const strategySignal = strategyState?.signal || null;
   const strategySetupId = strategyState?.setupId || null;
@@ -282,7 +285,8 @@ export default function DayTradingTerminal() {
     ? Math.min(configuredMaxContracts, plannedContracts)
     : configuredMaxContracts;
   const plannedLimit = Number(option.planned_limit_price || option.mark || 0);
-  const orderDebit = plannedLimit > 0 ? plannedLimit * orderQuantity * 100 : 0;
+  const orderDebit = plannedLimit > 0 && plannedContracts > 0 ? plannedLimit * orderQuantity * 100 : 0;
+  const strategyDebitLimit = Number(option.strategy_max_total_debit_dollars || settings.strategy_max_total_debit_dollars || 0);
   const snapshotAge = Number(strategyState?.ageSeconds);
   const freshSnapshot = Number.isFinite(snapshotAge) && snapshotAge >= 0 && snapshotAge <= 20;
   const usageRemaining = Number(tradeUsage?.remaining ?? 0);
@@ -317,6 +321,16 @@ export default function DayTradingTerminal() {
   const lifecycleView = stateCopy(lifecycle, side);
   const currentTone = lifecycleTone(lifecycle);
   const primaryGex = strategySignal?.gex || strategySignal?.zerogex_decision || currentSignal?.gex || {};
+  const gexAge = Number(primaryGex.provider_age_seconds);
+  const quoteAge = Number(setup?.option?.quote_age_seconds);
+  const staleReviewReason = !freshSnapshot
+    ? 'Strategy snapshot is stale'
+    : Number.isFinite(gexAge) && gexAge > 20
+      ? 'GEX snapshot is stale'
+      : Number.isFinite(quoteAge) && quoteAge > 15
+        ? 'Option quote is stale'
+        : null;
+  const reviewDataFresh = !staleReviewReason;
   const recentSignals = signals
     .filter(signal => signal.symbol === 'SPY' && signal.engine_version === 'signal-only-v2')
     .slice(0, 8);
@@ -348,10 +362,35 @@ export default function DayTradingTerminal() {
   }, []);
 
   useEffect(() => {
+    setRiskAssessment(null);
+    setRiskError(null);
+    setRiskLoading(false);
+  }, [currentSignal?.id, currentSignal?.lifecycle_status]);
+
+  const runAdHocRiskReview = async () => {
+    if (!currentSignal?.id || settings.day_trading_ai_enabled === 'false' || !reviewDataFresh) return;
+    setRiskLoading(true);
+    setRiskError(null);
+    try {
+      setRiskAssessment(await api.getSignalRiskAssessment(currentSignal.id));
+    } catch (error: any) {
+      setRiskError(error.message || 'Fresh AI setup review failed');
+    } finally {
+      setRiskLoading(false);
+    }
+  };
+
+  useEffect(() => {
     if (!lastMessage) return;
-    if (['NEW_SIGNAL', 'SIGNAL_UPDATED', 'STRATEGY_STATE_CHANGED'].includes(lastMessage.type)) {
+    if (lastMessage.type === 'STRATEGY_SNAPSHOT_UPDATED' && lastMessage.data) {
+      queryClient.setQueryData(QUERY_KEYS.strategyState, lastMessage.data);
+    }
+    if (lastMessage.type === 'STRATEGY_STATE_CHANGED') {
+      if (lastMessage.data) queryClient.setQueryData(QUERY_KEYS.strategyState, lastMessage.data);
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyState });
+    }
+    if (['NEW_SIGNAL', 'SIGNAL_UPDATED'].includes(lastMessage.type)) {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
     }
     if (['POSITION_UPDATED', 'TRADE_UPDATED'].includes(lastMessage.type)) {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions });
@@ -598,6 +637,129 @@ export default function DayTradingTerminal() {
       )}
 
       {linkedPosition && <PositionSummary position={linkedPosition} />}
+
+      <section className="rounded-xl border border-zinc-800 bg-[#101216] px-4 py-3 sm:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Hard risk limits</div>
+          <div className="grid flex-1 grid-cols-2 gap-x-5 sm:grid-cols-3 lg:grid-cols-6">
+            <Metric label="Premium at risk" value={orderDebit > 0 ? money(orderDebit) : '—'} tone="text-amber-200" />
+            <Metric label="Debit ceiling" value={strategyDebitLimit > 0 ? money(strategyDebitLimit) : '—'} />
+            <Metric label="Quantity" value={`${orderQuantity}`} detail={`strategy planned ${plannedContracts || '—'}`} />
+            <Metric label="Invalidation" value={money(setup?.invalidation || currentSignal?.stop_loss)} tone="text-rose-200" />
+            <Metric label="Strategy age" value={relativeAge(snapshotAge)} tone={freshSnapshot ? 'text-emerald-300' : 'text-rose-300'} />
+            <Metric label="GEX age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} tone={Number.isFinite(gexAge) && gexAge > 20 ? 'text-rose-300' : 'text-zinc-100'} />
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              Optional AI review
+            </div>
+            <h3 className="mt-1 text-base font-semibold text-zinc-100">Explain this setup in plain language</h3>
+            <p className="mt-1 text-xs text-zinc-500">Runs only when requested. Hard strategy limits remain authoritative.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {riskAssessment && (
+              <Badge variant="outline" className={`font-mono text-[10px] ${
+                riskAssessment.verdict === 'ALIGNED'
+                  ? 'border-emerald-500/30 bg-emerald-950/25 text-emerald-300'
+                  : riskAssessment.verdict === 'CONFLICTED'
+                    ? 'border-rose-500/30 bg-rose-950/25 text-rose-300'
+                    : 'border-amber-500/30 bg-amber-950/25 text-amber-300'
+              }`}>
+                {riskAssessment.verdict.replace('_', ' ')}
+              </Badge>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-sky-500/25 bg-sky-950/15 text-[10px] text-sky-200 hover:bg-sky-950/30"
+              onClick={runAdHocRiskReview}
+              disabled={!currentSignal || riskLoading || settings.day_trading_ai_enabled === 'false' || !reviewDataFresh}
+              title={staleReviewReason || 'Review the current setup using all available strategy and GEX evidence'}
+            >
+              {riskLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+              Review setup with AI
+            </Button>
+          </div>
+        </div>
+
+        {settings.day_trading_ai_enabled === 'false' ? (
+          <div className="mt-4 rounded-lg border border-dashed border-zinc-800 px-3 py-4 text-center text-xs text-zinc-500">
+            AI risk management is disabled in Day Trading settings.
+          </div>
+        ) : staleReviewReason ? (
+          <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-950/10 px-3 py-3 text-xs text-amber-200">
+            AI review is paused: {staleReviewReason}. Wait for fresh strategy data.
+          </div>
+        ) : riskLoading ? (
+          <div className="mt-4 flex items-center gap-2 text-xs text-zinc-400">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Reviewing this setup and its protected risk plan…
+          </div>
+        ) : riskAssessment ? (
+          <>
+            <p className="mt-4 text-sm font-medium leading-relaxed text-zinc-200">{riskAssessment.summary}</p>
+            <div className="mt-4 divide-y divide-zinc-800 rounded-lg bg-zinc-950/55 px-3">
+              {[
+                ['Setup', riskAssessment.likelyPath, 'text-sky-300'],
+                ['GEX', riskAssessment.gexRead, 'text-sky-300'],
+                ['If it works', riskAssessment.ifRight, 'text-emerald-300'],
+                ['Failure', riskAssessment.ifWrong, 'text-rose-300']
+              ].map(([label, statement, tone]) => (
+                <div key={label} className="grid gap-1 py-2.5 sm:grid-cols-[5rem_1fr] sm:gap-3">
+                  <div className={`text-[10px] font-semibold uppercase tracking-[0.12em] ${tone}`}>{label}</div>
+                  <div className="text-xs leading-relaxed text-zinc-300">{statement}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-col gap-2 rounded-lg border border-sky-500/15 bg-sky-950/10 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-xs leading-relaxed text-zinc-300"><span className="font-semibold text-sky-200">Safest action:</span> {riskAssessment.action}</div>
+              <div className="shrink-0 font-mono text-xs text-zinc-400">
+                Max planned debit {riskAssessment.maxPlannedLoss != null ? money(riskAssessment.maxPlannedLoss) : '—'}
+              </div>
+            </div>
+            <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/35">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-xs font-medium text-zinc-400">
+                Evidence and risk flags
+                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="grid gap-3 border-t border-zinc-800 p-3 sm:grid-cols-2">
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-300">Supporting data</div>
+                  <div className="mt-1.5 space-y-1 text-xs leading-relaxed text-zinc-300">
+                    {riskAssessment.supportingFactors.length > 0
+                      ? riskAssessment.supportingFactors.map((item, index) => <div key={`${item}-${index}`}>• {item}</div>)
+                      : <div>No additional supporting evidence identified.</div>}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-rose-300">Risk flags</div>
+                  <div className="mt-1.5 space-y-1 text-xs leading-relaxed text-zinc-300">
+                    {riskAssessment.riskFlags.length > 0
+                      ? riskAssessment.riskFlags.map((item, index) => <div key={`${item}-${index}`}>• {item}</div>)
+                      : <div>No additional risk flags identified.</div>}
+                  </div>
+                </div>
+              </div>
+            </details>
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] leading-relaxed text-zinc-600">
+              <span>Reviewed {time(riskAssessment.generatedAt)}</span>
+              <span>Strategy {relativeAge(snapshotAge)}</span>
+              <span>GEX {Number.isFinite(gexAge) ? `${number(gexAge, 1)}s old` : 'age unavailable'}</span>
+              <span>AI is advisory only.</span>
+            </div>
+          </>
+        ) : (
+          <div className={`mt-4 rounded-lg border border-dashed px-3 py-4 text-center text-xs ${riskError ? 'border-rose-500/25 text-rose-200' : 'border-zinc-800 text-zinc-500'}`}>
+            {riskError || (currentSignal ? 'No AI review has been requested for this setup.' : 'A persisted strategy setup is required for AI review.')}
+          </div>
+        )}
+      </section>
 
       <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
         <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">

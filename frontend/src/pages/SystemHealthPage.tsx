@@ -122,7 +122,7 @@ const causeFromError = (fallback: string, error?: string | null) => {
   if (lower.includes('timeout') || lower.includes('econn') || lower.includes('network')) return 'Network timeout or service unreachable.';
   if (lower.includes('401') || lower.includes('403') || lower.includes('unauthorized') || lower.includes('forbidden')) return 'Authentication or entitlement failure.';
   if (lower.includes('404')) return 'Endpoint path or upstream route mismatch.';
-  if (lower.includes('429') || lower.includes('rate')) return 'Rate limit or upstream throttling.';
+  if (lower.includes('429') || /\brate(?:[ -]?limit(?:ed|ing)?)?\b/.test(lower) || /\bthrottl(?:e|ed|ing)\b/.test(lower)) return 'Rate limit or upstream throttling.';
   if (lower.includes('subscription') || lower.includes('permission_denied')) return 'Data entitlement or subscription mismatch.';
   return fallback;
 };
@@ -244,6 +244,9 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
     if (services.strategyEngine) {
       const strategy = services.strategyEngine;
       const strategyHealthy = strategy.status === 'UP' && strategy.connected === true;
+      const strategyCause = strategy.lastError || strategy.degradedReason;
+      const snapshotStale = Number(strategy.freshnessMs) > 5000;
+      const providerStale = Number(strategy.providerFreshnessMs) > 5000;
       items.push({
         id: 'service:strategyEngine',
         area: 'Strategy',
@@ -256,11 +259,16 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
         evidence: strategy.degradedReason || strategy.lastError || {
           connected: strategy.connected,
           mode: strategy.mode,
-          providerFreshnessMs: strategy.providerFreshnessMs
+          providerFreshnessMs: strategy.providerFreshnessMs,
+          transport: strategy.transport
         },
         cause: strategyHealthy
           ? 'Strategy snapshots are connected and fresh.'
-          : statusSummary(strategy.status, strategy.degradedReason || strategy.lastError, 'Strategy snapshots are disconnected, stale, or still starting.'),
+          : strategy.connected === false
+            ? 'Strategy Engine is not connected to its configured IBKR Gateway.'
+            : snapshotStale || providerStale
+              ? `Strategy data is stale${snapshotStale ? `; backend snapshot age is ${formatDurationMs(strategy.freshnessMs)}` : ''}${providerStale ? `; provider snapshot age is ${formatDurationMs(strategy.providerFreshnessMs)}` : ''}.`
+              : statusSummary(strategy.status, strategyCause, 'Strategy snapshots are degraded or still starting.'),
         nextStep: strategyHealthy
           ? 'No action needed.'
           : 'Check the strategy-engine container, its IBKR endpoint, and health snapshot timestamps.',

@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ib_insync import IB, Stock, Ticker, util
+
+try:
+    import redis as redis_client
+except ImportError:  # Local tests can run without the optional event transport.
+    redis_client = None
 
 from ibkr_0dte_options import (
     DATA_TYPES,
@@ -453,7 +459,45 @@ class TradePrefetcher:
         self.local_gex: dict[str, Any] | None = None
         self.last_local_gex_at = 0.0
         self.last_journal_at = 0.0
+        self.redis_publisher: Any = None
+        self.redis_retry_at = 0.0
+        self.redis_last_error_at = 0.0
         self.ib.errorEvent += self._on_error
+
+    def _publish_signal_update(self, signal: dict[str, Any]) -> None:
+        if not self.args.redis_url or redis_client is None:
+            return
+        now = time.time()
+        if now < self.redis_retry_at:
+            return
+        try:
+            if self.redis_publisher is None:
+                self.redis_publisher = redis_client.Redis.from_url(
+                    self.args.redis_url,
+                    socket_connect_timeout=0.2,
+                    socket_timeout=0.2,
+                    decode_responses=True,
+                )
+            self.redis_publisher.publish(
+                self.args.redis_channel,
+                json.dumps(
+                    {
+                        "generated_at": signal.get("generated_at"),
+                        "state": signal.get("state"),
+                        "phase": signal.get("signal_phase"),
+                    },
+                    separators=(",", ":"),
+                ),
+            )
+        except Exception as exc:
+            self.redis_publisher = None
+            self.redis_retry_at = now + 5
+            if now - self.redis_last_error_at >= 60:
+                print(
+                    f"trade-prefetch Redis notification unavailable: {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                self.redis_last_error_at = now
 
     def _reset_option_state(self) -> None:
         """Discard ticker objects that cannot survive an IBKR reconnect."""
@@ -1084,6 +1128,7 @@ class TradePrefetcher:
                     if self._options_need_recenter():
                         self._refresh_options(force_chain=self.option_chain is None)
                     signal = self.write()
+                    self._publish_signal_update(signal)
                     self._log_if_changed(signal)
                     if self.args.once:
                         return
@@ -1110,6 +1155,11 @@ class TradePrefetcher:
                     self._reset_option_state()
                     time.sleep(self.args.reconnect_interval)
         finally:
+            if self.redis_publisher is not None:
+                try:
+                    self.redis_publisher.close()
+                except Exception:
+                    pass
             if self.ib.isConnected():
                 self.ib.disconnect()
             self._reset_option_state()
@@ -1299,6 +1349,16 @@ def main() -> None:
         help="Minimum seconds between historical-bar resubscription attempts.",
     )
     parser.add_argument("--stale-after", type=float, default=5)
+    parser.add_argument(
+        "--redis-url",
+        default=os.getenv("STRATEGY_REDIS_URL") or os.getenv("REDIS_URL") or "",
+        help="Optional Redis URL used only to publish snapshot-change notifications.",
+    )
+    parser.add_argument(
+        "--redis-channel",
+        default=os.getenv("STRATEGY_REDIS_CHANNEL", "strategy:state-changed"),
+        help="Redis Pub/Sub channel for strategy snapshot notifications.",
+    )
     parser.add_argument(
         "--journal-interval",
         type=float,

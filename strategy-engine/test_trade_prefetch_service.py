@@ -24,6 +24,35 @@ from trade_prefetch_service import (
 
 
 class TradePrefetchHelpersTest(unittest.TestCase):
+    @patch("trade_prefetch_service.redis_client")
+    def test_strategy_snapshot_notification_publishes_small_redis_event(
+        self,
+        redis_module,
+    ) -> None:
+        publisher = Mock()
+        redis_module.Redis.from_url.return_value = publisher
+        prefetcher = TradePrefetcher.__new__(TradePrefetcher)
+        prefetcher.args = SimpleNamespace(
+            redis_url="redis://redis:6379",
+            redis_channel="strategy:state-changed",
+        )
+        prefetcher.redis_publisher = None
+        prefetcher.redis_retry_at = 0.0
+        prefetcher.redis_last_error_at = 0.0
+
+        prefetcher._publish_signal_update({
+            "generated_at": 1000.25,
+            "state": "ACTIVE",
+            "signal_phase": "ACTIVE",
+            "large_payload": "not-published",
+        })
+
+        channel, raw = publisher.publish.call_args.args
+        payload = json.loads(raw)
+        self.assertEqual(channel, "strategy:state-changed")
+        self.assertEqual(payload["state"], "ACTIVE")
+        self.assertNotIn("large_payload", payload)
+
     def test_zerogex_primary_maps_to_engine_gex_contract(self) -> None:
         now = 1_785_162_000.0
         provider_time = datetime.fromtimestamp(

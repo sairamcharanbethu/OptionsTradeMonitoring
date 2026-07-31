@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { FastifyInstance } from 'fastify';
+import Redis from 'ioredis';
 import { getGlobalSettings } from '../lib/settings-utils';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 
@@ -17,6 +18,12 @@ export class StrategyEngineAdapter {
   private readonly dataDir: string;
   private timer: NodeJS.Timeout | null = null;
   private policyTimer: NodeJS.Timeout | null = null;
+  private refreshPromise: Promise<void> | null = null;
+  private refreshQueued = false;
+  private redisSubscriber: Redis | null = null;
+  private redisStatus: 'DISABLED' | 'CONNECTING' | 'UP' | 'DEGRADED' = 'DISABLED';
+  private lastRedisEventAt: string | null = null;
+  private lastRedisErrorLogAt = 0;
   private currentSignal: StrategySnapshot | null = null;
   private currentHealth: StrategySnapshot | null = null;
   private currentSetupId: string | null = null;
@@ -38,13 +45,15 @@ export class StrategyEngineAdapter {
     await this.restoreSetupIdentity();
     await this.publishPolicy();
     if (this.mode !== 'legacy') {
-      await this.poll();
+      await this.requestRefresh();
+      this.startRedisSubscription();
+      const fallbackIntervalMs = Math.max(500, Number(process.env.STRATEGY_FILE_POLL_INTERVAL_MS || 2000));
       this.timer = setInterval(() => {
-        this.poll().catch((err: any) => {
+        this.requestRefresh().catch((err: any) => {
           this.lastError = err.message || String(err);
           this.fastify.log.warn(`[StrategyEngineAdapter] ${this.lastError}`);
         });
-      }, 250);
+      }, fallbackIntervalMs);
     }
     this.policyTimer = setInterval(() => {
       this.publishPolicy().catch((err: any) => {
@@ -59,6 +68,10 @@ export class StrategyEngineAdapter {
     if (this.policyTimer) clearInterval(this.policyTimer);
     this.timer = null;
     this.policyTimer = null;
+    if (this.redisSubscriber) {
+      this.redisSubscriber.disconnect();
+      this.redisSubscriber = null;
+    }
   }
 
   public getCurrentState() {
@@ -71,8 +84,75 @@ export class StrategyEngineAdapter {
       ageSeconds,
       error: this.lastError,
       health: this.currentHealth,
-      signal: this.currentSignal
+      signal: this.currentSignal,
+      transport: {
+        redis: this.redisStatus,
+        lastRedisEventAt: this.lastRedisEventAt,
+        filePollFallback: true
+      }
     };
+  }
+
+  private startRedisSubscription(): void {
+    if (process.env.NODE_ENV === 'test') return;
+    const redisUrl = process.env.REDIS_URL;
+    if (!redisUrl) return;
+    const channel = process.env.STRATEGY_REDIS_CHANNEL || 'strategy:state-changed';
+    this.redisStatus = 'CONNECTING';
+    const subscriber = new Redis(redisUrl, {
+      lazyConnect: true,
+      maxRetriesPerRequest: null,
+      retryStrategy: (attempt) => Math.min(attempt * 250, 5000)
+    });
+    this.redisSubscriber = subscriber;
+    subscriber.on('ready', () => {
+      subscriber.subscribe(channel)
+        .then(() => {
+          this.redisStatus = 'UP';
+          this.fastify.log.info(`[StrategyEngineAdapter] Redis notifications subscribed on ${channel}.`);
+        })
+        .catch((err: any) => {
+          this.markRedisDegraded(`Redis subscribe failed: ${err.message || String(err)}`);
+        });
+    });
+    subscriber.on('message', (receivedChannel) => {
+      if (receivedChannel !== channel) return;
+      this.lastRedisEventAt = new Date().toISOString();
+      this.requestRefresh().catch((err: any) => {
+        this.lastError = err.message || String(err);
+        this.fastify.log.warn(`[StrategyEngineAdapter] Redis-triggered refresh failed: ${this.lastError}`);
+      });
+    });
+    subscriber.on('error', (err: any) => {
+      this.markRedisDegraded(`Redis notifications unavailable; file polling remains active: ${err.message || String(err)}`);
+    });
+    subscriber.connect().catch((err: any) => {
+      this.markRedisDegraded(`Redis notification connection deferred: ${err.message || String(err)}`);
+    });
+  }
+
+  private markRedisDegraded(message: string): void {
+    this.redisStatus = 'DEGRADED';
+    const now = Date.now();
+    if (now - this.lastRedisErrorLogAt < 60_000) return;
+    this.lastRedisErrorLogAt = now;
+    this.fastify.log.warn(`[StrategyEngineAdapter] ${message}`);
+  }
+
+  private requestRefresh(): Promise<void> {
+    if (this.refreshPromise) {
+      this.refreshQueued = true;
+      return this.refreshPromise;
+    }
+    this.refreshPromise = (async () => {
+      do {
+        this.refreshQueued = false;
+        await this.poll();
+      } while (this.refreshQueued);
+    })().finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
   }
 
   public async assertSignalExecutable(signalId: number): Promise<void> {
@@ -133,6 +213,10 @@ export class StrategyEngineAdapter {
     this.lastReceivedAt = new Date().toISOString();
     this.lastError = null;
     this.updateSetupIdentity(signal);
+    this.broadcast({
+      type: 'STRATEGY_SNAPSHOT_UPDATED',
+      data: this.getCurrentState()
+    });
 
     const eventFingerprint = this.eventFingerprint(signal);
     if (eventFingerprint === this.lastEventFingerprint) return;

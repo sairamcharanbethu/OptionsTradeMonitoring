@@ -952,7 +952,8 @@ const start = async () => {
           freshnessMs: strategyHealth.ageSeconds == null ? null : Math.round(strategyHealth.ageSeconds * 1000),
           providerFreshnessMs: strategyProviderAgeSeconds == null ? null : Math.round(strategyProviderAgeSeconds * 1000),
           lastSeen: strategyHealth.receivedAt,
-          lastError: strategyHealth.error || strategyHealth.health?.error || strategyHealth.health?.last_error || null
+          lastError: strategyHealth.error || strategyHealth.health?.error || strategyHealth.health?.last_error || null,
+          transport: strategyHealth.transport
         }, generatedAt),
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),

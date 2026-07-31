@@ -1318,6 +1318,11 @@ export const api = {
       providerFreshnessMs: number | null;
       lastSeen: string | null;
       lastError: string | null;
+      transport?: {
+        redis: 'DISABLED' | 'CONNECTING' | 'UP' | 'DEGRADED';
+        lastRedisEventAt: string | null;
+        filePollFallback: boolean;
+      };
     };
     scanner: AdapterHealth & {
       status: string;
@@ -1414,6 +1419,15 @@ export const api = {
   async getStrategyState(): Promise<StrategyEngineState> {
     const res = await authFetch(`${API_BASE}/signals/strategy-state?t=${Date.now()}`);
     if (!res.ok) throw new Error('Failed to fetch strategy state');
+    return res.json();
+  },
+
+  async getSignalRiskAssessment(id: number): Promise<SignalRiskAssessment> {
+    const res = await authFetch(`${API_BASE}/signals/${id}/risk-assessment`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to generate AI risk assessment');
+    }
     return res.json();
   },
 
@@ -1643,6 +1657,20 @@ export interface Signal {
   strategy_snapshot?: Record<string, any> | null;
 }
 
+export interface SignalRiskAssessment {
+  verdict: 'ALIGNED' | 'MIXED' | 'CONFLICTED' | 'WAIT';
+  summary: string;
+  likelyPath: string;
+  ifRight: string;
+  ifWrong: string;
+  action: string;
+  gexRead: string;
+  supportingFactors: string[];
+  riskFlags: string[];
+  maxPlannedLoss: number | null;
+  generatedAt: string;
+}
+
 export interface StrategyEngineState {
   mode: 'legacy' | 'shadow' | 'primary';
   setupId: string | null;
@@ -1651,6 +1679,11 @@ export interface StrategyEngineState {
   error: string | null;
   health: Record<string, any> | null;
   signal: Record<string, any> | null;
+  transport?: {
+    redis: 'DISABLED' | 'CONNECTING' | 'UP' | 'DEGRADED';
+    lastRedisEventAt: string | null;
+    filePollFallback: boolean;
+  };
 }
 
 export interface ScannerLog {

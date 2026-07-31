@@ -51,6 +51,8 @@ services:
       STRATEGY_MAX_TOTAL_DEBIT_DOLLARS: ${STRATEGY_MAX_TOTAL_DEBIT_DOLLARS:-500}
       STRATEGY_PREFERRED_CONTRACTS: ${STRATEGY_PREFERRED_CONTRACTS:-1}
       STRATEGY_MAX_CONTRACTS: ${STRATEGY_MAX_CONTRACTS:-1}
+      STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
+      STRATEGY_FILE_POLL_INTERVAL_MS: ${STRATEGY_FILE_POLL_INTERVAL_MS:-2000}
       VIX_TERM_STRUCTURE_MIN_RATIO: ${VIX_TERM_STRUCTURE_MIN_RATIO:-1.05}
     volumes:
       - strategy-data:/strategy-data
@@ -125,6 +127,9 @@ services:
       context: ./strategy-engine
       dockerfile: Dockerfile
     restart: unless-stopped
+    environment:
+      REDIS_URL: redis://trade-staging-redis:6379
+      STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
     volumes:
       - strategy-data:/data
     command:
@@ -187,6 +192,8 @@ services:
     depends_on:
       zerogex-prefetch:
         condition: service_started
+      trade-staging-redis:
+        condition: service_healthy
     networks:
       - ssmedia_ssmedia_net
       - default
