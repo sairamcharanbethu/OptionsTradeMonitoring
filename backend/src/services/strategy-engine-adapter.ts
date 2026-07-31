@@ -519,7 +519,7 @@ export class StrategyEngineAdapter {
          'SPY', $1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10, $11,
          $12, $13, $14, $15, $2, $16, $8, $17, $18, $19, $20
        )
-       ON CONFLICT (strategy_setup_id) DO UPDATE
+       ON CONFLICT (strategy_setup_id) WHERE strategy_setup_id IS NOT NULL DO UPDATE
        SET current_price = EXCLUDED.current_price,
            lifecycle_status = EXCLUDED.lifecycle_status,
            entry_allowed = EXCLUDED.entry_allowed,

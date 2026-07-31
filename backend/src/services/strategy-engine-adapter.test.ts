@@ -156,6 +156,10 @@ async function runTests() {
   }));
   const signalInsert = queries.find((query) => query.sql.includes('INSERT INTO signals'));
   const positionUpdate = queries.find((query) => query.sql.includes('UPDATE positions'));
+  assert(
+    signalInsert?.sql.includes('ON CONFLICT (strategy_setup_id) WHERE strategy_setup_id IS NOT NULL'),
+    'Strategy upsert must match the partial unique setup-id index used by PostgreSQL'
+  );
   assert(signalInsert?.values[5] === 554, 'Persisted strategy target must honor paper exit target 2');
   const persistedOption = JSON.parse(signalInsert?.values[13]);
   assert(persistedOption.planned_contracts === 2, 'Persisted signal must retain planned contract quantity');
