@@ -174,6 +174,15 @@ export interface Position {
   profit_trim_trade_id?: string;
   profit_trimmed_at?: string;
   notes?: string;
+  signal_id?: number;
+  strategy_setup_id?: string;
+  strategy_engine_version?: string;
+  strategy_lifecycle_status?: string;
+  strategy_policy_fingerprint?: string;
+  strategy_snapshot?: Record<string, any>;
+  strategy_managed?: boolean;
+  strategy_exit_requested_at?: string;
+  strategy_exit_reason?: string;
 }
 
 export interface ClosedTradesResponse {
@@ -1303,6 +1312,14 @@ export const api = {
       };
     };
     poller: AdapterHealth & { status: string; running: boolean };
+    strategyEngine?: AdapterHealth & {
+      status: string;
+      mode: 'legacy' | 'shadow' | 'primary';
+      connected: boolean;
+      providerFreshnessMs: number | null;
+      lastSeen: string | null;
+      lastError: string | null;
+    };
     scanner: AdapterHealth & {
       status: string;
       enabled?: boolean;
@@ -1534,6 +1551,13 @@ export interface OptionDetailsJSON {
   suggestedStopLoss?: number;
   suggestedTakeProfit?: number;
   usingTheoreticalPricing?: boolean;
+  planned_contracts?: number;
+  planned_limit_price?: number;
+  planned_total_debit?: number;
+  strategy_max_total_debit_dollars?: number;
+  targets?: number[];
+  exit_target_number?: number;
+  setupId?: string;
   gradeDiagnostics?: {
     baseScore: number;
     macroScore: number;

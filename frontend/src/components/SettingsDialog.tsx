@@ -207,7 +207,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
     // Day Trading State
     const [dayTradingEnabled, setDayTradingEnabled] = useState(true);
-    const [dayTradingSymbols, setDayTradingSymbols] = useState('QQQ,SPY');
+    const [dayTradingSymbols, setDayTradingSymbols] = useState('SPY');
     const [strategyMaxTotalDebitDollars, setStrategyMaxTotalDebitDollars] = useState('500');
     const [strategyPreferredContracts, setStrategyPreferredContracts] = useState('1');
     const [strategyMaxContracts, setStrategyMaxContracts] = useState('1');
@@ -338,7 +338,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setMaxCorrelatedPositions(data.max_correlated_positions || '1');
             setShadowTradingEnabled(data.shadow_trading_enabled === 'true');
             setExpiryMode(data.day_trading_expiry_mode || 'adaptive');
-            setOrderType(data.order_type || 'LIMIT');
+            setOrderType('LIMIT');
             setEntrySlippagePct(data.entry_slippage_pct || '3');
             setTakeProfitPct(data.take_profit_pct || '');
             setStopLossEngineEnabled(data.stop_loss_engine_enabled !== 'false');
@@ -347,7 +347,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
-            setDayTradingSymbols(data.day_trading_symbols || 'QQQ,SPY');
+            setDayTradingSymbols(data.day_trading_symbols || 'SPY');
             setStrategyMaxTotalDebitDollars(data.strategy_max_total_debit_dollars || '500');
             setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
             setStrategyMaxContracts(data.strategy_max_contracts || '1');
@@ -564,7 +564,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     }
 
     async function handleSaveSettings() {
-        const normalizedSymbols = SUPPORTED_DAY_TRADING_SYMBOLS.filter(symbol => parseDayTradingSymbols(dayTradingSymbols).includes(symbol));
+        const normalizedSymbols: DayTradingSymbol[] = ['SPY'];
         if (normalizedSymbols.length === 0) {
             alert('Enable at least one day-trading symbol.');
             return;
@@ -595,7 +595,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 max_correlated_positions: maxCorrelatedPositions,
                 shadow_trading_enabled: shadowTradingEnabled ? 'true' : 'false',
                 day_trading_expiry_mode: expiryMode,
-                order_type: orderType,
+                order_type: 'LIMIT',
                 entry_slippage_pct: entrySlippagePct,
                 take_profit_pct: takeProfitPct,
                 stop_loss_engine_enabled: stopLossEngineEnabled ? 'true' : 'false',
@@ -798,19 +798,19 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                         <TabsContent value="daytrading" className="m-0 space-y-5">
                             <div>
                                 <h3 className="text-lg font-semibold">Day trading</h3>
-                                <p className="text-sm text-muted-foreground">Scanner rules, order sizing, and execution routing.</p>
+                                <p className="text-sm text-muted-foreground">SPY strategy controls, execution mode, and user risk ceilings.</p>
                             </div>
                             <div className="grid gap-5">
                                 <section className="rounded-lg border bg-card p-4 space-y-4">
                                     <div>
-                                        <h4 className="text-sm font-semibold">Scanner</h4>
-                                        <p className="text-[10px] text-muted-foreground">Symbols, strike selection, confidence threshold, and trading window.</p>
+                                        <h4 className="text-sm font-semibold">Strategy signal</h4>
+                                        <p className="text-[10px] text-muted-foreground">The primary signal-only-v2 strategy monitors SPY and selects its own contract.</p>
                                     </div>
 
                                 <div className="grid gap-2">
                                     <div className="flex items-center justify-between">
                                         <Label htmlFor="dtEnabledToggle" className="flex items-center gap-2">
-                                            Day Trading Scanner
+                                            Day Trading
                                             {dayTradingEnabled ? (
                                                 <Badge variant="default" className="text-[10px] h-5 bg-emerald-600">Enabled</Badge>
                                             ) : (
@@ -826,7 +826,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="grid gap-2 rounded-md border border-border/70 bg-muted/10 p-3">
+                                        <div className="hidden">
                                             <div className="flex items-center justify-between gap-3">
                                                 <div>
                                                     <Label>Trading Symbols</Label>
@@ -851,7 +851,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             </div>
                                         </div>
 
-                                        <div className="grid gap-2">
+                                        <div className="hidden">
                                             <Label htmlFor="dtMinScore">Minimum Setup Score</Label>
                                             <Input
                                                 id="dtMinScore"
@@ -862,7 +862,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             />
                                         </div>
 
-                                        <div className="grid gap-2">
+                                        <div className="hidden">
                                             <Label htmlFor="dtStrikeOffset">Options Strike Offset</Label>
                                             <Select value={strikeOffset} onValueChange={setStrikeOffset}>
                                                 <SelectTrigger>
@@ -891,7 +891,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <p className="text-[10px] text-muted-foreground">Global signal-only-v2 contract-selection budget.</p>
                                         </div>
 
-                                        <div className="grid grid-cols-2 gap-3">
+                                        <div className="grid grid-cols-2 gap-3 md:col-span-2">
                                             <div className="grid gap-2">
                                                 <Label htmlFor="strategyPreferredContracts">Preferred Contracts</Label>
                                                 <Input
@@ -918,7 +918,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             </div>
                                         </div>
 
-                                        <div className="grid grid-cols-2 gap-3">
+                                        <div className="hidden">
                                             <div className="grid gap-2">
                                                 <Label htmlFor="dtStartTime">Start ET</Label>
                                                 <Input
@@ -944,23 +944,23 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 <section className="rounded-lg border bg-card p-4 space-y-4">
                                     <div>
                                         <h4 className="text-sm font-semibold">Execution and risk</h4>
-                                        <p className="text-[10px] text-muted-foreground">Route orders and cap exposure before a signal can be executed.</p>
+                                        <p className="text-[10px] text-muted-foreground">Choose simulation or live routing, then set the limits the strategy cannot exceed.</p>
                                     </div>
 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
-                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Broker execution</h5>
-                                            <p className="text-[10px] text-muted-foreground">Choose where approved signals are sent.</p>
+                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Execution mode</h5>
+                                            <p className="text-[10px] text-muted-foreground">Every order still requires explicit review in the Day Trading page.</p>
                                         </div>
                                         <div className="grid gap-2">
-                                            <Label htmlFor="executionBroker">Execution Broker</Label>
+                                            <Label htmlFor="executionBroker">Order destination</Label>
                                             <Select value={executionBroker} onValueChange={handleExecutionBrokerChange}>
                                                 <SelectTrigger id="executionBroker">
                                                     <SelectValue placeholder="Select Broker" />
                                                 </SelectTrigger>
                                                 <SelectContent>
-                                                    <SelectItem value="none">No broker execution (Simulated)</SelectItem>
-                                                    <SelectItem value="wealthsimple_snaptrade">Wealthsimple via SnapTrade (Live)</SelectItem>
+                                                    <SelectItem value="none">Simulation — live orders off</SelectItem>
+                                                    <SelectItem value="wealthsimple_snaptrade">Wealthsimple — live orders</SelectItem>
                                                 </SelectContent>
                                             </Select>
                                             {executionBroker === 'wealthsimple_snaptrade' && (
@@ -990,7 +990,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 </div>
                                             )}
                                             {isAdmin && (
-                                                <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
+                                                <div className="hidden">
                                                     <div className="flex items-center justify-between gap-3">
                                                         <Label htmlFor="mcpTradingEnabled" className="flex flex-wrap items-center gap-2">
                                                             MCP Trading Endpoint
@@ -1033,7 +1033,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 />
                                             </div>
                                             <div className="grid gap-2">
-                                                <Label htmlFor="contractsPerTrade">Contracts Per Trade</Label>
+                                                <Label htmlFor="contractsPerTrade">Maximum Contracts</Label>
                                                 <Input
                                                     id="contractsPerTrade"
                                                     type="number"
@@ -1041,6 +1041,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     value={contractsPerTrade}
                                                     onChange={(e) => setContractsPerTrade(e.target.value)}
                                                 />
+                                                <p className="text-[10px] text-muted-foreground">The submitted quantity is the lower of this ceiling and the strategy plan.</p>
                                             </div>
                                             <div className="grid gap-2">
                                                 <Label htmlFor="maxDailyLossDollars">Daily Loss Limit ($)</Label>
@@ -1059,20 +1060,20 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <Input id="lossCooldownMinutes" type="number" min="1" value={lossCooldownMinutes} onChange={(e) => setLossCooldownMinutes(e.target.value)} />
                                             </div>
                                             <div className="grid gap-2">
-                                                <Label htmlFor="maxCorrelatedPositions">Max SPY/QQQ Correlated Positions</Label>
+                                                <Label htmlFor="maxCorrelatedPositions">Maximum SPY Positions</Label>
                                                 <Input id="maxCorrelatedPositions" type="number" min="1" value={maxCorrelatedPositions} onChange={(e) => setMaxCorrelatedPositions(e.target.value)} />
                                             </div>
                                         </div>
                                         <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
                                             <div className="flex items-center justify-between gap-3">
-                                                <Label htmlFor="shadowTradingEnabled">Shadow Trading Mode</Label>
+                                                <Label htmlFor="shadowTradingEnabled">Force Shadow Simulation</Label>
                                                 <Switch id="shadowTradingEnabled" checked={shadowTradingEnabled} onCheckedChange={setShadowTradingEnabled} />
                                             </div>
-                                            <p className="text-[10px] text-muted-foreground">Runs the live signal and risk path but creates simulated positions only. No broker order is sent.</p>
+                                            <p className="text-[10px] text-muted-foreground">Overrides the selected destination and creates simulated positions only. No broker order is sent.</p>
                                         </div>
                                     </div>
 
-                                    <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
+                                    <div className="hidden">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Expiry policy</h5>
                                             <p className="text-[10px] text-muted-foreground">Control whether the scanner uses same-day expiry or its safer late-day 1DTE fallback.</p>
@@ -1089,24 +1090,16 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
-                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entry rules</h5>
-                                            <p className="text-[10px] text-muted-foreground">Control entry order type and slippage limits.</p>
+                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entry protection</h5>
+                                            <p className="text-[10px] text-muted-foreground">Entries use fresh IBKR bid/ask data and a server-enforced protected limit.</p>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <div className="grid gap-2">
-                                                <Label htmlFor="orderType">Entry Order Type</Label>
-                                                <Select value={orderType} onValueChange={setOrderType}>
-                                                    <SelectTrigger id="orderType">
-                                                        <SelectValue placeholder="Select Order Type" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectItem value="LIMIT">Limit</SelectItem>
-                                                        <SelectItem value="MARKET">Market</SelectItem>
-                                                    </SelectContent>
-                                                </Select>
+                                                <Label>Order type</Label>
+                                                <div className="rounded-md border bg-background/70 px-3 py-2 text-sm font-medium">Protected limit only</div>
                                             </div>
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="entrySlippagePct">Entry Slippage Cap (%)</Label>
+                                            <div className="hidden">
+                                                <Label htmlFor="entrySlippagePct">Legacy signal move tolerance (%)</Label>
                                                 <Input
                                                     id="entrySlippagePct"
                                                     type="number"
@@ -1114,8 +1107,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     step="0.5"
                                                     value={entrySlippagePct}
                                                     onChange={(e) => setEntrySlippagePct(e.target.value)}
-                                                    disabled={orderType !== 'LIMIT'}
                                                 />
+                                                <p className="text-[10px] text-muted-foreground">This does not replace the live protected-limit and debit checks.</p>
                                             </div>
                                         </div>
                                     </div>
@@ -1123,9 +1116,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Risk exits</h5>
-                                            <p className="text-[10px] text-muted-foreground">Tune take-profit behavior and automatic stop-loss exits.</p>
+                                            <p className="text-[10px] text-muted-foreground">Control emergency stop automation for this user.</p>
                                         </div>
-                                        <div className="grid gap-2">
+                                        <div className="hidden">
                                             <Label htmlFor="takeProfitPct">Premium Take Profit Override (%)</Label>
                                             <Input
                                                 id="takeProfitPct"
@@ -1159,14 +1152,14 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             </div>
                                             <p className={`text-[10px] ${stopLossEngineEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
                                                 {stopLossEngineEnabled
-                                                    ? 'Stop-loss exits can be submitted automatically for this user. Take-profit monitoring also remains active.'
-                                                    : 'Automatic stop-loss exits are paused for this user only. Take-profit and trim exits remain active.'}
+                                                    ? 'Emergency premium and underlying stops can submit exits automatically. Strategy lifecycle exits remain active.'
+                                                    : 'Emergency stop automation is paused for this user. Terminal strategy lifecycle and target exits remain active.'}
                                             </p>
                                         </div>
                                     </div>
                                 </section>
 
-                                <section className="rounded-lg border bg-card p-4 space-y-4">
+                                <section className="hidden">
                                     <div className="flex items-center justify-between">
                                         <Label htmlFor="dtAiEnabled" className="flex items-center gap-2">
                                             Enable AI Coach Commentary
