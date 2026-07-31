@@ -239,6 +239,13 @@ const Metric = ({
   </div>
 );
 
+const CompactRiskMetric = ({ label, value, tone = 'text-zinc-100' }: { label: string; value: string; tone?: string }) => (
+  <div className="min-w-0 rounded-md bg-zinc-950/45 px-2 py-1.5 sm:bg-transparent sm:px-2">
+    <div className="truncate text-[9px] font-medium uppercase tracking-[0.1em] text-zinc-600">{label}</div>
+    <div className={`mt-0.5 truncate font-mono text-xs font-semibold tabular-nums ${tone}`} title={value}>{value}</div>
+  </div>
+);
+
 const Level = ({
   label,
   value,
@@ -995,16 +1002,16 @@ export default function DayTradingTerminal() {
         />
       )}
 
-      <section className="rounded-xl border border-zinc-800 bg-[#101216] px-4 py-3 sm:px-5">
-        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-x-6">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Hard risk limits</div>
-          <div className="grid w-full flex-1 grid-cols-2 gap-x-4 sm:grid-cols-3 sm:gap-x-5 lg:grid-cols-6">
-            <Metric label="Premium at risk" value={orderDebit > 0 ? money(orderDebit) : '—'} tone="text-amber-200" />
-            <Metric label="Debit ceiling" value={strategyDebitLimit > 0 ? money(strategyDebitLimit) : '—'} />
-            <Metric label="Quantity" value={`${orderQuantity}`} detail={`strategy planned ${plannedContracts || '—'}`} />
-            <Metric label="Invalidation" value={money(setup?.invalidation || currentSignal?.stop_loss)} tone="text-rose-200" />
-            <Metric label="Strategy age" value={relativeAge(snapshotAge)} tone={freshSnapshot ? 'text-emerald-300' : 'text-rose-300'} />
-            <Metric label="GEX age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} tone={Number.isFinite(gexAge) && !gexFresh ? 'text-rose-300' : 'text-zinc-100'} />
+      <section className="rounded-lg border border-zinc-800 bg-[#101216] px-2.5 py-2 sm:px-3">
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+          <div className="shrink-0 px-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Hard risk</div>
+          <div className="grid min-w-0 flex-1 grid-cols-3 gap-1 sm:grid-cols-6 sm:gap-0 sm:divide-x sm:divide-zinc-800">
+            <CompactRiskMetric label="Premium risk" value={orderDebit > 0 ? money(orderDebit) : '—'} tone="text-amber-200" />
+            <CompactRiskMetric label="Debit ceiling" value={strategyDebitLimit > 0 ? money(strategyDebitLimit) : '—'} />
+            <CompactRiskMetric label="Quantity" value={`${orderQuantity} · plan ${plannedContracts || '—'}`} />
+            <CompactRiskMetric label="Invalidation" value={money(setup?.invalidation || currentSignal?.stop_loss)} tone="text-rose-200" />
+            <CompactRiskMetric label="Strategy age" value={relativeAge(snapshotAge)} tone={freshSnapshot ? 'text-emerald-300' : 'text-rose-300'} />
+            <CompactRiskMetric label="GEX age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} tone={Number.isFinite(gexAge) && !gexFresh ? 'text-rose-300' : 'text-zinc-100'} />
           </div>
         </div>
       </section>

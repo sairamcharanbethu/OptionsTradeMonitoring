@@ -1,5 +1,5 @@
 import '@fastify/postgres';
-import { SnaptradeService } from './snaptrade-service';
+import { SnaptradeService, SnapTradeRateLimitError } from './snaptrade-service';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -153,6 +153,43 @@ async function testPlaceOptionOrderRejectsInvalidLimitPriceBeforeBrokerCall() {
   assert(forceCalled === false, 'Should not call broker with invalid limit price');
 }
 
+async function testPlaceOptionOrderReturnsActionableRateLimitError() {
+  const service = new SnaptradeService(createFastifyMock());
+
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: {
+      trading: {
+        placeForceOrder: async () => {
+          throw new Error('Request failed after 3 retries due to 429 (rate limit) errors.');
+        }
+      }
+    }
+  });
+
+  let caught: any = null;
+  try {
+    await service.placeOptionOrder(
+      7,
+      'snaptrade-account',
+      'SPY260731C00745000',
+      'BUY_TO_OPEN',
+      1,
+      'LIMIT',
+      '1.42'
+    );
+  } catch (err: any) {
+    caught = err;
+  }
+
+  assert(caught instanceof SnapTradeRateLimitError, 'Should return a typed SnapTrade rate-limit error');
+  assert(caught.statusCode === 429, `Should expose HTTP 429, got ${caught.statusCode}`);
+  assert(caught.code === 'SNAPTRADE_RATE_LIMITED', `Should expose a stable error code, got ${caught.code}`);
+  assert(caught.message.includes('Check Wealthsimple'), 'Should tell the trader to reconcile at Wealthsimple before retrying');
+  assert(caught.message.includes('wait 60 seconds'), 'Should include the entry retry cooldown');
+}
+
 async function testOrderStatusRepairsClosedAcceptedEntry() {
   const localClosedPosition = {
     id: 42,
@@ -221,6 +258,7 @@ async function runTests() {
   await testPlaceOptionOrderUsesSingleLegForceOrderPayload();
   await testPlaceOptionOrderUsesLimitPriceForForceOrder();
   await testPlaceOptionOrderRejectsInvalidLimitPriceBeforeBrokerCall();
+  await testPlaceOptionOrderReturnsActionableRateLimitError();
   await testOrderStatusRepairsClosedAcceptedEntry();
   console.log('All SnaptradeService order payload tests passed!');
 }

@@ -8,6 +8,22 @@ import { TradeLifecycleService } from './trade-lifecycle-service';
 import { getSettingsWithGlobalFallback, invalidateSettingsCache } from '../lib/settings-utils';
 
 const SNAPTRADE_API_TIMEOUT_MS = Number(process.env.SNAPTRADE_API_TIMEOUT_MS || 15000);
+const SNAPTRADE_ORDER_RATE_LIMIT_COOLDOWN_SECONDS = Math.min(
+    300,
+    Math.max(15, Number(process.env.SNAPTRADE_ORDER_RATE_LIMIT_COOLDOWN_SECONDS || 60))
+);
+
+export class SnapTradeRateLimitError extends Error {
+    readonly code = 'SNAPTRADE_RATE_LIMITED';
+    readonly statusCode = 429;
+    readonly retryAfterSeconds: number;
+
+    constructor(message: string, retryAfterSeconds = SNAPTRADE_ORDER_RATE_LIMIT_COOLDOWN_SECONDS) {
+        super(message);
+        this.name = 'SnapTradeRateLimitError';
+        this.retryAfterSeconds = retryAfterSeconds;
+    }
+}
 
 export class SnaptradeService {
     private fastify: FastifyInstance;
@@ -84,6 +100,23 @@ export class SnaptradeService {
 
     private snaptradeRequestOptions(timeoutMs = SNAPTRADE_API_TIMEOUT_MS) {
         return { timeout: timeoutMs };
+    }
+
+    private orderRateLimitKey(userId: number) {
+        return `snaptrade:order-rate-limit:user:${userId}`;
+    }
+
+    private isRateLimitError(err: any) {
+        const status = Number(err?.statusCode || err?.status || err?.response?.status || err?.responseBody?.status);
+        const detail = String(err?.responseBody?.detail || err?.message || '').toLowerCase();
+        return status === 429 || detail.includes('429') || detail.includes('rate limit');
+    }
+
+    private rateLimitMessage(isOpeningOrder: boolean, retryAfterSeconds = SNAPTRADE_ORDER_RATE_LIMIT_COOLDOWN_SECONDS) {
+        const retryGuidance = isOpeningOrder
+            ? `then wait ${retryAfterSeconds} seconds before submitting this entry again`
+            : 'before retrying this exit';
+        return `SnapTrade rate limit reached; no accepted order was returned. Check Wealthsimple for an existing order ${retryGuidance}.`;
     }
 
     async generateConnectionUrl(userId: number) {
@@ -1306,6 +1339,17 @@ export class SnaptradeService {
         limitPrice?: string,
         options: { skipImpact?: boolean } = {}
     ) {
+        const isOpeningOrder = action === 'BUY_TO_OPEN' || action === 'SELL_TO_OPEN';
+        if (isOpeningOrder) {
+            const cooldownUntil = await redis.get(this.orderRateLimitKey(userId));
+            const remainingSeconds = cooldownUntil
+                ? Math.max(1, Math.ceil((new Date(cooldownUntil).getTime() - Date.now()) / 1000))
+                : 0;
+            if (remainingSeconds > 0) {
+                throw new SnapTradeRateLimitError(this.rateLimitMessage(true, remainingSeconds), remainingSeconds);
+            }
+        }
+
         const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
         const snaptradeOptionSymbol = this.toSnaptradeOccSymbol(optionSymbol);
         const snaptradeAccountId = this.toSnaptradeAccountId(accountId);
@@ -1359,6 +1403,19 @@ export class SnaptradeService {
                 }
             };
         } catch (err: any) {
+            if (err instanceof SnapTradeRateLimitError) throw err;
+            if (this.isRateLimitError(err)) {
+                if (isOpeningOrder) {
+                    const cooldownUntil = new Date(Date.now() + SNAPTRADE_ORDER_RATE_LIMIT_COOLDOWN_SECONDS * 1000).toISOString();
+                    await redis.set(
+                        this.orderRateLimitKey(userId),
+                        cooldownUntil,
+                        SNAPTRADE_ORDER_RATE_LIMIT_COOLDOWN_SECONDS
+                    );
+                }
+                this.fastify.log.warn(`[SnaptradeService] Order submission rate limited for user ${userId}`);
+                throw new SnapTradeRateLimitError(this.rateLimitMessage(isOpeningOrder));
+            }
             this.fastify.log.error(`[SnaptradeService] Option order execution failed: ${err.message}`);
             if (err.responseBody) {
                 this.fastify.log.error(`[SnaptradeService] API response body: ${JSON.stringify(err.responseBody)}`);
