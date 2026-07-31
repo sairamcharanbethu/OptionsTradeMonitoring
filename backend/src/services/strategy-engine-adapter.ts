@@ -13,6 +13,7 @@ type StrategySnapshot = Record<string, any>;
 
 const ACTIVE_STATES = new Set(['ARMED', 'ACTIVE', 'MANAGE', 'EXTENDED']);
 const TERMINAL_STATES = new Set(['COMPLETED', 'INVALIDATED', 'TRACKING_ABORTED', 'FAILED']);
+const MAX_GEX_PROVIDER_AGE_SECONDS = 120;
 
 export class StrategyEngineAdapter {
   private readonly mode: StrategyEngineMode = 'primary';
@@ -197,7 +198,7 @@ export class StrategyEngineAdapter {
       throw this.conflict('The strategy snapshot is stale');
     }
     const gexAge = this.gexAgeSeconds(live);
-    if (gexAge === null || gexAge < 0 || gexAge > 20) {
+    if (!this.authoritativeGexFresh(live, gexAge)) {
       throw this.conflict('The authoritative GEX snapshot is stale');
     }
     const quoteAge = this.optionQuoteAgeSeconds(live);
@@ -228,7 +229,7 @@ export class StrategyEngineAdapter {
       throw this.conflict('The strategy snapshot is stale');
     }
     const gexAge = this.gexAgeSeconds(live);
-    if (gexAge === null || gexAge < 0 || gexAge > 20) {
+    if (!this.authoritativeGexFresh(live, gexAge)) {
       throw this.conflict('The authoritative GEX snapshot is stale');
     }
     const quoteAge = this.optionQuoteAgeSeconds(live);
@@ -742,6 +743,13 @@ export class StrategyEngineAdapter {
     if (Number.isFinite(age)) return age;
     const timestamp = Number(signal.gex?.provider_timestamp || signal.gex?.fetched_at);
     return Number.isFinite(timestamp) && timestamp > 0 ? Date.now() / 1000 - timestamp : null;
+  }
+
+  private authoritativeGexFresh(signal: StrategySnapshot, age = this.gexAgeSeconds(signal)): boolean {
+    if (age === null || age < 0 || age > MAX_GEX_PROVIDER_AGE_SECONDS) return false;
+    if (signal.gex?.error) return false;
+    if (signal.zerogex_shadow?.fresh === false) return false;
+    return true;
   }
 
   private optionQuoteAgeSeconds(signal: StrategySnapshot): number | null {

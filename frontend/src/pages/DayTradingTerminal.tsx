@@ -39,6 +39,7 @@ import {
 
 type LifecycleTone = 'idle' | 'armed' | 'active' | 'manage' | 'complete' | 'blocked';
 type ServicesHealth = Awaited<ReturnType<typeof api.getServicesHealth>>;
+const MAX_GEX_PROVIDER_AGE_SECONDS = 120;
 
 const money = (value: unknown, decimals = 2) => {
   const number = Number(value);
@@ -567,11 +568,16 @@ export default function DayTradingTerminal() {
   const currentStrategy = strategyDisplay(currentStrategyCode);
   const primaryGex = strategySignal?.gex || currentSignal?.gex || strategySignal?.zerogex_shadow || {};
   const gexAge = gexAgeSeconds(strategySignal || currentSignal?.strategy_snapshot || null);
+  const gexFresh = Number.isFinite(gexAge)
+    && gexAge >= 0
+    && gexAge <= MAX_GEX_PROVIDER_AGE_SECONDS
+    && !primaryGex.error
+    && strategySignal?.zerogex_shadow?.fresh !== false;
   const staleReviewReason = !freshSnapshot
     ? 'Strategy snapshot is stale'
     : !Number.isFinite(gexAge)
       ? 'GEX snapshot age is unavailable'
-      : gexAge > 20
+      : !gexFresh
       ? 'GEX snapshot is stale'
       : null;
   const reviewDataFresh = !staleReviewReason;
@@ -710,7 +716,7 @@ export default function DayTradingTerminal() {
     },
     {
       label: 'ZeroGEX',
-      status: Number.isFinite(gexAge) ? gexAge <= 20 ? 'UP' : 'DEGRADED' : 'DOWN',
+      status: Number.isFinite(gexAge) ? gexFresh ? 'UP' : 'DEGRADED' : 'DOWN',
       age: Number.isFinite(gexAge) ? `${number(gexAge, 1)}s old` : 'age unavailable',
       detail: Number.isFinite(gexAge)
         ? `${String(primaryGex.regime || primaryGex.gamma_regime || 'GEX context')} · authoritative provider timestamp`
@@ -998,7 +1004,7 @@ export default function DayTradingTerminal() {
             <Metric label="Quantity" value={`${orderQuantity}`} detail={`strategy planned ${plannedContracts || '—'}`} />
             <Metric label="Invalidation" value={money(setup?.invalidation || currentSignal?.stop_loss)} tone="text-rose-200" />
             <Metric label="Strategy age" value={relativeAge(snapshotAge)} tone={freshSnapshot ? 'text-emerald-300' : 'text-rose-300'} />
-            <Metric label="GEX age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} tone={Number.isFinite(gexAge) && gexAge > 20 ? 'text-rose-300' : 'text-zinc-100'} />
+            <Metric label="GEX age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} tone={Number.isFinite(gexAge) && !gexFresh ? 'text-rose-300' : 'text-zinc-100'} />
           </div>
         </div>
       </section>

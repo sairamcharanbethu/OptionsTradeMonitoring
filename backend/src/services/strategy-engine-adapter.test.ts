@@ -141,11 +141,19 @@ async function runTests() {
   });
   const freshReview = await reviewAdapter.assertSignalReviewable(7);
   assert(freshReview.optionQuoteFresh, 'Fresh option quote must allow a current AI review');
+  reviewAdapter.currentSignal.state = 'ACTIVE';
+  reviewAdapter.currentSignal.lifecycle = { entry_allowed: true };
+  reviewAdapter.currentSignal.gex.provider_age_seconds = 40.1;
+  await reviewAdapter.assertSignalExecutable(7);
+  reviewAdapter.currentSignal.gex.provider_age_seconds = 120.1;
+  await reviewAdapter.assertSignalExecutable(7).then(
+    () => { throw new Error('GEX older than the provider contract must block execution'); },
+    (error: Error) => assert(error.message.includes('GEX'), 'Stale GEX must return the authoritative freshness error')
+  );
+  reviewAdapter.currentSignal.gex.provider_age_seconds = 2;
   reviewAdapter.currentSignal.call_setup.option.quote_age_seconds = null;
   const missingQuoteReview = await reviewAdapter.assertSignalReviewable(7);
   assert(!missingQuoteReview.optionQuoteFresh, 'Missing option quote must downgrade rather than suppress AI review');
-  reviewAdapter.currentSignal.state = 'ACTIVE';
-  reviewAdapter.currentSignal.lifecycle = { entry_allowed: true };
   await reviewAdapter.assertSignalExecutable(7).then(
     () => { throw new Error('Missing option quote age must block execution'); },
     (error: Error) => assert(error.message.includes('quote'), 'Execution must report the stale or missing option quote')
