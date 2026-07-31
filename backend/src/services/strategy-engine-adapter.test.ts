@@ -101,11 +101,16 @@ async function runTests() {
   reviewAdapter.fastify.pg.query = async () => ({
     rows: [{ strategy_setup_id: reviewAdapter.currentSetupId }]
   });
-  await reviewAdapter.assertSignalReviewable(7);
+  const freshReview = await reviewAdapter.assertSignalReviewable(7);
+  assert(freshReview.optionQuoteFresh, 'Fresh option quote must allow a current AI review');
   reviewAdapter.currentSignal.call_setup.option.quote_age_seconds = null;
-  await reviewAdapter.assertSignalReviewable(7).then(
-    () => { throw new Error('Missing option quote age must block AI review'); },
-    (error: Error) => assert(error.message.includes('quote'), 'Missing quote age must produce a clear review blocker')
+  const missingQuoteReview = await reviewAdapter.assertSignalReviewable(7);
+  assert(!missingQuoteReview.optionQuoteFresh, 'Missing option quote must downgrade rather than suppress AI review');
+  reviewAdapter.currentSignal.state = 'ACTIVE';
+  reviewAdapter.currentSignal.lifecycle = { entry_allowed: true };
+  await reviewAdapter.assertSignalExecutable(7).then(
+    () => { throw new Error('Missing option quote age must block execution'); },
+    (error: Error) => assert(error.message.includes('quote'), 'Execution must report the stale or missing option quote')
   );
 
   const queries: Array<{ sql: string; values: any[] }> = [];

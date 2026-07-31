@@ -1577,6 +1577,7 @@ def _evaluate_option_contract(
     mid, spread = contract.get("mid"), contract.get("spread_pct")
     volume = contract.get("volume")
     delta = contract.get("delta")
+    quote_age = contract.get("quote_age_seconds")
     selected_expiry = str(options.get("expiry") or "")
     expiry_mode = str(options.get("expiry_mode") or "")
     options_generated_at = options.get("generated_at")
@@ -1591,6 +1592,10 @@ def _evaluate_option_contract(
             reasons.append("next-listed expiry is not selected before 1:00 PM ET")
     if not (_number(bid) and _number(ask) and bid > 0 and ask >= bid):
         reasons.append("live bid/ask quote is unavailable")
+    if _number(quote_age) is None or float(quote_age) < 0:
+        reasons.append("option quote timestamp is unavailable")
+    elif float(quote_age) > 15:
+        reasons.append(f"option quote is {float(quote_age):.1f}s old")
     if not (_number(mid) and mid > 0):
         reasons.append("mid premium is unavailable")
     if not _number(spread):

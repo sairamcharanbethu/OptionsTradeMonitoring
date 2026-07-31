@@ -263,6 +263,7 @@ export default function DayTradingTerminal() {
       ? strategySignal?.call_setup
       : null;
   const option = currentSignal?.option_details || setup?.option || {};
+  const quoteAge = setup?.option?.quote_age_seconds == null ? Number.NaN : Number(setup.option.quote_age_seconds);
   const lifecycleData = strategySignal?.lifecycle || currentSignal?.strategy_snapshot?.lifecycle || {};
   const targets = Array.isArray(option.targets)
     ? option.targets
@@ -306,6 +307,7 @@ export default function DayTradingTerminal() {
     lifecycle !== 'ACTIVE' ? `Lifecycle is ${lifecycle}` : null,
     !entryAllowed ? 'Entry window is not open' : null,
     !freshSnapshot ? 'Strategy snapshot is stale' : null,
+    !Number.isFinite(quoteAge) || quoteAge > 15 ? 'Selected option quote is stale or missing' : null,
     usageRemaining <= 0 ? 'Daily trade limit reached' : null,
     plannedContracts <= 0 ? 'Strategy has no executable contract quantity' : null,
     ...liveMissing,
@@ -323,14 +325,11 @@ export default function DayTradingTerminal() {
   const currentTone = lifecycleTone(lifecycle);
   const primaryGex = strategySignal?.gex || strategySignal?.zerogex_decision || currentSignal?.gex || {};
   const gexAge = primaryGex.provider_age_seconds == null ? Number.NaN : Number(primaryGex.provider_age_seconds);
-  const quoteAge = setup?.option?.quote_age_seconds == null ? Number.NaN : Number(setup.option.quote_age_seconds);
   const staleReviewReason = !freshSnapshot
     ? 'Strategy snapshot is stale'
     : Number.isFinite(gexAge) && gexAge > 20
       ? 'GEX snapshot is stale'
-      : !Number.isFinite(quoteAge) || quoteAge > 15
-        ? 'Option quote is stale or missing'
-        : null;
+      : null;
   const reviewDataFresh = !staleReviewReason;
   const recentSignals = signals
     .filter(signal => signal.symbol === 'SPY' && signal.engine_version === 'signal-only-v2')
@@ -694,6 +693,12 @@ export default function DayTradingTerminal() {
             </Button>
           </div>
         </div>
+
+        {(!Number.isFinite(quoteAge) || quoteAge > 15) && (
+          <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-950/10 px-3 py-3 text-xs text-amber-200">
+            Option quote is stale or missing. AI can explain the directional setup, but its verdict remains WAIT and execution stays blocked.
+          </div>
+        )}
 
         {settings.day_trading_ai_enabled === 'false' ? (
           <div className="mt-4 rounded-lg border border-dashed border-zinc-800 px-3 py-4 text-center text-xs text-zinc-500">

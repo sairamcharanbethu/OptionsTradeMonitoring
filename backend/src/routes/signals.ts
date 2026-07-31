@@ -50,7 +50,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     if (!strategyEngine?.assertSignalReviewable) {
       return reply.code(503).send({ error: 'Live strategy validation is unavailable' });
     }
-    await strategyEngine.assertSignalReviewable(signal.id);
+    const reviewFreshness = await strategyEngine.assertSignalReviewable(signal.id);
 
     const cacheKey = `AI_RISK_REVIEW:${userId}:${signal.id}`;
     const cached = await redis.get(cacheKey);
@@ -93,8 +93,10 @@ ${JSON.stringify({
     ticker: option.ticker,
     expiry: option.expiry,
     strike: option.strike,
-    bid: option.bid,
-    ask: option.ask,
+    quoteFresh: reviewFreshness.optionQuoteFresh,
+    quoteAgeSeconds: reviewFreshness.optionQuoteAgeSeconds,
+    bid: reviewFreshness.optionQuoteFresh ? option.bid : null,
+    ask: reviewFreshness.optionQuoteFresh ? option.ask : null,
     plannedLimit,
     plannedContracts,
     plannedDebit
@@ -136,18 +138,27 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
         return (text || fallback).slice(0, 220);
       };
       const assessment = {
-        verdict: allowedVerdicts.has(String(raw.verdict).toUpperCase()) ? String(raw.verdict).toUpperCase() : 'MIXED',
-        summary: plain(raw.summary || raw.analysis, 'Treat this setup cautiously and follow the frozen strategy plan.'),
+        verdict: reviewFreshness.optionQuoteFresh
+          ? (allowedVerdicts.has(String(raw.verdict).toUpperCase()) ? String(raw.verdict).toUpperCase() : 'MIXED')
+          : 'WAIT',
+        summary: reviewFreshness.optionQuoteFresh
+          ? plain(raw.summary || raw.analysis, 'Treat this setup cautiously and follow the frozen strategy plan.')
+          : 'The directional setup can be reviewed, but execution must wait for a fresh option quote.',
         likelyPath: plain(raw.likely_path, 'Wait for the strategy trigger and confirmation before considering entry.'),
         ifRight: plain(raw.if_right, 'The position should progress toward the strategy target while protection remains active.'),
         ifWrong: plain(raw.if_wrong, signal.stop_loss ? `The setup fails if SPY reaches ${signal.stop_loss}.` : 'Exit when the strategy invalidates the setup.'),
-        action: plain(raw.action, signal.entry_allowed ? 'Use only the planned size and protected limit.' : 'Stay flat until the strategy permits entry.'),
+        action: reviewFreshness.optionQuoteFresh
+          ? plain(raw.action, signal.entry_allowed ? 'Use only the planned size and protected limit.' : 'Stay flat until the strategy permits entry.')
+          : 'Stay flat until IBKR supplies a fresh bid and ask for the selected option.',
         gexRead: plain(raw.gex_read, 'GEX does not provide a clear additional edge for this setup.'),
         supportingFactors: (Array.isArray(raw.supporting_factors) ? raw.supporting_factors : [])
           .slice(0, 3)
           .map((value: unknown) => plain(value, ''))
           .filter(Boolean),
-        riskFlags: (Array.isArray(raw.risk_flags) ? raw.risk_flags : [])
+        riskFlags: [
+          ...(!reviewFreshness.optionQuoteFresh ? ['Selected option quote is stale or missing; execution is blocked.'] : []),
+          ...(Array.isArray(raw.risk_flags) ? raw.risk_flags : [])
+        ]
           .slice(0, 3)
           .map((value: unknown) => plain(value, ''))
           .filter(Boolean),

@@ -198,9 +198,16 @@ export class StrategyEngineAdapter {
     if (gexAge === null || gexAge < 0 || gexAge > 20) {
       throw this.conflict('The authoritative GEX snapshot is stale');
     }
+    const quoteAge = this.optionQuoteAgeSeconds(live);
+    if (quoteAge === null || quoteAge < 0 || quoteAge > 15) {
+      throw this.conflict('The selected option quote is stale or missing');
+    }
   }
 
-  public async assertSignalReviewable(signalId: number): Promise<void> {
+  public async assertSignalReviewable(signalId: number): Promise<{
+    optionQuoteFresh: boolean;
+    optionQuoteAgeSeconds: number | null;
+  }> {
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT strategy_setup_id
        FROM signals
@@ -222,12 +229,11 @@ export class StrategyEngineAdapter {
     if (gexAge === null || gexAge < 0 || gexAge > 20) {
       throw this.conflict('The authoritative GEX snapshot is stale');
     }
-    const side = live.favoring === 'puts' ? 'PUT' : live.favoring === 'calls' ? 'CALL' : null;
-    const option = side === 'PUT' ? live.put_setup?.option : side === 'CALL' ? live.call_setup?.option : null;
-    const quoteAge = option?.quote_age_seconds == null ? Number.NaN : Number(option.quote_age_seconds);
-    if (!Number.isFinite(quoteAge) || quoteAge < 0 || quoteAge > 15) {
-      throw this.conflict('The selected option quote is stale or missing');
-    }
+    const quoteAge = this.optionQuoteAgeSeconds(live);
+    return {
+      optionQuoteFresh: quoteAge !== null && quoteAge >= 0 && quoteAge <= 15,
+      optionQuoteAgeSeconds: quoteAge
+    };
   }
 
   private conflict(message: string): Error {
@@ -567,6 +573,17 @@ export class StrategyEngineAdapter {
     if (Number.isFinite(age)) return age;
     const timestamp = Number(signal.gex?.provider_timestamp || signal.gex?.fetched_at);
     return Number.isFinite(timestamp) && timestamp > 0 ? Date.now() / 1000 - timestamp : null;
+  }
+
+  private optionQuoteAgeSeconds(signal: StrategySnapshot): number | null {
+    const option = signal.favoring === 'puts'
+      ? signal.put_setup?.option
+      : signal.favoring === 'calls'
+        ? signal.call_setup?.option
+        : null;
+    if (option?.quote_age_seconds == null) return null;
+    const age = Number(option.quote_age_seconds);
+    return Number.isFinite(age) ? age : null;
   }
 
   private isTerminal(signal: StrategySnapshot): boolean {

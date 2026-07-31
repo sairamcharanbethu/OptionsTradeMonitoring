@@ -64,6 +64,7 @@ def liquid_contract(
         "delta": 0.30 if right == "C" else -0.30,
         "volume": 500.0,
         "liquidity": "ok",
+        "quote_age_seconds": 1.0,
     }
 
 
@@ -961,6 +962,17 @@ class OtmOptionSelectionTest(unittest.TestCase):
         selected = _select_otm_option(self.options, "C", 742.10, steps=2)
         self.assertFalse(selected["eligible"])
         self.assertIn("live bid/ask quote is unavailable", selected["rejection_reasons"])
+
+    def test_exact_otm_contract_is_rejected_when_quote_is_stale(self) -> None:
+        target = next(
+            contract
+            for contract in self.options["contracts"]
+            if contract["right"] == "C" and contract["strike"] == 744
+        )
+        target["quote_age_seconds"] = 16.0
+        selected = _select_otm_option(self.options, "C", 742.10, steps=2)
+        self.assertFalse(selected["eligible"])
+        self.assertIn("option quote is 16.0s old", selected["rejection_reasons"])
 
     def test_option_spread_tolerance_uses_fifteen_percent_signal_quality_limit(self) -> None:
         target = next(
