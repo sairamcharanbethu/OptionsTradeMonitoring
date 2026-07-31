@@ -8,6 +8,13 @@ export async function paperAccountRoutes(fastify: FastifyInstance) {
     return { ...summary, canManage: String((request as any).user?.role || '').toUpperCase() === 'ADMIN' };
   });
 
+  fastify.get('/journal', async (request) => {
+    const query = request.query as { limit?: string; offset?: string };
+    return {
+      items: await (fastify as any).paperTrading.getJournal(Number(query.limit || 100), Number(query.offset || 0))
+    };
+  });
+
   fastify.get('/reports/:month', async (request, reply) => {
     const { month } = request.params as { month: string };
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {

@@ -14,6 +14,7 @@ const GLOBAL_SETTING_KEYS = [
   'strategy_max_total_debit_dollars',
   'strategy_preferred_contracts',
   'strategy_max_contracts',
+  'paper_trailing_stop_pct',
   'mcp_trading_enabled',
   'day_trading_ai_provider',
   'day_trading_ai_model',
@@ -24,6 +25,7 @@ const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
   'strategy_max_total_debit_dollars',
   'strategy_preferred_contracts',
   'strategy_max_contracts',
+  'paper_trailing_stop_pct',
   'ibkr_gateway_mode',
   'ibkr_host',
   'ibkr_port',
@@ -124,7 +126,8 @@ export function isPublicGlobalSettingKey(key: string): boolean {
     'day_trading_symbols',
     'strategy_max_total_debit_dollars',
     'strategy_preferred_contracts',
-    'strategy_max_contracts'
+    'strategy_max_contracts',
+    'paper_trailing_stop_pct'
   ].includes(key);
 }
 

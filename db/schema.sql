@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS paper_trade_decisions (
     protected_limit NUMERIC(12,4),
     model VARCHAR(160),
     prompt_version VARCHAR(50) NOT NULL,
+    policy_version VARCHAR(50) NOT NULL DEFAULT 'paper-exit-v2',
+    trailing_stop_pct NUMERIC(6,2) NOT NULL DEFAULT 15,
     ai_requested BOOLEAN NOT NULL DEFAULT FALSE,
     ai_reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
@@ -197,12 +199,53 @@ CREATE TABLE IF NOT EXISTS paper_monthly_reports (
     UNIQUE (account_id, month)
 );
 
+CREATE TABLE IF NOT EXISTS paper_trade_journal (
+    id BIGSERIAL PRIMARY KEY,
+    account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
+    setup_id UUID,
+    decision_id BIGINT REFERENCES paper_trade_decisions(id),
+    position_id INTEGER,
+    event_type VARCHAR(50) NOT NULL,
+    policy_version VARCHAR(50) NOT NULL,
+    message TEXT NOT NULL,
+    premium NUMERIC(12,4),
+    underlying_price NUMERIC(12,4),
+    quantity INTEGER,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS paper_baseline_trades (
+    id BIGSERIAL PRIMARY KEY,
+    account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
+    decision_id BIGINT NOT NULL REFERENCES paper_trade_decisions(id),
+    setup_id UUID NOT NULL,
+    position_id INTEGER,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+    entry_price NUMERIC(12,4) NOT NULL,
+    current_price NUMERIC(12,4) NOT NULL,
+    exit_price NUMERIC(12,4),
+    realized_pnl NUMERIC(16,2) NOT NULL DEFAULT 0,
+    exit_reason VARCHAR(50),
+    policy_version VARCHAR(50) NOT NULL,
+    trailing_stop_pct NUMERIC(6,2) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (account_id, decision_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_positions_paper_account_status
     ON positions (paper_account_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_orders_account_status
     ON paper_orders (account_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_decisions_account_created
     ON paper_trade_decisions (account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_journal_account_created
+    ON paper_trade_journal (account_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_baseline_account_status
+    ON paper_baseline_trades (account_id, status, created_at DESC);
 
 -- Goals Table
 CREATE TABLE IF NOT EXISTS goals (

@@ -239,13 +239,17 @@ export interface PaperAccountSummary {
     risk_tier?: string;
     exit_profile?: string;
     decision_source?: string;
+    policy_version?: string;
+    decision_trailing_stop_pct?: number | string;
   }>;
   recentDecisions: Array<Record<string, any>>;
   recentOrders: Array<Record<string, any>>;
   monthlyReports: Array<{ month: string; report: Record<string, any>; generated_at: string }>;
+  journal: Array<{ id: number; event_type: string; message: string; policy_version: string; premium?: number | string | null; created_at: string }>;
   session: { entries: number; entriesRemaining: number | null; pnl: number; pnlPct: number };
-  limits: { maxDebitPct: number | null; dailyLossPct: number | null; maxTradesPerDay: number | null; maxOpenPositions: number; maxContracts: number | null; trailingStopPct: number };
+  limits: { maxDebitPct: number | null; dailyLossPct: number | null; maxTradesPerDay: number | null; maxOpenPositions: number; maxContracts: number | null; trailingStopPct: number; policyVersion: string };
   aiUsage: { dailyCalls: number; dailyCallLimit: number; dailyCallsRemaining: number; dailyTokens: number; monthlyCalls: number; monthlyTokens: number };
+  baseline: { name: string; closedTrades: number; openTrades: number; wins: number; winRate: number; realizedPnl: number; managedRealizedPnl: number; valueAdded: number };
   health: { status: string; lastProcessedAt: string | null; lastError: string | null };
   canManage: boolean;
 }

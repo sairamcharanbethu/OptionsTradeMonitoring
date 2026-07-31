@@ -328,6 +328,13 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'ZeroGEX API key must be a single line' });
                     }
+                    if (key === 'paper_trailing_stop_pct') {
+                        const trailingPct = Number(trimmedValue);
+                        if (!Number.isFinite(trailingPct) || trailingPct < 1 || trailingPct > 50) {
+                            await client.query('ROLLBACK');
+                            return reply.code(400).send({ error: 'Paper trailing stop must be between 1% and 50%' });
+                        }
+                    }
                     await client.query(
                         `INSERT INTO settings (user_id, key, value, updated_at) 
                          VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 

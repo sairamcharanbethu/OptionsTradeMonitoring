@@ -212,6 +212,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [strategyMaxTotalDebitDollars, setStrategyMaxTotalDebitDollars] = useState('500');
     const [strategyPreferredContracts, setStrategyPreferredContracts] = useState('1');
     const [strategyMaxContracts, setStrategyMaxContracts] = useState('1');
+    const [paperTrailingStopPct, setPaperTrailingStopPct] = useState('15');
     const [strikeOffset, setStrikeOffset] = useState('0');
     const [minSignalScore, setMinSignalScore] = useState('70');
     const [tradingStartTime, setTradingStartTime] = useState('09:30');
@@ -352,6 +353,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setStrategyMaxTotalDebitDollars(data.strategy_max_total_debit_dollars || '500');
             setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
             setStrategyMaxContracts(data.strategy_max_contracts || '1');
+            setPaperTrailingStopPct(data.paper_trailing_stop_pct || '15');
             setStrikeOffset(data.strike_offset || '0');
             setMinSignalScore(data.min_signal_score || '70');
             setTradingStartTime(data.trading_start_time || '09:30');
@@ -619,6 +621,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 settingsPayload.strategy_max_total_debit_dollars = strategyMaxTotalDebitDollars;
                 settingsPayload.strategy_preferred_contracts = strategyPreferredContracts;
                 settingsPayload.strategy_max_contracts = strategyMaxContracts;
+                settingsPayload.paper_trailing_stop_pct = paperTrailingStopPct;
             }
             await api.updateSettings(settingsPayload);
             queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -889,6 +892,21 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 disabled={!isAdmin}
                                             />
                                             <p className="text-[10px] text-muted-foreground">Global signal-only-v2 contract-selection budget.</p>
+                                        </div>
+
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="paperTrailingStopPct">Paper Premium Trail (%)</Label>
+                                            <Input
+                                                id="paperTrailingStopPct"
+                                                type="number"
+                                                min="1"
+                                                max="50"
+                                                step="0.5"
+                                                value={paperTrailingStopPct}
+                                                onChange={(e) => setPaperTrailingStopPct(e.target.value)}
+                                                disabled={!isAdmin}
+                                            />
+                                            <p className="text-[10px] text-muted-foreground">Applied after TP1. The value and paper-exit policy version are frozen on each new paper trade.</p>
                                         </div>
 
                                         <div className="grid grid-cols-2 gap-3 md:col-span-2">

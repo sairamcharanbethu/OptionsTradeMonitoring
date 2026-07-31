@@ -1330,7 +1330,14 @@ export default function DayTradingTerminal() {
             <span>AI today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyCalls}/{paperAccount.aiUsage.dailyCallLimit}</span></span>
             <span>Tokens today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyTokens.toLocaleString()}</span></span>
             <span>Tokens this month <span className="font-mono text-zinc-200">{paperAccount.aiUsage.monthlyTokens.toLocaleString()}</span></span>
+            <span>Exit policy <span className="font-mono text-zinc-200">{paperAccount.limits.policyVersion} · {paperAccount.limits.trailingStopPct}%</span></span>
             <span className="text-zinc-500">Clear setups use rules; AI is reserved for ambiguity.</span>
+          </div>
+
+          <div className="mt-3 grid grid-cols-3 divide-x divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/35 py-2 text-center">
+            <Metric label="Managed P&L" value={money(paperAccount.baseline.managedRealizedPnl)} detail="AI/rules sizing" tone={paperAccount.baseline.managedRealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
+            <Metric label="1-contract baseline" value={money(paperAccount.baseline.realizedPnl)} detail={`${paperAccount.baseline.closedTrades} closed`} tone={paperAccount.baseline.realizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
+            <Metric label="Sizing value" value={`${paperAccount.baseline.valueAdded >= 0 ? '+' : ''}${money(paperAccount.baseline.valueAdded)}`} detail="managed − baseline" tone={paperAccount.baseline.valueAdded >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
           </div>
 
           {paperAccount.openPositions[0] ? (
@@ -1343,7 +1350,7 @@ export default function DayTradingTerminal() {
                   {paperAccount.openPositions[0].quantity} contract{Number(paperAccount.openPositions[0].quantity) === 1 ? '' : 's'} · {paperAccount.openPositions[0].risk_tier || 'bounded'} risk · {String(paperAccount.openPositions[0].exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
                 </div>
                 <div className="mt-1 text-[11px] text-zinc-500">
-                  Structural SL → TP1 protection/trim → TP2 · {paperAccount.limits.trailingStopPct}% premium trail activates after TP1
+                  Structural SL → TP1 protection/trim → TP2 · {Number(paperAccount.openPositions[0].decision_trailing_stop_pct || paperAccount.limits.trailingStopPct)}% premium trail · {paperAccount.openPositions[0].policy_version || paperAccount.limits.policyVersion}
                 </div>
               </div>
               <div className="font-mono text-xs text-zinc-300">
@@ -1359,6 +1366,24 @@ export default function DayTradingTerminal() {
             <div className="mt-4 rounded-lg border border-dashed border-zinc-800 px-3 py-4 text-center text-xs text-zinc-500">
               No paper decision yet. The account will evaluate the next fresh ACTIVE setup automatically.
             </div>
+          )}
+
+          {paperAccount.journal.length > 0 && (
+            <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
+              <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-xs font-medium text-zinc-400">
+                Paper trade journal
+                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="max-h-72 divide-y divide-zinc-800 overflow-y-auto border-t border-zinc-800 px-3">
+                {paperAccount.journal.map(item => (
+                  <div key={item.id} className="grid gap-1 py-2.5 sm:grid-cols-[150px_1fr_auto] sm:gap-3">
+                    <span className="font-mono text-[11px] text-violet-300">{item.event_type.replace(/_/g, ' ')}</span>
+                    <span className="text-xs leading-relaxed text-zinc-300">{item.message}</span>
+                    <span className="font-mono text-[10px] text-zinc-500">{dateTime(item.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
           )}
 
           {paperAccount.monthlyReports.length > 0 && (
