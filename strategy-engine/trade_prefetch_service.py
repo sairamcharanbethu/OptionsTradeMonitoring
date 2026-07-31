@@ -106,12 +106,14 @@ def _bars_are_stale(bars: Any, stale_after: float, now: float | None = None) -> 
     return latest is None or current - latest > stale_after
 
 
-def _option_dict(ticker: Ticker) -> dict[str, Any]:
+def _option_dict(ticker: Ticker, *, now: float | None = None) -> dict[str, Any]:
     contract = ticker.contract
     bid, ask = _value(ticker.bid), _value(ticker.ask)
     mid = (bid + ask) / 2 if bid is not None and ask is not None and ask > 0 else None
     spread = (ask - bid) / mid * 100 if mid else None
     greeks = ticker.modelGreeks or ticker.bidGreeks or ticker.askGreeks or ticker.lastGreeks
+    quote_time = _ticker_time(ticker)
+    quote_age = (now if now is not None else time.time()) - quote_time if quote_time else None
     open_interest = (
         getattr(ticker, "callOpenInterest", None)
         if contract.right == "C"
@@ -139,6 +141,8 @@ def _option_dict(ticker: Ticker) -> dict[str, Any]:
         "open_interest": float(open_interest) if _valid(open_interest) and open_interest >= 0 else None,
         "volume": float(ticker.volume) if _valid(ticker.volume) else None,
         "liquidity": liquidity,
+        "quote_time": quote_time,
+        "quote_age_seconds": round(max(0.0, quote_age), 2) if quote_age is not None else None,
     }
 
 
@@ -789,7 +793,7 @@ class TradePrefetcher:
             "underlying": "SPY",
             "expiry": self.option_expiry,
             "expiry_mode": self.option_expiry_mode,
-            "contracts": [_option_dict(ticker) for ticker in self.option_tickers],
+            "contracts": [_option_dict(ticker, now=generated_at) for ticker in self.option_tickers],
         }
         spy_spot = (symbols.get("SPY") or {}).get("spot")
         external_gex = (
@@ -967,6 +971,7 @@ class TradePrefetcher:
                 ).get("closed_at"),
                 "host": self.args.host,
                 "port": self.args.port,
+                "client_id": self.args.client_id,
                 "data_type": self.args.data_type,
                 "option_contracts": len(self.option_tickers),
                 "option_expiry": self.option_expiry,

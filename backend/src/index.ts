@@ -1113,12 +1113,14 @@ const start = async () => {
     });
 
     const port = Number(process.env.PORT) || 3001;
+    // Publish the settings-derived IBKR policy before the strategy container is
+    // allowed to start, so it never opens a session against stale defaults.
+    await strategyEngine.start();
     await fastify.listen({ port, host: '0.0.0.0' });
 
     const startBackgroundServices = async () => {
       fastify.log.info('[System] Starting background services...');
       poller.start();
-      await strategyEngine.start();
       if (strategyEngine.getMode() !== 'primary') {
         scanner.start();
       } else {
@@ -1129,22 +1131,22 @@ const start = async () => {
       runSnaptradePendingOrderSync().catch((err: any) => {
         fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);
       });
-      let liveExitStreamStarted = false;
+      // Keep the monitor attached while the IBKR stream performs its own
+      // reconnect loop. A failed first connection must not leave it inactive.
+      liveExitMonitor.start('ibkr');
 
       try {
         const ibkrStreamStarted = await ibkrMarketDataStreamer.start();
         if (ibkrStreamStarted) {
-          liveExitMonitor.start('ibkr');
           fastify.log.info('[Stream] IBKR option market data stream enabled for live exit monitoring.');
-          liveExitStreamStarted = true;
         }
         await optionMarketHistoryCapture.rehydrateRecentSignals?.();
       } catch (err: any) {
         fastify.log.warn(`[Stream] IBKR option market data stream failed to start: ${err.message}`);
       }
 
-      if (!liveExitStreamStarted) {
-        fastify.log.warn('[Stream] No option market data stream started for live exit monitoring.');
+      if (!ibkrMarketDataStreamer.getHealth().connected) {
+        fastify.log.warn('[Stream] IBKR quote stream is reconnecting; live exit monitor remains attached.');
       }
     };
 

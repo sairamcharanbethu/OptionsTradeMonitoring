@@ -67,9 +67,24 @@ async function testLiveExitCachesOpenPositionsAcrossQuoteBurst() {
   assert(service.getHealth().positionCacheSize === 1, 'Expected live-exit position cache to contain one contract');
 }
 
+async function testLiveExitReflectsReconnectingIbkrStream() {
+  const { fastify } = createFastifyMock();
+  fastify.ibkrMarketDataStreamer = {
+    getHealth: () => ({ status: 'DEGRADED', connected: false, lastError: 'reconnecting' })
+  };
+  const service = new LiveExitMonitorService(fastify);
+  service.start('ibkr');
+
+  const health = service.getHealth();
+  assert(health.active, 'Monitor must remain attached while the IBKR stream reconnects');
+  assert(health.provider === 'ibkr', 'Monitor must retain the IBKR provider during reconnect');
+  assert(health.status === 'DEGRADED', 'Reconnecting stream must degrade rather than disable the monitor');
+}
+
 async function runTests() {
   console.log('Running LiveExitMonitorService tests...');
   await testLiveExitCachesOpenPositionsAcrossQuoteBurst();
+  await testLiveExitReflectsReconnectingIbkrStream();
   console.log('All LiveExitMonitorService tests passed!');
 }
 

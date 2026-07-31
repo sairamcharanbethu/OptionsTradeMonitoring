@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -234,6 +234,7 @@ export default function DayTradingTerminal() {
   const [riskAssessment, setRiskAssessment] = useState<SignalRiskAssessment | null>(null);
   const [riskLoading, setRiskLoading] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
+  const riskRequestRef = useRef(0);
 
   const strategySignal = strategyState?.signal || null;
   const strategySetupId = strategyState?.setupId || null;
@@ -321,14 +322,14 @@ export default function DayTradingTerminal() {
   const lifecycleView = stateCopy(lifecycle, side);
   const currentTone = lifecycleTone(lifecycle);
   const primaryGex = strategySignal?.gex || strategySignal?.zerogex_decision || currentSignal?.gex || {};
-  const gexAge = Number(primaryGex.provider_age_seconds);
-  const quoteAge = Number(setup?.option?.quote_age_seconds);
+  const gexAge = primaryGex.provider_age_seconds == null ? Number.NaN : Number(primaryGex.provider_age_seconds);
+  const quoteAge = setup?.option?.quote_age_seconds == null ? Number.NaN : Number(setup.option.quote_age_seconds);
   const staleReviewReason = !freshSnapshot
     ? 'Strategy snapshot is stale'
     : Number.isFinite(gexAge) && gexAge > 20
       ? 'GEX snapshot is stale'
-      : Number.isFinite(quoteAge) && quoteAge > 15
-        ? 'Option quote is stale'
+      : !Number.isFinite(quoteAge) || quoteAge > 15
+        ? 'Option quote is stale or missing'
         : null;
   const reviewDataFresh = !staleReviewReason;
   const recentSignals = signals
@@ -362,6 +363,7 @@ export default function DayTradingTerminal() {
   }, []);
 
   useEffect(() => {
+    riskRequestRef.current += 1;
     setRiskAssessment(null);
     setRiskError(null);
     setRiskLoading(false);
@@ -369,14 +371,19 @@ export default function DayTradingTerminal() {
 
   const runAdHocRiskReview = async () => {
     if (!currentSignal?.id || settings.day_trading_ai_enabled === 'false' || !reviewDataFresh) return;
+    const requestId = ++riskRequestRef.current;
+    const signalId = currentSignal.id;
     setRiskLoading(true);
     setRiskError(null);
     try {
-      setRiskAssessment(await api.getSignalRiskAssessment(currentSignal.id));
+      const assessment = await api.getSignalRiskAssessment(signalId);
+      if (requestId !== riskRequestRef.current) return;
+      setRiskAssessment(assessment);
     } catch (error: any) {
+      if (requestId !== riskRequestRef.current) return;
       setRiskError(error.message || 'Fresh AI setup review failed');
     } finally {
-      setRiskLoading(false);
+      if (requestId === riskRequestRef.current) setRiskLoading(false);
     }
   };
 

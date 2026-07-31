@@ -2,6 +2,8 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { AIService } from '../services/ai-service';
+import { redis } from '../lib/redis';
+import { randomUUID } from 'crypto';
 
 const UpdateStatusSchema = z.object({
   status: z.enum(['PENDING', 'PENDING_TRIGGER', 'EXECUTED', 'CANCELLED'])
@@ -43,6 +45,28 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     );
     const signal = rows[0];
     if (!signal) return reply.code(404).send({ error: 'Strategy setup not found' });
+
+    const strategyEngine = (fastify as any).strategyEngine;
+    if (!strategyEngine?.assertSignalReviewable) {
+      return reply.code(503).send({ error: 'Live strategy validation is unavailable' });
+    }
+    await strategyEngine.assertSignalReviewable(signal.id);
+
+    const cacheKey = `AI_RISK_REVIEW:${userId}:${signal.id}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch {
+        await redis.del(cacheKey);
+      }
+    }
+    const lockKey = `${cacheKey}:LOCK`;
+    const lockValue = randomUUID();
+    const lockAcquired = await redis.setNX(lockKey, lockValue, 30);
+    if (redis.isReady() && !lockAcquired) {
+      return reply.code(429).send({ error: 'This setup is already being reviewed. Please wait a moment.' });
+    }
 
     const option = signal.option_details || {};
     const plannedContracts = Math.max(0, Number(option.planned_contracts || 0));
@@ -130,10 +154,13 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
         maxPlannedLoss: plannedDebit > 0 ? Number(plannedDebit.toFixed(2)) : null,
         generatedAt: new Date().toISOString()
       };
+      await redis.set(cacheKey, JSON.stringify(assessment), 10);
       return assessment;
     } catch (err: any) {
       fastify.log.warn(`[Signals] AI risk assessment failed for signal #${signal.id}: ${err.message || String(err)}`);
       return reply.code(502).send({ error: err.message || 'AI risk assessment failed' });
+    } finally {
+      if (lockAcquired) await redis.delIfValue(lockKey, lockValue);
     }
   });
 

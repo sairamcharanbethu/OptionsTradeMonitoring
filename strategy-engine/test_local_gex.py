@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from local_gex import GexSourceSelector, build_local_gex, select_gex, usable_gex
@@ -156,7 +157,8 @@ class LocalGexTest(unittest.TestCase):
             "sscgex",
         )
 
-    def test_ibkr_option_serialization_retains_gamma_and_open_interest(self):
+    def test_ibkr_option_serialization_retains_quote_age_gamma_and_open_interest(self):
+        quote_time = datetime.fromtimestamp(1_000, timezone.utc)
         ticker = SimpleNamespace(
             contract=SimpleNamespace(
                 localSymbol="SPY C101", right="C", strike=101, lastTradeDateOrContractMonth="20260722"
@@ -170,10 +172,13 @@ class LocalGexTest(unittest.TestCase):
             callOpenInterest=321,
             putOpenInterest=None,
             volume=50,
+            time=quote_time,
         )
-        item = _option_dict(ticker)
+        item = _option_dict(ticker, now=1_002.25)
         self.assertEqual(item["gamma"], 0.02345679)
         self.assertEqual(item["open_interest"], 321.0)
+        self.assertEqual(item["quote_time"], 1_000)
+        self.assertEqual(item["quote_age_seconds"], 2.25)
 
 
 if __name__ == "__main__":

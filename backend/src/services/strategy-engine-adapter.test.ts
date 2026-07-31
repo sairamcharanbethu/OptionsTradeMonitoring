@@ -66,6 +66,10 @@ async function runTests() {
     'Execution freshness must read the ZeroGEX provider age'
   );
   assert(
+    adapter.gexAgeSeconds(signal({ gex: { provider_age_seconds: null } })) === null,
+    'Missing GEX age must not be treated as a fresh zero-second snapshot'
+  );
+  assert(
     adapter.isTerminal(signal({ state: 'WAIT', signal_phase: 'INVALIDATED' })),
     'A terminal signal phase must close the setup even when the top-level state is WAIT'
   );
@@ -83,6 +87,26 @@ async function runTests() {
   await Promise.all([adapter.requestRefresh(), adapter.requestRefresh()]);
   assert(refreshCalls === 2, 'A Redis event received during refresh must queue one follow-up file read');
   assert(maxActiveRefreshes === 1, 'Strategy snapshot refreshes must never overlap');
+
+  const reviewAdapter = createAdapter();
+  reviewAdapter.currentSetupId = '22222222-2222-4222-8222-222222222222';
+  reviewAdapter.currentSignal = signal({
+    generated_at: Date.now() / 1000,
+    gex: { provider_age_seconds: 2 },
+    call_setup: {
+      ...signal().call_setup,
+      option: { ...signal().call_setup.option, quote_age_seconds: 3 }
+    }
+  });
+  reviewAdapter.fastify.pg.query = async () => ({
+    rows: [{ strategy_setup_id: reviewAdapter.currentSetupId }]
+  });
+  await reviewAdapter.assertSignalReviewable(7);
+  reviewAdapter.currentSignal.call_setup.option.quote_age_seconds = null;
+  await reviewAdapter.assertSignalReviewable(7).then(
+    () => { throw new Error('Missing option quote age must block AI review'); },
+    (error: Error) => assert(error.message.includes('quote'), 'Missing quote age must produce a clear review blocker')
+  );
 
   const queries: Array<{ sql: string; values: any[] }> = [];
   const persistenceAdapter = new StrategyEngineAdapter({

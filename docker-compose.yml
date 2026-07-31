@@ -53,6 +53,7 @@ services:
       STRATEGY_MAX_CONTRACTS: ${STRATEGY_MAX_CONTRACTS:-1}
       STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
       STRATEGY_FILE_POLL_INTERVAL_MS: ${STRATEGY_FILE_POLL_INTERVAL_MS:-2000}
+      STRATEGY_REDIS_WATCHDOG_INTERVAL_MS: ${STRATEGY_REDIS_WATCHDOG_INTERVAL_MS:-30000}
       VIX_TERM_STRUCTURE_MIN_RATIO: ${VIX_TERM_STRUCTURE_MIN_RATIO:-1.05}
     volumes:
       - strategy-data:/strategy-data
@@ -188,11 +189,13 @@ services:
       - --zerogex-file
       - /data/trade/zerogex.json
       - --interval
-      - "0.25"
+      - "1"
     depends_on:
       zerogex-prefetch:
         condition: service_started
       trade-staging-redis:
+        condition: service_healthy
+      trade-staging-backend:
         condition: service_healthy
     networks:
       - ssmedia_ssmedia_net

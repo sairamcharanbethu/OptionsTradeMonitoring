@@ -109,6 +109,8 @@ export class LiveExitMonitorService {
       ? 'DOWN'
       : streamStatus === 'DOWN'
         ? 'DOWN'
+        : streamStatus === 'DEGRADED'
+          ? 'DEGRADED'
         : this.lastError
           ? 'DEGRADED'
           : 'UP';

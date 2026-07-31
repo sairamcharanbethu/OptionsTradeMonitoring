@@ -24,6 +24,7 @@ export class StrategyEngineAdapter {
   private redisStatus: 'DISABLED' | 'CONNECTING' | 'UP' | 'DEGRADED' = 'DISABLED';
   private lastRedisEventAt: string | null = null;
   private lastRedisErrorLogAt = 0;
+  private lastFallbackPollAt = 0;
   private currentSignal: StrategySnapshot | null = null;
   private currentHealth: StrategySnapshot | null = null;
   private currentSetupId: string | null = null;
@@ -49,6 +50,13 @@ export class StrategyEngineAdapter {
       this.startRedisSubscription();
       const fallbackIntervalMs = Math.max(500, Number(process.env.STRATEGY_FILE_POLL_INTERVAL_MS || 2000));
       this.timer = setInterval(() => {
+        const now = Date.now();
+        const fallbackWatchdogMs = Math.max(
+          fallbackIntervalMs,
+          Number(process.env.STRATEGY_REDIS_WATCHDOG_INTERVAL_MS || 30000)
+        );
+        if (this.redisStatus === 'UP' && now - this.lastFallbackPollAt < fallbackWatchdogMs) return;
+        this.lastFallbackPollAt = now;
         this.requestRefresh().catch((err: any) => {
           this.lastError = err.message || String(err);
           this.fastify.log.warn(`[StrategyEngineAdapter] ${this.lastError}`);
@@ -88,7 +96,9 @@ export class StrategyEngineAdapter {
       transport: {
         redis: this.redisStatus,
         lastRedisEventAt: this.lastRedisEventAt,
-        filePollFallback: true
+        filePollFallback: true,
+        filePollIntervalMs: Number(process.env.STRATEGY_FILE_POLL_INTERVAL_MS || 2000),
+        redisWatchdogIntervalMs: Number(process.env.STRATEGY_REDIS_WATCHDOG_INTERVAL_MS || 30000)
       }
     };
   }
@@ -187,6 +197,36 @@ export class StrategyEngineAdapter {
     const gexAge = this.gexAgeSeconds(live);
     if (gexAge === null || gexAge < 0 || gexAge > 20) {
       throw this.conflict('The authoritative GEX snapshot is stale');
+    }
+  }
+
+  public async assertSignalReviewable(signalId: number): Promise<void> {
+    const { rows } = await (this.fastify as any).pg.query(
+      `SELECT strategy_setup_id
+       FROM signals
+       WHERE id = $1 AND engine_version = 'signal-only-v2'`,
+      [signalId]
+    );
+    if (rows.length === 0 || !rows[0].strategy_setup_id) {
+      throw this.conflict('The strategy setup is unavailable for review');
+    }
+    const live = this.currentSignal;
+    if (!live || String(rows[0].strategy_setup_id) !== this.currentSetupId) {
+      throw this.conflict('The strategy setup changed before the AI review started');
+    }
+    const signalAge = Date.now() / 1000 - Number(live.generated_at || 0);
+    if (!Number.isFinite(signalAge) || signalAge < 0 || signalAge > 20) {
+      throw this.conflict('The strategy snapshot is stale');
+    }
+    const gexAge = this.gexAgeSeconds(live);
+    if (gexAge === null || gexAge < 0 || gexAge > 20) {
+      throw this.conflict('The authoritative GEX snapshot is stale');
+    }
+    const side = live.favoring === 'puts' ? 'PUT' : live.favoring === 'calls' ? 'CALL' : null;
+    const option = side === 'PUT' ? live.put_setup?.option : side === 'CALL' ? live.call_setup?.option : null;
+    const quoteAge = option?.quote_age_seconds == null ? Number.NaN : Number(option.quote_age_seconds);
+    if (!Number.isFinite(quoteAge) || quoteAge < 0 || quoteAge > 15) {
+      throw this.conflict('The selected option quote is stale or missing');
     }
   }
 
@@ -514,9 +554,13 @@ export class StrategyEngineAdapter {
   }
 
   private gexAgeSeconds(signal: StrategySnapshot): number | null {
-    const providerAge = Number(signal.gex?.provider_age_seconds);
+    const providerAge = signal.gex?.provider_age_seconds == null
+      ? Number.NaN
+      : Number(signal.gex.provider_age_seconds);
     if (Number.isFinite(providerAge)) return providerAge;
-    const zeroGexProviderAge = Number(signal.zerogex_shadow?.provider_age_seconds);
+    const zeroGexProviderAge = signal.zerogex_shadow?.provider_age_seconds == null
+      ? Number.NaN
+      : Number(signal.zerogex_shadow.provider_age_seconds);
     if (Number.isFinite(zeroGexProviderAge)) return zeroGexProviderAge;
     const freshness = signal.zerogex_shadow?.data_freshness?.gex_summary;
     const age = Number(freshness?.adjusted_age_seconds ?? freshness?.age_seconds);

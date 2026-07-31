@@ -132,6 +132,7 @@ export class IbkrMarketDataStreamService extends EventEmitter {
       mode: this.mode,
       host: this.host,
       port: this.port,
+      clientId: this.clientId,
       marketDataType: this.marketDataType,
       activeSubscriptions: this.subscriptionsByKey.size,
       lastMessageAt: this.lastMessageAt,
