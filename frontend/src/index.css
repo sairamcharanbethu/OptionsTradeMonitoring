@@ -262,3 +262,21 @@ a,
   transition-duration: 160ms;
   transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
 }
+
+.day-trading-terminal .text-zinc-600 {
+  color: rgb(161 161 170);
+}
+
+@media (max-width: 639px) {
+  .day-trading-terminal .text-\[9px\],
+  .day-trading-terminal .text-\[10px\] {
+    font-size: 11px;
+    line-height: 1rem;
+  }
+}
+
+@media (min-width: 640px) {
+  .day-trading-terminal .responsive-details-content {
+    display: block;
+  }
+}

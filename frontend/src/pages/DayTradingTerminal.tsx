@@ -276,18 +276,31 @@ const CompactRiskMetric = ({ label, value, tone = 'text-zinc-100' }: { label: st
   </div>
 );
 
-const Level = ({
-  label,
-  value,
-  tone = 'text-zinc-100'
+const LevelRail = ({
+  potential,
+  levels
 }: {
-  label: string;
-  value: unknown;
-  tone?: string;
+  potential: boolean;
+  levels: Array<{ label: string; value: unknown; tone: string; dot: string }>;
 }) => (
-  <div className="min-w-0 rounded-lg bg-black/15 px-3 py-2 sm:rounded-none sm:border-l sm:border-zinc-800 sm:bg-transparent sm:py-0 sm:first:border-l-0 sm:first:pl-0">
-    <div className="text-[10px] font-medium text-zinc-500">{label}</div>
-    <div className={`mt-1 font-mono text-base font-semibold tabular-nums ${tone}`}>{money(value)}</div>
+  <div className="mt-5 rounded-lg border border-zinc-800/80 bg-black/15 px-2 py-3 sm:mt-6 sm:px-4">
+    <div className="mb-3 flex items-center justify-between gap-3 px-1">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
+        {potential ? 'Potential level plan' : 'Active level plan'}
+      </span>
+      <span className="text-[10px] text-zinc-500">Stop → Spot → Trigger → T1 → T2</span>
+    </div>
+    <div className="relative grid grid-cols-5 gap-1 before:absolute before:left-[10%] before:right-[10%] before:top-[1.55rem] before:h-px before:bg-zinc-700">
+      {levels.map(level => (
+        <div key={level.label} className="relative z-10 min-w-0 text-center">
+          <div className="truncate text-[10px] font-medium text-zinc-500">{level.label}</div>
+          <span className={`mx-auto mt-1.5 block h-2.5 w-2.5 rounded-full border-2 border-[#101216] ${level.dot}`} />
+          <div className={`mt-1.5 truncate font-mono text-xs font-semibold tabular-nums sm:text-sm ${level.tone}`} title={money(level.value)}>
+            {money(level.value)}
+          </div>
+        </div>
+      ))}
+    </div>
   </div>
 );
 
@@ -599,6 +612,7 @@ export default function DayTradingTerminal() {
     && currentSignal.lifecycle_status === 'ACTIVE'
     && lifecycleData.entry_allowed !== false;
   const signalDismissed = currentSignal?.status === 'CANCELLED';
+  const dismissedActionableSetup = signalDismissed && ['ARMED', 'ACTIVE'].includes(lifecycle);
   const entryReviewAvailable = ['ARMED', 'ACTIVE'].includes(lifecycle) && !signalDismissed;
   const liveMissing = executionMode.live
     ? [
@@ -639,9 +653,9 @@ export default function DayTradingTerminal() {
       || (strategySetupId && strategyPosition.strategy_setup_id === strategySetupId)
     );
   }) || null, [positions, currentSignal?.id, strategySetupId]);
-  const displayLifecycle = signalDismissed ? 'DISMISSED' : lifecycle;
+  const displayLifecycle = dismissedActionableSetup ? 'DISMISSED' : lifecycle;
   const lifecycleView = stateCopy(displayLifecycle, side);
-  const currentTone = signalDismissed ? 'blocked' : lifecycleTone(lifecycle);
+  const currentTone = dismissedActionableSetup ? 'blocked' : lifecycleTone(lifecycle);
   const currentStrategyCode = strategySignal?.strategy || currentSignal?.strategy_name || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
   const spot = Number(strategySignal?.spot || currentSignal?.current_price);
@@ -656,7 +670,7 @@ export default function DayTradingTerminal() {
   const spotVsTrigger = Number.isFinite(spot) && Number.isFinite(trigger)
     ? `${money(Math.abs(spot - trigger))} ${spot >= trigger ? 'above' : 'below'} trigger`
     : 'trigger distance unavailable';
-  const heartbeatSummary = signalDismissed
+  const heartbeatSummary = dismissedActionableSetup
     ? `The strategy engine remains ${lifecycle}, but this setup is closed for your account.`
     : lifecycle === 'ACTIVE'
       ? `${canExecute ? '' : `${executionBlockers[0]}. `}SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
@@ -667,7 +681,7 @@ export default function DayTradingTerminal() {
           : side
             ? `The strategy currently favors ${side === 'CALL' ? 'calls' : 'puts'}, but no qualified entry exists.${strategyBlockers[0] ? ` Waiting on: ${strategyBlockers[0]}.` : ''} SPY is ${spotVsTrigger}.`
             : 'The strategy is monitoring SPY and has not opened a new entry window.';
-  const heartbeatLabel = signalDismissed
+  const heartbeatLabel = dismissedActionableSetup
     ? 'Closed for your account'
     : canExecute
       ? 'Entry conditions live'
@@ -939,7 +953,7 @@ export default function DayTradingTerminal() {
   ];
 
   return (
-    <main className="mx-auto w-full max-w-[1440px] space-y-3 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4 sm:px-0 sm:pb-0">
+    <main className="day-trading-terminal mx-auto w-full max-w-[1440px] space-y-3 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4 sm:px-0 sm:pb-0">
       <section className="overflow-hidden rounded-2xl border border-zinc-800/90 bg-[#0d0f12] shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
         <header className="flex flex-col gap-4 border-b border-zinc-800 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
@@ -1029,7 +1043,7 @@ export default function DayTradingTerminal() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-70">{lifecycleView.eyebrow}</span>
                 <span className="rounded-md border border-current/20 bg-black/15 px-2 py-1 font-mono text-[10px] font-semibold">{displayLifecycle}</span>
-                {signalDismissed && lifecycle === 'ACTIVE' && (
+                {dismissedActionableSetup && lifecycle === 'ACTIVE' && (
                   <span className="text-[10px] font-medium text-zinc-500">Strategy engine ACTIVE</span>
                 )}
                 {side && (
@@ -1062,21 +1076,24 @@ export default function DayTradingTerminal() {
                 </div>
               )}
 
-              <div className="mt-5 grid grid-cols-2 gap-2 sm:mt-6 sm:grid-cols-5 sm:gap-x-3 sm:gap-y-3">
-                <Level label="SPY spot" value={strategySignal?.spot || currentSignal?.current_price} />
-                <Level label={directionConfirmed ? 'Entry trigger' : 'Potential trigger'} value={setup?.trigger || currentSignal?.entry_trigger} tone={directionConfirmed ? 'text-emerald-200' : 'text-zinc-300'} />
-                <Level label={directionConfirmed ? 'Invalidation' : 'Potential invalidation'} value={setup?.invalidation || currentSignal?.stop_loss} tone={directionConfirmed ? 'text-rose-200' : 'text-zinc-300'} />
-                <Level label={directionConfirmed ? 'Target 1' : 'Potential target 1'} value={targetOne} tone={directionConfirmed ? 'text-sky-200' : 'text-zinc-300'} />
-                <Level label={directionConfirmed ? `Target ${option.exit_target_number || 2}` : `Potential target ${option.exit_target_number || 2}`} value={targetTwo} tone={directionConfirmed ? 'text-sky-200' : 'text-zinc-300'} />
-              </div>
+              <LevelRail
+                potential={!directionConfirmed}
+                levels={[
+                  { label: 'Stop', value: setup?.invalidation || currentSignal?.stop_loss, tone: directionConfirmed ? 'text-rose-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-rose-400' : 'bg-zinc-500' },
+                  { label: 'Spot', value: strategySignal?.spot || currentSignal?.current_price, tone: 'text-zinc-100', dot: 'bg-zinc-200' },
+                  { label: 'Trigger', value: setup?.trigger || currentSignal?.entry_trigger, tone: directionConfirmed ? 'text-emerald-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-emerald-400' : 'bg-zinc-500' },
+                  { label: 'T1', value: targetOne, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-400' : 'bg-zinc-500' },
+                  { label: `T${option.exit_target_number || 2}`, value: targetTwo, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-300' : 'bg-zinc-500' }
+                ]}
+              />
 
               <div className="mt-4 rounded-lg border border-zinc-800/80 bg-zinc-950/45 p-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${signalDismissed ? 'bg-zinc-500' : lifecycle === 'ACTIVE' && canExecute ? 'animate-pulse bg-emerald-400' : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'}`} />
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${dismissedActionableSetup ? 'bg-zinc-500' : lifecycle === 'ACTIVE' && canExecute ? 'animate-pulse bg-emerald-400' : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'}`} />
                       <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Setup heartbeat</span>
-                      <span className={`text-[10px] font-semibold ${signalDismissed || !canExecute ? 'text-amber-300' : 'text-emerald-300'}`}>{heartbeatLabel}</span>
+                      <span className={`text-[10px] font-semibold ${dismissedActionableSetup || !canExecute ? 'text-amber-300' : 'text-emerald-300'}`}>{heartbeatLabel}</span>
                     </div>
                     <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-zinc-300">{heartbeatSummary}</p>
                   </div>
@@ -1134,7 +1151,7 @@ export default function DayTradingTerminal() {
 
             <aside className="rounded-xl border border-zinc-800/90 bg-black/20 p-3.5 sm:p-4">
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Next action</div>
-              {signalDismissed ? (
+              {dismissedActionableSetup ? (
                 <>
                   <div className="mt-2 text-lg font-semibold text-zinc-50">No action available</div>
                   <p className="mt-1 text-xs leading-relaxed text-zinc-500">
@@ -1283,14 +1300,16 @@ export default function DayTradingTerminal() {
         </div>
       </section>}
 
-      {entryReviewAvailable && <section className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
+      <section className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">
               <ShieldCheck className="h-3.5 w-3.5" />
               Optional AI review
             </div>
-            <h3 className="mt-1 text-base font-semibold text-zinc-100">Explain this setup in plain language</h3>
+            <h3 className="mt-1 text-base font-semibold text-zinc-100">
+              {entryReviewAvailable ? 'Explain this setup in plain language' : 'Explain the current directional bias'}
+            </h3>
             <p className="mt-1 text-xs text-zinc-500">Runs only when requested. Hard strategy limits remain authoritative.</p>
           </div>
           <div className="flex w-full items-center gap-2 sm:w-auto">
@@ -1314,7 +1333,7 @@ export default function DayTradingTerminal() {
               title={staleReviewReason || 'Review the current setup using all available strategy and GEX evidence'}
             >
               {riskLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
-              Review setup with AI
+              {entryReviewAvailable ? 'Review setup with AI' : 'Review bias with AI'}
             </Button>
           </div>
         </div>
@@ -1396,7 +1415,7 @@ export default function DayTradingTerminal() {
             {riskError || (currentSignal ? 'No AI review has been requested for this setup.' : 'A persisted strategy setup is required for AI review.')}
           </div>
         )}
-      </section>}
+      </section>
 
       <section className={entryReviewAvailable ? 'grid gap-4 lg:grid-cols-[1.1fr_0.9fr]' : ''}>
         {entryReviewAvailable && <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
@@ -1467,18 +1486,22 @@ export default function DayTradingTerminal() {
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
-        <article id="setup-history" className="min-w-0 scroll-mt-4 rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <details id="setup-history" className="responsive-details group min-w-0 scroll-mt-4 rounded-xl border border-zinc-800 bg-[#101216]">
+          <summary className="flex cursor-pointer list-none items-start justify-between gap-3 p-4 sm:cursor-default sm:p-5">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
               <h3 className="mt-1 text-base font-semibold text-zinc-100">Plans, execution and outcome</h3>
-              <p className="mt-1 text-xs text-zinc-500">Each row is one strategy setup. Expand it for the complete lifecycle.</p>
+              <p className="mt-1 text-xs text-zinc-500">Collapsed on mobile · expand for complete lifecycle records.</p>
             </div>
-            <Button variant="ghost" size="sm" className="h-8 justify-start px-2 text-[10px] text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => refetchHistory()}>
+            <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-zinc-500 transition-transform group-open:rotate-180 sm:hidden" />
+          </summary>
+          <div className="responsive-details-content border-t border-zinc-800 px-4 pb-4 sm:border-t-0 sm:px-5 sm:pb-5">
+            <div className="flex justify-end pt-2 sm:pt-0">
+              <Button variant="ghost" size="sm" className="h-8 justify-start px-2 text-[10px] text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => refetchHistory()}>
               <RefreshCw className="mr-1.5 h-3 w-3" /> Refresh history
-            </Button>
-          </div>
-          <div className="mt-4 space-y-2">
+              </Button>
+            </div>
+          <div className="mt-2 space-y-2">
             {historyLoading ? (
               <div className="space-y-2">
                 {[0, 1, 2].map(item => <div key={item} className="h-[4.5rem] animate-pulse rounded-lg bg-zinc-900/70" />)}
@@ -1495,18 +1518,19 @@ export default function DayTradingTerminal() {
               </div>
             )}
           </div>
-        </article>
+          </div>
+        </details>
 
-        <details className="group rounded-xl border border-zinc-800 bg-[#101216]">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:p-5">
+        <details className="responsive-details group rounded-xl border border-zinc-800 bg-[#101216]">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:cursor-default sm:p-5">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
               <h3 className="mt-1 text-base font-semibold text-zinc-100">Entry-critical services</h3>
-              <p className="mt-1 text-xs text-zinc-500">Collapsed by default · provider-timestamp ages</p>
+              <p className="mt-1 text-xs text-zinc-500">Collapsed on mobile · provider-timestamp ages</p>
             </div>
-            <ChevronDown className="h-4 w-4 shrink-0 text-zinc-500 transition-transform group-open:rotate-180" />
+            <ChevronDown className="h-4 w-4 shrink-0 text-zinc-500 transition-transform group-open:rotate-180 sm:hidden" />
           </summary>
-          <div className="border-t border-zinc-800 px-4 pb-4 sm:px-5 sm:pb-5">
+          <div className="responsive-details-content border-t border-zinc-800 px-4 pb-4 sm:border-t-0 sm:px-5 sm:pb-5">
             <div className="mt-3 flex justify-end">
               <Link to="/system-health" className="text-[10px] font-semibold text-sky-300 hover:text-sky-200">Full health →</Link>
             </div>
