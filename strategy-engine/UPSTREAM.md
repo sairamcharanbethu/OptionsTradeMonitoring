@@ -1,7 +1,6 @@
 # Strategy engine provenance
 
-The deterministic SPY strategy and GEX modules in this directory were vendored
-from `/Users/saibethu/Documents/ClaudeCodeAgent` at commit `90c5a08`.
+The deterministic SPY strategy and GEX modules.
 
 Included behavior is the broker-free `signal-only-v2` engine, its read-only
 IBKR prefetch loop, ZeroGEX normalization/prefetch, and dormant SSCGEX/local
