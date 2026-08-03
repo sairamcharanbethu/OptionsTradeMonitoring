@@ -1134,21 +1134,22 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Risk exits</h5>
-                                            <p className="text-[10px] text-muted-foreground">Control emergency stop automation for this user.</p>
+                                            <p className="text-[10px] text-muted-foreground">Control automatic live-position exits for this user.</p>
                                         </div>
-                                        <div className="hidden">
-                                            <Label htmlFor="takeProfitPct">Premium Take Profit Override (%)</Label>
+                                        <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
+                                            <Label htmlFor="takeProfitPct">Automatic Premium Take Profit (%)</Label>
                                             <Input
                                                 id="takeProfitPct"
                                                 type="number"
-                                                min="0"
-                                                step="1"
+                                                min="0.1"
+                                                max="500"
+                                                step="0.5"
                                                 value={takeProfitPct}
                                                 onChange={(e) => setTakeProfitPct(e.target.value)}
-                                                placeholder="Blank = use suggested TP"
+                                                placeholder="Blank = no premium override"
                                             />
                                             <p className="text-[10px] text-muted-foreground">
-                                                Optional. Example: 20 exits at entry premium +20%. Leave blank to rely on the scanner suggested TP.
+                                                Live long positions can submit an automatic exit near this premium gain. Example: 10 turns a $0.49 fill into a $0.54 target. Leave blank to use strategy targets only.
                                             </p>
                                         </div>
 
