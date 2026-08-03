@@ -769,7 +769,20 @@ class OtmOptionSelectionTest(unittest.TestCase):
         self.assertEqual(selected["target_strike"], 743.0)
         self.assertEqual(selected["selection"], "DELTA/LIQ OTM+1")
 
-    def test_budget_selector_prefers_two_affordable_contracts(self) -> None:
+    def test_budget_selector_prefers_quality_over_contract_count(self) -> None:
+        quality_contract = next(
+            contract
+            for contract in self.options["contracts"]
+            if contract["right"] == "C" and contract["strike"] == 743
+        )
+        quality_contract.update(
+            bid=1.47,
+            ask=1.49,
+            mid=1.48,
+            delta=0.40,
+            spread_pct=1.4,
+            volume=2_000,
+        )
         two_contract = next(
             contract
             for contract in self.options["contracts"]
@@ -779,9 +792,9 @@ class OtmOptionSelectionTest(unittest.TestCase):
             bid=0.96,
             ask=0.98,
             mid=0.97,
-            delta=0.25,
-            spread_pct=2.1,
-            volume=2_000,
+            delta=0.16,
+            spread_pct=4.9,
+            volume=10,
         )
 
         selected = _select_signal_option(
@@ -795,10 +808,27 @@ class OtmOptionSelectionTest(unittest.TestCase):
             max_spread_pct=5,
         )
 
-        self.assertEqual(selected["target_strike"], 745.0)
-        self.assertEqual(selected["planned_contracts"], 2)
-        self.assertEqual(selected["planned_limit_price"], 0.99)
-        self.assertEqual(selected["planned_total_debit"], 198.0)
+        self.assertEqual(selected["target_strike"], 743.0)
+        self.assertEqual(selected["planned_contracts"], 1)
+        self.assertEqual(selected["planned_limit_price"], 1.50)
+        self.assertEqual(selected["planned_total_debit"], 150.0)
+
+    def test_selector_uses_open_interest_as_a_quality_tiebreaker(self) -> None:
+        call_one = next(
+            contract for contract in self.options["contracts"]
+            if contract["right"] == "C" and contract["strike"] == 743
+        )
+        call_two = next(
+            contract for contract in self.options["contracts"]
+            if contract["right"] == "C" and contract["strike"] == 744
+        )
+        call_one.update(delta=0.40, spread_pct=2.0, volume=500, open_interest=10_000)
+        call_two.update(delta=0.40, spread_pct=2.0, volume=500, open_interest=0)
+
+        selected = _select_signal_option(self.options, "C", 742.10)
+
+        self.assertEqual(selected["target_strike"], 743.0)
+        self.assertGreater(selected["selection_quality"]["open_interest_credit"], 0)
 
     def test_budget_selector_falls_back_to_one_quality_contract(self) -> None:
         preferred = next(
@@ -1495,6 +1525,9 @@ class ContinuationStateTest(unittest.TestCase):
         self.assertEqual(signal["call_setup"]["risk_method"], "0.75x_5m_atr")
         self.assertEqual(signal["call_setup"]["risk_dollars"], 0.30)
         self.assertEqual(signal["call_setup"]["invalidation"], 99.70)
+        self.assertGreaterEqual(signal["confidence_score"], 90)
+        self.assertEqual(signal["continuation_quality"]["calls"]["grade"], "A+")
+        self.assertIn("gex_trend_context", signal["continuation_quality"]["calls"]["components"])
 
     def test_zerogex_stand_down_does_not_block_confirmed_continuation(self) -> None:
         now = time.time()

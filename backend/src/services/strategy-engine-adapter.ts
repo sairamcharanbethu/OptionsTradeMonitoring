@@ -622,7 +622,8 @@ export class StrategyEngineAdapter {
     const target = targets[Math.min(exitTargetNumber, targets.length) - 1] ?? targets[0] ?? null;
     const confidence = Math.max(0, Math.min(100, Math.round(Number(signal.confidence_score || 0))));
     const tradeBias = side === 'CALL' ? 'BULLISH' : 'BEARISH';
-    const setupGrade = state === 'ACTIVE' && lifecycle.entry_allowed === true ? 'A+' : null;
+    const confidenceGrade = confidence >= 90 ? 'A+' : confidence >= 70 ? 'A' : null;
+    const setupGrade = state === 'ACTIVE' && lifecycle.entry_allowed === true ? confidenceGrade : null;
     const signalResult = await (this.fastify as any).pg.query(
       `INSERT INTO signals (
          symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss,
@@ -637,6 +638,7 @@ export class StrategyEngineAdapter {
        ON CONFLICT (strategy_setup_id) WHERE strategy_setup_id IS NOT NULL DO UPDATE
        SET trade_bias = EXCLUDED.trade_bias,
            current_price = EXCLUDED.current_price,
+           confidence_score = EXCLUDED.confidence_score,
            setup_grade = EXCLUDED.setup_grade,
            lifecycle_status = EXCLUDED.lifecycle_status,
            entry_allowed = EXCLUDED.entry_allowed,

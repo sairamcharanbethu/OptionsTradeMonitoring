@@ -1703,7 +1703,7 @@ def _select_signal_option(
         )
     atm = min(strikes, key=lambda strike: (abs(strike - spot), strike))
     atm_index = strikes.index(atm)
-    candidates: list[tuple[int, float, int, dict[str, Any]]] = []
+    candidates: list[tuple[float, int, int, dict[str, Any]]] = []
     budget_blocked: list[tuple[float, int, dict[str, Any]]] = []
     for offset in range(1, max_otm_steps + 1):
         index = atm_index + offset if right == "C" else atm_index - offset
@@ -1728,12 +1728,28 @@ def _select_signal_option(
         delta = abs(float(evaluated["delta"])) if _number(evaluated.get("delta")) else None
         spread = float(evaluated.get("spread_pct") or max_spread_pct)
         volume = float(evaluated.get("volume") or 0)
+        open_interest = (
+            float(evaluated["open_interest"])
+            if _number(evaluated.get("open_interest"))
+            else 0
+        )
         delta_penalty = abs(delta - 0.40) * 4 if delta is not None else 1.0
         spread_penalty = spread / max_spread_pct
         volume_credit = min(math.log10(volume + 1) / 4, 1)
+        open_interest_credit = min(math.log10(open_interest + 1) / 4, 1)
         offset_penalty = abs(offset - 2) * 0.05
-        score = delta_penalty + spread_penalty + offset_penalty - volume_credit
+        score = (
+            delta_penalty + spread_penalty + offset_penalty
+            - volume_credit - 0.25 * open_interest_credit
+        )
         evaluated["selection_score"] = round(score, 4)
+        evaluated["selection_quality"] = {
+            "delta_penalty": round(delta_penalty, 4),
+            "spread_penalty": round(spread_penalty, 4),
+            "volume_credit": round(volume_credit, 4),
+            "open_interest_credit": round(open_interest_credit, 4),
+            "offset_penalty": round(offset_penalty, 4),
+        }
         evaluated["otm_offset"] = offset
         if evaluated.get("eligible") is True:
             planned_quantity = int(
@@ -1741,7 +1757,7 @@ def _select_signal_option(
                 or preferred_contracts
             )
             candidates.append(
-                (-planned_quantity, score, offset, evaluated)
+                (score, -planned_quantity, offset, evaluated)
             )
         elif (
             evaluated.get("quality_eligible") is True
@@ -1772,19 +1788,14 @@ def _select_signal_option(
             max_spread_pct=max_spread_pct,
         )
     candidates.sort(key=lambda item: (item[0], item[1], abs(item[2] - 2)))
-    _, best_score, _, best = candidates[0]
-    best_quantity = int(best.get("planned_contracts") or preferred_contracts)
+    best_score, _, _, best = candidates[0]
     preferred_strike = (preferred or {}).get("target_strike")
     if _number(preferred_strike):
         retained = next(
             (
                 item for item in candidates
                 if float(item[3]["target_strike"]) == float(preferred_strike)
-                and int(
-                    item[3].get("planned_contracts")
-                    or preferred_contracts
-                ) == best_quantity
-                and item[1] <= best_score + 0.10
+                and item[0] <= best_score + 0.10
             ),
             None,
         )
@@ -2072,6 +2083,49 @@ def _continuation_atr_plan(entry: float, side: str, atr_5m: float) -> dict[str, 
         "risk_dollars": risk,
         "targets": targets,
         "method": "0.75x_5m_atr",
+    }
+
+
+def _continuation_confidence(
+    *,
+    breakout: bool,
+    trend_5m: bool,
+    trend_15m: bool,
+    cross_market: bool,
+    use_cross_market: bool,
+    vwap_aligned: bool,
+    rvol: float,
+    spot: float,
+    trigger: float,
+    channel_width: float,
+    atr_5m: float,
+    gamma_regime: str | None,
+) -> dict[str, Any]:
+    """Score continuation strength without changing the existing entry gates."""
+    safe_atr = max(float(atr_5m), 0.01)
+    channel_atr = max(0.0, float(channel_width)) / safe_atr
+    trigger_distance_atr = abs(float(spot) - float(trigger)) / safe_atr
+    components = {
+        "completed_breakout": 20 if breakout else 0,
+        "trend_5m": 10 if trend_5m else 0,
+        "trend_15m": 15 if trend_15m else 0,
+        "cross_market": 5 if use_cross_market and cross_market else 0,
+        "vwap_alignment": 10 if vwap_aligned else 0,
+        "volume_expansion": 15 if rvol >= 1.2 else 0,
+        "strong_volume_bonus": 5 if rvol >= 1.5 else 0,
+        "gex_trend_context": 10 if gamma_regime == "Trend" else 5 if gamma_regime == "Range" else 0,
+        "channel_quality": min(10, round(channel_atr * 10)),
+        "trigger_proximity": 5 if trigger_distance_atr <= 0.25 else 3 if trigger_distance_atr <= 0.50 else 1 if trigger_distance_atr <= 0.75 else 0,
+    }
+    maximum = 105 if use_cross_market else 100
+    score = round(min(100, sum(components.values()) / maximum * 100))
+    return {
+        "score": score,
+        "grade": "A+" if score >= 90 else "A" if score >= 70 else "B",
+        "components": components,
+        "channel_width_atr": round(channel_atr, 3),
+        "trigger_distance_atr": round(trigger_distance_atr, 3),
+        "gamma_regime": gamma_regime,
     }
 
 
@@ -2839,6 +2893,39 @@ def build_signal(
     atr_5m = float(spy["atr_5m"]) if _number(spy.get("atr_5m")) else 0.20
     call_risk = _continuation_atr_plan(call_trigger, "calls", atr_5m)
     put_risk = _continuation_atr_plan(put_trigger, "puts", atr_5m)
+    channel_width = max(0.0, raw_call_trigger - raw_put_trigger)
+    call_continuation_quality = _continuation_confidence(
+        breakout=bool(call_break),
+        trend_5m=bool(spy_up),
+        trend_15m=bool(spy_up_15m),
+        cross_market=bool(qqq_up),
+        use_cross_market=use_qqq,
+        vwap_aligned=bool(above_vwap),
+        rvol=float(rvol),
+        spot=float(spot),
+        trigger=float(call_trigger),
+        channel_width=channel_width,
+        atr_5m=atr_5m,
+        gamma_regime=gex_ctx.get("gamma_regime"),
+    )
+    put_continuation_quality = _continuation_confidence(
+        breakout=bool(put_break),
+        trend_5m=bool(spy_down),
+        trend_15m=bool(spy_down_15m),
+        cross_market=bool(qqq_down),
+        use_cross_market=use_qqq,
+        vwap_aligned=bool(below_vwap),
+        rvol=float(rvol),
+        spot=float(spot),
+        trigger=float(put_trigger),
+        channel_width=channel_width,
+        atr_5m=atr_5m,
+        gamma_regime=gex_ctx.get("gamma_regime"),
+    )
+    result["continuation_quality"] = {
+        "calls": call_continuation_quality,
+        "puts": put_continuation_quality,
+    }
     call_targets = list(call_risk["targets"])
     put_targets = list(put_risk["targets"])
     structural_levels = _gex_target_levels(gex_ctx)
@@ -3542,6 +3629,17 @@ def build_signal(
             state=lifecycle_state,
             favoring=previous_side,
             strategy=previous_strategy,
+            confidence_score=(
+                previous_signal.get("confidence_score")
+                if _number(previous_signal.get("confidence_score"))
+                else (
+                    call_continuation_quality["score"]
+                    if previous_side == "calls"
+                    else put_continuation_quality["score"]
+                )
+                if previous_strategy == "CONTINUATION"
+                else None
+            ),
             reversal_setup=previous_reversal if previous_strategy in FROZEN_SETUP_STRATEGIES else None,
             lifecycle={
                 "status": lifecycle_state,
@@ -3686,7 +3784,13 @@ def build_signal(
             current_option["locked_at"] = now
             target_setup["option"] = current_option
             target_setup["status"] = "active_latched"
-            result.update(state="ACTIVE", favoring=side, strategy="CONTINUATION")
+            continuation_quality = call_continuation_quality if side == "calls" else put_continuation_quality
+            result.update(
+                state="ACTIVE",
+                favoring=side,
+                strategy="CONTINUATION",
+                confidence_score=continuation_quality["score"],
+            )
             result["lifecycle"] = {
                 "status": "ACTIVE",
                 "activated_at": now,
@@ -3715,7 +3819,12 @@ def build_signal(
         if _option_eligible(call_option) and not result["blockers"]:
             call_option["locked_at_activation"] = True
             call_option["locked_at"] = now
-            result.update(state="ACTIVE", favoring="calls", strategy="CONTINUATION")
+            result.update(
+                state="ACTIVE",
+                favoring="calls",
+                strategy="CONTINUATION",
+                confidence_score=call_continuation_quality["score"],
+            )
             result["lifecycle"] = {
                 "status": "ACTIVE", "activated_at": now, "entry_window_until": now + 60,
                 "targets_hit": 0, "entry_allowed": True, "paper_position_open": True,
@@ -3742,7 +3851,12 @@ def build_signal(
         if _option_eligible(put_option) and not result["blockers"]:
             put_option["locked_at_activation"] = True
             put_option["locked_at"] = now
-            result.update(state="ACTIVE", favoring="puts", strategy="CONTINUATION")
+            result.update(
+                state="ACTIVE",
+                favoring="puts",
+                strategy="CONTINUATION",
+                confidence_score=put_continuation_quality["score"],
+            )
             result["lifecycle"] = {
                 "status": "ACTIVE", "activated_at": now, "entry_window_until": now + 60,
                 "targets_hit": 0, "entry_allowed": True, "paper_position_open": True,

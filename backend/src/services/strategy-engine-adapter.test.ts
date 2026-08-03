@@ -230,6 +230,7 @@ async function runTests() {
   persistenceAdapter.currentSetupId = '11111111-1111-4111-8111-111111111111';
   await persistenceAdapter.persistPrimarySignal(signal({
     state: 'ACTIVE',
+    confidence_score: 92,
     lifecycle: { entry_allowed: true },
     paper_policy: { exit_after_target: 2 },
     call_setup: {
@@ -250,11 +251,19 @@ async function runTests() {
   );
   assert(signalInsert?.values[5] === 554, 'Persisted strategy target must honor paper exit target 2');
   assert(signalInsert?.values[20] === 'BULLISH', 'Primary CALL signals must store a directional trade bias');
-  assert(signalInsert?.values[21] === 'A+', 'An executable primary signal must store its actual executable grade');
+  assert(signalInsert?.values[21] === 'A+', 'A strong executable primary signal must store its scored A+ grade');
   const persistedOption = JSON.parse(signalInsert?.values[13]);
   assert(persistedOption.planned_contracts === 2, 'Persisted signal must retain planned contract quantity');
   assert(positionUpdate?.values[2] === 552, 'Open strategy positions must retain the first target as TP1');
   assert(positionUpdate?.values[3] === 554, 'Open strategy positions must retain the configured final target as TP2');
+  queries.length = 0;
+  await persistenceAdapter.persistPrimarySignal(signal({
+    state: 'ACTIVE',
+    confidence_score: 78,
+    lifecycle: { entry_allowed: true }
+  }));
+  const qualifiedSignalInsert = queries.find((query) => query.sql.includes('INSERT INTO signals'));
+  assert(qualifiedSignalInsert?.values[21] === 'A', 'A qualified continuation must persist as A instead of being promoted to A+');
   queries.length = 0;
   await persistenceAdapter.retireSupersededSetup('old-setup', signal());
   assert(queries.some((query) => query.sql.includes("lifecycle_status = 'SUPERSEDED'")), 'A replaced setup signal must become terminal');

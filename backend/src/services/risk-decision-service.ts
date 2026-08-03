@@ -7,6 +7,7 @@ export type RiskDecisionCode =
   | 'DAILY_LOSS_LIMIT'
   | 'CONSECUTIVE_LOSS_COOLDOWN'
   | 'PREMIUM_RISK_LIMIT'
+  | 'PLANNED_LOSS_LIMIT'
   | 'CORRELATED_EXPOSURE_LIMIT'
   | 'EXECUTION_REALISM_TOO_LOW'
   | 'THEORETICAL_PRICING'
@@ -47,6 +48,8 @@ export type PreSubmitRiskInput = {
   cooldownUntil?: string | null;
   premiumRisk?: number;
   maxPremiumRisk?: number;
+  plannedLoss?: number;
+  remainingDailyLossBudget?: number;
   correlatedOpenPositions?: number;
   maxCorrelatedPositions?: number;
   optionDetails?: any;
@@ -93,6 +96,9 @@ export class RiskDecisionService {
       input.premiumRisk !== undefined && input.maxPremiumRisk !== undefined
         ? this.forPremiumRisk(input.premiumRisk, input.maxPremiumRisk)
         : this.allow(),
+      input.plannedLoss !== undefined && input.remainingDailyLossBudget !== undefined
+        ? this.forPlannedLoss(input.plannedLoss, input.remainingDailyLossBudget)
+        : this.allow(),
       input.correlatedOpenPositions !== undefined && input.maxCorrelatedPositions !== undefined
         ? this.forCorrelatedExposure(input.correlatedOpenPositions, input.maxCorrelatedPositions, input.contractLabel || 'underlying')
         : this.allow(),
@@ -125,6 +131,8 @@ export class RiskDecisionService {
         cooldownUntil: input.cooldownUntil ?? null,
         premiumRisk: input.premiumRisk ?? null,
         maxPremiumRisk: input.maxPremiumRisk ?? null,
+        plannedLoss: input.plannedLoss ?? null,
+        remainingDailyLossBudget: input.remainingDailyLossBudget ?? null,
         correlatedOpenPositions: input.correlatedOpenPositions ?? null,
         maxCorrelatedPositions: input.maxCorrelatedPositions ?? null,
         quote: input.quoteValidation?.quote ? {
@@ -223,6 +231,18 @@ export class RiskDecisionService {
       code: 'PREMIUM_RISK_LIMIT',
       message: `Premium risk $${premiumRisk.toFixed(2)} exceeds per-trade limit $${Math.abs(maxPremiumRisk).toFixed(2)}`,
       metadata: { premiumRisk, maxPremiumRisk: Math.abs(maxPremiumRisk) }
+    };
+  }
+
+  static forPlannedLoss(plannedLoss: number, remainingDailyLossBudget: number): RiskDecision {
+    const remaining = Math.max(0, remainingDailyLossBudget);
+    if (plannedLoss <= remaining) return this.allow();
+    return {
+      allowed: false,
+      skipped: true,
+      code: 'PLANNED_LOSS_LIMIT',
+      message: `Planned loss $${plannedLoss.toFixed(2)} exceeds the remaining daily loss budget $${remaining.toFixed(2)}`,
+      metadata: { plannedLoss, remainingDailyLossBudget: remaining }
     };
   }
 

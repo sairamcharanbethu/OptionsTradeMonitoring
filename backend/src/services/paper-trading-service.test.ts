@@ -110,7 +110,7 @@ async function run() {
     },
     log: { warn() {}, info() {}, error() {} }
   } as any, redis) as any;
-  service.mandatoryFlattenDue = () => false;
+  service.expirationExitIntent = () => null;
   await service.refreshOpenPositions({
     state: 'ACTIVE',
     spot: 754.56,
@@ -523,6 +523,78 @@ async function run() {
     false,
     'paper flatten must not close a later-dated contract'
   );
+  assert.equal(
+    calendarService.expirationExitIntent({ expiration_date: '2026-11-27' }, new Date('2026-11-27T18:05:00.000Z')),
+    'END_OF_DAY_RECOVERY',
+    'a missed early-close flatten must remain recoverable after the market closes'
+  );
+  assert.equal(
+    calendarService.expirationExitIntent({ expiration_date: '2026-11-26' }, new Date('2026-11-27T18:05:00.000Z')),
+    'EXPIRED_RECOVERY',
+    'an expired paper contract must remain recoverable on a later date'
+  );
+
+  let overdueExitIntent = '';
+  let overdueExitBid = -1;
+  const overduePosition = {
+    id: 92,
+    option_type: 'CALL',
+    strike_price: 755,
+    expiration_date: '2026-08-03',
+    strategy_setup_id: 'overdue-setup',
+    strategy_snapshot: {},
+    entry_price: 0.97,
+    current_price: 1.24,
+    quantity: 1,
+    suggested_stop_loss: 750,
+    suggested_take_profit_1: 760,
+    suggested_take_profit_2: 762,
+    trailing_high_price: 1.24,
+    trailing_stop_loss_pct: 15,
+    exit_profile: 'BALANCED_T2',
+    policy_version: 'paper-exit-v2',
+    analysis_data: {}
+  };
+  const overdueService = new PaperTradingService({
+    pg: {
+      query: async (sql: string) => sql.includes('JOIN paper_trade_decisions')
+        ? { rows: [overduePosition] }
+        : sql.includes('SELECT * FROM positions WHERE id=')
+          ? { rows: [{ ...overduePosition, status: 'OPEN' }] }
+          : { rows: [] }
+    },
+    ibkrMarketData: { getOptionQuoteForOsi: async () => null },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  overdueService.expirationExitIntent = () => 'END_OF_DAY_RECOVERY';
+  overdueService.getLivePosition = async () => ({ currentPrice: 1.24, analysis: {} });
+  overdueService.setLivePosition = async () => new Date().toISOString();
+  overdueService.closePaperQuantity = async (_position: any, _quantity: number, bid: number, intent: string) => {
+    overdueExitBid = bid;
+    overdueExitIntent = intent;
+  };
+  await overdueService.refreshOpenPositions({
+    spot: 755,
+    state: 'ACTIVE',
+    lifecycle: { status: 'ACTIVE' },
+    call_setup: { option: {} }
+  }, 'different-setup');
+  assert.equal(overdueExitIntent, 'END_OF_DAY_RECOVERY', 'an overdue 0DTE paper position must close without a fresh option bid');
+  assert.equal(overdueExitBid, 1.24, 'overdue recovery should use the last Redis mark when IBKR has no bid');
+
+  let restartRecoveryIntent = '';
+  const restartRecoveryService = new PaperTradingService({
+    pg: { query: async () => ({ rows: [overduePosition] }) },
+    ibkrMarketData: { getOptionQuoteForOsi: async () => null },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  restartRecoveryService.expirationExitIntent = () => 'END_OF_DAY_RECOVERY';
+  restartRecoveryService.getLivePosition = async () => ({ currentPrice: 1.24, analysis: {} });
+  restartRecoveryService.closePaperQuantity = async (_position: any, _quantity: number, _bid: number, intent: string) => {
+    restartRecoveryIntent = intent;
+  };
+  await restartRecoveryService.recoverOverdueOpenPositions();
+  assert.equal(restartRecoveryIntent, 'END_OF_DAY_RECOVERY', 'service restart recovery must close an overdue open paper position');
 
   let premiumStopIntent = '';
   const premiumStopPosition = {

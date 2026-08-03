@@ -278,6 +278,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   const dailyLoss = RiskDecisionService.forDailyLossLimit(-250, 200);
   const cooldown = RiskDecisionService.forConsecutiveLosses(3, 3, new Date(Date.now() + 60_000).toISOString());
   const premiumRisk = RiskDecisionService.forPremiumRisk(600, 500);
+  const plannedLoss = RiskDecisionService.forPlannedLoss(90, 75);
   const correlated = RiskDecisionService.forCorrelatedExposure(1, 1, 'SPY/QQQ');
   const executionRealism = RiskDecisionService.forExecutionRealism({
     decision: {
@@ -391,6 +392,8 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(dailyLoss.allowed === false && dailyLoss.code === 'DAILY_LOSS_LIMIT', 'Should block daily loss limit');
   assert(cooldown.allowed === false && cooldown.code === 'CONSECUTIVE_LOSS_COOLDOWN', 'Should block consecutive-loss cooldown');
   assert(premiumRisk.allowed === false && premiumRisk.code === 'PREMIUM_RISK_LIMIT', 'Should block premium risk limit');
+  assert(plannedLoss.allowed === false && plannedLoss.code === 'PLANNED_LOSS_LIMIT', 'Should block planned loss above the remaining daily budget');
+  assert(RiskDecisionService.forPlannedLoss(75, 75).allowed === true, 'Should allow planned loss at the remaining daily budget');
   assert(correlated.allowed === false && correlated.code === 'CORRELATED_EXPOSURE_LIMIT', 'Should block correlated exposure');
   assert(executionRealism.allowed === false && executionRealism.code === 'EXECUTION_REALISM_TOO_LOW', 'Should block low execution realism');
   assert(theoretical.allowed === false && theoretical.code === 'THEORETICAL_PRICING', 'Should block theoretical pricing');
@@ -726,6 +729,32 @@ async function testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim() {
   assert(result.skipped === true && claimCalled === false, 'A stale lifecycle must block before the durable broker submission claim');
 }
 
+async function testFreshQuotePlannedLossRespectsRemainingDailyBudget() {
+  let failureMessage = '';
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  service.getSignalOptionDetails = async () => ({});
+  service.validateEntryQuote = async () => ({
+    quote: createEntryQuote(),
+    protectedLimit: 2.05,
+    baselineMark: 2,
+    movePct: 2.5,
+    stabilityMovePct: null
+  });
+  service.getRiskState = async () => ({ maxPremiumRisk: 500, remainingDailyLossBudget: 50 });
+  service.markSignalExecutionFailure = async (_userId: number, _signalId: number, message: string) => {
+    failureMessage = message;
+  };
+
+  const result = await service.executeSnapTradeOptionTrade(createSignalInput(), {
+    live_trading_acknowledged: 'true',
+    snaptrade_trading_account_id: '7:account',
+    order_type: 'LIMIT'
+  }, 1);
+
+  assert(result.riskCode === 'PLANNED_LOSS_LIMIT', 'The final protected quote must honor the remaining daily loss budget');
+  assert(failureMessage.includes('remaining daily loss budget'), 'The skipped execution must record the planned-loss reason');
+}
+
 async function runTests() {
   console.log('Running TradeExecutionService broker lifecycle tests...');
   await testIBKRQuoteAllowsProtectedLimit();
@@ -747,6 +776,7 @@ async function runTests() {
   await testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit();
   await testLiveEntryUsesCorrelatedExposureLockAndFailsClosed();
   await testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim();
+  await testFreshQuotePlannedLossRespectsRemainingDailyBudget();
   console.log('All TradeExecutionService broker lifecycle tests passed!');
 }
 

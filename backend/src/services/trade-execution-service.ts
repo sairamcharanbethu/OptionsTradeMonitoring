@@ -78,6 +78,7 @@ export class TradeExecutionService {
   private readonly ENTRY_MAX_SPREAD_PCT = 5;
   private readonly ENTRY_MIN_BID_TO_ENTRY_RATIO = 0.90;
   private readonly ENTRY_LIMIT_MID_TO_ASK_OFFSET_PCT = 20;
+  private readonly PLANNED_LOSS_FRACTION = 0.40;
   private readonly BROKER_SYNC_RETRY_BACKOFF_BASE_MS = 500;
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
@@ -229,7 +230,9 @@ export class TradeExecutionService {
       maxConsecutiveLosses: riskState.maxConsecutiveLosses,
       cooldownUntil: riskState.cooldownUntil,
       premiumRisk: Math.max(0, Number(input.mark || 0) * quantity * 100),
-      maxPremiumRisk: riskState.maxPremiumRisk
+      maxPremiumRisk: riskState.maxPremiumRisk,
+      plannedLoss: Math.max(0, Number(input.mark || 0) * quantity * 100 * this.PLANNED_LOSS_FRACTION),
+      remainingDailyLossBudget: riskState.remainingDailyLossBudget
     });
     if (!accountRisk.approved) {
       return this.denyPreSubmitRisk(input, broker, accountRisk);
@@ -350,18 +353,11 @@ export class TradeExecutionService {
 
   private async getSignalSetupGrade(signalId: number): Promise<string | null> {
     const { rows } = await this.fastify.pg.query(
-      `SELECT setup_grade, engine_version, lifecycle_status, entry_allowed
+      `SELECT setup_grade
        FROM signals
        WHERE id = $1`,
       [signalId]
     );
-    if (
-      rows[0]?.engine_version === 'signal-only-v2'
-      && rows[0]?.lifecycle_status === 'ACTIVE'
-      && rows[0]?.entry_allowed === true
-    ) {
-      return 'A+';
-    }
     return rows[0]?.setup_grade || null;
   }
 
@@ -448,9 +444,11 @@ export class TradeExecutionService {
     const cooldownUntil = consecutiveLosses >= maxConsecutiveLosses && lastLossAt
       ? new Date(new Date(lastLossAt).getTime() + lossCooldownMinutes * 60_000).toISOString()
       : null;
+    const dailyRealizedPnl = Number(pnlRows[0]?.daily_pnl || 0);
     return {
-      dailyRealizedPnl: Number(pnlRows[0]?.daily_pnl || 0),
+      dailyRealizedPnl,
       maxDailyLoss,
+      remainingDailyLossBudget: Math.max(0, maxDailyLoss - Math.max(0, -dailyRealizedPnl)),
       consecutiveLosses,
       maxConsecutiveLosses,
       cooldownUntil,
@@ -864,15 +862,18 @@ export class TradeExecutionService {
             message: strategyDebitViolation
           };
         }
-        const maxPremiumRisk = this.parsePositiveNumber(settings.max_premium_risk_dollars, 500, 1_000_000);
+        const riskState = await this.getRiskState(input.userId, settings, 'wealthsimple_snaptrade');
         const premiumRisk = validatedQuote.protectedLimit * quantity * 100;
+        const plannedLoss = premiumRisk * this.PLANNED_LOSS_FRACTION;
         const premiumRiskAssessment = RiskDecisionService.evaluatePreSubmit({
           signalId: input.signalId,
           broker: 'wealthsimple_snaptrade',
           side: input.winningSide,
           contractLabel: this.contractLabel(input),
           premiumRisk,
-          maxPremiumRisk
+          maxPremiumRisk: riskState.maxPremiumRisk,
+          plannedLoss,
+          remainingDailyLossBudget: riskState.remainingDailyLossBudget
         });
         if (!premiumRiskAssessment.approved) {
           return this.denyPreSubmitRisk(input, 'wealthsimple_snaptrade', premiumRiskAssessment);

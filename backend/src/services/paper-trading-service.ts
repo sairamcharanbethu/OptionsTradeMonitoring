@@ -295,7 +295,47 @@ export class PaperTradingService {
     for (const order of expired) {
       await this.journal('ENTRY_EXPIRED', 'Pending entry expired during restart recovery.', order, null, null, { orderId: order.id });
     }
+    await this.recoverOverdueOpenPositions();
     await this.refreshAccountEquity();
+  }
+
+  private async recoverOverdueOpenPositions(date: Date = new Date()): Promise<void> {
+    const { rows } = await (this.fastify as any).pg.query(
+      `SELECT p.*, ptd.exit_profile, ptd.policy_version,
+              ptd.trailing_stop_pct AS decision_trailing_stop_pct
+       FROM positions p
+       JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
+       WHERE p.paper_account_id=$1 AND p.status='OPEN'`,
+      [ACCOUNT_ID]
+    );
+    for (const position of rows) {
+      const expirationIntent = this.expirationExitIntent(position, date);
+      if (!expirationIntent) continue;
+      const live = await this.getLivePosition(position.id);
+      let bid = 0;
+      let quoteBid = 0;
+      try {
+        const quote = await (this.fastify as any).ibkrMarketData?.getOptionQuoteForOsi(null, this.osiTicker(position));
+        quoteBid = Number(quote?.bid || 0);
+        bid = quoteBid;
+      } catch (error: any) {
+        this.fastify.log.warn(`[PaperTrading] Recovery quote failed for position ${position.id}: ${error.message || String(error)}`);
+      }
+      const fallbackMark = Number(live?.currentPrice ?? position.current_price ?? 0);
+      if (!(bid > 0)) bid = Number.isFinite(fallbackMark) && fallbackMark >= 0 ? fallbackMark : 0;
+      await this.closePaperQuantity({
+        ...position,
+        current_price: bid,
+        underlying_price: live?.underlyingPrice ?? position.underlying_price,
+        trailing_high_price: live?.trailingHighPrice ?? position.trailing_high_price,
+        trailing_stop_loss_pct: live?.trailingStopPct ?? position.trailing_stop_loss_pct,
+        suggested_stop_loss: live?.suggestedStopLoss ?? position.suggested_stop_loss,
+        analysis_data: {
+          ...(live?.analysis || (typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {})),
+          recoveryExitQuoteSource: quoteBid > 0 ? 'IBKR_BID' : 'LAST_KNOWN_MARK'
+        }
+      }, Number(position.quantity), bid, expirationIntent);
+    }
   }
 
   public async setAutomationStatus(status: 'ACTIVE' | 'PAUSED'): Promise<Record<string, any>> {
@@ -786,7 +826,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const storedTerminal = ['COMPLETED', 'FAILED', 'INVALIDATED', 'TRACKING_ABORTED'].includes(
         String(storedSnapshot.lifecycle?.status || storedSnapshot.state).toUpperCase()
       );
-      const flattenDue = this.mandatoryFlattenDue(position);
+      const expirationIntent = this.expirationExitIntent(position);
       const optionQuoteAgeSeconds = option.quote_age_seconds == null ? NaN : Number(option.quote_age_seconds);
       let bid = sameSetup
         && this.canonicalTicker(option.local_symbol) === this.canonicalTicker(this.osiTicker(position))
@@ -796,12 +836,21 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         ? Number(option.bid || 0)
         : 0;
       if (!bid) {
-        const quote = await (this.fastify as any).ibkrMarketData.getOptionQuoteForOsi(null, this.osiTicker(position));
-        bid = Number(quote?.bid || 0);
+        try {
+          const quote = await (this.fastify as any).ibkrMarketData.getOptionQuoteForOsi(null, this.osiTicker(position));
+          bid = Number(quote?.bid || 0);
+        } catch (error: any) {
+          this.fastify.log.warn(`[PaperTrading] Option quote failed for position ${position.id}: ${error.message || String(error)}`);
+        }
       }
       const spot = Number(signal.spot || position.underlying_price || 0);
-      if (!bid) continue;
       const live = await this.getLivePosition(position.id);
+      if (!bid && expirationIntent && expirationIntent !== 'END_OF_DAY') {
+        const fallbackMark = Number(live?.currentPrice ?? position.current_price ?? 0);
+        bid = Number.isFinite(fallbackMark) && fallbackMark >= 0 ? fallbackMark : 0;
+      }
+      const allowZeroRecovery = expirationIntent === 'END_OF_DAY_RECOVERY' || expirationIntent === 'EXPIRED_RECOVERY';
+      if (!bid && !allowZeroRecovery) continue;
       const analysis = live?.analysis || (typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {});
       const trailingStopPct = Number(analysis.trailingStopPct || position.decision_trailing_stop_pct || DEFAULT_PAPER_TRAILING_STOP_PCT);
       const previousTrailingStop = Number(analysis.trailingStopPremium || 0);
@@ -846,6 +895,10 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         strategy_snapshot: sameSetup ? signal : storedSnapshot,
         analysis_data: analysis
       };
+      if (expirationIntent === 'END_OF_DAY_RECOVERY' || expirationIntent === 'EXPIRED_RECOVERY') {
+        await this.closePaperQuantity(managedPosition, Number(position.quantity), bid, expirationIntent);
+        continue;
+      }
       if (trailingStopPremium && trailingStopPremium > previousTrailingStop + 0.009) {
         if (!previousTrailingStop || trailingStopPremium >= previousTrailingStop + 0.05) {
           await this.notifyPaperEvent('TRAILING_MOVE', position, `Trail moved to $${trailingStopPremium.toFixed(2)} after premium reached $${trailingHighPremium.toFixed(2)}. Hold unless the bid touches the trail.`);
@@ -903,9 +956,9 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           }
         }
       }
-      if (flattenDue) {
+      if (expirationIntent === 'END_OF_DAY') {
         const current = await (this.fastify as any).pg.query('SELECT * FROM positions WHERE id=$1', [position.id]);
-        if (current.rows[0]?.status === 'OPEN') await this.closePaperQuantity({ ...current.rows[0], ...managedPosition, quantity: current.rows[0].quantity }, Number(current.rows[0].quantity), bid, 'END_OF_DAY');
+        if (current.rows[0]?.status === 'OPEN') await this.closePaperQuantity({ ...current.rows[0], ...managedPosition, quantity: current.rows[0].quantity }, Number(current.rows[0].quantity), bid, expirationIntent);
       }
     }
   }
@@ -1262,14 +1315,19 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
   }
 
   private mandatoryFlattenDue(position: any, date: Date = new Date()): boolean {
+    return this.expirationExitIntent(position, date) === 'END_OF_DAY';
+  }
+
+  private expirationExitIntent(position: any, date: Date = new Date()): 'END_OF_DAY' | 'END_OF_DAY_RECOVERY' | 'EXPIRED_RECOVERY' | null {
     const expiration = this.normalizeExpiry(position?.expiration_date);
-    if (!expiration || expiration !== ET_DATE.format(date)) return false;
+    const today = ET_DATE.format(date);
+    if (!expiration) return null;
+    if (expiration < today) return 'EXPIRED_RECOVERY';
+    if (expiration !== today) return null;
     const closeMinutes = getUSMarketCloseMinutes(date);
     const market = getNewYorkMarketState(date, 9 * 60 + 30, closeMinutes);
-    return !market.isWeekend
-      && !market.isHoliday
-      && market.minutes >= closeMinutes - 40
-      && market.minutes < closeMinutes;
+    if (market.isWeekend || market.isHoliday || market.minutes < closeMinutes - 40) return null;
+    return market.minutes < closeMinutes ? 'END_OF_DAY' : 'END_OF_DAY_RECOVERY';
   }
 
   private normalizeExpiry(value: any): string | null {
