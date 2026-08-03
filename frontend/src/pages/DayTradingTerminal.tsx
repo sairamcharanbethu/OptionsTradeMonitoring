@@ -1347,7 +1347,7 @@ export default function DayTradingTerminal() {
               </div>
               <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
-                Every distinct qualified setup can open concurrently at a protected market quote. Available cash, reservation accounting and per-setup deduplication preserve ledger integrity; live Wealthsimple orders remain manual.
+                Every distinct qualified setup can open concurrently at a protected market quote. Available cash, reservation accounting and per-setup deduplication preserve ledger integrity; live Wealthsimple entries remain manual, while configured exits can submit automatically.
               </p>
             </div>
             {paperAccount.canManage && (

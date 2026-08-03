@@ -105,12 +105,85 @@ async function testStrategyLifecycleExitDoesNotPartialTrim() {
   );
 }
 
+async function testExitReviewStateCannotBeClaimedAgain() {
+  let claimSql = '';
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (sql: string) => {
+        claimSql = sql;
+        return { rows: [], rowCount: 0 };
+      }
+    }
+  } as any;
+  const poller = new MarketPoller(fastify, {}) as any;
+
+  const submitted = await poller.submitSnapTradeExit({
+    id: 44,
+    user_id: 7,
+    account_id: '7:wealthsimple-account',
+    quantity: 1,
+    execution_status: 'EXIT_STALE',
+    entry_action: 'BUY_TO_OPEN'
+  }, 'MARKET');
+
+  assert(submitted === false, 'An unclaimable exit must not submit another broker order');
+  assert(claimSql.includes("NOT LIKE 'EXIT_%'"), 'The atomic exit claim must reject broker-review states');
+}
+
+async function testLocalClosePreservesPriorRealizedPnl() {
+  let updateSql = '';
+  let updateParams: any[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (sql: string, params: any[] = []) => {
+        updateSql = sql;
+        updateParams = params;
+        return { rows: [], rowCount: 1 };
+      }
+    }
+  } as any;
+  const poller = new MarketPoller(fastify, {}) as any;
+  const closePnl = await poller.closePositionLocally({
+    id: 45,
+    entry_price: 0.49,
+    quantity: 1,
+    realized_pnl: 12,
+    entry_action: 'BUY_TO_OPEN'
+  }, 0, 'EXPIRED');
+
+  assert(closePnl === -49, `A worthless $0.49 long contract should realize -$49, got ${closePnl}`);
+  assert(updateSql.includes('COALESCE(realized_pnl, 0) + $2'), 'A final close must add to PnL already realized by earlier trims');
+  assert(updateParams[0] === 0 && updateParams[1] === -49, `Expected zero exit and -$49 close leg, got ${JSON.stringify(updateParams)}`);
+  assert(updateParams[2] === 'EXPIRED', 'The close must preserve its lifecycle reason');
+}
+
+async function testPendingAndReviewExitsStayUnresolved() {
+  const poller = createPoller();
+  assert(poller.hasUnresolvedExit({ execution_status: 'PENDING_EXIT' }) === true, 'A pending exit must remain unresolved');
+  assert(poller.hasUnresolvedExit({ execution_status: 'EXIT_STALE' }) === true, 'A stale broker exit must require review');
+  assert(poller.hasUnresolvedExit({ execution_status: 'FILLED' }) === false, 'A filled entry must not look like an unresolved exit');
+}
+
+async function testExpirationUsesNewYorkTradingDate() {
+  const poller = createPoller();
+  const saturdayNoonEt = new Date('2026-07-04T16:00:00.000Z');
+  assert(poller.isPositionExpired({ expiration_date: '2026-07-03' }, saturdayNoonEt) === true, 'A prior-day contract must be expired');
+  assert(poller.isPositionExpired({ expiration_date: '2026-07-04' }, saturdayNoonEt) === false, 'The same date must not be treated as a prior-day expiration');
+  assert(poller.isPositionExpired({ expiration_date: 'invalid' }, saturdayNoonEt) === false, 'An invalid expiration must not trigger a destructive close');
+}
+
 async function runTests() {
   console.log('Running MarketPoller tests...');
   await testUnderlyingStopDirection();
   await testThetaStopMaxHoldWindows();
   await testTradeExcursionTracksLongAndShortPremium();
   await testStrategyLifecycleExitDoesNotPartialTrim();
+  await testExitReviewStateCannotBeClaimedAgain();
+  await testLocalClosePreservesPriorRealizedPnl();
+  await testPendingAndReviewExitsStayUnresolved();
+  await testExpirationUsesNewYorkTradingDate();
   console.log('All MarketPoller tests passed!');
 }
 

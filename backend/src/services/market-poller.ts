@@ -4,7 +4,7 @@ import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
 import { SnaptradeService } from './snaptrade-service';
-import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
@@ -43,16 +43,9 @@ export class MarketPoller {
   public async start() {
     // 1. Fetch the preferred interval and polling enabled state from settings
     try {
-      const { rows } = await (this.fastify as any).pg.query(
-        "SELECT key, value FROM settings WHERE key IN ('market_poll_interval', 'polling_enabled') ORDER BY updated_at DESC"
-      );
-      for (const row of rows) {
-        if (row.key === 'market_poll_interval') {
-          this.currentIntervalSeconds = parseInt(row.value, 10) || 60;
-        } else if (row.key === 'polling_enabled') {
-          this.pollingEnabled = row.value !== 'false';
-        }
-      }
+      const settings = await getGlobalSettings((this.fastify as any).pg);
+      this.currentIntervalSeconds = parseInt(settings.market_poll_interval, 10) || 60;
+      this.pollingEnabled = settings.polling_enabled !== 'false';
     } catch (err) {
       this.fastify.log.error(`[MarketPoller] Failed to load poll settings from DB: ${err}`);
     }
@@ -425,6 +418,7 @@ export class MarketPoller {
        WHERE id = $7
          AND status = 'OPEN'
          AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')
+         AND COALESCE(execution_status, '') NOT LIKE 'EXIT_%'
          AND broker_exit_order_id IS NULL
        RETURNING id`,
       [nextExecutionStatus, nextExitReason, orderType, partialTrim, exitQuantity, claimNote, position.id]
@@ -658,7 +652,7 @@ export class MarketPoller {
     this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
 
     const { rows: positions } = await (this.fastify as any).pg.query(
-      "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN'"
+      "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_broker, '') <> 'system_paper'"
     );
 
     if (positions.length === 0) {
@@ -685,7 +679,10 @@ export class MarketPoller {
         let shouldForceClose = false;
         let reason = '';
 
-        if (['PENDING_EXIT', 'PENDING_TRIM'].includes(String(pos.execution_status || ''))) {
+        if (this.hasUnresolvedExit(pos)) {
+            continue;
+        }
+        if (this.isPositionExpired(pos, now)) {
             continue;
         }
 
@@ -715,17 +712,7 @@ export class MarketPoller {
                 continue;
             }
 
-            const realizedPnl = TradeLifecycleService.calculateRealizedPnl(pos, currentPrice, pos.quantity);
-
-            await (this.fastify as any).pg.query(
-                `UPDATE positions 
-                 SET status = 'CLOSED', 
-                     realized_pnl = $1,
-                     notes = COALESCE(notes, '') || $2,
-                     updated_at = CURRENT_TIMESTAMP 
-                 WHERE id = $3`,
-                [realizedPnl, ` [Force closed: ${reason}]`, pos.id]
-            );
+            const realizedPnl = await this.closePositionLocally(pos, currentPrice, reason);
 
             await this.notifyN8n(
                 pos, 
@@ -766,27 +753,11 @@ export class MarketPoller {
       // 1. Auto-Close Expired Logic
       // Check for expired positions for this symbol first
       const symbolPositions = positions.filter((p: any) => p.symbol === symbol);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
       for (const pos of symbolPositions) {
-        const expDate = new Date(pos.expiration_date);
-        expDate.setHours(0, 0, 0, 0);
-
-        // Standard comparison: If expiration date is strictly less than today (yesterday or earlier), it's expired.
-        if (expDate < today) {
+        if (pos.status !== 'OPEN' || this.hasUnresolvedExit(pos)) continue;
+        if (this.isPositionExpired(pos)) {
           this.fastify.log.info(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
-          // Close with 0 PnL
-          await (this.fastify as any).pg.query(
-            `UPDATE positions 
-                 SET status = 'CLOSED', 
-                     exit_price = 0, 
-                     realized_pnl = 0, 
-                     notes = COALESCE(notes, '') || ' [Auto-closed as Expired]',
-                     updated_at = CURRENT_TIMESTAMP 
-                 WHERE id = $1`,
-            [pos.id]
-          );
+          await this.closePositionLocally(pos, 0, 'EXPIRED');
           // Mark as closed locally so we don't sync it below
           pos.status = 'CLOSED';
         }
@@ -806,6 +777,37 @@ export class MarketPoller {
 
   public async processPositionExitUpdate(position: any, price: number, greeks?: any, iv?: number, underlyingPrice?: number, quote?: ExitQuoteContext) {
     return this.processUpdate(position, price, greeks, iv, underlyingPrice, quote);
+  }
+
+  private hasUnresolvedExit(position: any): boolean {
+    const executionStatus = String(position?.execution_status || '');
+    return TradeLifecycleService.isPendingExitStatus(executionStatus)
+      || TradeLifecycleService.isBrokerExitReviewStatus(executionStatus);
+  }
+
+  private isPositionExpired(position: any, now: Date = new Date()): boolean {
+    const expiration = position?.expiration_date instanceof Date
+      ? position.expiration_date.toISOString().slice(0, 10)
+      : String(position?.expiration_date || '').slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(expiration)
+      && expiration < this.getNewYorkDateString(now);
+  }
+
+  private async closePositionLocally(position: any, exitPrice: number, reason: string): Promise<number> {
+    const realizedPnl = TradeLifecycleService.calculateRealizedPnl(position, exitPrice, position.quantity);
+    await (this.fastify as any).pg.query(
+      `UPDATE positions
+       SET status = 'CLOSED',
+           exit_price = $1,
+           realized_pnl = COALESCE(realized_pnl, 0) + $2,
+           execution_status = 'EXIT_FILLED',
+           exit_reason = $3,
+           notes = COALESCE(notes, '') || $4,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $5 AND status = 'OPEN'`,
+      [exitPrice, realizedPnl, reason, ` [Auto-closed: ${reason}]`, position.id]
+    );
+    return realizedPnl;
   }
 
   private async processUpdate(position: any, price: number, greeks?: any, iv?: number, underlyingPrice?: number, quote?: ExitQuoteContext) {

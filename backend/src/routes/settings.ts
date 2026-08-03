@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled } from '../lib/settings-utils';
+import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
@@ -335,6 +335,24 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                             return reply.code(400).send({ error: 'Paper trailing stop must be between 1% and 50%' });
                         }
                     }
+                    if (key === 'take_profit_pct') {
+                        const validationError = validateTakeProfitPctSetting(trimmedValue);
+                        if (validationError) {
+                            await client.query('ROLLBACK');
+                            return reply.code(400).send({ error: validationError });
+                        }
+                    }
+                    if (key === 'market_poll_interval') {
+                        const validationError = validateMarketPollIntervalSetting(trimmedValue);
+                        if (validationError) {
+                            await client.query('ROLLBACK');
+                            return reply.code(400).send({ error: validationError });
+                        }
+                    }
+                    if (key === 'polling_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Market polling enabled must be true or false' });
+                    }
                     await client.query(
                         `INSERT INTO settings (user_id, key, value, updated_at) 
                          VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
@@ -349,7 +367,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 await invalidateSettingsCache(userId, Object.keys(updates));
 
                 // If poll interval was updated, notify the poller service
-                if (updates.market_poll_interval) {
+                if (role === 'ADMIN' && updates.market_poll_interval) {
                     const newInterval = parseInt(updates.market_poll_interval, 10);
                     if (!isNaN(newInterval) && (fastify as any).poller) {
                         (fastify as any).poller.updateInterval(newInterval);
@@ -357,7 +375,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 }
 
                 // If polling toggle was updated, stop/resume the poller
-                if (updates.polling_enabled !== undefined && (fastify as any).poller) {
+                if (role === 'ADMIN' && updates.polling_enabled !== undefined && (fastify as any).poller) {
                     if (updates.polling_enabled === 'true') {
                         (fastify as any).poller.resume();
                     } else {

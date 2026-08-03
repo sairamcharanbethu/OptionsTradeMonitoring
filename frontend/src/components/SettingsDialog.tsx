@@ -578,8 +578,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 openrouter_key: openRouterKey,
                 ai_model: model,
                 briefing_frequency: briefingFrequency,
-                market_poll_interval: pollInterval,
-                polling_enabled: pollingEnabled ? 'true' : 'false',
                 position_poll_interval: positionPollInterval,
                 snaptrade_client_id: snaptradeClientId,
                 snaptrade_consumer_key: snaptradeConsumerKey,
@@ -616,6 +614,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 day_trading_coach_model: model
             };
             if (isAdmin) {
+                settingsPayload.market_poll_interval = pollInterval;
+                settingsPayload.polling_enabled = pollingEnabled ? 'true' : 'false';
                 settingsPayload.mcp_trading_enabled = mcpTradingEnabled ? 'true' : 'false';
                 if (zeroGexApiKey.trim()) settingsPayload.zerogex_api_key = zeroGexApiKey.trim();
                 settingsPayload.strategy_max_total_debit_dollars = strategyMaxTotalDebitDollars;
@@ -739,10 +739,13 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             id="pollingToggle"
                                             checked={pollingEnabled}
                                             onCheckedChange={setPollingEnabled}
+                                            disabled={!isAdmin}
                                         />
                                     </div>
                                     <p className={`text-[10px] ${!pollingEnabled ? 'text-amber-500 font-semibold' : 'text-muted-foreground'}`}>
-                                        {!pollingEnabled
+                                        {!isAdmin
+                                            ? 'Admin-controlled master toggle for all server-side market data polling.'
+                                            : !pollingEnabled
                                             ? 'Polling is paused. No API calls will be made to fetch prices or Greeks.'
                                             : 'Master toggle for all server-side market data polling.'}
                                     </p>
@@ -755,7 +758,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <Badge variant="destructive" className="text-[10px] h-5">High Risk</Badge>
                                         )}
                                     </Label>
-                                    <Select value={pollInterval} onValueChange={setPollInterval} disabled={!pollingEnabled}>
+                                    <Select value={pollInterval} onValueChange={setPollInterval} disabled={!isAdmin || !pollingEnabled}>
                                         <SelectTrigger className={!pollingEnabled ? 'opacity-50' : ''}>
                                             <SelectValue placeholder="Select Interval" />
                                         </SelectTrigger>

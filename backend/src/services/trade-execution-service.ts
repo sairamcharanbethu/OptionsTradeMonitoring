@@ -973,9 +973,7 @@ export class TradeExecutionService {
     const strategyManaged = signal.engine_version === 'signal-only-v2' && Boolean(signal.strategy_setup_id);
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
     const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
-    const configuredTakeProfitPct = strategyManaged
-      ? null
-      : this.parseOptionalPct(execution.takeProfitPct, 500);
+    const configuredTakeProfitPct = this.parseOptionalPct(execution.takeProfitPct, 500);
     const premiumTakeProfit = configuredTakeProfitPct !== null
       ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
       : null;

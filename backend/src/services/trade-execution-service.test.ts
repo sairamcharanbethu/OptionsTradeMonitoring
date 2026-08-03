@@ -549,6 +549,42 @@ async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
   }
 }
 
+async function testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit() {
+  let insertParams: any[] = [];
+  const service = new TradeExecutionService({
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (sql: string, params: any[] = []) => {
+        if (sql.includes('FROM signals')) {
+          return { rows: [{ strategy_setup_id: 'setup-42', engine_version: 'signal-only-v2', lifecycle_status: 'ACTIVE' }] };
+        }
+        if (sql.includes('INSERT INTO positions')) {
+          insertParams = params;
+          return { rows: [{ id: 9001 }] };
+        }
+        return { rows: [] };
+      }
+    }
+  } as any);
+
+  await (service as any).insertExecutedPosition(createSignalInput({ mark: 0.49 }), {
+    quantity: 1,
+    entryPrice: 0.49,
+    isSimulated: false,
+    accountId: '7:wealthsimple-account',
+    executionBroker: 'wealthsimple_snaptrade',
+    brokerOrderId: 'order-42',
+    brokerTradeId: null,
+    executionStatus: 'PENDING_RECONCILE',
+    positionStatus: 'PENDING_ORDER',
+    takeProfitPct: '10',
+    notes: '[test entry]'
+  });
+
+  assert(insertParams[8] === 0.54, `A 10% strategy premium override on a $0.49 entry should store $0.54, got ${insertParams[8]}`);
+  assert(insertParams[32] === true, 'The strategy position must remain marked as strategy-managed');
+}
+
 async function runTests() {
   console.log('Running TradeExecutionService broker lifecycle tests...');
   await testIBKRQuoteAllowsProtectedLimit();
@@ -565,6 +601,7 @@ async function runTests() {
   await testStrategyDebitPlanUsesSubmittedLimit();
   await testPreSubmitRiskDenialSkipsBeforeBrokerPath();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
+  await testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit();
   console.log('All TradeExecutionService broker lifecycle tests passed!');
 }
 

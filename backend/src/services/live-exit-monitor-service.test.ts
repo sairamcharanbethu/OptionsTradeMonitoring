@@ -9,6 +9,7 @@ function assert(condition: boolean, message: string) {
 function createFastifyMock() {
   let positionQueries = 0;
   let processedUpdates = 0;
+  let positionQuerySql = '';
   const fastify = {
     log: {
       info: () => {},
@@ -20,6 +21,7 @@ function createFastifyMock() {
       query: async (sql: string) => {
         if (sql.includes('FROM positions')) {
           positionQueries++;
+          positionQuerySql = sql;
           return {
             rows: [{
               id: 101,
@@ -49,13 +51,14 @@ function createFastifyMock() {
   return {
     fastify,
     getPositionQueries: () => positionQueries,
-    getProcessedUpdates: () => processedUpdates
+    getProcessedUpdates: () => processedUpdates,
+    getPositionQuerySql: () => positionQuerySql
   };
 }
 
 async function testLiveExitCachesOpenPositionsAcrossQuoteBurst() {
   process.env.LIVE_EXIT_POSITION_CACHE_MS = '5000';
-  const { fastify, getPositionQueries, getProcessedUpdates } = createFastifyMock();
+  const { fastify, getPositionQueries, getProcessedUpdates, getPositionQuerySql } = createFastifyMock();
   const service = new LiveExitMonitorService(fastify);
   service.start('test');
 
@@ -65,6 +68,7 @@ async function testLiveExitCachesOpenPositionsAcrossQuoteBurst() {
   assert(getPositionQueries() === 1, `Expected one positions query for quote burst, got ${getPositionQueries()}`);
   assert(getProcessedUpdates() === 2, `Expected both quotes to process against cached position, got ${getProcessedUpdates()}`);
   assert(service.getHealth().positionCacheSize === 1, 'Expected live-exit position cache to contain one contract');
+  assert(getPositionQuerySql().includes("execution_broker, '') <> 'system_paper'"), 'Legacy live-exit monitoring must exclude system-paper positions');
 }
 
 async function testLiveExitReflectsReconnectingIbkrStream() {

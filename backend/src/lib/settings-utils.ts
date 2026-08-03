@@ -10,6 +10,8 @@ const GLOBAL_SETTING_KEYS = [
   'zerogex_api_key',
   'discord_webhook_url',
   'discord_alerts_enabled',
+  'market_poll_interval',
+  'polling_enabled',
   'day_trading_symbols',
   'strategy_max_total_debit_dollars',
   'strategy_preferred_contracts',
@@ -26,6 +28,8 @@ const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
   'strategy_preferred_contracts',
   'strategy_max_contracts',
   'paper_trailing_stop_pct',
+  'market_poll_interval',
+  'polling_enabled',
   'ibkr_gateway_mode',
   'ibkr_host',
   'ibkr_port',
@@ -127,7 +131,9 @@ export function isPublicGlobalSettingKey(key: string): boolean {
     'strategy_max_total_debit_dollars',
     'strategy_preferred_contracts',
     'strategy_max_contracts',
-    'paper_trailing_stop_pct'
+    'paper_trailing_stop_pct',
+    'market_poll_interval',
+    'polling_enabled'
   ].includes(key);
 }
 
@@ -144,4 +150,23 @@ export function applyMcpTradingEnabledFallback(settings: Record<string, string>,
     ...settings,
     mcp_trading_enabled: String(envValue || '').trim().toLowerCase() === 'true' ? 'true' : 'false'
   };
+}
+
+export function validateTakeProfitPctSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const takeProfitPct = Number(raw);
+  if (!Number.isFinite(takeProfitPct) || takeProfitPct <= 0 || takeProfitPct > 500) {
+    return 'Automatic premium take profit must be greater than 0% and no more than 500%';
+  }
+  return null;
+}
+
+export function validateMarketPollIntervalSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  const seconds = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(seconds) || seconds < 1 || seconds > 900) {
+    return 'Market poll interval must be a whole number between 1 and 900 seconds';
+  }
+  return null;
 }
