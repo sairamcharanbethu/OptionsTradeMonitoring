@@ -305,6 +305,12 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
     quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9 },
     intendedEntry: 2.05
   });
+  const missingQuoteAge = RiskDecisionService.evaluatePreSubmit({
+    signalId: 42,
+    quoteValidation: { quote: createEntryQuote({ quoteAgeMs: null }), baselineMark: 2, movePct: 2, stabilityMovePct: 0 },
+    quoteThresholds: { maxQuoteAgeMs: 2_000, maxSpreadPct: 15, minBidToEntryRatio: 0.9 },
+    intendedEntry: 2.05
+  });
   const missingBidAsk = RiskDecisionService.evaluatePreSubmit({
     signalId: 42,
     broker: 'wealthsimple_snaptrade',
@@ -379,6 +385,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(liveAck.denials[0]?.code === 'LIVE_TRADING_NOT_ACKNOWLEDGED', 'Should block missing live acknowledgement');
   assert(account.denials[0]?.code === 'ACCOUNT_NOT_SELECTED', 'Should block missing trading account');
   assert(staleQuote.denials[0]?.code === 'STALE_QUOTE', 'Should block stale option quote');
+  assert(missingQuoteAge.denials[0]?.code === 'STALE_QUOTE', 'Should block an option quote without a provider age');
   assert(missingBidAsk.denials[0]?.code === 'MISSING_BID_ASK', 'Should block missing bid/ask');
   assert(wideSpread.denials[0]?.code === 'SPREAD_TOO_WIDE', 'Should block wide spread');
   assert(premiumJump.approved === true && premiumJump.evidence.movePct === 20, 'Premium jump should remain evidence, not block momentum entry');

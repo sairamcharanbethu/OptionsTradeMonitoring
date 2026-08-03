@@ -305,6 +305,62 @@ async function run() {
   assert.equal(concurrentOrderCreated, true, 'a distinct qualified setup must reserve its own paper entry');
   assert.equal(concurrentPendingProcessed, true, 'a newly reserved concurrent entry must proceed to autonomous fill processing');
 
+  let invalidQuoteQueries = 0;
+  const invalidQuoteService = new PaperTradingService({
+    pg: { query: async () => { invalidQuoteQueries += 1; return { rows: [] }; } },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  const otherwiseEligibleSignal = {
+    state: 'ACTIVE',
+    generated_at: Date.now() / 1000,
+    lifecycle: { entry_allowed: true },
+    favoring: 'calls',
+    call_setup: {
+      option: {
+        eligible: true,
+        bid: 0.49,
+        ask: 0.50,
+        expiry: '2026-08-03',
+        local_symbol: 'SPY 260803C00756000',
+        strike: 756
+      }
+    }
+  };
+  await invalidQuoteService.maybeCreateEntry(otherwiseEligibleSignal, 'missing-quote-age');
+  assert.equal(invalidQuoteQueries, 0, 'an option quote without a provider age must not reach autonomous paper reservation');
+  await invalidQuoteService.maybeCreateEntry({
+    ...otherwiseEligibleSignal,
+    generated_at: Date.now() / 1000 + 60,
+    call_setup: { option: { ...otherwiseEligibleSignal.call_setup.option, quote_age_seconds: 0.1 } }
+  }, 'future-snapshot');
+  assert.equal(invalidQuoteQueries, 0, 'a future-dated strategy snapshot must not reach autonomous paper reservation');
+
+  let invalidFillConnections = 0;
+  const invalidFillOrder = {
+    id: 30,
+    option_type: 'CALL',
+    osi_ticker: 'SPY 260803C00755000',
+    expires_at: new Date(Date.now() + 60_000).toISOString()
+  };
+  const invalidFillService = new PaperTradingService({
+    pg: {
+      query: async (sql: string) => {
+        if (sql.includes('FROM paper_orders po')) return { rows: [{ ...invalidFillOrder, setup_id: 'missing-fill-age' }] };
+        if (sql.includes('SELECT * FROM paper_accounts')) return { rows: [{ automation_status: 'ACTIVE' }] };
+        return { rows: [] };
+      },
+      connect: async () => { invalidFillConnections += 1; throw new Error('stale quote must not start a fill transaction'); }
+    },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  await invalidFillService.processPendingEntry({
+    state: 'ACTIVE',
+    generated_at: Date.now() / 1000,
+    lifecycle: { entry_allowed: true },
+    call_setup: { option: { eligible: true, local_symbol: invalidFillOrder.osi_ticker, bid: 0.58, ask: 0.59 } }
+  }, 'missing-fill-age');
+  assert.equal(invalidFillConnections, 0, 'a pending order must not fill without a provider quote age');
+
   const entryQueries: string[] = [];
   let entryRedisDeletes = 0;
   const entryOrder = {
@@ -359,11 +415,12 @@ async function run() {
   }) as any;
   await entryService.processPendingEntry({
     state: 'ACTIVE',
+    generated_at: Date.now() / 1000,
     lifecycle: { entry_allowed: true },
     call_setup: {
       invalidation: 753.78,
       targets: [755, 755.46],
-      option: { local_symbol: entryOrder.osi_ticker, bid: 0.58, ask: 0.59, quote_age_seconds: 0.1 }
+      option: { eligible: true, local_symbol: entryOrder.osi_ticker, bid: 0.58, ask: 0.59, quote_age_seconds: 0.1 }
     }
   }, entryOrder.setup_id).then(
     () => { throw new Error('An unverified Redis entry state must not commit the PostgreSQL fill'); },

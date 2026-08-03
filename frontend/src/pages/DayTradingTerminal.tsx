@@ -84,6 +84,7 @@ const duration = (startValue?: string | null, endValue?: string | null) => {
 const relativeAge = (seconds: unknown) => {
   const age = Number(seconds);
   if (!Number.isFinite(age)) return 'No snapshot';
+  if (age < 0) return 'Clock skew';
   if (age < 1) return 'Live';
   if (age < 60) return `${age.toFixed(1)}s ago`;
   return `${Math.round(age / 60)}m ago`;
@@ -603,7 +604,7 @@ export default function DayTradingTerminal() {
   const baseSnapshotAge = Number(strategyState?.ageSeconds);
   const snapshotGeneratedAt = Number(strategySignal?.generated_at);
   const snapshotAge = Number.isFinite(snapshotGeneratedAt) && snapshotGeneratedAt > 0
-    ? Math.max(0, clockNow / 1000 - snapshotGeneratedAt)
+    ? clockNow / 1000 - snapshotGeneratedAt
     : baseSnapshotAge;
   const snapshotDrift = Number.isFinite(snapshotAge) && Number.isFinite(baseSnapshotAge)
     ? Math.max(0, snapshotAge - baseSnapshotAge)
@@ -641,7 +642,7 @@ export default function DayTradingTerminal() {
     lifecycle !== 'ACTIVE' ? `Lifecycle is ${lifecycle}` : null,
     !entryAllowed ? 'Entry window is not open' : null,
     !freshSnapshot ? 'Strategy snapshot is stale' : null,
-    !Number.isFinite(quoteAge) || quoteAge > 15 ? 'Selected option quote is stale or missing' : null,
+    !Number.isFinite(quoteAge) || quoteAge < 0 || quoteAge > 15 ? 'Selected option quote is stale or missing' : null,
     !gexFresh ? 'Authoritative GEX snapshot is stale or missing' : null,
     usageRemaining <= 0 ? 'Daily trade limit reached' : null,
     plannedContracts <= 0 ? 'Strategy has no executable contract quantity' : null,

@@ -87,7 +87,7 @@ export class StrategyEngineAdapter {
 
   public getCurrentState() {
     const generatedAt = Number(this.currentSignal?.generated_at || 0);
-    const ageSeconds = generatedAt > 0 ? Math.max(0, Date.now() / 1000 - generatedAt) : null;
+    const ageSeconds = generatedAt > 0 ? Date.now() / 1000 - generatedAt : null;
     return {
       mode: this.mode,
       setupId: this.currentSetupId,

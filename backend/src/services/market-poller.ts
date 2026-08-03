@@ -651,9 +651,10 @@ export class MarketPoller {
   public async poll(force: boolean = false) {
     this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
 
-    const { rows: positions } = await (this.fastify as any).pg.query(
+    const { rows } = await (this.fastify as any).pg.query(
       "SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_broker, '') <> 'system_paper'"
     );
+    const positions = await this.marketDataBuffer.applyLatestToPositions<any>(rows);
 
     if (positions.length === 0) {
       this.fastify.log.info('[MarketPoller] No active positions to poll.');
@@ -798,14 +799,28 @@ export class MarketPoller {
     await (this.fastify as any).pg.query(
       `UPDATE positions
        SET status = 'CLOSED',
+           current_price = $1,
            exit_price = $1,
            realized_pnl = COALESCE(realized_pnl, 0) + $2,
            execution_status = 'EXIT_FILLED',
            exit_reason = $3,
-           notes = COALESCE(notes, '') || $4,
+           max_favorable_price = COALESCE($4, max_favorable_price),
+           max_adverse_price = COALESCE($5, max_adverse_price),
+           mfe_pct = COALESCE($6, mfe_pct),
+           mae_pct = COALESCE($7, mae_pct),
+           trailing_high_price = COALESCE($8, trailing_high_price),
+           stop_loss_trigger = COALESCE($9, stop_loss_trigger),
+           analysis_data = COALESCE($10::jsonb, analysis_data),
+           notes = COALESCE(notes, '') || $11,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5 AND status = 'OPEN'`,
-      [exitPrice, realizedPnl, reason, ` [Auto-closed: ${reason}]`, position.id]
+       WHERE id = $12 AND status = 'OPEN'`,
+      [exitPrice, realizedPnl, reason, position.max_favorable_price ?? null, position.max_adverse_price ?? null,
+        position.mfe_pct ?? null, position.mae_pct ?? null, position.trailing_high_price ?? null,
+        position.stop_loss_trigger ?? null,
+        position.analysis_data == null
+          ? null
+          : (typeof position.analysis_data === 'string' ? position.analysis_data : JSON.stringify(position.analysis_data)),
+        ` [Auto-closed: ${reason}]`, position.id]
     );
     return realizedPnl;
   }
@@ -814,6 +829,7 @@ export class MarketPoller {
     // System paper positions are valued and exited exclusively by PaperTradingService.
     // Keeping them out of the legacy poller prevents duplicate closes and broker calls.
     if (position.execution_broker === 'system_paper') return;
+    position = await this.marketDataBuffer.applyLatestToPosition(position);
     let analysis: any = {};
     let analysisDirty = false;
     try {
@@ -837,6 +853,9 @@ export class MarketPoller {
       trailing_high_price: Number(position.trailing_high_price || position.entry_price),
       trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
     });
+    const bufferedTrailingHighPrice = engineResult.newHigh ?? Number(position.trailing_high_price || position.entry_price);
+    const bufferedStopLossTrigger = engineResult.newStopLoss
+      ?? (position.stop_loss_trigger == null ? null : Number(position.stop_loss_trigger));
 
     const isShortPremiumPosition = TradeLifecycleService.isShortPremiumPosition(position);
     let triggered = !isShortPremiumPosition && !noBidQuote && engineResult.triggered && engineResult.triggerType === 'TAKE_PROFIT';
@@ -855,16 +874,6 @@ export class MarketPoller {
     const entryPrice = Number(position.entry_price);
     const excursion = this.calculateTradeExcursion(position, price);
     if (excursion.changed) {
-      await (this.fastify as any).pg.query(
-        `UPDATE positions
-         SET max_favorable_price = $1,
-             max_adverse_price = $2,
-             mfe_pct = $3,
-             mae_pct = $4,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $5`,
-        [excursion.maxFavorablePrice, excursion.maxAdversePrice, excursion.mfePct, excursion.maePct, position.id]
-      );
       position.max_favorable_price = excursion.maxFavorablePrice;
       position.max_adverse_price = excursion.maxAdversePrice;
       position.mfe_pct = excursion.mfePct;
@@ -1057,12 +1066,7 @@ export class MarketPoller {
               this.fastify.log.info(`[MarketPoller] Dynamic Trailing TAKE_PROFIT triggered for CALL: Spot ${underlyingPrice.toFixed(2)} <= Trailing Stop ${trailingStopPrice.toFixed(2)}`);
             }
 
-            // Save updated analysis data back to the database
-            await (this.fastify as any).pg.query(
-              "UPDATE positions SET analysis_data = $1 WHERE id = $2",
-              [JSON.stringify(analysis), position.id]
-            );
-            analysisDirty = false;
+            analysisDirty = true;
           }
         } else if (position.option_type === 'PUT') {
           const hasReachedTarget = analysis.underlyingTrailingLow !== undefined || underlyingPrice <= underlyingTarget;
@@ -1081,12 +1085,7 @@ export class MarketPoller {
               this.fastify.log.info(`[MarketPoller] Dynamic Trailing TAKE_PROFIT triggered for PUT: Spot ${underlyingPrice.toFixed(2)} >= Trailing Stop ${trailingStopPrice.toFixed(2)}`);
             }
 
-            // Save updated analysis data
-            await (this.fastify as any).pg.query(
-              "UPDATE positions SET analysis_data = $1 WHERE id = $2",
-              [JSON.stringify(analysis), position.id]
-            );
-            analysisDirty = false;
+            analysisDirty = true;
           }
         }
       } else {
@@ -1140,7 +1139,14 @@ export class MarketPoller {
       gamma: greeks?.gamma ?? null,
       vega: greeks?.vega ?? null,
       iv: iv ?? null,
-      underlyingPrice: underlyingPrice ?? null
+      underlyingPrice: underlyingPrice ?? null,
+      maxFavorablePrice: excursion.maxFavorablePrice,
+      maxAdversePrice: excursion.maxAdversePrice,
+      mfePct: excursion.mfePct,
+      maePct: excursion.maePct,
+      trailingHighPrice: bufferedTrailingHighPrice,
+      stopLossTrigger: bufferedStopLossTrigger,
+      analysisData: analysisDirty ? analysis : undefined
     });
 
     if (!quoteRecorded) {
@@ -1152,15 +1158,15 @@ export class MarketPoller {
         gamma: greeks?.gamma ?? null,
         vega: greeks?.vega ?? null,
         iv: iv ?? null,
-        underlyingPrice: underlyingPrice ?? null
+        underlyingPrice: underlyingPrice ?? null,
+        maxFavorablePrice: excursion.maxFavorablePrice,
+        maxAdversePrice: excursion.maxAdversePrice,
+        mfePct: excursion.mfePct,
+        maePct: excursion.maePct,
+        trailingHighPrice: bufferedTrailingHighPrice,
+        stopLossTrigger: bufferedStopLossTrigger,
+        analysisData: analysisDirty ? analysis : undefined
       });
-    }
-
-    if (analysisDirty) {
-      await (this.fastify as any).pg.query(
-        "UPDATE positions SET analysis_data = $1 WHERE id = $2",
-        [JSON.stringify(analysis), position.id]
-      );
     }
 
     const currentExecutionStatus = String(position.execution_status || '');
@@ -1198,6 +1204,21 @@ export class MarketPoller {
 
         // Execute Live SnapTrade order if not simulated
         if (!position.is_simulated) {
+            await (this.fastify as any).pg.query(
+              `UPDATE positions
+               SET current_price = $1,
+                   max_favorable_price = $2,
+                   max_adverse_price = $3,
+                   mfe_pct = $4,
+                   mae_pct = $5,
+                   trailing_high_price = $6,
+                   stop_loss_trigger = $7,
+                   analysis_data = $8,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = $9 AND status = 'OPEN'`,
+              [price, excursion.maxFavorablePrice, excursion.maxAdversePrice, excursion.mfePct, excursion.maePct,
+                bufferedTrailingHighPrice, bufferedStopLossTrigger, JSON.stringify(analysis), position.id]
+            );
             const exitAction = TradeLifecycleService.getExitAction(position);
             this.fastify.log.info(`[MarketPoller] LIVE position ${partialTrim ? 'profit trim' : 'exit'} triggered for position ${position.id} (${position.symbol}). Executing ${exitAction} ${exitQuantity}/${position.quantity} via SnapTrade...`);
             let limitPrice: string | undefined = undefined;
@@ -1244,20 +1265,43 @@ export class MarketPoller {
                    profit_trimmed_at = CURRENT_TIMESTAMP,
                    stop_loss_trigger = GREATEST(COALESCE(stop_loss_trigger, 0), entry_price),
                    take_profit_trigger = NULL,
-                   notes = COALESCE(notes, '') || $4,
+                   current_price = $3,
+                   max_favorable_price = $4,
+                   max_adverse_price = $5,
+                   mfe_pct = $6,
+                   mae_pct = $7,
+                   trailing_high_price = $8,
+                   analysis_data = $9,
+                   notes = COALESCE(notes, '') || $10,
                    updated_at = CURRENT_TIMESTAMP
-               WHERE id = $5 AND status = 'OPEN' AND quantity > $1`,
-              [exitQuantity, realizedPnl, price, ` [Profit trim simulated: sold ${exitQuantity}/${position.quantity} via ${exitTriggerType}]`, position.id]
+               WHERE id = $11 AND status = 'OPEN' AND quantity > $1`,
+              [exitQuantity, realizedPnl, price, excursion.maxFavorablePrice, excursion.maxAdversePrice,
+                excursion.mfePct, excursion.maePct, bufferedTrailingHighPrice, JSON.stringify(analysis),
+                ` [Profit trim simulated: sold ${exitQuantity}/${position.quantity} via ${exitTriggerType}]`, position.id]
             )
           : await (this.fastify as any).pg.query(
               `UPDATE positions
                   SET status = $1,
                   loss_avoided = $2,
                   realized_pnl = COALESCE(realized_pnl, 0) + $3,
-                  notes = COALESCE(notes, '') || $4,
+                  current_price = $4,
+                  exit_price = $4,
+                  execution_status = 'EXIT_FILLED',
+                  exit_reason = $5,
+                  max_favorable_price = $6,
+                  max_adverse_price = $7,
+                  mfe_pct = $8,
+                  mae_pct = $9,
+                  trailing_high_price = $10,
+                  stop_loss_trigger = $11,
+                  analysis_data = $12,
+                  notes = COALESCE(notes, '') || $13,
                   updated_at = CURRENT_TIMESTAMP
-                  WHERE id = $5 AND status = 'OPEN'`,
-              [newStatus, lossAvoided, realizedPnl, ` [Closed via ${exitTriggerType}]`, position.id]
+                  WHERE id = $14 AND status = 'OPEN'`,
+              [newStatus, lossAvoided, realizedPnl, price, exitTriggerType,
+                excursion.maxFavorablePrice, excursion.maxAdversePrice, excursion.mfePct, excursion.maePct,
+                bufferedTrailingHighPrice, bufferedStopLossTrigger, JSON.stringify(analysis),
+                ` [Closed via ${exitTriggerType}]`, position.id]
             );
 
         if (updateResult.rowCount === 0) {
@@ -1294,15 +1338,6 @@ export class MarketPoller {
 
         this.notifyN8n(position, price, realizedPnl, lossAvoided, exitTriggerType, aiData.summary, aiData.discord_message, greeks, iv);
       }
-    } else if (engineResult.newHigh || engineResult.newStopLoss) {
-      await (this.fastify as any).pg.query(
-        `UPDATE positions 
-         SET trailing_high_price = COALESCE($1, trailing_high_price),
-             stop_loss_trigger = COALESCE($2, stop_loss_trigger),
-             updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $3`,
-        [engineResult.newHigh, engineResult.newStopLoss, position.id]
-      );
     }
   }
 

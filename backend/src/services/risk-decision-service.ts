@@ -301,16 +301,21 @@ export class RiskDecisionService {
         message: 'Entry skipped: option quote is missing a usable bid/ask spread'
       };
     }
-    if (quote.quoteAgeMs !== null && quote.quoteAgeMs > thresholds.maxQuoteAgeMs) {
+    const quoteAgeMs = quote.quoteAgeMs == null ? NaN : Number(quote.quoteAgeMs);
+    if (!Number.isFinite(quoteAgeMs) || quoteAgeMs < 0 || quoteAgeMs > thresholds.maxQuoteAgeMs) {
       return {
         allowed: false,
         skipped: true,
         code: 'STALE_QUOTE',
-        message: `Entry skipped: option quote is stale (${Math.round(quote.quoteAgeMs / 1000)}s old)`,
-        metadata: { quoteAgeMs: quote.quoteAgeMs, maxQuoteAgeMs: thresholds.maxQuoteAgeMs }
+        message: Number.isFinite(quoteAgeMs) && quoteAgeMs >= 0
+          ? `Entry skipped: option quote is stale (${Math.round(quoteAgeMs / 1000)}s old)`
+          : 'Entry skipped: option quote timestamp is missing or invalid',
+        metadata: { quoteAgeMs: Number.isFinite(quoteAgeMs) ? quoteAgeMs : null, maxQuoteAgeMs: thresholds.maxQuoteAgeMs }
       };
     }
-    if (!quote.bid || !quote.ask || quote.bid <= 0 || quote.ask <= 0 || quote.spreadPct === null) {
+    const spreadPct = quote.spreadPct == null ? NaN : Number(quote.spreadPct);
+    if (!Number.isFinite(Number(quote.bid)) || !Number.isFinite(Number(quote.ask))
+      || quote.bid <= 0 || quote.ask <= 0 || quote.ask < quote.bid || !Number.isFinite(spreadPct)) {
       return {
         allowed: false,
         skipped: true,
@@ -318,13 +323,13 @@ export class RiskDecisionService {
         message: 'Entry skipped: option quote is missing a usable bid/ask spread'
       };
     }
-    if (quote.spreadPct > thresholds.maxSpreadPct) {
+    if (spreadPct > thresholds.maxSpreadPct) {
       return {
         allowed: false,
         skipped: true,
         code: 'SPREAD_TOO_WIDE',
-        message: `Entry skipped: option spread ${quote.spreadPct}% is wider than ${thresholds.maxSpreadPct}%`,
-        metadata: { spreadPct: quote.spreadPct, maxSpreadPct: thresholds.maxSpreadPct }
+        message: `Entry skipped: option spread ${spreadPct}% is wider than ${thresholds.maxSpreadPct}%`,
+        metadata: { spreadPct, maxSpreadPct: thresholds.maxSpreadPct }
       };
     }
     if (intendedEntry && intendedEntry > 0 && quote.bid < intendedEntry * thresholds.minBidToEntryRatio) {

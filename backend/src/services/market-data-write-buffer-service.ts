@@ -12,6 +12,13 @@ type QuoteTelemetry = {
   vega?: number | null;
   iv?: number | null;
   underlyingPrice?: number | null;
+  maxFavorablePrice?: number | null;
+  maxAdversePrice?: number | null;
+  mfePct?: number | null;
+  maePct?: number | null;
+  trailingHighPrice?: number | null;
+  stopLossTrigger?: number | null;
+  analysisData?: Record<string, any> | null;
   recordedAt?: string;
 };
 
@@ -69,6 +76,13 @@ export class MarketDataWriteBufferService {
         vega: input.vega,
         iv: input.iv,
         underlyingPrice: input.underlyingPrice,
+        maxFavorablePrice: input.maxFavorablePrice,
+        maxAdversePrice: input.maxAdversePrice,
+        mfePct: input.mfePct,
+        maePct: input.maePct,
+        trailingHighPrice: input.trailingHighPrice,
+        stopLossTrigger: input.stopLossTrigger,
+        analysisData: input.analysisData === undefined ? undefined : JSON.stringify(input.analysisData),
         updatedAt: recordedAt
       }),
       this.redisClient.zadd(this.historyKey(positionId), Number.isFinite(score) ? score : Date.now(), history)
@@ -172,7 +186,14 @@ export class MarketDataWriteBufferService {
           gamma: this.optionalNumber(latest.gamma),
           vega: this.optionalNumber(latest.vega),
           iv: this.optionalNumber(latest.iv),
-          underlyingPrice: this.optionalNumber(latest.underlyingPrice)
+          underlyingPrice: this.optionalNumber(latest.underlyingPrice),
+          maxFavorablePrice: this.optionalNumber(latest.maxFavorablePrice),
+          maxAdversePrice: this.optionalNumber(latest.maxAdversePrice),
+          mfePct: this.optionalNumber(latest.mfePct),
+          maePct: this.optionalNumber(latest.maePct),
+          trailingHighPrice: this.optionalNumber(latest.trailingHighPrice),
+          stopLossTrigger: this.optionalNumber(latest.stopLossTrigger),
+          analysisData: this.optionalJsonObject(latest.analysisData)
         }, client);
       }
 
@@ -227,8 +248,15 @@ export class MarketDataWriteBufferService {
            gamma = $4,
            vega = $5,
            iv = $6,
-           underlying_price = $7
-       WHERE id = $8`,
+           underlying_price = $7,
+           max_favorable_price = COALESCE($8, max_favorable_price),
+           max_adverse_price = COALESCE($9, max_adverse_price),
+           mfe_pct = COALESCE($10, mfe_pct),
+           mae_pct = COALESCE($11, mae_pct),
+           trailing_high_price = COALESCE($12, trailing_high_price),
+           stop_loss_trigger = COALESCE($13, stop_loss_trigger),
+           analysis_data = COALESCE($14::jsonb, analysis_data)
+       WHERE id = $15 AND status = 'OPEN'`,
       [
         input.price,
         input.delta ?? null,
@@ -237,6 +265,13 @@ export class MarketDataWriteBufferService {
         input.vega ?? null,
         input.iv ?? null,
         input.underlyingPrice ?? null,
+        input.maxFavorablePrice ?? null,
+        input.maxAdversePrice ?? null,
+        input.mfePct ?? null,
+        input.maePct ?? null,
+        input.trailingHighPrice ?? null,
+        input.stopLossTrigger ?? null,
+        input.analysisData === undefined ? null : JSON.stringify(input.analysisData),
         input.positionId
       ]
     );
@@ -274,6 +309,14 @@ export class MarketDataWriteBufferService {
     this.assignOptionalNumber(next, 'vega', latest.vega);
     this.assignOptionalNumber(next, 'iv', latest.iv);
     this.assignOptionalNumber(next, 'underlying_price', latest.underlyingPrice);
+    this.assignOptionalNumber(next, 'max_favorable_price', latest.maxFavorablePrice);
+    this.assignOptionalNumber(next, 'max_adverse_price', latest.maxAdversePrice);
+    this.assignOptionalNumber(next, 'mfe_pct', latest.mfePct);
+    this.assignOptionalNumber(next, 'mae_pct', latest.maePct);
+    this.assignOptionalNumber(next, 'trailing_high_price', latest.trailingHighPrice);
+    this.assignOptionalNumber(next, 'stop_loss_trigger', latest.stopLossTrigger);
+    const analysisData = this.optionalJsonObject(latest.analysisData);
+    if (analysisData !== undefined) next.analysis_data = analysisData;
     if (latest.updatedAt) next.updated_at = latest.updatedAt;
     return next;
   }
@@ -281,6 +324,17 @@ export class MarketDataWriteBufferService {
   private assignOptionalNumber(target: any, key: string, value: string | undefined) {
     const parsed = this.optionalNumber(value);
     if (parsed !== null) target[key] = parsed;
+  }
+
+  private optionalJsonObject(value: string | undefined): Record<string, any> | null | undefined {
+    if (value === undefined) return undefined;
+    if (!value) return null;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private parseHistoryRow(row: string): { price: number; recorded_at: string } | null {

@@ -103,6 +103,7 @@ async function testQuoteTelemetryBuffersUntilFlush() {
   assert(summary.flushed === 1, `Expected one flushed position, got ${summary.flushed}`);
   assert(summary.historyRows === 1, `Expected one history row, got ${summary.historyRows}`);
   assert(queries.some((query) => query.sql.includes('UPDATE positions')), 'Expected latest quote update during flush');
+  assert(queries.some((query) => query.sql.includes("status = 'OPEN'")), 'Buffered quotes must not overwrite a position after its durable close');
   assert(queries.some((query) => query.sql.includes('INSERT INTO price_history')), 'Expected price history insert during flush');
 }
 
@@ -116,6 +117,13 @@ async function testBufferedQuoteOverlaysDbPositionRows() {
     price: 1.44,
     delta: 0.62,
     underlyingPrice: 741.2,
+    maxFavorablePrice: 1.44,
+    maxAdversePrice: 0.98,
+    mfePct: 29.73,
+    maePct: -11.71,
+    trailingHighPrice: 1.44,
+    stopLossTrigger: 1.22,
+    analysisData: { smartStopWarning: { status: 'STOP_ARMED', belowStopCount: 1 } },
     recordedAt: '2026-07-01T15:31:00.000Z'
   });
 
@@ -130,7 +138,45 @@ async function testBufferedQuoteOverlaysDbPositionRows() {
   assert(position.current_price === 1.44, `Expected Redis current price overlay, got ${position.current_price}`);
   assert(position.delta === 0.62, `Expected Redis delta overlay, got ${position.delta}`);
   assert(position.underlying_price === 741.2, `Expected Redis underlying overlay, got ${position.underlying_price}`);
+  assert(position.max_favorable_price === 1.44, `Expected Redis favorable excursion overlay, got ${position.max_favorable_price}`);
+  assert(position.max_adverse_price === 0.98, `Expected Redis adverse excursion overlay, got ${position.max_adverse_price}`);
+  assert(position.mfe_pct === 29.73, `Expected Redis MFE overlay, got ${position.mfe_pct}`);
+  assert(position.mae_pct === -11.71, `Expected Redis MAE overlay, got ${position.mae_pct}`);
+  assert(position.trailing_high_price === 1.44, `Expected Redis trailing high overlay, got ${position.trailing_high_price}`);
+  assert(position.stop_loss_trigger === 1.22, `Expected Redis trailing stop overlay, got ${position.stop_loss_trigger}`);
+  assert(position.analysis_data?.smartStopWarning?.belowStopCount === 1, 'Expected Redis exit-state analysis overlay');
   assert(position.updated_at === '2026-07-01T15:31:00.000Z', `Expected Redis updated_at overlay, got ${position.updated_at}`);
+}
+
+async function testFlushPersistsBufferedExitState() {
+  const redis = createRedisMock();
+  const { fastify, queries } = createFastifyMock();
+  const service = new MarketDataWriteBufferService(fastify, redis);
+
+  await service.recordQuote({
+    positionId: 42,
+    price: 0.82,
+    maxFavorablePrice: 1.44,
+    maxAdversePrice: 0.82,
+    mfePct: 29.73,
+    maePct: -26.13,
+    trailingHighPrice: 1.44,
+    stopLossTrigger: 1.22,
+    analysisData: { smartStopWarning: { status: 'STOP_ARMED', belowStopCount: 1 } },
+    recordedAt: '2026-07-01T15:31:00.000Z'
+  });
+
+  await service.flushToDatabase();
+
+  const update = queries.find((query) => query.sql.includes('UPDATE positions'));
+  assert(Boolean(update), 'Expected buffered position state to be flushed');
+  assert(update?.params?.[7] === 1.44, `Expected favorable excursion in flush params, got ${update?.params?.[7]}`);
+  assert(update?.params?.[8] === 0.82, `Expected adverse excursion in flush params, got ${update?.params?.[8]}`);
+  assert(update?.params?.[9] === 29.73, `Expected MFE in flush params, got ${update?.params?.[9]}`);
+  assert(update?.params?.[10] === -26.13, `Expected MAE in flush params, got ${update?.params?.[10]}`);
+  assert(update?.params?.[11] === 1.44, `Expected trailing high in flush params, got ${update?.params?.[11]}`);
+  assert(update?.params?.[12] === 1.22, `Expected trailing stop in flush params, got ${update?.params?.[12]}`);
+  assert(JSON.parse(update?.params?.[13]).smartStopWarning.belowStopCount === 1, 'Expected exit-state analysis in flush params');
 }
 
 async function testFlushPreservesQuoteThatArrivesDuringFlush() {
@@ -169,6 +215,7 @@ async function runTests() {
   console.log('Running MarketDataWriteBufferService tests...');
   await testQuoteTelemetryBuffersUntilFlush();
   await testBufferedQuoteOverlaysDbPositionRows();
+  await testFlushPersistsBufferedExitState();
   await testFlushPreservesQuoteThatArrivesDuringFlush();
   console.log('All MarketDataWriteBufferService tests passed!');
 }

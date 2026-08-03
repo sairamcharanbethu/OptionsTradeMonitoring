@@ -174,6 +174,91 @@ async function testExpirationUsesNewYorkTradingDate() {
   assert(poller.isPositionExpired({ expiration_date: 'invalid' }, saturdayNoonEt) === false, 'An invalid expiration must not trigger a destructive close');
 }
 
+function createMarketDataRedisMock() {
+  const hashes = new Map<string, Record<string, string>>();
+  return {
+    isReady: () => true,
+    hgetall: async (key: string) => ({ ...(hashes.get(key) || {}) }),
+    hset: async (key: string, values: Record<string, any>) => {
+      const current = hashes.get(key) || {};
+      for (const [field, value] of Object.entries(values)) {
+        if (value !== undefined) current[field] = value === null ? '' : String(value);
+      }
+      hashes.set(key, current);
+    },
+    sadd: async () => {},
+    zadd: async () => {}
+  };
+}
+
+async function testOrdinaryQuoteUpdatesStayOutOfPostgres() {
+  const queries: string[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async (sql: string) => { queries.push(sql); return { rows: [], rowCount: 1 }; } }
+  } as any;
+  const poller = new MarketPoller(fastify, createMarketDataRedisMock()) as any;
+
+  await poller.processPositionExitUpdate({
+    id: 51,
+    user_id: 7,
+    status: 'OPEN',
+    is_simulated: true,
+    entry_price: 1,
+    current_price: 1,
+    quantity: 1,
+    stop_loss_trigger: 0.5,
+    take_profit_trigger: 2,
+    trailing_high_price: 1,
+    expiration_date: '2099-08-03',
+    option_type: 'CALL'
+  }, 1.1, undefined, undefined, undefined, { bid: 1.09, ask: 1.11, mid: 1.1, spreadPct: 1.82, source: 'test' });
+
+  assert(queries.length === 0, `An ordinary live quote must remain Redis-only, got ${queries.length} PostgreSQL writes: ${JSON.stringify(queries)}`);
+}
+
+async function testSimulatedExitPersistsFinalCheckpoint() {
+  let closeSql = '';
+  let closeParams: any[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (sql: string, params: any[] = []) => {
+        if (sql.includes("SET status = $1")) {
+          closeSql = sql;
+          closeParams = params;
+        }
+        return { rows: [], rowCount: 1 };
+      }
+    }
+  } as any;
+  const poller = new MarketPoller(fastify, createMarketDataRedisMock()) as any;
+  poller.aiService.generateAlertSummary = async () => ({ summary: '', discord_message: '' });
+  poller.notifyN8n = () => {};
+
+  await poller.processPositionExitUpdate({
+    id: 52,
+    user_id: 7,
+    symbol: 'SPY',
+    status: 'OPEN',
+    is_simulated: true,
+    entry_price: 1,
+    current_price: 1,
+    quantity: 1,
+    stop_loss_trigger: 0.5,
+    take_profit_trigger: 2,
+    trailing_high_price: 1,
+    expiration_date: '2099-08-03',
+    option_type: 'CALL',
+    analysis_data: {}
+  }, 2.1, undefined, undefined, undefined, { bid: 2.09, ask: 2.11, mid: 2.1, spreadPct: 0.95, source: 'test' });
+
+  assert(closeSql.includes('exit_price = $4'), 'A simulated close must persist its final exit price');
+  assert(closeSql.includes("execution_status = 'EXIT_FILLED'"), 'A simulated close must persist a terminal execution status');
+  assert(closeSql.includes('analysis_data = $12'), 'A simulated close must persist its final exit analysis');
+  assert(closeParams[3] === 2.1 && closeParams[4] === 'TAKE_PROFIT', `Expected final price and exit reason, got ${JSON.stringify(closeParams)}`);
+}
+
 async function runTests() {
   console.log('Running MarketPoller tests...');
   await testUnderlyingStopDirection();
@@ -184,6 +269,8 @@ async function runTests() {
   await testLocalClosePreservesPriorRealizedPnl();
   await testPendingAndReviewExitsStayUnresolved();
   await testExpirationUsesNewYorkTradingDate();
+  await testOrdinaryQuoteUpdatesStayOutOfPostgres();
+  await testSimulatedExitPersistsFinalCheckpoint();
   console.log('All MarketPoller tests passed!');
 }
 

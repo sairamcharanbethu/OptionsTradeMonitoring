@@ -253,6 +253,122 @@ async function testOrderStatusRepairsClosedAcceptedEntry() {
   assert(repaired === true, 'Should update the local position');
 }
 
+async function testPartialEntryRemainsPendingUntilRemainderIsResolved() {
+  const position = {
+    id: 77,
+    user_id: 7,
+    symbol: 'SPY',
+    option_type: 'CALL',
+    strike_price: 755,
+    expiration_date: '2026-08-03',
+    entry_price: 0.49,
+    current_price: 0.49,
+    quantity: 2,
+    contracts_requested: 2,
+    status: 'PENDING_ORDER',
+    execution_status: 'ACCEPTED',
+    execution_broker: 'wealthsimple_snaptrade',
+    broker_order_id: 'partial-order',
+    broker_trade_id: null,
+    execution_account_id: '7:snap-account',
+    account_id: '7:snap-account',
+    entry_action: 'BUY_TO_OPEN'
+  };
+  let returnedPendingRows = false;
+  let partialUpdate: any[] | null = null;
+  const service = new SnaptradeService(createFastifyMockWithQueries(async (sql: string, params: any[] = []) => {
+    if (sql.includes('FROM positions') && sql.includes("status = 'PENDING_ORDER'") && !returnedPendingRows) {
+      returnedPendingRows = true;
+      return { rows: [position] };
+    }
+    if (sql.includes("key = 'take_profit_pct'")) return { rows: [] };
+    if (sql.includes("SET status = 'PENDING_ORDER'") && sql.includes("execution_status = 'PARTIALLY_FILLED'")) {
+      partialUpdate = params;
+      return { rows: [], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 1 };
+  }));
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: {
+      accountInformation: {
+        getUserAccountRecentOrders: async () => ({
+          data: [{
+            brokerage_order_id: 'partial-order',
+            status: 'PARTIALLY_FILLED',
+            filled_quantity: 1,
+            execution_price: 0.50
+          }]
+        })
+      }
+    }
+  });
+
+  const summary = await service.syncPendingBrokerOrders(7);
+  const params = partialUpdate as unknown as any[];
+  assert(Boolean(params), 'A partial entry must persist an explicit reconciliation state');
+  assert(params[0] === 1 && params[1] === 0.5, `Expected one filled contract at $0.50, got ${JSON.stringify(params)}`);
+  assert(summary.opened === 0 && summary.stillPending === 1, 'A working partial entry must not be treated as a fully open position');
+  assert(summary.orders[0]?.action === 'partially_filled', 'A partial fill must be visible in broker reconciliation output');
+}
+
+async function testPartialExitDoesNotCloseRemainingPosition() {
+  const position = {
+    id: 78,
+    user_id: 7,
+    symbol: 'SPY',
+    option_type: 'CALL',
+    strike_price: 755,
+    expiration_date: '2026-08-03',
+    entry_price: 0.49,
+    current_price: 0.60,
+    quantity: 2,
+    status: 'OPEN',
+    execution_status: 'PENDING_EXIT',
+    execution_broker: 'wealthsimple_snaptrade',
+    broker_exit_order_id: 'partial-exit',
+    execution_account_id: '7:snap-account',
+    account_id: '7:snap-account',
+    entry_action: 'BUY_TO_OPEN'
+  };
+  let returnedPendingRows = false;
+  let partialExitUpdate: any[] | null = null;
+  const service = new SnaptradeService(createFastifyMockWithQueries(async (sql: string, params: any[] = []) => {
+    if (sql.includes('FROM positions') && sql.includes("status = 'PENDING_ORDER'") && !returnedPendingRows) {
+      returnedPendingRows = true;
+      return { rows: [position] };
+    }
+    if (sql.includes("key = 'take_profit_pct'")) return { rows: [] };
+    if (sql.includes('SET execution_status = $1') && String(params[1] || '').includes('partially filled')) {
+      partialExitUpdate = params;
+      return { rows: [], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 1 };
+  }));
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: {
+      accountInformation: {
+        getUserAccountRecentOrders: async () => ({
+          data: [{
+            brokerage_order_id: 'partial-exit',
+            status: 'PARTIALLY_FILLED',
+            filled_quantity: 1,
+            execution_price: 0.61
+          }]
+        })
+      }
+    }
+  });
+
+  const summary = await service.syncPendingBrokerOrders(7);
+  assert(Boolean(partialExitUpdate), 'A partial exit must retain an explicit pending-exit state');
+  assert(summary.closed === 0 && summary.stillPending === 1, 'A partial exit must not close the remaining local position');
+  assert(summary.orders[0]?.action === 'exit_partially_filled', 'A partial exit must be visible in broker reconciliation output');
+}
+
 async function runTests() {
   console.log('Running SnaptradeService order payload tests...');
   await testPlaceOptionOrderUsesSingleLegForceOrderPayload();
@@ -260,6 +376,8 @@ async function runTests() {
   await testPlaceOptionOrderRejectsInvalidLimitPriceBeforeBrokerCall();
   await testPlaceOptionOrderReturnsActionableRateLimitError();
   await testOrderStatusRepairsClosedAcceptedEntry();
+  await testPartialEntryRemainsPendingUntilRemainderIsResolved();
+  await testPartialExitDoesNotCloseRemainingPosition();
   console.log('All SnaptradeService order payload tests passed!');
 }
 

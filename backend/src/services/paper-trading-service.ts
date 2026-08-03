@@ -443,11 +443,16 @@ export class PaperTradingService {
   private async maybeCreateEntry(signal: Record<string, any>, setupId: string): Promise<void> {
     if (String(signal.state).toUpperCase() !== 'ACTIVE' || signal.lifecycle?.entry_allowed !== true) return;
     const generatedAt = Number(signal.generated_at || 0);
-    if (!generatedAt || Date.now() / 1000 - generatedAt > 20) return;
+    const signalAgeSeconds = Date.now() / 1000 - generatedAt;
+    if (!Number.isFinite(signalAgeSeconds) || signalAgeSeconds < 0 || signalAgeSeconds > 20) return;
     const { side, setup, option } = this.optionFor(signal);
     const expiry = this.normalizeExpiry(option.expiry);
-    if (option.eligible !== true || !Number(option.bid) || !Number(option.ask) || Number(option.quote_age_seconds) > 15
-      || !expiry || !option.local_symbol || !Number(option.strike)) return;
+    const bid = Number(option.bid);
+    const ask = Number(option.ask);
+    const quoteAgeSeconds = option.quote_age_seconds == null ? NaN : Number(option.quote_age_seconds);
+    if (option.eligible !== true || !Number.isFinite(bid) || bid <= 0 || !Number.isFinite(ask) || ask <= 0 || ask < bid
+      || !Number.isFinite(quoteAgeSeconds) || quoteAgeSeconds < 0 || quoteAgeSeconds > 15
+      || !expiry || !option.local_symbol || !Number.isFinite(Number(option.strike)) || Number(option.strike) <= 0) return;
     const account = await this.account();
     if (account.automation_status !== 'ACTIVE') return;
     const existing = await (this.fastify as any).pg.query(
@@ -455,9 +460,10 @@ export class PaperTradingService {
     );
     if (existing.rows.length > 0) return;
     const today = ET_DATE.format(new Date());
-    const bid = Number(option.bid);
-    const ask = Number(option.ask);
-    const mid = Number(option.mid || (bid + ask) / 2);
+    const suppliedMid = Number(option.mid);
+    const mid = Number.isFinite(suppliedMid) && suppliedMid >= bid && suppliedMid <= ask
+      ? suppliedMid
+      : (bid + ask) / 2;
     const protectedLimit = Number(Math.min(ask, mid + (ask - mid) * 0.20).toFixed(2));
     const settings = await getGlobalSettings((this.fastify as any).pg);
     const trailingStopPct = this.trailingStopPct(settings);
@@ -531,7 +537,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         settings.day_trading_ai_model || settings.ai_model || null, PROMPT_VERSION,
         PAPER_POLICY_VERSION, trailingStopPct,
         aiRequested, JSON.stringify(aiReasons), tokenUsage.promptTokens, tokenUsage.completionTokens, tokenUsage.totalTokens,
-        bounded.rationale, JSON.stringify(bounded.riskFlags), JSON.stringify({ generatedAt, quoteAgeSeconds: option.quote_age_seconds, bid, ask, mid, strategyState: signal.state })]
+        bounded.rationale, JSON.stringify(bounded.riskFlags), JSON.stringify({ generatedAt, quoteAgeSeconds, bid, ask, mid, strategyState: signal.state })]
     );
     const decisionRow = decisionInsert.rows[0];
     if (decisionRow) {
@@ -571,7 +577,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
          ) VALUES ($1,$2,$3,$4,'ENTRY','BUY_TO_OPEN','PENDING',$5,$6,$7,$8,$9,$10,$11,$12,NOW() + INTERVAL '60 seconds')
          ON CONFLICT (account_id, setup_id, intent) DO NOTHING RETURNING id`,
         [ACCOUNT_ID, decisionRow.id, setupId, decisionRow.signal_id, option.local_symbol, side, Number(option.strike), expiry,
-          quantity, protectedLimit, reservedDebit, JSON.stringify({ bid, ask, mid, quoteAgeSeconds: option.quote_age_seconds })]
+          quantity, protectedLimit, reservedDebit, JSON.stringify({ bid, ask, mid, quoteAgeSeconds })]
       );
       orderCreated = Boolean(order.rows[0]);
       if (orderCreated) {
@@ -614,13 +620,23 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       return;
     }
     const expired = new Date(order.expires_at).getTime() <= Date.now();
-    const active = String(signal.state).toUpperCase() === 'ACTIVE' && signal.lifecycle?.entry_allowed === true;
+    const generatedAt = Number(signal.generated_at || 0);
+    const signalAgeSeconds = Date.now() / 1000 - generatedAt;
+    const active = String(signal.state).toUpperCase() === 'ACTIVE'
+      && signal.lifecycle?.entry_allowed === true
+      && Number.isFinite(signalAgeSeconds)
+      && signalAgeSeconds >= 0
+      && signalAgeSeconds <= 20;
     if (expired || !active) {
       await this.cancelPendingOrder(order, expired ? 'Protected entry limit expired after 60 seconds' : 'Strategy entry window closed');
       return;
     }
     const ask = Number(option.ask || 0);
-    if (!ask || Number(option.quote_age_seconds) > 15 || ask > Number(order.limit_price) + 0.0001) return;
+    const bid = Number(option.bid || 0);
+    const quoteAgeSeconds = option.quote_age_seconds == null ? NaN : Number(option.quote_age_seconds);
+    if (option.eligible !== true || !Number.isFinite(bid) || bid <= 0 || !Number.isFinite(ask) || ask <= 0 || ask < bid
+      || !Number.isFinite(quoteAgeSeconds) || quoteAgeSeconds < 0 || quoteAgeSeconds > 15
+      || ask > Number(order.limit_price) + 0.0001) return;
     const fillPrice = Number(ask.toFixed(2));
     const debit = Number((fillPrice * Number(order.quantity) * 100).toFixed(2));
     const targets = Array.isArray(setup.targets) ? setup.targets : [];
@@ -770,9 +786,12 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         String(storedSnapshot.lifecycle?.status || storedSnapshot.state).toUpperCase()
       );
       const flattenDue = this.mandatoryFlattenDue();
+      const optionQuoteAgeSeconds = option.quote_age_seconds == null ? NaN : Number(option.quote_age_seconds);
       let bid = sameSetup
         && this.canonicalTicker(option.local_symbol) === this.canonicalTicker(this.osiTicker(position))
-        && Number(option.quote_age_seconds) <= 15
+        && Number.isFinite(optionQuoteAgeSeconds)
+        && optionQuoteAgeSeconds >= 0
+        && optionQuoteAgeSeconds <= 15
         ? Number(option.bid || 0)
         : 0;
       if (!bid) {

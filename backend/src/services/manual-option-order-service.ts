@@ -110,23 +110,33 @@ function toQuotePayload(quote: any) {
   };
 }
 
-function assertUsableEntryQuote(quote: any, intendedEntry: number | null, orderType: OptionOrderType, action: OptionEntryAction) {
+export function assertUsableEntryQuote(quote: any, intendedEntry: number | null, orderType: OptionOrderType, action: OptionEntryAction) {
   if (!quote || Number(quote.mark || 0) <= 0) {
     throw new Error('A live IBKR quote is required before submitting the order.');
   }
   if (Number(quote.bid || 0) <= 0 || Number(quote.ask || 0) <= 0) {
     throw new Error('Manual option order blocked: selected contract is missing live bid/ask.');
   }
+  if (Number(quote.ask) < Number(quote.bid)) {
+    throw new Error('Manual option order blocked: selected contract has a crossed bid/ask quote.');
+  }
   const quoteAgeMs = quote.quoteAgeMs === null || quote.quoteAgeMs === undefined ? null : Number(quote.quoteAgeMs);
-  if (quoteAgeMs !== null && quoteAgeMs > MAX_ENTRY_QUOTE_AGE_MS && (isRegularUsMarketSession() || orderType === 'MARKET')) {
+  if (quoteAgeMs === null || !Number.isFinite(quoteAgeMs) || quoteAgeMs < 0) {
+    throw new Error('Manual option order blocked: selected contract quote timestamp is missing or invalid.');
+  }
+  if (quoteAgeMs > MAX_ENTRY_QUOTE_AGE_MS && (isRegularUsMarketSession() || orderType === 'MARKET')) {
     const ageSeconds = Math.round(quoteAgeMs / 1000);
     const reason = orderType === 'MARKET'
       ? 'market orders require a fresh quote'
       : 'market is open and quote is stale';
     throw new Error(`Manual option order blocked: selected contract quote is stale (${ageSeconds}s old; ${reason}).`);
   }
-  if (quote.spreadPct !== null && quote.spreadPct !== undefined && Number(quote.spreadPct) > 15) {
-    throw new Error(`Manual option order blocked: bid/ask spread ${Number(quote.spreadPct).toFixed(1)}% is too wide.`);
+  const mid = (Number(quote.bid) + Number(quote.ask)) / 2;
+  const spreadPct = quote.spreadPct === null || quote.spreadPct === undefined
+    ? ((Number(quote.ask) - Number(quote.bid)) / mid) * 100
+    : Number(quote.spreadPct);
+  if (!Number.isFinite(spreadPct) || spreadPct > 15) {
+    throw new Error(`Manual option order blocked: bid/ask spread ${Number.isFinite(spreadPct) ? spreadPct.toFixed(1) : 'unknown'}% is too wide.`);
   }
   if (action === 'BUY_TO_OPEN' && intendedEntry && Number(quote.bid || 0) / intendedEntry < 0.9) {
     throw new Error('Manual option order blocked: live bid is too far below intended entry.');

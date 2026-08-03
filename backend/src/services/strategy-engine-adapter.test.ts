@@ -39,6 +39,9 @@ function signal(overrides: Record<string, any> = {}) {
 async function runTests() {
   const adapter = createAdapter();
   assert(adapter.getMode() === 'primary', 'The replacement strategy must remain the active signal source');
+  adapter.currentSignal = signal({ generated_at: Date.now() / 1000 + 60 });
+  assert(adapter.getCurrentState().ageSeconds < 0, 'A future-dated strategy snapshot must remain visibly invalid instead of appearing fresh');
+  adapter.currentSignal = null;
   const first = adapter.planFingerprint(signal());
   const quoteChurn = adapter.planFingerprint(signal({ spot: 550.1 }));
   assert(first === quoteChurn, 'Plan identity must ignore spot churn');

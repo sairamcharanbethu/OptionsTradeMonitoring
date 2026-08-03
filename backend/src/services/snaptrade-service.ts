@@ -550,8 +550,9 @@ export class SnaptradeService {
 
             const rawStatus = this.normalizeOrderStatus(order.status);
             const terminalStatuses = ['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED'];
+            const partialStatuses = ['PARTIAL', 'PARTIALLY_EXECUTED', 'PARTIALLY_FILLED'];
             const pendingStatuses = ['PENDING', 'ACCEPTED', 'QUEUED', 'TRIGGERED', 'ACTIVATED', 'PENDING_RISK_REVIEW', 'CONTINGENT_ORDER', 'CANCEL_PENDING', 'REPLACE_PENDING', 'REPLACED', 'STOPPED', 'SUSPENDED', 'NONE', 'UNKNOWN'];
-            const status = this.hasFillEvidence(order) && !terminalStatuses.includes(rawStatus)
+            const status = this.hasFillEvidence(order) && !terminalStatuses.includes(rawStatus) && !partialStatuses.includes(rawStatus)
                 ? 'FILLED'
                 : rawStatus;
             let repairedLocalPosition = localPosition;
@@ -713,6 +714,7 @@ export class SnaptradeService {
                AND execution_broker = 'wealthsimple_snaptrade'
                AND (
                  status = 'PENDING_ORDER'
+                 OR (status = 'OPEN' AND execution_status = 'PARTIALLY_FILLED')
                  OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
                  OR (status = 'OPEN' AND execution_status = 'PENDING_TRIM')
                  OR (status = 'OPEN' AND execution_status LIKE 'EXIT_%')
@@ -758,6 +760,7 @@ export class SnaptradeService {
         };
 
         const openStatuses = new Set(['EXECUTED', 'FILLED', 'FILLED_FULLY', 'COMPLETE', 'COMPLETED', 'PARTIAL', 'PARTIALLY_EXECUTED', 'PARTIALLY_FILLED']);
+        const partialStatuses = new Set(['PARTIAL', 'PARTIALLY_EXECUTED', 'PARTIALLY_FILLED']);
         const closedStatuses = new Set(['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED']);
         const pendingStatuses = new Set([
             'PENDING',
@@ -820,7 +823,9 @@ export class SnaptradeService {
                 }
 
                 const rawStatus = this.normalizeOrderStatus(order.status);
-                const status = this.hasFillEvidence(order) && !closedStatuses.has(rawStatus) ? 'FILLED' : rawStatus;
+                const status = this.hasFillEvidence(order) && !closedStatuses.has(rawStatus) && !partialStatuses.has(rawStatus)
+                    ? 'FILLED'
+                    : rawStatus;
                 await this.fastify.pg.query(
                     `UPDATE positions
                      SET last_broker_sync_at = CURRENT_TIMESTAMP,
@@ -829,7 +834,137 @@ export class SnaptradeService {
                      WHERE id = $2`,
                     [status, position.id]
                 );
-                if (openStatuses.has(status)) {
+                const actualFilledQuantity = this.getActualFilledQuantity(order);
+                if (phase === 'ENTRY' && partialStatuses.has(status)) {
+                    const requestedQuantity = Math.max(1, Number(position.contracts_requested || position.quantity || 1));
+                    const filledQuantity = Math.min(Math.floor(actualFilledQuantity), requestedQuantity);
+                    const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
+                    await this.fastify.pg.query(
+                        `UPDATE positions
+                         SET status = 'PENDING_ORDER',
+                             execution_status = 'PARTIALLY_FILLED',
+                             quantity = CASE WHEN $1 > 0 THEN $1 ELSE quantity END,
+                             entry_price = CASE WHEN $1 > 0 THEN $2 ELSE entry_price END,
+                             current_price = CASE WHEN $1 > 0 THEN $2 ELSE current_price END,
+                             execution_error = 'Entry is partially filled; wait for completion or cancel the remainder at Wealthsimple before managing an exit.',
+                             notes = COALESCE(notes, '') || $3,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = $4`,
+                        [filledQuantity, fillPrice, ` [SnapTrade partial entry: ${filledQuantity}/${requestedQuantity} filled; remainder still working]`, position.id]
+                    );
+                    await this.syncSignalExecutionFromOrder(position, 'EXECUTED', 'PARTIALLY_FILLED');
+                    summary.stillPending += 1;
+                    summary.orders.push({
+                        positionId: position.id,
+                        status: 'PARTIALLY_FILLED',
+                        action: 'partially_filled',
+                        brokerOrderId: position.broker_order_id,
+                        brokerTradeId: position.broker_trade_id,
+                        fillPrice
+                    });
+                    if (String(position.execution_status) !== 'PARTIALLY_FILLED' || Number(position.quantity || 0) !== filledQuantity) {
+                        await TradeRedisService.recordEvent(this.fastify.pg, {
+                            userId,
+                            positionId: position.id,
+                            eventType: 'ENTRY_PARTIALLY_FILLED',
+                            message: `SnapTrade entry partially filled ${filledQuantity}/${requestedQuantity}`,
+                            metadata: { status, filledQuantity, requestedQuantity, fillPrice }
+                        });
+                    }
+                    continue;
+                }
+
+                if (phase === 'EXIT' && partialStatuses.has(status)) {
+                    const requestedQuantity = Math.max(1, Number(position.profit_trim_quantity || position.quantity || 1));
+                    const filledQuantity = Math.min(Math.floor(actualFilledQuantity), requestedQuantity);
+                    await this.fastify.pg.query(
+                        `UPDATE positions
+                         SET execution_status = $1,
+                             execution_error = $2,
+                             notes = COALESCE(notes, '') || $3,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = $4`,
+                        [executionStatus === 'PENDING_TRIM' ? 'PENDING_TRIM' : 'PENDING_EXIT',
+                            `Exit is partially filled (${filledQuantity}/${requestedQuantity}); the broker remainder is still working.`,
+                            ` [SnapTrade partial exit: ${filledQuantity}/${requestedQuantity} filled; remainder still working]`, position.id]
+                    );
+                    summary.stillPending += 1;
+                    summary.orders.push({
+                        positionId: position.id,
+                        status: 'PARTIALLY_FILLED',
+                        action: 'exit_partially_filled',
+                        brokerOrderId: position.broker_exit_order_id,
+                        brokerTradeId: position.broker_exit_trade_id,
+                        fillPrice: this.getOrderFillPrice(order, Number(position.current_price || position.entry_price || 0.01))
+                    });
+                    continue;
+                }
+
+                const terminalExitWithFill = phase === 'EXIT' && closedStatuses.has(status) && actualFilledQuantity > 0;
+                if (terminalExitWithFill) {
+                    const terminalReviewStatus = ['CANCELED', 'CANCELLED', 'PARTIAL_CANCELED'].includes(status)
+                        ? 'EXIT_CANCELED'
+                        : `EXIT_${status}`;
+                    const currentQuantity = Math.max(1, Number(position.quantity || 1));
+                    const filledQuantity = Math.min(Math.floor(actualFilledQuantity), currentQuantity);
+                    const fillPrice = this.getOrderFillPrice(order, Number(position.current_price || position.entry_price || 0.01));
+                    if (executionStatus === terminalReviewStatus && String(position.last_broker_order_status || '') === status) {
+                        summary.stillPending += 1;
+                        summary.orders.push({
+                            positionId: position.id,
+                            status: terminalReviewStatus,
+                            action: 'exit_partial_review',
+                            brokerOrderId: position.broker_exit_order_id,
+                            brokerTradeId: position.broker_exit_trade_id,
+                            fillPrice
+                        });
+                        continue;
+                    }
+                    const realizedPnl = TradeLifecycleService.calculateRealizedPnl(position, fillPrice, filledQuantity);
+                    const remainingQuantity = currentQuantity - filledQuantity;
+                    if (remainingQuantity > 0) {
+                        await this.fastify.pg.query(
+                            `UPDATE positions
+                             SET quantity = $1,
+                                 execution_status = $2,
+                                 current_price = $3,
+                                 realized_pnl = COALESCE(realized_pnl, 0) + $4,
+                                 execution_error = $5,
+                                 profit_trim_status = CASE WHEN $6::boolean THEN 'DONE' ELSE profit_trim_status END,
+                                 profit_trim_quantity = CASE WHEN $6::boolean THEN $7 ELSE profit_trim_quantity END,
+                                 profit_trim_price = CASE WHEN $6::boolean THEN $3 ELSE profit_trim_price END,
+                                 profit_trimmed_at = CASE WHEN $6::boolean THEN CURRENT_TIMESTAMP ELSE profit_trimmed_at END,
+                                 notes = COALESCE(notes, '') || $8,
+                                 updated_at = CURRENT_TIMESTAMP
+                             WHERE id = $9`,
+                            [remainingQuantity, terminalReviewStatus, fillPrice, realizedPnl,
+                                `Broker exit ended after a partial fill; ${remainingQuantity} contract(s) remain and require reconciliation.`,
+                                executionStatus === 'PENDING_TRIM', filledQuantity,
+                                ` [SnapTrade terminal partial exit: sold ${filledQuantity}/${currentQuantity} @ $${fillPrice}; ${remainingQuantity} remain]`, position.id]
+                        );
+                        summary.trimmed += 1;
+                        summary.stillPending += 1;
+                        summary.orders.push({
+                            positionId: position.id,
+                            status: terminalReviewStatus,
+                            action: 'exit_partial_review',
+                            brokerOrderId: position.broker_exit_order_id,
+                            brokerTradeId: position.broker_exit_trade_id,
+                            fillPrice
+                        });
+                        await TradeRedisService.recordEvent(this.fastify.pg, {
+                            userId,
+                            positionId: position.id,
+                            eventType: 'EXIT_PARTIAL_REVIEW',
+                            message: `SnapTrade exit ended after filling ${filledQuantity}/${currentQuantity}; ${remainingQuantity} remain`,
+                            metadata: { status, filledQuantity, remainingQuantity, fillPrice }
+                        });
+                        continue;
+                    }
+                }
+
+                const terminalEntryWithFill = phase === 'ENTRY' && closedStatuses.has(status) && actualFilledQuantity > 0;
+                if (openStatuses.has(status) || terminalEntryWithFill || terminalExitWithFill) {
                     const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
                     let orderAction = phase === 'EXIT' ? 'closed' : 'opened';
                     if (phase === 'EXIT') {
@@ -895,6 +1030,12 @@ export class SnaptradeService {
                             });
                         }
                     } else {
+                        const requestedQuantity = Math.max(1, Number(position.contracts_requested || position.quantity || 1));
+                        const filledQuantity = Math.min(
+                            Math.floor(actualFilledQuantity || requestedQuantity),
+                            requestedQuantity
+                        );
+                        const finalEntryStatus = terminalEntryWithFill ? `${status}_WITH_FILL` : status;
                         const manualEntry = this.getManualEntryConfig(position);
                         const isShortOpen = TradeLifecycleService.isShortPremiumPosition(position);
                         const stopLoss = manualEntry || isShortOpen ? null : Number((fillPrice * 0.8).toFixed(2));
@@ -907,28 +1048,30 @@ export class SnaptradeService {
                             `UPDATE positions
                              SET status = 'OPEN',
                                  execution_status = $1,
-                                 entry_price = $2,
-                                 current_price = $2,
-                                 stop_loss_trigger = $3,
-                                 take_profit_trigger = $4,
-                                 trailing_high_price = GREATEST(COALESCE(trailing_high_price, 0), $2),
+                                 quantity = $2,
+                                 entry_price = $3,
+                                 current_price = $3,
+                                 stop_loss_trigger = $4,
+                                 take_profit_trigger = $5,
+                                 trailing_high_price = GREATEST(COALESCE(trailing_high_price, 0), $3),
                                  execution_error = NULL,
-                                 notes = COALESCE(notes, '') || $5,
+                                 notes = COALESCE(notes, '') || $6,
                                  updated_at = CURRENT_TIMESTAMP
-                             WHERE id = $6`,
-                            [status, fillPrice, stopLoss, takeProfit, ` [SnapTrade fill confirmed: ${status}; auto exits recalculated from fill]`, position.id]
+                             WHERE id = $7`,
+                            [finalEntryStatus, filledQuantity, fillPrice, stopLoss, takeProfit,
+                                ` [SnapTrade fill confirmed: ${finalEntryStatus}; ${filledQuantity}/${requestedQuantity} contracts; auto exits recalculated from fill]`, position.id]
                         );
                         summary.opened += 1;
-                        await this.syncSignalExecutionFromOrder(position, 'EXECUTED', status);
+                        await this.syncSignalExecutionFromOrder(position, 'EXECUTED', finalEntryStatus);
                         await TradeRedisService.recordEvent(this.fastify.pg, {
                             userId,
                             positionId: position.id,
                             eventType: 'ENTRY_FILLED',
-                            message: `SnapTrade entry fill confirmed: ${status}`,
-                            metadata: { status, fillPrice }
+                            message: `SnapTrade entry fill confirmed: ${finalEntryStatus}`,
+                            metadata: { status: finalEntryStatus, fillPrice, filledQuantity, requestedQuantity }
                         });
                         if (!isShortOpen && manualEntry?.takeProfitPct && takeProfit) {
-                            await this.submitManualTakeProfit(position, accountId, takeProfit, status);
+                            await this.submitManualTakeProfit({ ...position, quantity: filledQuantity }, accountId, takeProfit, finalEntryStatus);
                         }
                     }
                     summary.orders.push({
