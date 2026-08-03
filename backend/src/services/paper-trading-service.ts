@@ -33,6 +33,7 @@ export class PaperTradingService {
   private queuedSnapshots = new Map<string, { signal: Record<string, any>; setupId: string }>();
   private snapshotProcessing: Promise<void> | null = null;
   private monthlyTimer: NodeJS.Timeout | null = null;
+  private exitRecoveryTimer: NodeJS.Timeout | null = null;
   private lastError: string | null = null;
   private lastProcessedAt: string | null = null;
 
@@ -46,6 +47,12 @@ export class PaperTradingService {
         this.fastify.log.warn(`[PaperTrading] Monthly report check failed: ${this.lastError}`);
       });
     }, 60 * 60 * 1000);
+    this.exitRecoveryTimer = setInterval(() => {
+      this.recoverOverdueOpenPositions().catch((error: any) => {
+        this.lastError = error.message || String(error);
+        this.fastify.log.warn(`[PaperTrading] Scheduled exit recovery failed: ${this.lastError}`);
+      });
+    }, 60 * 1000);
     this.ensurePriorMonthReport().catch((error: any) => {
       this.fastify.log.warn(`[PaperTrading] Initial monthly report check failed: ${error.message || String(error)}`);
     });
@@ -57,7 +64,9 @@ export class PaperTradingService {
 
   public stop(): void {
     if (this.monthlyTimer) clearInterval(this.monthlyTimer);
+    if (this.exitRecoveryTimer) clearInterval(this.exitRecoveryTimer);
     this.monthlyTimer = null;
+    this.exitRecoveryTimer = null;
   }
 
   public getHealth() {
@@ -1061,9 +1070,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     } catch (error: any) {
       redisError = error instanceof Error ? error : new Error(String(error));
     }
-    const alertType = intent === 'TARGET_1_TRIM' || intent === 'TARGET_1' ? 'TP1'
-      : intent === 'TARGET_2' ? 'TP2'
-        : intent === 'TRAILING_STOP' ? 'TRAILING_STOP' : 'SL';
+    const alertType = this.exitAlertType(intent);
     this.broadcast({ type: 'PAPER_ACCOUNT_CHANGED', data: { reason: intent, positionId: position.id } });
     await this.notifyPaperEvent(alertType, position, `${intent.replace(/_/g, ' ')}: sold ${closeQty} at $${bid.toFixed(2)} for ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}. ${remaining > 0 ? `${remaining} contract${remaining === 1 ? '' : 's'} remain.` : 'Position is closed.'}`);
     if (redisError) throw redisError;
@@ -1267,6 +1274,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     return Number.isFinite(configured) && configured >= 1 && configured <= 50
       ? Number(configured.toFixed(2))
       : DEFAULT_PAPER_TRAILING_STOP_PCT;
+  }
+
+  private exitAlertType(intent: string): string {
+    if (intent === 'TARGET_1_TRIM' || intent === 'TARGET_1') return 'TP1';
+    if (intent === 'TARGET_2') return 'TP2';
+    if (intent === 'TRAILING_STOP') return 'TRAILING_STOP';
+    if (['END_OF_DAY', 'END_OF_DAY_RECOVERY', 'EXPIRED_RECOVERY'].includes(intent)) return 'EOD';
+    if (intent === 'STRATEGY_TERMINAL') return 'EXIT';
+    return 'SL';
   }
 
   private async journal(

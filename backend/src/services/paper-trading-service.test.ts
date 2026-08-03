@@ -39,6 +39,40 @@ async function run() {
   assert.equal(PaperTradingService.normalizeAIDecision({ decision: 'TRADE', risk_tier: 'UNBOUNDED', exit_profile: 'BALANCED_T2' }), null);
   assert.equal(PaperTradingService.normalizeAIDecision({ decision: 'TRADE', risk_tier: 'FULL', exit_profile: 'TRAIL_FOREVER' }), null);
 
+  const originalSetInterval = globalThis.setInterval;
+  const originalClearInterval = globalThis.clearInterval;
+  const scheduledIntervals: Array<{ callback: () => void; milliseconds: number; handle: any }> = [];
+  const clearedIntervals: any[] = [];
+  try {
+    (globalThis as any).setInterval = (callback: () => void, milliseconds: number) => {
+      const handle = { milliseconds };
+      scheduledIntervals.push({ callback, milliseconds, handle });
+      return handle;
+    };
+    (globalThis as any).clearInterval = (handle: any) => { clearedIntervals.push(handle); };
+    let scheduledRecoveries = 0;
+    const scheduledService = new PaperTradingService({
+      log: { warn() {}, info() {}, error() {} }
+    } as any) as any;
+    scheduledService.ensurePriorMonthReport = async () => {};
+    scheduledService.recover = async () => {};
+    scheduledService.recoverOverdueOpenPositions = async () => { scheduledRecoveries += 1; };
+    scheduledService.start();
+    scheduledService.start();
+    assert.deepEqual(
+      scheduledIntervals.map(interval => interval.milliseconds),
+      [60 * 60 * 1000, 60 * 1000],
+      'paper automation must schedule one monthly report timer and one idempotent minute exit recovery timer'
+    );
+    scheduledIntervals[1].callback();
+    assert.equal(scheduledRecoveries, 1, 'the one-minute sweep must invoke overdue paper-exit recovery');
+    scheduledService.stop();
+    assert.equal(clearedIntervals.length, 2, 'stopping paper automation must clear both timers');
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+    globalThis.clearInterval = originalClearInterval;
+  }
+
   const positionUpdates: any[][] = [];
   const liveWrites: Array<{ key: string; values: Record<string, any> }> = [];
   let quoteRequests = 0;
@@ -513,6 +547,9 @@ async function run() {
     pg: { query: async () => ({ rows: [] }) },
     log: { warn() {}, info() {}, error() {} }
   } as any, redis) as any;
+  assert.equal(calendarService.exitAlertType('END_OF_DAY_RECOVERY'), 'EOD', 'recovered EOD exits must not be mislabeled as stop losses');
+  assert.equal(calendarService.exitAlertType('STRATEGY_TERMINAL'), 'EXIT', 'strategy-terminal exits must use a neutral exit alert');
+  assert.equal(calendarService.exitAlertType('PREMIUM_STOP'), 'SL', 'premium stops must remain stop-loss alerts');
   assert.equal(
     calendarService.mandatoryFlattenDue({ expiration_date: '2026-11-27' }, new Date('2026-11-27T17:20:00.000Z')),
     true,

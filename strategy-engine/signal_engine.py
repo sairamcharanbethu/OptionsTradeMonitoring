@@ -1727,9 +1727,14 @@ def _select_signal_option(
         )
         delta = abs(float(evaluated["delta"])) if _number(evaluated.get("delta")) else None
         spread = float(evaluated.get("spread_pct") or max_spread_pct)
-        volume = float(evaluated.get("volume") or 0)
+        volume = max(
+            0,
+            float(evaluated["volume"])
+            if _number(evaluated.get("volume"))
+            else 0,
+        )
         open_interest = (
-            float(evaluated["open_interest"])
+            max(0, float(evaluated["open_interest"]))
             if _number(evaluated.get("open_interest"))
             else 0
         )

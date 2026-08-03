@@ -830,6 +830,28 @@ class OtmOptionSelectionTest(unittest.TestCase):
         self.assertEqual(selected["target_strike"], 743.0)
         self.assertGreater(selected["selection_quality"]["open_interest_credit"], 0)
 
+    def test_selector_safely_clamps_negative_liquidity_fields(self) -> None:
+        selected_contract = next(
+            contract for contract in self.options["contracts"]
+            if contract["right"] == "C" and contract["strike"] == 743
+        )
+        rejected_contract = next(
+            contract for contract in self.options["contracts"]
+            if contract["right"] == "C" and contract["strike"] == 744
+        )
+        selected_contract.update(
+            delta=0.40,
+            spread_pct=1.0,
+            volume=2_000,
+            open_interest=-100,
+        )
+        rejected_contract.update(volume=-100, open_interest=-100)
+
+        selected = _select_signal_option(self.options, "C", 742.10)
+
+        self.assertEqual(selected["target_strike"], 743.0)
+        self.assertEqual(selected["selection_quality"]["open_interest_credit"], 0)
+
     def test_budget_selector_falls_back_to_one_quality_contract(self) -> None:
         preferred = next(
             contract
