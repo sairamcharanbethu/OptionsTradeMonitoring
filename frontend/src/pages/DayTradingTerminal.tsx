@@ -520,7 +520,11 @@ export default function DayTradingTerminal() {
   const queryClient = useQueryClient();
   const { isConnected, lastMessage } = useWebSocket();
   const { data: signals = [], isLoading: signalsLoading, refetch: refetchSignals } = useSignals(5000);
-  const { data: strategyState, refetch: refetchStrategy } = useStrategyState(isConnected ? 10000 : 1000);
+  const {
+    data: strategyState,
+    dataUpdatedAt: strategyStateUpdatedAt,
+    refetch: refetchStrategy
+  } = useStrategyState(isConnected ? 10000 : 1000);
   const { data: settings = {} } = useSettings();
   const { data: tradeUsage } = useTradeUsage();
   const { data: positions = [] } = usePositions(5000);
@@ -608,13 +612,17 @@ export default function DayTradingTerminal() {
   const strategyDebitLimit = Number(option.strategy_max_total_debit_dollars || settings.strategy_max_total_debit_dollars || 0);
   const baseSnapshotAge = Number(strategyState?.ageSeconds);
   const snapshotGeneratedAt = Number(strategySignal?.generated_at);
-  const snapshotAge = Number.isFinite(snapshotGeneratedAt) && snapshotGeneratedAt > 0
-    ? clockNow / 1000 - snapshotGeneratedAt
-    : baseSnapshotAge;
-  const snapshotDrift = Number.isFinite(snapshotAge) && Number.isFinite(baseSnapshotAge)
-    ? Math.max(0, snapshotAge - baseSnapshotAge)
+  const timeSinceStateReceipt = strategyStateUpdatedAt > 0
+    ? Math.max(0, (clockNow - strategyStateUpdatedAt) / 1000)
     : 0;
-  const quoteAge = Number.isFinite(baseQuoteAge) ? baseQuoteAge + snapshotDrift : Number.NaN;
+  const snapshotAge = Number.isFinite(baseSnapshotAge)
+    ? baseSnapshotAge + timeSinceStateReceipt
+    : Number.isFinite(snapshotGeneratedAt) && snapshotGeneratedAt > 0
+      ? clockNow / 1000 - snapshotGeneratedAt
+      : Number.NaN;
+  const quoteAge = Number.isFinite(baseQuoteAge)
+    ? baseQuoteAge + Math.max(0, snapshotAge)
+    : Number.NaN;
   const freshSnapshot = Number.isFinite(snapshotAge) && snapshotAge >= 0 && snapshotAge <= 20;
   const usageRemaining = Number(tradeUsage?.remaining ?? 0);
   const entryAllowed = currentSignal?.entry_allowed === true
