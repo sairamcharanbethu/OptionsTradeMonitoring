@@ -509,6 +509,70 @@ async function run() {
   assert.ok(!duplicateExitQueries.some(sql => sql.includes('INSERT INTO paper_orders')),
     'an already-closed position must not create another exit or credit cash again');
 
+  const calendarService = new PaperTradingService({
+    pg: { query: async () => ({ rows: [] }) },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  assert.equal(
+    calendarService.mandatoryFlattenDue({ expiration_date: '2026-11-27' }, new Date('2026-11-27T17:20:00.000Z')),
+    true,
+    'paper 0DTE flatten must begin 40 minutes before an early close'
+  );
+  assert.equal(
+    calendarService.mandatoryFlattenDue({ expiration_date: '2026-11-28' }, new Date('2026-11-27T17:20:00.000Z')),
+    false,
+    'paper flatten must not close a later-dated contract'
+  );
+
+  let premiumStopIntent = '';
+  const premiumStopPosition = {
+    id: 93,
+    option_type: 'CALL',
+    strike_price: 755,
+    expiration_date: '2026-08-04',
+    strategy_setup_id: 'premium-stop-setup',
+    strategy_snapshot: {},
+    entry_price: 1,
+    current_price: 1,
+    stop_loss_trigger: 0.8,
+    quantity: 1,
+    suggested_stop_loss: 99,
+    suggested_take_profit_1: 110,
+    suggested_take_profit_2: 112,
+    trailing_high_price: 1,
+    trailing_stop_loss_pct: 15,
+    exit_profile: 'BALANCED_T2',
+    policy_version: 'paper-exit-v2',
+    analysis_data: {}
+  };
+  const premiumStopService = new PaperTradingService({
+    pg: {
+      query: async (sql: string) => sql.includes('JOIN paper_trade_decisions')
+        ? { rows: [premiumStopPosition] }
+        : { rows: [] }
+    },
+    ibkrMarketData: { getOptionQuoteForOsi: async () => null },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  premiumStopService.getLivePosition = async () => null;
+  premiumStopService.setLivePosition = async () => new Date().toISOString();
+  premiumStopService.closePaperQuantity = async (_position: any, _quantity: number, _bid: number, intent: string) => {
+    premiumStopIntent = intent;
+  };
+  await premiumStopService.refreshOpenPositions({
+    spot: 100,
+    state: 'ACTIVE',
+    lifecycle: { status: 'ACTIVE' },
+    call_setup: {
+      option: {
+        local_symbol: 'SPY260804C00755000',
+        bid: 0.79,
+        quote_age_seconds: 0.1
+      }
+    }
+  }, 'premium-stop-setup');
+  assert.equal(premiumStopIntent, 'PREMIUM_STOP', 'the stored 20% paper premium stop must be enforced');
+
   console.log('All PaperTradingService tests passed!');
 }
 

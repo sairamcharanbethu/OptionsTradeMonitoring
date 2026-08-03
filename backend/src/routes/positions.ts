@@ -2,7 +2,7 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 import { redis } from '../lib/redis';
 import { AnalysisService } from '../services/analysis-service';
-import { SnaptradeService } from '../services/snaptrade-service';
+import { isAmbiguousSnapTradeOrderError, SnaptradeService } from '../services/snaptrade-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
@@ -597,6 +597,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
           return reply.code(400).send({ error: 'No SnapTrade account id is attached to this position' });
         }
 
+        let acceptedOrder: any = null;
         try {
           const snaptradeService = new SnaptradeService(fastify);
           const osiTicker = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
@@ -609,6 +610,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             closeQty,
             'MARKET'
           );
+          acceptedOrder = order;
 
           const updatedPosition = await TradeLifecycleService.markExitSubmitted(
             client,
@@ -632,7 +634,12 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
           await TradeRedisService.requestBrokerSync(userId);
           return updatedPosition;
         } catch (err: any) {
-          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual SnapTrade exit failed');
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual SnapTrade exit failed', {
+            ambiguous: Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err),
+            orderId: acceptedOrder?.orderId || null,
+            tradeId: acceptedOrder?.tradeId || null,
+            requestedQuantity: closeQty
+          });
           await TradeRedisService.recordEvent(client, {
             userId,
             positionId: id,

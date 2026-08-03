@@ -78,6 +78,32 @@ async function testMarkExitSubmittedDoesNotMarkTrimWithoutTrimQuantity() {
   assert(query.params?.[7] === null, 'Full trim should not pass partial trim quantity');
 }
 
+async function testExitSubmissionFailureSeparatesRetryableAndAmbiguousOutcomes() {
+  const captured: Array<{ params?: any[] }> = [];
+  const db = {
+    query: async (_sql: string, params?: any[]) => {
+      captured.push({ params });
+      return { rows: [], rowCount: 1 };
+    }
+  };
+
+  await TradeLifecycleService.markExitSubmissionFailure(db, 44, 'broker rejected request');
+  await TradeLifecycleService.markExitSubmissionFailure(db, 45, 'request timed out', 'Exit failed', {
+    ambiguous: true,
+    orderId: 'possible-order',
+    requestedQuantity: 1
+  });
+
+  assert(captured[0].params?.[0] === 'EXIT_RETRYABLE', 'A definite pre-acceptance failure must remain retryable');
+  assert(captured[1].params?.[0] === 'EXIT_RECONCILE_REQUIRED', 'An ambiguous submission must require reconciliation');
+  assert(captured[1].params?.[2] === 'possible-order', 'A returned broker id must survive a local persistence failure');
+  assert(captured[1].params?.[4] === 1, 'An ambiguous trim must retain its requested quantity for exact reconciliation');
+  assert(TradeLifecycleService.canRetryExit({ status: 'OPEN', execution_status: 'EXIT_RETRYABLE', exit_retry_count: 0 }).allowed,
+    'A definite failed submission must be retryable without a broker order id');
+  assert(!TradeLifecycleService.canRetryExit({ status: 'OPEN', execution_status: 'EXIT_RECONCILE_REQUIRED', exit_retry_count: 0 }).allowed,
+    'An ambiguous submission must never be retried without broker reconciliation');
+}
+
 async function testShortOptionLifecycleHelpers() {
   const longCall = { option_type: 'CALL', entry_action: 'BUY_TO_OPEN', entry_price: 1.5 };
   const shortCall = { option_type: 'CALL', entry_action: 'SELL_TO_OPEN', entry_price: 1.5 };
@@ -99,6 +125,7 @@ async function runTests() {
   await testFinalEntryExecutionStatuses();
   await testMarkExitSubmittedRecordsPendingTrimMetadata();
   await testMarkExitSubmittedDoesNotMarkTrimWithoutTrimQuantity();
+  await testExitSubmissionFailureSeparatesRetryableAndAmbiguousOutcomes();
   await testShortOptionLifecycleHelpers();
   console.log('All TradeLifecycleService tests passed!');
 }

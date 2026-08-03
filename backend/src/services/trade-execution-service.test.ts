@@ -668,6 +668,64 @@ async function testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit() {
   assert(insertParams[33] === true, 'The strategy position must remain marked as strategy-managed');
 }
 
+async function testLiveEntryUsesCorrelatedExposureLockAndFailsClosed() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  let lockKey = '';
+  let lockTtl = 0;
+  let failureMessage = '';
+  const originalAcquireLock = (TradeRedisService as any).acquireLock;
+  try {
+    (TradeRedisService as any).acquireLock = async (key: string, ttl: number) => {
+      lockKey = key;
+      lockTtl = ttl;
+      return { acquired: true, degraded: true, key, token: 'degraded' };
+    };
+    service.getSignalExecutionContract = async () => ({ engineVersion: 'signal-only-v2', optionDetails: { planned_contracts: 1 } });
+    service.getRiskState = async () => ({ maxCorrelatedPositions: 1 });
+    service.getExistingSignalExecution = async () => null;
+    service.getSignalSetupGrade = async () => 'A+';
+    service.markSignalExecutionFailure = async (_userId: number, _signalId: number, message: string) => { failureMessage = message; };
+
+    const result = await service.executeSignal(createSignalInput({ symbol: 'SPY' }), {
+      execution_broker: 'wealthsimple_snaptrade',
+      snaptrade_auto_trade: 'true',
+      live_trading_acknowledged: 'true',
+      snaptrade_trading_account_id: '7:account',
+      contracts_per_trade: '1'
+    });
+    assert(lockKey.includes('entry-exposure:7:wealthsimple_snaptrade:SPY-QQQ'), `Expected correlated exposure lock, got ${lockKey}`);
+    assert(lockTtl === 120, `Live exposure lock must cover broker round trips, got ${lockTtl}s`);
+    assert(result.skipped === true && failureMessage.includes('lock is unavailable'), 'A live entry must fail closed when Redis locking is unavailable');
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+  }
+}
+
+async function testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim() {
+  let revalidated = false;
+  let claimCalled = false;
+  const fastify = createFastifyMock();
+  fastify.strategyEngine = {
+    assertSignalExecutable: async () => {
+      revalidated = true;
+      throw new Error('The strategy is no longer accepting a new entry');
+    }
+  };
+  const service = new TradeExecutionService(fastify) as any;
+  service.getSignalOptionDetails = async () => ({});
+  service.validateEntryQuote = async () => ({ quote: createEntryQuote(), protectedLimit: 2.05, baselineMark: 2, movePct: 2.5, stabilityMovePct: null });
+  service.markSignalExecutionFailure = async () => {};
+  service.claimSignalSubmission = async () => { claimCalled = true; return true; };
+
+  const result = await service.executeSnapTradeOptionTrade(createSignalInput(), {
+    live_trading_acknowledged: 'true',
+    snaptrade_trading_account_id: '7:account',
+    order_type: 'LIMIT'
+  }, 1);
+  assert(revalidated, 'The primary lifecycle must be revalidated after the final option quote');
+  assert(result.skipped === true && claimCalled === false, 'A stale lifecycle must block before the durable broker submission claim');
+}
+
 async function runTests() {
   console.log('Running TradeExecutionService broker lifecycle tests...');
   await testIBKRQuoteAllowsProtectedLimit();
@@ -687,6 +745,8 @@ async function runTests() {
   await testPreSubmitRiskDenialSkipsBeforeBrokerPath();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   await testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit();
+  await testLiveEntryUsesCorrelatedExposureLockAndFailsClosed();
+  await testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim();
   console.log('All TradeExecutionService broker lifecycle tests passed!');
 }
 

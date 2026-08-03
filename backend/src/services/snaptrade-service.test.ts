@@ -1,5 +1,5 @@
 import '@fastify/postgres';
-import { SnaptradeService, SnapTradeRateLimitError } from './snaptrade-service';
+import { SnaptradeService, SnapTradeOrderSubmissionError, SnapTradeRateLimitError } from './snaptrade-service';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -190,6 +190,69 @@ async function testPlaceOptionOrderReturnsActionableRateLimitError() {
   assert(caught.message.includes('wait 60 seconds'), 'Should include the entry retry cooldown');
 }
 
+async function testOrderSubmissionErrorsPreserveAmbiguity() {
+  const service = new SnaptradeService(createFastifyMock());
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: { trading: { placeForceOrder: async () => { throw Object.assign(new Error('socket timeout'), { code: 'ETIMEDOUT' }); } } }
+  });
+  let timeoutError: any = null;
+  try {
+    await service.placeOptionOrder(7, 'account', 'SPY260803C00755000', 'BUY_TO_OPEN', 1, 'LIMIT', '0.49');
+  } catch (error) {
+    timeoutError = error;
+  }
+  assert(timeoutError instanceof SnapTradeOrderSubmissionError && timeoutError.ambiguous === true,
+    'A transport timeout must be marked as an ambiguous broker outcome');
+
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: { trading: { placeForceOrder: async () => { throw Object.assign(new Error('invalid order'), { response: { status: 400 } }); } } }
+  });
+  let rejectedError: any = null;
+  try {
+    await service.placeOptionOrder(7, 'account', 'SPY260803C00755000', 'BUY_TO_OPEN', 1, 'LIMIT', '0.49');
+  } catch (error) {
+    rejectedError = error;
+  }
+  assert(rejectedError instanceof SnapTradeOrderSubmissionError && rejectedError.ambiguous === false,
+    'A broker HTTP 400 response must be classified as a definite failed submission');
+
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: { trading: { placeForceOrder: async () => { throw Object.assign(new Error('transport did not return an HTTP status'), { status: 0 }); } } }
+  });
+  let missingStatusError: any = null;
+  try {
+    await service.placeOptionOrder(7, 'account', 'SPY260803C00755000', 'BUY_TO_OPEN', 1, 'LIMIT', '0.49');
+  } catch (error) {
+    missingStatusError = error;
+  }
+  assert(missingStatusError instanceof SnapTradeOrderSubmissionError && missingStatusError.ambiguous === true,
+    'A transport failure with status zero must require broker reconciliation');
+}
+
+async function testMissingOrderIdUsesUniqueExactFingerprintOnly() {
+  const service = new SnaptradeService(createFastifyMock()) as any;
+  const position = {
+    symbol: 'SPY', option_type: 'CALL', strike_price: 755, expiration_date: '2026-08-03',
+    entry_action: 'BUY_TO_OPEN', quantity: 1, contracts_requested: 1,
+    created_at: '2026-08-03T14:00:00.000Z'
+  };
+  const exact = {
+    brokerage_order_id: 'recovered-order', action: 'BUY_OPEN', total_quantity: '1',
+    time_placed: '2026-08-03T14:00:20.000Z',
+    option_symbol: { ticker: 'SPY   260803C00755000' }
+  };
+  assert(service.findMatchingOrder([exact], position, 'ENTRY') === exact,
+    'A unique exact contract/action/quantity/time match must recover an ambiguous order');
+  assert(service.findMatchingOrder([exact, { ...exact, brokerage_order_id: 'second-order' }], position, 'ENTRY') === null,
+    'Multiple matching broker orders must remain unresolved instead of guessing');
+}
+
 async function testOrderStatusRepairsClosedAcceptedEntry() {
   const localClosedPosition = {
     id: 42,
@@ -323,9 +386,10 @@ async function testPartialExitDoesNotCloseRemainingPosition() {
     expiration_date: '2026-08-03',
     entry_price: 0.49,
     current_price: 0.60,
-    quantity: 2,
+    quantity: 3,
     status: 'OPEN',
-    execution_status: 'PENDING_EXIT',
+    execution_status: 'EXIT_RECONCILE_REQUIRED',
+    profit_trim_quantity: 1,
     execution_broker: 'wealthsimple_snaptrade',
     broker_exit_order_id: 'partial-exit',
     execution_account_id: '7:snap-account',
@@ -365,6 +429,7 @@ async function testPartialExitDoesNotCloseRemainingPosition() {
 
   const summary = await service.syncPendingBrokerOrders(7);
   assert(Boolean(partialExitUpdate), 'A partial exit must retain an explicit pending-exit state');
+  assert((partialExitUpdate as unknown as any[])[0] === 'PENDING_TRIM', 'An ambiguous partial trim must recover its trim lifecycle from the stored requested quantity');
   assert(summary.closed === 0 && summary.stillPending === 1, 'A partial exit must not close the remaining local position');
   assert(summary.orders[0]?.action === 'exit_partially_filled', 'A partial exit must be visible in broker reconciliation output');
 }
@@ -443,6 +508,8 @@ async function runTests() {
   await testPlaceOptionOrderUsesLimitPriceForForceOrder();
   await testPlaceOptionOrderRejectsInvalidLimitPriceBeforeBrokerCall();
   await testPlaceOptionOrderReturnsActionableRateLimitError();
+  await testOrderSubmissionErrorsPreserveAmbiguity();
+  await testMissingOrderIdUsesUniqueExactFingerprintOnly();
   await testOrderStatusRepairsClosedAcceptedEntry();
   await testPartialEntryRemainsPendingUntilRemainderIsResolved();
   await testPartialExitDoesNotCloseRemainingPosition();

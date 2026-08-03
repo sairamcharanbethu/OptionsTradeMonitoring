@@ -3,7 +3,7 @@ import YahooFinance from 'yahoo-finance2';
 import { getSettingsWithGlobalFallback, resolveMcpTradingEnabled } from '../lib/settings-utils';
 import { redis } from '../lib/redis';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
-import { SnaptradeService } from './snaptrade-service';
+import { isAmbiguousSnapTradeOrderError, SnaptradeService } from './snaptrade-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { TradeRedisService } from './trade-redis-service';
 
@@ -376,11 +376,12 @@ export class ManualOptionOrderService {
         ]
       );
       const positionId = insertResult.rows[0]?.id;
+      if (!positionId) throw new Error('Failed to reserve the local position before broker submission');
 
-      let order: any;
+      let acceptedOrder: any = null;
       try {
         const snaptrade = new SnaptradeService(this.fastify);
-        order = await snaptrade.placeOptionOrder(
+        const order = await snaptrade.placeOptionOrder(
           userId,
           accountId,
           osiTicker,
@@ -390,80 +391,98 @@ export class ManualOptionOrderService {
           input.orderType === 'LIMIT' ? Number(input.limitPrice).toFixed(2) : undefined,
           { skipImpact: true }
         );
+        acceptedOrder = order;
+
+        const { rows } = await (this.fastify as any).pg.query(
+          `UPDATE positions
+           SET broker_order_id = $1,
+               broker_trade_id = $2,
+               execution_status = $3,
+               notes = COALESCE(notes, '') || $4,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5
+           RETURNING *`,
+          [
+            order.orderId || null,
+            order.tradeId || null,
+            entryState.executionStatus,
+            ` [${sourceLabel} SnapTrade order submitted${order.orderId ? `: ${order.orderId}` : ''}]`,
+            positionId
+          ]
+        );
+        if (!rows[0]) {
+          throw new Error('Broker accepted the entry, but the local position state changed before the order id was persisted');
+        }
+
+        await TradeRedisService.recordEvent((this.fastify as any).pg, {
+          userId,
+          positionId,
+          eventType: input.source === 'mcp' ? 'MCP_ENTRY_ORDER_SUBMITTED' : 'MANUAL_ENTRY_ORDER_SUBMITTED',
+          message: `${sourceLabel} Wealthsimple ${input.orderType} ${input.action} submitted`,
+          metadata: {
+            orderId: order.orderId || null,
+            tradeId: order.tradeId || null,
+            contract: osiTicker,
+            quantity: input.quantity,
+            action: input.action,
+            orderType: input.orderType,
+            limitPrice: input.limitPrice || null,
+            quote: quote ? toQuotePayload(quote) : null,
+            quoteValidation: isMcpRelay ? 'skipped_mcp_relay' : 'ibkr_live_quote',
+            brokerFillPending
+          }
+        });
+        await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
+        await TradeRedisService.requestBrokerSync(userId);
+        (this.fastify as any).ibkrMarketDataStreamer?.syncSubscriptions?.().catch((err: any) => {
+          this.fastify.log.warn(`[ManualOptionOrderService] Failed to refresh stream subscriptions after entry: ${err.message}`);
+        });
+
+        const result: ManualOptionOrderResult = {
+          success: true,
+          orderId: order.orderId || null,
+          tradeId: order.tradeId || null,
+          optionSymbol: osiTicker,
+          position: rows[0]
+        };
+        if (input.clientOrderId) {
+          await redis.set(idempotencyKey(userId, input.clientOrderId), JSON.stringify(result), IDEMPOTENCY_TTL_SECONDS);
+        }
+        return result;
       } catch (err: any) {
+        const ambiguous = Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err);
         await (this.fastify as any).pg.query(
           `UPDATE positions
-           SET status = 'CLOSED',
-               execution_status = 'ENTRY_FAILED',
-               execution_error = $1,
-               notes = COALESCE(notes, '') || $2,
+           SET status = $1,
+               execution_status = $2,
+               execution_error = $3,
+               broker_order_id = COALESCE($4, broker_order_id),
+               broker_trade_id = COALESCE($5, broker_trade_id),
+               notes = COALESCE(notes, '') || $6,
                updated_at = CURRENT_TIMESTAMP
-           WHERE id = $3`,
-          [err.message || String(err), ` [${sourceLabel} broker submit failed: ${err.message || String(err)}]`, positionId]
+           WHERE id = $7`,
+          [
+            ambiguous ? 'PENDING_ORDER' : 'CLOSED',
+            ambiguous ? 'ENTRY_RECONCILE_REQUIRED' : 'ENTRY_FAILED',
+            err.message || String(err),
+            acceptedOrder?.orderId || null,
+            acceptedOrder?.tradeId || null,
+            ` [${sourceLabel} broker submit ${ambiguous ? 'requires reconciliation' : 'failed'}: ${err.message || String(err)}]`,
+            positionId
+          ]
         );
         await TradeRedisService.recordEvent((this.fastify as any).pg, {
           userId,
           positionId,
-          eventType: input.source === 'mcp' ? 'MCP_ENTRY_ORDER_FAILED' : 'MANUAL_ENTRY_ORDER_FAILED',
+          eventType: ambiguous
+            ? (input.source === 'mcp' ? 'MCP_ENTRY_RECONCILE_REQUIRED' : 'MANUAL_ENTRY_RECONCILE_REQUIRED')
+            : (input.source === 'mcp' ? 'MCP_ENTRY_ORDER_FAILED' : 'MANUAL_ENTRY_ORDER_FAILED'),
           message: err.message || String(err),
           metadata: { contract: osiTicker, quantity: input.quantity, orderType: input.orderType, action: input.action }
         });
+        if (ambiguous) await TradeRedisService.requestBrokerSync(userId);
         throw err;
       }
-
-      const { rows } = await (this.fastify as any).pg.query(
-        `UPDATE positions
-         SET broker_order_id = $1,
-             broker_trade_id = $2,
-             execution_status = $3,
-             notes = COALESCE(notes, '') || $4,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $5
-         RETURNING *`,
-        [
-          order.orderId || null,
-          order.tradeId || null,
-          entryState.executionStatus,
-          ` [${sourceLabel} SnapTrade order submitted${order.orderId ? `: ${order.orderId}` : ''}]`,
-          positionId
-        ]
-      );
-
-      await TradeRedisService.recordEvent((this.fastify as any).pg, {
-        userId,
-        positionId,
-        eventType: input.source === 'mcp' ? 'MCP_ENTRY_ORDER_SUBMITTED' : 'MANUAL_ENTRY_ORDER_SUBMITTED',
-        message: `${sourceLabel} Wealthsimple ${input.orderType} ${input.action} submitted`,
-        metadata: {
-          orderId: order.orderId || null,
-          tradeId: order.tradeId || null,
-          contract: osiTicker,
-          quantity: input.quantity,
-          action: input.action,
-          orderType: input.orderType,
-          limitPrice: input.limitPrice || null,
-          quote: quote ? toQuotePayload(quote) : null,
-          quoteValidation: isMcpRelay ? 'skipped_mcp_relay' : 'ibkr_live_quote',
-          brokerFillPending
-        }
-      });
-      await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
-      await TradeRedisService.requestBrokerSync(userId);
-      (this.fastify as any).ibkrMarketDataStreamer?.syncSubscriptions?.().catch((err: any) => {
-        this.fastify.log.warn(`[ManualOptionOrderService] Failed to refresh stream subscriptions after entry: ${err.message}`);
-      });
-
-      const result: ManualOptionOrderResult = {
-        success: true,
-        orderId: order.orderId || null,
-        tradeId: order.tradeId || null,
-        optionSymbol: osiTicker,
-        position: rows[0]
-      };
-      if (input.clientOrderId) {
-        await redis.set(idempotencyKey(userId, input.clientOrderId), JSON.stringify(result), IDEMPOTENCY_TTL_SECONDS);
-      }
-      return result;
     } finally {
       await TradeRedisService.releaseLock(entryLock);
     }
@@ -531,9 +550,9 @@ export class ManualOptionOrderService {
 
         const optionSymbol = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
         const exitAction = TradeLifecycleService.getExitAction(position);
-        let order: any;
+        let acceptedOrder: any = null;
         try {
-          order = await snaptrade.placeOptionOrder(
+          const order = await snaptrade.placeOptionOrder(
             userId,
             accountId,
             optionSymbol,
@@ -543,8 +562,54 @@ export class ManualOptionOrderService {
             input.orderType === 'LIMIT' ? Number(input.limitPrice).toFixed(2) : undefined,
             { skipImpact: true }
           );
+          acceptedOrder = order;
+
+          const updatedPosition = await TradeLifecycleService.markExitSubmitted(
+            client,
+            input.positionId,
+            order,
+            {
+              reason: input.reason || 'MCP',
+              orderType: input.orderType,
+              trimQuantity: closeQty < currentQty ? closeQty : null,
+              note: ` [MCP SnapTrade ${input.orderType} ${exitAction} exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
+            }
+          );
+          await TradeRedisService.recordEvent(client, {
+            userId,
+            positionId: input.positionId,
+            eventType: 'MCP_EXIT_ORDER_SUBMITTED',
+            message: `MCP Wealthsimple ${input.orderType} ${exitAction} submitted`,
+            metadata: {
+              orderId: order.orderId || null,
+              tradeId: order.tradeId || null,
+              contract: optionSymbol,
+              quantity: closeQty,
+              action: exitAction,
+              orderType: input.orderType,
+              limitPrice: input.limitPrice || null
+            }
+          });
+          await client.query('COMMIT');
+          await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
+          await TradeRedisService.requestBrokerSync(userId);
+          return {
+            success: true,
+            orderId: order.orderId || null,
+            tradeId: order.tradeId || null,
+            optionSymbol,
+            action: exitAction,
+            orderType: input.orderType,
+            quantity: closeQty,
+            position: updatedPosition
+          };
         } catch (err: any) {
-          await TradeLifecycleService.markExitSubmissionFailure(client, input.positionId, err.message || String(err), 'MCP SnapTrade exit failed');
+          await TradeLifecycleService.markExitSubmissionFailure(client, input.positionId, err.message || String(err), 'MCP SnapTrade exit failed', {
+            ambiguous: Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err),
+            orderId: acceptedOrder?.orderId || null,
+            tradeId: acceptedOrder?.tradeId || null,
+            requestedQuantity: closeQty
+          });
           await TradeRedisService.recordEvent(client, {
             userId,
             positionId: input.positionId,
@@ -556,46 +621,6 @@ export class ManualOptionOrderService {
           await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
           throw err;
         }
-
-        const updatedPosition = await TradeLifecycleService.markExitSubmitted(
-          client,
-          input.positionId,
-          order,
-          {
-            reason: input.reason || 'MCP',
-            orderType: input.orderType,
-            trimQuantity: closeQty < currentQty ? closeQty : null,
-            note: ` [MCP SnapTrade ${input.orderType} ${exitAction} exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
-          }
-        );
-        await TradeRedisService.recordEvent(client, {
-          userId,
-          positionId: input.positionId,
-          eventType: 'MCP_EXIT_ORDER_SUBMITTED',
-          message: `MCP Wealthsimple ${input.orderType} ${exitAction} submitted`,
-          metadata: {
-            orderId: order.orderId || null,
-            tradeId: order.tradeId || null,
-            contract: optionSymbol,
-            quantity: closeQty,
-            action: exitAction,
-            orderType: input.orderType,
-            limitPrice: input.limitPrice || null
-          }
-        });
-        await client.query('COMMIT');
-        await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
-        await TradeRedisService.requestBrokerSync(userId);
-        return {
-          success: true,
-          orderId: order.orderId || null,
-          tradeId: order.tradeId || null,
-          optionSymbol,
-          action: exitAction,
-          orderType: input.orderType,
-          quantity: closeQty,
-          position: updatedPosition
-        };
       } catch (err) {
         try {
           await client.query('ROLLBACK');

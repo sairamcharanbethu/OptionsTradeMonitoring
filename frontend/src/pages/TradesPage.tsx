@@ -78,6 +78,8 @@ const actionLabel = (trade: Position) => {
   if (status === 'PENDING_TRIM') return 'Trim pending';
   if (status === 'PENDING_EXIT') return 'Close pending';
   if (status === 'EXIT_STALE') return 'Verify broker';
+  if (status === 'EXIT_RECONCILE_REQUIRED') return 'Verify broker';
+  if (status === 'EXIT_RETRYABLE') return 'Retry available';
   if (status === 'EXIT_REJECTED' || status === 'EXIT_FAILED') return 'Sync required';
   if (status.startsWith('EXIT_')) return 'Broker check';
   return 'Close';
@@ -89,6 +91,8 @@ const stateLabel = (trade: Position) => {
     PENDING_EXIT: 'Close pending',
     PENDING_TRIM: 'Trim pending',
     EXIT_STALE: 'Verify broker',
+    EXIT_RECONCILE_REQUIRED: 'Broker verification required',
+    EXIT_RETRYABLE: 'Exit retry available',
     EXIT_REJECTED: 'Exit rejected',
     EXIT_FAILED: 'Exit failed',
     STOP_LOSS: 'Stop loss',
@@ -123,9 +127,9 @@ const activeOrderId = (trade: Position) =>
   trade.broker_exit_order_id || trade.profit_trim_order_id || trade.broker_order_id || '-';
 
 const canRetryClose = (trade: Position) =>
-  ['EXIT_REJECTED', 'EXIT_FAILED', 'EXIT_CANCELED', 'EXIT_CANCELLED', 'EXIT_EXPIRED', 'EXIT_STALE'].includes(String(trade.execution_status || ''))
+  ['EXIT_RETRYABLE', 'EXIT_REJECTED', 'EXIT_FAILED', 'EXIT_CANCELED', 'EXIT_CANCELLED', 'EXIT_EXPIRED', 'EXIT_STALE'].includes(String(trade.execution_status || ''))
   && trade.status === 'OPEN'
-  && !!trade.broker_exit_order_id;
+  && (trade.execution_status === 'EXIT_RETRYABLE' || !!trade.broker_exit_order_id);
 
 type ClosedTradeRange = 'today' | 'past-day' | 'past-week' | 'past-month' | 'past-6-months' | 'past-year' | 'ytd';
 

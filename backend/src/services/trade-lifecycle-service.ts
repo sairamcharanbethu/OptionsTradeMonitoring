@@ -6,12 +6,8 @@ export type ExitExecutionStatus = 'PENDING_EXIT' | 'PENDING_TRIM';
 export type OptionEntryAction = 'BUY_TO_OPEN' | 'SELL_TO_OPEN';
 export type OptionExitAction = 'SELL_TO_CLOSE' | 'BUY_TO_CLOSE';
 export type EntryOrderState =
-  | 'LOCAL_BLOCKED'
   | 'SUBMITTED'
   | 'PENDING_RECONCILE'
-  | 'ACCEPTED'
-  | 'FILLED'
-  | 'REJECTED'
   | 'STALE'
   | 'REVIEW_REQUIRED';
 
@@ -112,7 +108,7 @@ export class TradeLifecycleService {
   }
 
   static isRetryableExitStatus(status?: string | null): boolean {
-    return ['EXIT_REJECTED', 'EXIT_FAILED', 'EXIT_CANCELED', 'EXIT_CANCELLED', 'EXIT_EXPIRED', 'EXIT_STALE'].includes(String(status || ''));
+    return ['EXIT_RETRYABLE', 'EXIT_REJECTED', 'EXIT_FAILED', 'EXIT_CANCELED', 'EXIT_CANCELLED', 'EXIT_EXPIRED', 'EXIT_STALE'].includes(String(status || ''));
   }
 
   static assertCanRequestExit(position: any) {
@@ -129,9 +125,11 @@ export class TradeLifecycleService {
   static canRetryExit(position: any): ExitRetryDecision {
     if (!position) return { allowed: false, reason: 'Position not found' };
     if (position.status !== 'OPEN') return { allowed: false, reason: 'Only open positions can retry an exit' };
-    if (!position.broker_exit_order_id) return { allowed: false, reason: 'No previous broker exit order id is attached to this position' };
     if (!this.isRetryableExitStatus(position.execution_status)) {
       return { allowed: false, reason: `Exit retry is not allowed while status is ${position.execution_status || 'empty'}` };
+    }
+    if (!position.broker_exit_order_id && position.execution_status !== 'EXIT_RETRYABLE') {
+      return { allowed: false, reason: 'No previous broker exit order id is attached to this position' };
     }
     const retryCount = Number(position.exit_retry_count || 0);
     if (retryCount >= this.MAX_EXIT_RETRIES) {
@@ -171,9 +169,9 @@ export class TradeLifecycleService {
            exit_requested_at = CURRENT_TIMESTAMP,
            exit_retry_count = COALESCE(exit_retry_count, 0) + $5,
            profit_trim_status = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN 'PENDING' ELSE profit_trim_status END,
-           profit_trim_quantity = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $8::integer ELSE profit_trim_quantity END,
-           profit_trim_order_id = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $1 ELSE profit_trim_order_id END,
-           profit_trim_trade_id = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $2 ELSE profit_trim_trade_id END,
+           profit_trim_quantity = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $8::integer ELSE NULL END,
+           profit_trim_order_id = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $1 ELSE NULL END,
+           profit_trim_trade_id = CASE WHEN $8::integer IS NOT NULL AND $8::integer < quantity THEN $2 ELSE NULL END,
            notes = COALESCE(notes, '') || $6,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $7
@@ -195,16 +193,30 @@ export class TradeLifecycleService {
     return rows[0];
   }
 
-  static async markExitSubmissionFailure(db: Queryable, positionId: number | string, message: string, notePrefix = 'Exit submission failed') {
+  static async markExitSubmissionFailure(
+    db: Queryable,
+    positionId: number | string,
+    message: string,
+    notePrefix = 'Exit submission failed',
+    options: { ambiguous?: boolean; orderId?: string | null; tradeId?: string | null; requestedQuantity?: number | null } = {}
+  ) {
+    const executionStatus = options.ambiguous ? 'EXIT_RECONCILE_REQUIRED' : 'EXIT_RETRYABLE';
+    const requestedQuantity = Number(options.requestedQuantity);
+    const persistedQuantity = Number.isFinite(requestedQuantity) && requestedQuantity > 0
+      ? Math.floor(requestedQuantity)
+      : null;
     await db.query(
       `UPDATE positions
-       SET execution_status = 'EXIT_FAILED',
-           execution_error = $1,
-           notes = COALESCE(notes, '') || $2,
+       SET execution_status = $1,
+           execution_error = $2,
+           broker_exit_order_id = COALESCE($3, broker_exit_order_id),
+           broker_exit_trade_id = COALESCE($4, broker_exit_trade_id),
+           profit_trim_quantity = COALESCE($5, profit_trim_quantity),
+           notes = COALESCE(notes, '') || $6,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3
+       WHERE id = $7
          AND status = 'OPEN'`,
-      [message, ` [${notePrefix}: ${message}]`, positionId]
+      [executionStatus, message, options.orderId || null, options.tradeId || null, persistedQuantity, ` [${notePrefix}: ${message}]`, positionId]
     );
   }
 

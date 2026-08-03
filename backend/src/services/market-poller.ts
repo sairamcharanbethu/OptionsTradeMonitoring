@@ -3,7 +3,7 @@ import { FastifyInstance } from 'fastify';
 import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
-import { SnaptradeService } from './snaptrade-service';
+import { isAmbiguousSnapTradeOrderError, SnaptradeService } from './snaptrade-service';
 import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
@@ -210,16 +210,22 @@ export class MarketPoller {
     return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
   }
 
-  private async markExitSubmissionFailure(position: any, message: string) {
-    await TradeLifecycleService.markExitSubmissionFailure((this.fastify as any).pg, position.id, message);
+  private async markExitSubmissionFailure(
+    position: any,
+    message: string,
+    options: { ambiguous?: boolean; orderId?: string | null; tradeId?: string | null; requestedQuantity?: number | null } = {}
+  ) {
+    await TradeLifecycleService.markExitSubmissionFailure((this.fastify as any).pg, position.id, message, 'Exit submission failed', options);
     await new DiscordAlertService(this.fastify).send({
       userId: Number(position.user_id),
-      title: 'Automated exit failed',
-      message: `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)} exit submission failed: ${message}`,
+      title: options.ambiguous ? 'Automated exit requires broker verification' : 'Automated exit failed',
+      message: options.ambiguous
+        ? `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)} may have reached the broker. Do not retry until Wealthsimple reconciliation completes: ${message}`
+        : `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)} exit submission failed and can be retried after verification: ${message}`,
       severity: 'critical',
       category: 'exit-failure',
       tradeId: position.id,
-      dedupeKey: `auto-exit-failed:${position.id}:${String(message || '').slice(0, 120)}`,
+      dedupeKey: `auto-exit-${options.ambiguous ? 'reconcile' : 'failed'}:${position.id}:${String(message || '').slice(0, 120)}`,
       dedupeSeconds: 900
     });
   }
@@ -325,8 +331,7 @@ export class MarketPoller {
     flattenMinutes: number;
     closeMinutes: number;
   } | null {
-    if (!position.strategy_managed
-      || position.is_simulated
+    if (position.is_simulated
       || String(position.execution_broker || '').toLowerCase() !== 'wealthsimple_snaptrade') return null;
     const expiration = position.expiration_date instanceof Date
       ? position.expiration_date.toISOString().slice(0, 10)
@@ -433,7 +438,7 @@ export class MarketPoller {
 
   private isLateDayExitWindow(date: Date = new Date()): boolean {
     const parts = this.getNewYorkTimeParts(date);
-    return parts.minutes >= (15 * 60 + 45);
+    return parts.minutes >= getUSMarketCloseMinutes(date) - 15;
   }
 
   private getNewYorkTimeParts(date: Date = new Date()): { hour: number; minute: number; minutes: number } {
@@ -505,6 +510,7 @@ export class MarketPoller {
       return false;
     }
 
+    let acceptedOrder: { orderId?: string | null; tradeId?: string | null } | null = null;
     try {
       const snaptradeService = new SnaptradeService(this.fastify);
       const osiTicker = this.constructOSITicker(
@@ -523,8 +529,9 @@ export class MarketPoller {
         orderType,
         limitPrice
       );
+      acceptedOrder = result;
 
-      await (this.fastify as any).pg.query(
+      const persistResult = await (this.fastify as any).pg.query(
         `UPDATE positions
          SET execution_status = $1::text,
              execution_error = NULL,
@@ -548,11 +555,19 @@ export class MarketPoller {
           position.id
         ]
       );
+      if ((persistResult.rowCount ?? persistResult.rows?.length ?? 0) === 0) {
+        throw new Error('Broker accepted the exit, but the position state changed before the broker order id was persisted');
+      }
       return true;
     } catch (err: any) {
       const message = err.message || String(err);
       this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${message}`);
-      await this.markExitSubmissionFailure(position, message);
+      await this.markExitSubmissionFailure(position, message, {
+        ambiguous: Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err),
+        orderId: acceptedOrder?.orderId || null,
+        tradeId: acceptedOrder?.tradeId || null,
+        requestedQuantity: exitQuantity
+      });
       return false;
     }
   }
@@ -721,8 +736,8 @@ export class MarketPoller {
     return lastFetchedPrice;
   }
 
-  public isMarketOpen(): boolean {
-    return getNewYorkMarketState(new Date(), 9 * 60 + 30, 16 * 60 + 16).isOpen;
+  public isMarketOpen(date: Date = new Date()): boolean {
+    return getNewYorkMarketState(date, 9 * 60 + 30, getUSMarketCloseMinutes(date)).isOpen;
   }
 
   public async poll(force: boolean = false) {
@@ -738,20 +753,8 @@ export class MarketPoller {
       return;
     }
 
-    // 0. Hard Time-based Day Trading Cutoffs Enforcements
+    // 0. Calendar-aware 0DTE flatten enforcement.
     const now = new Date();
-    const etFormatter = new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/New_York',
-        hour: 'numeric',
-        minute: 'numeric',
-        hour12: false
-    });
-    const [etHourStr, etMinuteStr] = etFormatter.format(now).split(':');
-    const etHour = parseInt(etHourStr, 10);
-    const etMinute = parseInt(etMinuteStr, 10);
-    const etTimeMinutes = etHour * 60 + etMinute;
-
-    const isEodCutoff = etTimeMinutes >= 15 * 60 + 30; // 3:30 PM ET or later
 
     for (const pos of positions) {
         let shouldForceClose = false;
@@ -764,9 +767,12 @@ export class MarketPoller {
             continue;
         }
 
-        if (isEodCutoff) {
-            shouldForceClose = true;
-            reason = 'Hard Cutoff (3:30 PM ET)';
+        const mandatoryFlatten = this.getMandatoryFlattenAssessment(pos, now);
+        if (mandatoryFlatten?.triggered) {
+          shouldForceClose = true;
+          const hour = Math.floor(mandatoryFlatten.flattenMinutes / 60);
+          const minute = String(mandatoryFlatten.flattenMinutes % 60).padStart(2, '0');
+          reason = `0DTE mandatory flatten (${hour}:${minute} ET)`;
         }
 
         if (shouldForceClose) {

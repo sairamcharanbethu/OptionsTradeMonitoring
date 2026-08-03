@@ -27,6 +27,19 @@ export class SnapTradeRateLimitError extends Error {
     }
 }
 
+export class SnapTradeOrderSubmissionError extends Error {
+    readonly code = 'SNAPTRADE_ORDER_SUBMISSION_FAILED';
+
+    constructor(message: string, readonly ambiguous: boolean) {
+        super(message);
+        this.name = 'SnapTradeOrderSubmissionError';
+    }
+}
+
+export function isAmbiguousSnapTradeOrderError(error: unknown): boolean {
+    return error instanceof SnapTradeOrderSubmissionError && error.ambiguous;
+}
+
 export class SnaptradeService {
     private fastify: FastifyInstance;
 
@@ -112,6 +125,14 @@ export class SnaptradeService {
         const status = Number(err?.statusCode || err?.status || err?.response?.status || err?.responseBody?.status);
         const detail = String(err?.responseBody?.detail || err?.message || '').toLowerCase();
         return status === 429 || detail.includes('429') || detail.includes('rate limit');
+    }
+
+    private isAmbiguousOrderSubmissionError(err: any): boolean {
+        if (String(err?.message || '').includes('Limit price is required')) return false;
+        const status = Number(err?.statusCode || err?.status || err?.response?.status || err?.responseBody?.status);
+        const code = String(err?.code || '').toUpperCase();
+        if (['ECONNABORTED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE'].includes(code)) return true;
+        return !Number.isFinite(status) || status <= 0 || status === 408 || status >= 500;
     }
 
     private rateLimitMessage(isOpeningOrder: boolean, retryAfterSeconds = SNAPTRADE_ORDER_RATE_LIMIT_COOLDOWN_SECONDS) {
@@ -475,12 +496,57 @@ export class SnaptradeService {
                 position.broker_trade_id
             ].filter(Boolean).map((value) => String(value));
 
-        if (expectedIds.length === 0) return null;
+        if (expectedIds.length > 0) {
+            return orders.find((order) => {
+                const orderIds = this.collectOrderIds(order);
+                return expectedIds.some((id) => orderIds.includes(id));
+            }) || null;
+        }
 
-        return orders.find((order) => {
-            const orderIds = this.collectOrderIds(order);
-            return expectedIds.some((id) => orderIds.includes(id));
-        }) || null;
+        const expectedTicker = this.canonicalOccTicker(this.constructOSITicker(
+            position.symbol,
+            Number(position.strike_price),
+            position.option_type,
+            position.expiration_date
+        ));
+        const expectedAction = this.normalizeOrderAction(
+            phase === 'EXIT' ? TradeLifecycleService.getExitAction(position) : position.entry_action || 'BUY_TO_OPEN'
+        );
+        const expectedQuantity = Math.max(1, Number(
+            phase === 'EXIT' ? position.profit_trim_quantity || position.quantity : position.contracts_requested || position.quantity
+        ));
+        const requestedAt = new Date(
+            phase === 'EXIT' ? position.exit_requested_at || position.updated_at : position.created_at || position.updated_at
+        ).getTime();
+        if (!expectedTicker || !Number.isFinite(requestedAt)) return null;
+
+        const candidates = orders.filter((order) => {
+            const ticker = this.canonicalOccTicker(order?.option_symbol?.ticker || '');
+            const action = this.normalizeOrderAction(order?.action);
+            const quantity = Number(order?.total_quantity || 0);
+            const placedAt = new Date(order?.time_placed || '').getTime();
+            return ticker === expectedTicker
+                && action === expectedAction
+                && Number.isFinite(quantity)
+                && Math.abs(quantity - expectedQuantity) < 0.0001
+                && Number.isFinite(placedAt)
+                && placedAt >= requestedAt - 30_000
+                && placedAt <= requestedAt + 5 * 60_000;
+        });
+        return candidates.length === 1 ? candidates[0] : null;
+    }
+
+    private canonicalOccTicker(value: any): string {
+        return String(value || '').replace(/\s+/g, '').toUpperCase();
+    }
+
+    private normalizeOrderAction(value: any): string {
+        return String(value || '').trim().toUpperCase().replace(/_TO_/g, '_');
+    }
+
+    private getBrokerageOrderId(order: any): string | null {
+        const value = order?.brokerage_order_id || order?.id || null;
+        return value ? String(value) : null;
     }
 
     async getRecentOrderStatusById(userId: number, orderId: string) {
@@ -824,6 +890,42 @@ export class SnaptradeService {
                     continue;
                 }
 
+                const inferredOrderId = this.getBrokerageOrderId(order);
+                const missingLocalOrderId = phase === 'EXIT'
+                    ? !position.broker_exit_order_id && !position.broker_exit_trade_id
+                    : !position.broker_order_id && !position.broker_trade_id;
+                if (missingLocalOrderId && inferredOrderId) {
+                    const orderColumn = phase === 'EXIT' ? 'broker_exit_order_id' : 'broker_order_id';
+                    await this.fastify.pg.query(
+                        `UPDATE positions
+                         SET ${orderColumn} = $1,
+                             notes = COALESCE(notes, '') || $2,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE id = $3`,
+                        [inferredOrderId, ` [SnapTrade order linked by exact contract/action/quantity/time reconciliation: ${inferredOrderId}]`, position.id]
+                    );
+                    if (phase === 'EXIT') position.broker_exit_order_id = inferredOrderId;
+                    else {
+                        position.broker_order_id = inferredOrderId;
+                        if (position.signal_id) {
+                            await this.fastify.pg.query(
+                                `UPDATE signal_user_executions
+                                 SET broker_order_id = $1,
+                                     updated_at = CURRENT_TIMESTAMP
+                                 WHERE signal_id = $2 AND user_id = $3`,
+                                [inferredOrderId, position.signal_id, userId]
+                            );
+                        }
+                    }
+                    await TradeRedisService.recordEvent(this.fastify.pg, {
+                        userId,
+                        positionId: position.id,
+                        eventType: phase === 'EXIT' ? 'EXIT_ORDER_RECONCILED' : 'ENTRY_ORDER_RECONCILED',
+                        message: `SnapTrade ${phase.toLowerCase()} order linked after an ambiguous submission response`,
+                        metadata: { brokerOrderId: inferredOrderId }
+                    });
+                }
+
                 const rawStatus = this.normalizeOrderStatus(order.status);
                 const status = this.hasFillEvidence(order) && !closedStatuses.has(rawStatus) && !partialStatuses.has(rawStatus)
                     ? 'FILLED'
@@ -879,6 +981,9 @@ export class SnaptradeService {
                 if (phase === 'EXIT' && partialStatuses.has(status)) {
                     const requestedQuantity = Math.max(1, Number(position.profit_trim_quantity || position.quantity || 1));
                     const filledQuantity = Math.min(Math.floor(actualFilledQuantity), requestedQuantity);
+                    const isTrim = requestedQuantity < Number(position.quantity || 1)
+                        || executionStatus === 'PENDING_TRIM'
+                        || String(position.exit_reason || '').includes('TRIM');
                     await this.fastify.pg.query(
                         `UPDATE positions
                          SET execution_status = $1,
@@ -886,7 +991,7 @@ export class SnaptradeService {
                              notes = COALESCE(notes, '') || $3,
                              updated_at = CURRENT_TIMESTAMP
                          WHERE id = $4`,
-                        [executionStatus === 'PENDING_TRIM' ? 'PENDING_TRIM' : 'PENDING_EXIT',
+                        [isTrim ? 'PENDING_TRIM' : 'PENDING_EXIT',
                             `Exit is partially filled (${filledQuantity}/${requestedQuantity}); the broker remainder is still working.`,
                             ` [SnapTrade partial exit: ${filledQuantity}/${requestedQuantity} filled; remainder still working]`, position.id]
                     );
@@ -909,6 +1014,9 @@ export class SnaptradeService {
                         : `EXIT_${status}`;
                     const currentQuantity = Math.max(1, Number(position.quantity || 1));
                     const filledQuantity = Math.min(Math.floor(actualFilledQuantity), currentQuantity);
+                    const isTrim = Number(position.profit_trim_quantity || currentQuantity) < currentQuantity
+                        || executionStatus === 'PENDING_TRIM'
+                        || String(position.exit_reason || '').includes('TRIM');
                     const fillPrice = this.getOrderFillPrice(order, Number(position.current_price || position.entry_price || 0.01));
                     if (executionStatus === terminalReviewStatus && String(position.last_broker_order_status || '') === status) {
                         summary.stillPending += 1;
@@ -941,7 +1049,7 @@ export class SnaptradeService {
                              WHERE id = $9`,
                             [remainingQuantity, terminalReviewStatus, fillPrice, realizedPnl,
                                 `Broker exit ended after a partial fill; ${remainingQuantity} contract(s) remain and require reconciliation.`,
-                                executionStatus === 'PENDING_TRIM', filledQuantity,
+                                isTrim, filledQuantity,
                                 ` [SnapTrade terminal partial exit: sold ${filledQuantity}/${currentQuantity} @ $${fillPrice}; ${remainingQuantity} remain]`, position.id]
                         );
                         summary.trimmed += 1;
@@ -970,9 +1078,11 @@ export class SnaptradeService {
                     const fillPrice = this.getOrderFillPrice(order, Number(position.entry_price || position.current_price || 0.01));
                     let orderAction = phase === 'EXIT' ? 'closed' : 'opened';
                     if (phase === 'EXIT') {
-                        const isTrim = executionStatus === 'PENDING_TRIM' || position.exit_reason === 'PROFIT_TRIM';
                         const requestedQty = Number(position.profit_trim_quantity || position.quantity || 1);
                         const currentQty = Number(position.quantity || 1);
+                        const isTrim = requestedQty < currentQty
+                            || executionStatus === 'PENDING_TRIM'
+                            || String(position.exit_reason || '').includes('TRIM');
                         const filledQty = Math.min(this.getFilledQuantity(order) || requestedQty, currentQty);
                         const realizedPnl = TradeLifecycleService.calculateRealizedPnl(position, fillPrice, filledQty);
                         if (isTrim && filledQty < currentQty) {
@@ -1299,6 +1409,7 @@ export class SnaptradeService {
         const quantity = Number(position.quantity || 1);
         if (!Number.isFinite(userId) || userId <= 0 || !Number.isFinite(quantity) || quantity <= 0) return;
 
+        let acceptedOrder: { orderId?: string | null; tradeId?: string | null } | null = null;
         try {
             const optionSymbol = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
             const exitAction = TradeLifecycleService.getExitAction(position);
@@ -1311,6 +1422,7 @@ export class SnaptradeService {
                 'LIMIT',
                 takeProfit.toFixed(2)
             );
+            acceptedOrder = order;
             await TradeLifecycleService.markExitSubmitted(this.fastify.pg, position.id, order, {
                 reason: 'MANUAL_TAKE_PROFIT',
                 orderType: 'LIMIT',
@@ -1324,21 +1436,50 @@ export class SnaptradeService {
                 metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity, limitPrice: takeProfit, fillStatus, action: exitAction }
             });
         } catch (err: any) {
-            await this.fastify.pg.query(
-                `UPDATE positions
-                 SET execution_error = $1,
-                     notes = COALESCE(notes, '') || $2,
-                     updated_at = CURRENT_TIMESTAMP
-                 WHERE id = $3`,
-                [err.message || String(err), ` [Manual Entry take-profit submit failed: ${err.message || String(err)}]`, position.id]
-            );
+            const ambiguous = Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err);
+            if (ambiguous) {
+                await TradeLifecycleService.markExitSubmissionFailure(
+                    this.fastify.pg,
+                    position.id,
+                    err.message || String(err),
+                    'Manual Entry take-profit submission requires reconciliation',
+                    {
+                        ambiguous: true,
+                        orderId: acceptedOrder?.orderId || null,
+                        tradeId: acceptedOrder?.tradeId || null,
+                        requestedQuantity: quantity
+                    }
+                );
+                await TradeRedisService.requestBrokerSync(userId);
+            } else {
+                await this.fastify.pg.query(
+                    `UPDATE positions
+                     SET execution_error = $1,
+                         notes = COALESCE(notes, '') || $2,
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $3`,
+                    [err.message || String(err), ` [Manual Entry take-profit submit failed: ${err.message || String(err)}]`, position.id]
+                );
+            }
             await TradeRedisService.recordEvent(this.fastify.pg, {
                 userId,
                 positionId: position.id,
-                eventType: 'MANUAL_TAKE_PROFIT_FAILED',
+                eventType: ambiguous ? 'MANUAL_TAKE_PROFIT_RECONCILE_REQUIRED' : 'MANUAL_TAKE_PROFIT_FAILED',
                 message: err.message || String(err),
                 metadata: { limitPrice: takeProfit, fillStatus }
             });
+            if (ambiguous) {
+                await new DiscordAlertService(this.fastify).send({
+                    userId,
+                    title: 'Take-profit order requires broker verification',
+                    message: `Position #${position.id} may have a Wealthsimple take-profit order. Do not submit another exit until reconciliation completes.`,
+                    severity: 'critical',
+                    category: 'exit-failure',
+                    tradeId: position.id,
+                    dedupeKey: `manual-take-profit-reconcile:${position.id}`,
+                    dedupeSeconds: 900
+                });
+            }
         }
     }
 
@@ -1617,7 +1758,10 @@ export class SnaptradeService {
                 this.fastify.log.error(`[SnaptradeService] API response body: ${JSON.stringify(err.responseBody)}`);
             }
             const detail = err.responseBody?.detail || err.message;
-            throw new Error(`Failed to place options trade via SnapTrade: ${detail}`);
+            throw new SnapTradeOrderSubmissionError(
+                `Failed to place options trade via SnapTrade: ${detail}`,
+                this.isAmbiguousOrderSubmissionError(err)
+            );
         }
     }
 

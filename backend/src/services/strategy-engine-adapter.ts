@@ -267,45 +267,62 @@ export class StrategyEngineAdapter {
     const snapshotFingerprint = this.hash(signal);
     if (snapshotFingerprint === this.hash(this.currentSignal)) return;
 
-    this.currentSignal = signal;
-    this.lastReceivedAt = new Date().toISOString();
-    this.lastError = null;
-    this.updateSetupIdentity(signal);
-    const paperSetupId = this.currentSetupId;
-    if (paperSetupId && (this.fastify as any).paperTrading) {
-      (this.fastify as any).paperTrading.processSnapshot(signal, paperSetupId).catch((err: any) => {
-        this.fastify.log.warn(`[PaperTrading] Snapshot processing failed: ${err.message || String(err)}`);
-      });
-    }
-    this.broadcast({
-      type: 'STRATEGY_SNAPSHOT_UPDATED',
-      data: this.getCurrentState()
-    });
-
-    const eventFingerprint = this.eventFingerprint(signal);
-    if (eventFingerprint === this.lastEventFingerprint) return;
-    const eventInserted = await this.persistEvent(signal, eventFingerprint);
-    this.lastEventFingerprint = eventFingerprint;
-
-    let persistedSignalId: number | null = null;
-    if (this.mode === 'primary') {
-      persistedSignalId = await this.persistPrimarySignal(signal);
-      if (persistedSignalId) {
-        await this.maybeExecuteAutonomousLiveEntries(signal, persistedSignalId);
+    const previousState = {
+      signal: this.currentSignal,
+      setupId: this.currentSetupId,
+      planFingerprint: this.currentPlanFingerprint,
+      eventFingerprint: this.lastEventFingerprint
+    };
+    try {
+      this.currentSignal = signal;
+      this.lastReceivedAt = new Date().toISOString();
+      this.lastError = null;
+      const supersededSetupId = this.updateSetupIdentity(signal);
+      if (supersededSetupId) {
+        await this.retireSupersededSetup(supersededSetupId, signal);
       }
-    }
-    if (eventInserted) {
-      this.notifyStrategyLifecycle(signal).catch((err: any) => {
-        this.fastify.log.warn(`[StrategyEngineAdapter] Discord lifecycle alert failed: ${err.message || String(err)}`);
+      const paperSetupId = this.currentSetupId;
+      if (paperSetupId && (this.fastify as any).paperTrading) {
+        (this.fastify as any).paperTrading.processSnapshot(signal, paperSetupId).catch((err: any) => {
+          this.fastify.log.warn(`[PaperTrading] Snapshot processing failed: ${err.message || String(err)}`);
+        });
+      }
+      this.broadcast({
+        type: 'STRATEGY_SNAPSHOT_UPDATED',
+        data: this.getCurrentState()
       });
-    }
-    this.broadcast({
-      type: 'STRATEGY_STATE_CHANGED',
-      data: this.getCurrentState()
-    });
-    if (this.isTerminal(signal)) {
-      this.currentPlanFingerprint = null;
-      this.currentSetupId = null;
+
+      const eventFingerprint = this.eventFingerprint(signal);
+      if (eventFingerprint === this.lastEventFingerprint) return;
+      const eventInserted = await this.persistEvent(signal, eventFingerprint);
+      this.lastEventFingerprint = eventFingerprint;
+
+      let persistedSignalId: number | null = null;
+      if (this.mode === 'primary') {
+        persistedSignalId = await this.persistPrimarySignal(signal);
+        if (persistedSignalId) {
+          await this.maybeExecuteAutonomousLiveEntries(signal, persistedSignalId);
+        }
+      }
+      if (eventInserted) {
+        this.notifyStrategyLifecycle(signal).catch((err: any) => {
+          this.fastify.log.warn(`[StrategyEngineAdapter] Discord lifecycle alert failed: ${err.message || String(err)}`);
+        });
+      }
+      this.broadcast({
+        type: 'STRATEGY_STATE_CHANGED',
+        data: this.getCurrentState()
+      });
+      if (this.isTerminal(signal)) {
+        this.currentPlanFingerprint = null;
+        this.currentSetupId = null;
+      }
+    } catch (error) {
+      this.currentSignal = previousState.signal;
+      this.currentSetupId = previousState.setupId;
+      this.currentPlanFingerprint = previousState.planFingerprint;
+      this.lastEventFingerprint = previousState.eventFingerprint;
+      throw error;
     }
   }
 
@@ -318,15 +335,42 @@ export class StrategyEngineAdapter {
     }
   }
 
-  private updateSetupIdentity(signal: StrategySnapshot): void {
+  private updateSetupIdentity(signal: StrategySnapshot): string | null {
     const planFingerprint = this.planFingerprint(signal);
     if (!planFingerprint) {
-      return;
+      return null;
     }
     if (planFingerprint !== this.currentPlanFingerprint) {
+      const previousSetupId = this.currentSetupId;
       this.currentPlanFingerprint = planFingerprint;
       this.currentSetupId = randomUUID();
+      return previousSetupId;
     }
+    return null;
+  }
+
+  private async retireSupersededSetup(setupId: string, signal: StrategySnapshot): Promise<void> {
+    await (this.fastify as any).pg.query(
+      `UPDATE signals
+       SET lifecycle_status = 'SUPERSEDED',
+           entry_allowed = FALSE,
+           status = CASE WHEN status IN ('PENDING', 'PENDING_TRIGGER') THEN 'CANCELLED' ELSE status END
+       WHERE strategy_setup_id = $1`,
+      [setupId]
+    );
+    await (this.fastify as any).pg.query(
+      `UPDATE positions
+       SET strategy_lifecycle_status = 'SUPERSEDED',
+           strategy_exit_requested_at = COALESCE(strategy_exit_requested_at, CURRENT_TIMESTAMP),
+           strategy_exit_reason = 'SUPERSEDED',
+           notes = COALESCE(notes, '') || ' [Strategy setup superseded by a new frozen plan]',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE strategy_setup_id = $1
+         AND strategy_managed = TRUE
+         AND status = 'OPEN'`,
+      [setupId]
+    );
+    this.fastify.log.info(`[StrategyEngineAdapter] Retired superseded setup ${setupId} before activating the new ${signal.favoring || 'directional'} plan.`);
   }
 
   private planFingerprint(signal: StrategySnapshot): string | null {
@@ -577,6 +621,8 @@ export class StrategyEngineAdapter {
     const exitTargetNumber = Math.max(1, Number(signal.paper_policy?.exit_after_target || 2));
     const target = targets[Math.min(exitTargetNumber, targets.length) - 1] ?? targets[0] ?? null;
     const confidence = Math.max(0, Math.min(100, Math.round(Number(signal.confidence_score || 0))));
+    const tradeBias = side === 'CALL' ? 'BULLISH' : 'BEARISH';
+    const setupGrade = state === 'ACTIVE' && lifecycle.entry_allowed === true ? 'A+' : null;
     const signalResult = await (this.fastify as any).pg.query(
       `INSERT INTO signals (
          symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss,
@@ -584,12 +630,14 @@ export class StrategyEngineAdapter {
          no_trade_reasons, option_expiration_date, market_date, option_details,
          engine_version, strategy_name, strategy_setup_id, lifecycle_status,
          entry_allowed, activated_at, policy_fingerprint, strategy_snapshot
-       ) VALUES (
-         'SPY', $1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10, $11,
+         ) VALUES (
+         'SPY', $1, $21, $3, $4, $5, $6, $7, $22, 'PENDING', $9, $10, $11,
          $12, $13, $14, $15, $2, $16, $8, $17, $18, $19, $20
        )
        ON CONFLICT (strategy_setup_id) WHERE strategy_setup_id IS NOT NULL DO UPDATE
-       SET current_price = EXCLUDED.current_price,
+       SET trade_bias = EXCLUDED.trade_bias,
+           current_price = EXCLUDED.current_price,
+           setup_grade = EXCLUDED.setup_grade,
            lifecycle_status = EXCLUDED.lifecycle_status,
            entry_allowed = EXCLUDED.entry_allowed,
            activated_at = EXCLUDED.activated_at,
@@ -635,7 +683,9 @@ export class StrategyEngineAdapter {
         lifecycle.entry_allowed === true,
         lifecycle.activated_at ? new Date(Number(lifecycle.activated_at) * 1000) : null,
         signal.policy_fingerprint || null,
-        JSON.stringify(signal)
+        JSON.stringify(signal),
+        tradeBias,
+        setupGrade
       ]
     );
     await (this.fastify as any).pg.query(

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { getSettingsWithGlobalFallback, invalidateSettingsCache } from '../lib/settings-utils';
 import { IbkrMarketDataService } from '../services/ibkr-market-data-service';
 import { ManualOptionOrderService } from '../services/manual-option-order-service';
-import { SnaptradeService } from '../services/snaptrade-service';
+import { isAmbiguousSnapTradeOrderError, SnaptradeService } from '../services/snaptrade-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
 
@@ -316,6 +316,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
           return reply.code(404).send({ error: 'Manual entry trade not found' });
         }
 
+        let acceptedOrder: any = null;
         try {
           TradeLifecycleService.assertCanRequestExit(position);
         } catch (err: any) {
@@ -350,6 +351,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
             undefined,
             { skipImpact: true }
           );
+          acceptedOrder = order;
 
           const fullClose = trimQty >= currentQty;
           const updatedPosition = await TradeLifecycleService.markExitSubmitted(
@@ -376,7 +378,12 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
           await TradeRedisService.requestBrokerSync(userId);
           return updatedPosition;
         } catch (err: any) {
-          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Entry trim failed');
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Entry trim failed', {
+            ambiguous: Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err),
+            orderId: acceptedOrder?.orderId || null,
+            tradeId: acceptedOrder?.tradeId || null,
+            requestedQuantity: trimQty
+          });
           await TradeRedisService.recordEvent(client, {
             userId,
             positionId: id,

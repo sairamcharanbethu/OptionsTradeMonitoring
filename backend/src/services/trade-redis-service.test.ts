@@ -31,9 +31,18 @@ async function testRecordEventPersistsSignalId() {
   assert(insert.params?.[3] === 'SIGNAL_GENERATED', `Expected SIGNAL_GENERATED event type, got ${insert.params?.[3]}`);
 }
 
+async function testCorrelatedEntryExposureKeys() {
+  const spy = TradeRedisService.keys.entryExposureLock(7, 'wealthsimple_snaptrade', 'SPY');
+  const qqq = TradeRedisService.keys.entryExposureLock(7, 'wealthsimple_snaptrade', 'QQQ');
+  const aapl = TradeRedisService.keys.entryExposureLock(7, 'wealthsimple_snaptrade', 'AAPL');
+  assert(spy === qqq, 'SPY and QQQ must share one live-entry exposure lock');
+  assert(spy !== aapl, 'An unrelated underlying must use a separate exposure lock');
+}
+
 async function runTests() {
   console.log('Running TradeRedisService tests...');
   await testRecordEventPersistsSignalId();
+  await testCorrelatedEntryExposureKeys();
   console.log('All TradeRedisService tests passed!');
 }
 

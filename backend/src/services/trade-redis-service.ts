@@ -49,6 +49,11 @@ export class TradeRedisService {
     brokerSyncLock: (userId: number) => `locks:broker-sync:user:${userId}`,
     exitLock: (positionId: number | string) => `locks:exit:${positionId}`,
     entryLock: (userId: number, contractKey: string) => `locks:entry:${userId}:${contractKey}`,
+    entryExposureLock: (userId: number, broker: string, symbol: string) => {
+      const normalized = String(symbol || '').trim().toUpperCase();
+      const exposureGroup = ['SPY', 'QQQ'].includes(normalized) ? 'SPY-QQQ' : normalized;
+      return `locks:entry-exposure:${userId}:${broker}:${exposureGroup}`;
+    },
     metric: (name: string) => `metrics:trade-redis:${name}`,
   };
 

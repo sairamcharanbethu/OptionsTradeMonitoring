@@ -3,6 +3,7 @@ import { AIService } from './ai-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { getGlobalSettings } from '../lib/settings-utils';
 import { redis as defaultRedis } from '../lib/redis';
+import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 
 const ACCOUNT_ID = 'strategy-system';
 const PROMPT_VERSION = 'paper-risk-v2';
@@ -785,7 +786,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const storedTerminal = ['COMPLETED', 'FAILED', 'INVALIDATED', 'TRACKING_ABORTED'].includes(
         String(storedSnapshot.lifecycle?.status || storedSnapshot.state).toUpperCase()
       );
-      const flattenDue = this.mandatoryFlattenDue();
+      const flattenDue = this.mandatoryFlattenDue(position);
       const optionQuoteAgeSeconds = option.quote_age_seconds == null ? NaN : Number(option.quote_age_seconds);
       let bid = sameSetup
         && this.canonicalTicker(option.local_symbol) === this.canonicalTicker(this.osiTicker(position))
@@ -808,6 +809,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const t2 = Number(position.suggested_take_profit_2 || t1 || 0);
       const stop = Number(live?.suggestedStopLoss || position.suggested_stop_loss || 0);
       const invalidated = stop > 0 && (isCall ? spot <= stop : spot >= stop);
+      const premiumStop = Number(live?.stopLossTrigger || position.stop_loss_trigger || 0);
+      const premiumStopped = premiumStop > 0 && bid <= premiumStop;
       const emergency = bid <= Number(position.entry_price) * 0.65;
       if (sameSetup) analysis.strategyLifecycleStatus = String(signal.lifecycle?.status || signal.state || '').toUpperCase();
       const liveTerminal = ['COMPLETED', 'FAILED', 'INVALIDATED', 'TRACKING_ABORTED'].includes(
@@ -848,8 +851,13 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           await this.notifyPaperEvent('TRAILING_MOVE', position, `Trail moved to $${trailingStopPremium.toFixed(2)} after premium reached $${trailingHighPremium.toFixed(2)}. Hold unless the bid touches the trail.`);
         }
       }
-      if (invalidated || emergency || terminal) {
-        await this.closePaperQuantity(managedPosition, Number(position.quantity), bid, invalidated ? 'INVALIDATION' : emergency ? 'EMERGENCY_PREMIUM_STOP' : 'STRATEGY_TERMINAL');
+      if (invalidated || premiumStopped || emergency || terminal) {
+        await this.closePaperQuantity(
+          managedPosition,
+          Number(position.quantity),
+          bid,
+          invalidated ? 'INVALIDATION' : premiumStopped ? 'PREMIUM_STOP' : emergency ? 'EMERGENCY_PREMIUM_STOP' : 'STRATEGY_TERMINAL'
+        );
         continue;
       }
       if (position.exit_profile === 'CONSERVATIVE_T1' && hitT1) {
@@ -1253,9 +1261,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     }
   }
 
-  private mandatoryFlattenDue(): boolean {
-    const [hour, minute] = ET_TIME.format(new Date()).split(':').map(Number);
-    return hour * 60 + minute >= 15 * 60 + 55;
+  private mandatoryFlattenDue(position: any, date: Date = new Date()): boolean {
+    const expiration = this.normalizeExpiry(position?.expiration_date);
+    if (!expiration || expiration !== ET_DATE.format(date)) return false;
+    const closeMinutes = getUSMarketCloseMinutes(date);
+    const market = getNewYorkMarketState(date, 9 * 60 + 30, closeMinutes);
+    return !market.isWeekend
+      && !market.isHoliday
+      && market.minutes >= closeMinutes - 40
+      && market.minutes < closeMinutes;
   }
 
   private normalizeExpiry(value: any): string | null {

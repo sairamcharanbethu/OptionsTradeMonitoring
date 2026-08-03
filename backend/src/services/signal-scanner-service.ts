@@ -3809,11 +3809,11 @@ Rules:
     if (absDelta === null || !Number.isFinite(absDelta)) {
       score -= 3;
       reasons.push('delta unavailable');
-    } else if (absDelta < 0.25) {
-      score -= Math.min(25, (0.25 - absDelta) * 100);
+    } else if (absDelta < 0.30) {
+      score -= Math.min(25, (0.30 - absDelta) * 100);
       reasons.push(`delta too low ${absDelta.toFixed(2)}`);
-    } else if (absDelta > 0.7) {
-      score -= Math.min(20, (absDelta - 0.7) * 80);
+    } else if (absDelta > 0.65) {
+      score -= Math.min(20, (absDelta - 0.65) * 80);
       reasons.push(`delta too high ${absDelta.toFixed(2)}`);
     } else {
       score += Math.max(0, 12 - Math.abs(absDelta - 0.45) * 40);
@@ -5316,7 +5316,9 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       symbol: signal.symbol,
       winningSide,
       chosenStrike: Number(optionDetails.strike || Math.round(currentPrice)),
-      chosenExpiry: optionDetails.expiry || signal.option_expiration_date || new Date().toISOString().split('T')[0],
+      chosenExpiry: optionDetails.expiry
+        || signal.option_expiration_date
+        || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }),
       stopUnderlying: Number(signal.stop_loss || currentPrice * 0.99),
       targetUnderlying: Number(signal.target_price || currentPrice * 1.01),
       mark: optionDetails.mark != null ? Number(optionDetails.mark) : null,

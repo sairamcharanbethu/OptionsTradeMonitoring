@@ -102,12 +102,17 @@ async function testMandatoryLiveStrategyFlattenWindow() {
   const early = poller.getMandatoryFlattenAssessment({ ...position, expiration_date: '2026-11-27' }, new Date('2026-11-27T17:20:00.000Z'));
   const oneDte = poller.getMandatoryFlattenAssessment({ ...position, expiration_date: '2026-08-04' }, new Date('2026-08-03T19:20:00.000Z'));
   const paper = poller.getMandatoryFlattenAssessment({ ...position, is_simulated: true }, new Date('2026-08-03T19:20:00.000Z'));
+  const nonStrategy = poller.getMandatoryFlattenAssessment({ ...position, strategy_managed: false }, new Date('2026-08-03T19:20:00.000Z'));
 
   assert(before?.triggered === false, 'Regular 0DTE flatten must not trigger before 15:20 ET');
   assert(regular?.triggered === true && regular.flattenMinutes === 15 * 60 + 20, 'A PostgreSQL date-shaped 0DTE position must flatten at 15:20 ET');
   assert(early?.triggered === true && early.flattenMinutes === 12 * 60 + 20, 'Early-close 0DTE flatten must trigger at 12:20 ET');
   assert(oneDte === null, 'Non-0DTE positions must not be flattened by the day-trade deadline');
   assert(paper === null, 'The live mandatory flatten must not duplicate paper management');
+  assert(nonStrategy?.triggered === true, 'Every live SnapTrade 0DTE position must use the same calendar-aware flatten window');
+  assert(poller.isLateDayExitWindow(new Date('2026-11-27T17:45:00.000Z')) === true, 'Early-close late-day handling must begin at 12:45 ET');
+  assert(poller.isMarketOpen(new Date('2026-11-27T17:59:00.000Z')) === true, 'The early-close session must remain open before 13:00 ET');
+  assert(poller.isMarketOpen(new Date('2026-11-27T18:00:00.000Z')) === false, 'The early-close session must close at 13:00 ET');
 }
 
 async function testTradeExcursionTracksLongAndShortPremium() {

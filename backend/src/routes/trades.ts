@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
-import { SnaptradeService } from '../services/snaptrade-service';
+import { isAmbiguousSnapTradeOrderError, SnaptradeService } from '../services/snaptrade-service';
 import { TradeExecutionService } from '../services/trade-execution-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
@@ -378,7 +378,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
          AND (
            (execution_status IN ('PENDING_EXIT', 'PENDING_TRIM', 'EXIT_STALE') AND COALESCE(exit_requested_at, updated_at) < now() - INTERVAL '5 minutes')
            OR (status = 'PENDING_ORDER' AND updated_at < now() - INTERVAL '10 minutes')
-           OR execution_status IN ('EXIT_REJECTED', 'EXIT_FAILED')
+           OR execution_status IN ('EXIT_RETRYABLE', 'EXIT_RECONCILE_REQUIRED', 'EXIT_REJECTED', 'EXIT_FAILED')
          )
        ORDER BY updated_at DESC
        LIMIT 20`,
@@ -389,7 +389,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       const isPendingEntry = trade.status === 'PENDING_ORDER';
       alerts.push({
         id: `trade-${trade.id}-${trade.execution_status || trade.status}`,
-        severity: trade.execution_status === 'EXIT_REJECTED' || trade.execution_status === 'EXIT_FAILED' ? 'critical' : 'warning',
+        severity: ['EXIT_RECONCILE_REQUIRED', 'EXIT_REJECTED', 'EXIT_FAILED'].includes(trade.execution_status) ? 'critical' : 'warning',
         category: isPendingEntry ? 'stale-entry' : 'stale-exit',
         title: isPendingEntry ? 'Entry order has not reconciled' : 'Exit order needs broker verification',
         message: `${trade.symbol} ${trade.option_type} ${Number(trade.strike_price)} is ${trade.execution_status || trade.status}. Check Wealthsimple status before sending another order.`,
@@ -749,6 +749,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
         }
 
         const trade = rows[0];
+        let acceptedOrder: any = null;
         try {
           TradeLifecycleService.assertCanRequestExit(trade);
         } catch (err: any) {
@@ -779,6 +780,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             closeQuantity,
             'MARKET'
           );
+          acceptedOrder = order;
 
           const updatedTrade = await TradeLifecycleService.markExitSubmitted(
             client,
@@ -803,7 +805,12 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
           await TradeRedisService.requestBrokerSync(userId);
           return updatedTrade;
         } catch (err: any) {
-          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Wealthsimple exit failed');
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Wealthsimple exit failed', {
+            ambiguous: Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err),
+            orderId: acceptedOrder?.orderId || null,
+            tradeId: acceptedOrder?.tradeId || null,
+            requestedQuantity: closeQuantity
+          });
           await TradeRedisService.recordEvent(client, {
             userId,
             positionId: id,
@@ -988,6 +995,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
           return reply.code(400).send({ error: 'No Wealthsimple account id is attached to this trade' });
         }
 
+        let acceptedOrder: any = null;
         try {
           const optionSymbol = constructOSITicker(trade.symbol, Number(trade.strike_price), trade.option_type, trade.expiration_date);
           const exitAction = TradeLifecycleService.getExitAction(trade);
@@ -999,6 +1007,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
             closeQuantity,
             'MARKET'
           );
+          acceptedOrder = order;
 
           const updatedTrade = await TradeLifecycleService.markExitSubmitted(
             client,
@@ -1024,7 +1033,12 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
           await TradeRedisService.requestBrokerSync(userId);
           return updatedTrade;
         } catch (err: any) {
-          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Retry Wealthsimple exit failed');
+          await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Retry Wealthsimple exit failed', {
+            ambiguous: Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err),
+            orderId: acceptedOrder?.orderId || null,
+            tradeId: acceptedOrder?.tradeId || null,
+            requestedQuantity: closeQuantity
+          });
           await TradeRedisService.recordEvent(client, {
             userId,
             positionId: id,

@@ -79,6 +79,40 @@ async function runTests() {
   const setupId = adapter.currentSetupId;
   adapter.updateSetupIdentity(signal({ state: 'ACTIVE', lifecycle: { entry_allowed: true } }));
   assert(adapter.currentSetupId === setupId, 'ARMED to ACTIVE must preserve setup identity');
+  const supersededSetupId = adapter.updateSetupIdentity(signal({
+    call_setup: { ...signal().call_setup, trigger: 551 }
+  }));
+  assert(supersededSetupId === setupId, 'A changed frozen plan must identify the prior setup for retirement');
+
+  const retryAdapter = createAdapter();
+  const previousSignal = signal();
+  const replacementSignal = signal({
+    generated_at: 1_786_000_001,
+    call_setup: { ...signal().call_setup, trigger: 551 }
+  });
+  retryAdapter.currentSignal = previousSignal;
+  retryAdapter.currentPlanFingerprint = retryAdapter.planFingerprint(previousSignal);
+  retryAdapter.currentSetupId = '44444444-4444-4444-8444-444444444444';
+  retryAdapter.lastEventFingerprint = retryAdapter.eventFingerprint(previousSignal);
+  retryAdapter.readJson = async (filePath: string) => filePath.endsWith('signal.json') ? replacementSignal : {};
+  retryAdapter.retireSupersededSetup = async () => undefined;
+  retryAdapter.broadcast = () => undefined;
+  retryAdapter.persistPrimarySignal = async () => null;
+  let persistenceAttempts = 0;
+  retryAdapter.persistEvent = async () => {
+    persistenceAttempts += 1;
+    if (persistenceAttempts === 1) throw new Error('temporary database failure');
+    return false;
+  };
+  await retryAdapter.poll().then(
+    () => { throw new Error('The first persistence attempt should fail'); },
+    () => undefined
+  );
+  assert(retryAdapter.currentSignal === previousSignal, 'A failed snapshot persistence must restore the previous in-memory signal');
+  assert(retryAdapter.currentSetupId === '44444444-4444-4444-8444-444444444444', 'A failed setup replacement must restore the previous setup id');
+  await retryAdapter.poll();
+  assert(persistenceAttempts === 2, 'An unchanged snapshot must retry after a transient persistence failure');
+  assert(retryAdapter.currentSignal === replacementSignal, 'A successful retry must publish the replacement snapshot');
 
   const eventOne = adapter.eventFingerprint(signal());
   const eventTwo = adapter.eventFingerprint(signal({ spot: 551, generated_at: 1_786_000_001 }));
@@ -215,10 +249,16 @@ async function runTests() {
     'Strategy upsert must match the partial unique setup-id index used by PostgreSQL'
   );
   assert(signalInsert?.values[5] === 554, 'Persisted strategy target must honor paper exit target 2');
+  assert(signalInsert?.values[20] === 'BULLISH', 'Primary CALL signals must store a directional trade bias');
+  assert(signalInsert?.values[21] === 'A+', 'An executable primary signal must store its actual executable grade');
   const persistedOption = JSON.parse(signalInsert?.values[13]);
   assert(persistedOption.planned_contracts === 2, 'Persisted signal must retain planned contract quantity');
   assert(positionUpdate?.values[2] === 552, 'Open strategy positions must retain the first target as TP1');
   assert(positionUpdate?.values[3] === 554, 'Open strategy positions must retain the configured final target as TP2');
+  queries.length = 0;
+  await persistenceAdapter.retireSupersededSetup('old-setup', signal());
+  assert(queries.some((query) => query.sql.includes("lifecycle_status = 'SUPERSEDED'")), 'A replaced setup signal must become terminal');
+  assert(queries.some((query) => query.sql.includes("strategy_exit_reason = 'SUPERSEDED'")), 'A linked open position must receive a superseded exit request');
 
   let autonomousCall: any = null;
   const autonomousUserId = 9191;

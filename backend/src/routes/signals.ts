@@ -820,6 +820,16 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
     }
   }, async (request, reply) => {
     try {
+      const { role } = (request as any).user;
+      if (role !== 'ADMIN') {
+        return (reply as any).code(403).send({ error: 'Admin access required' });
+      }
+      const strategyEngine = (fastify as any).strategyEngine;
+      if (!strategyEngine || strategyEngine.getMode?.() === 'primary') {
+        return (reply as any).code(409).send({
+          error: 'The legacy scanner is disabled while signal-only-v2 is the primary strategy.'
+        });
+      }
       const scanner = (fastify as any).scanner;
       if (!scanner) {
         return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
