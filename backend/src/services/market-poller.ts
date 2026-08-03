@@ -9,7 +9,7 @@ import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
 import { MarketDataWriteBufferService } from './market-data-write-buffer-service';
-import { getNewYorkMarketState } from '../lib/market-calendar';
+import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 
 type ExitQuoteContext = {
   bid?: number;
@@ -21,7 +21,7 @@ type ExitQuoteContext = {
   source?: string;
 };
 
-type ExitTriggerType = 'STOP_LOSS' | 'TRAILING_STOP' | 'TAKE_PROFIT' | 'THETA_STOP';
+type ExitTriggerType = 'STOP_LOSS' | 'TRAILING_STOP' | 'TAKE_PROFIT' | 'THETA_STOP' | 'END_OF_DAY';
 
 export class MarketPoller {
   private fastify: FastifyInstance;
@@ -320,6 +320,32 @@ export class MarketPoller {
     };
   }
 
+  private getMandatoryFlattenAssessment(position: any, now: Date = new Date()): {
+    triggered: boolean;
+    flattenMinutes: number;
+    closeMinutes: number;
+  } | null {
+    if (!position.strategy_managed
+      || position.is_simulated
+      || String(position.execution_broker || '').toLowerCase() !== 'wealthsimple_snaptrade') return null;
+    const expiration = position.expiration_date instanceof Date
+      ? position.expiration_date.toISOString().slice(0, 10)
+      : String(position.expiration_date || '').split('T')[0];
+    if (expiration !== this.getNewYorkDateString(now)) return null;
+
+    const closeMinutes = getUSMarketCloseMinutes(now);
+    const flattenMinutes = closeMinutes - 40;
+    const market = getNewYorkMarketState(now, 9 * 60 + 30, closeMinutes);
+    return {
+      triggered: !market.isWeekend
+        && !market.isHoliday
+        && market.minutes >= flattenMinutes
+        && market.minutes < closeMinutes,
+      flattenMinutes,
+      closeMinutes
+    };
+  }
+
   private getTakeProfitOrderPreference(position: any, price: number, quote?: ExitQuoteContext): { orderType: 'LIMIT' | 'MARKET'; limitPrice?: string; mode: 'PAST_TP' | 'NEAR_TP' | 'STRUCTURE_TP' | 'EOD_MARKET' } {
     const takeProfit = Number(position.take_profit_trigger || 0);
     const sellablePremium = this.getSellablePremium(price, quote);
@@ -447,6 +473,8 @@ export class MarketPoller {
       ? 'PROFIT_TRIM'
       : exitTriggerType === 'TRAILING_STOP'
         ? 'SYNTHETIC_TRAILING_STOP'
+        : exitTriggerType === 'END_OF_DAY'
+          ? 'MANDATORY_DAY_TRADE_FLATTEN'
         : 'AUTO_EXIT';
     const claimNote = partialTrim
       ? ` [Profit trim claim created before SnapTrade ${orderType} ${exitAction} for ${exitQuantity}/${position.quantity} contracts]`
@@ -902,6 +930,7 @@ export class MarketPoller {
       && configuredSyntheticTrailingPct >= 1
       && configuredSyntheticTrailingPct <= 50;
     const syntheticQuoteFresh = this.isFreshSyntheticTrailQuote(quoteContext);
+    const mandatoryFlatten = this.getMandatoryFlattenAssessment(position);
     const syntheticState = analysis.syntheticTrailing && typeof analysis.syntheticTrailing === 'object'
       ? analysis.syntheticTrailing
       : {};
@@ -1250,6 +1279,23 @@ export class MarketPoller {
       }
     }
 
+    if (mandatoryFlatten?.triggered
+      && syntheticQuoteFresh
+      && (!triggered || triggerType === 'TAKE_PROFIT')) {
+      triggered = true;
+      triggerType = 'END_OF_DAY';
+      lossAvoided = entryPrice - sellablePremium;
+      analysis.mandatoryFlatten = {
+        status: 'TRIGGERED',
+        flattenMinutes: mandatoryFlatten.flattenMinutes,
+        closeMinutes: mandatoryFlatten.closeMinutes,
+        price: sellablePremium,
+        triggeredAt: new Date().toISOString()
+      };
+      analysisDirty = true;
+      this.fastify.log.warn(`[MarketPoller] Mandatory 0DTE flatten triggered for live strategy position ${position.id}.`);
+    }
+
     if (!triggered) {
       const thetaStop = this.getThetaStopAssessment(position, new Date(), analysis.thetaStop?.startedAt);
       if (thetaStop && !analysis.thetaStop?.startedAt) {
@@ -1398,7 +1444,9 @@ export class MarketPoller {
                   ? (analysis.syntheticTrailing?.exitAtT2 === true
                     ? (position.suggested_take_profit_2 || position.suggested_take_profit_1 || position.take_profit_trigger)
                     : (position.suggested_take_profit_1 || position.take_profit_trigger))
-                  : (position.suggested_stop_loss || position.stop_loss_trigger), price]
+                  : exitTriggerType === 'END_OF_DAY'
+                    ? price
+                    : (position.suggested_stop_loss || position.stop_loss_trigger), price]
               );
               this.notifyN8n(
                 position,
@@ -1474,7 +1522,11 @@ export class MarketPoller {
 
         await (this.fastify as any).pg.query(
           'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',
-          [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT' ? (position.suggested_take_profit_1 || position.take_profit_trigger) : (position.suggested_stop_loss || position.stop_loss_trigger), price]
+          [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT'
+            ? (position.suggested_take_profit_1 || position.take_profit_trigger)
+            : exitTriggerType === 'END_OF_DAY'
+              ? price
+              : (position.suggested_stop_loss || position.stop_loss_trigger), price]
         );
 
         // Generate AI Summary for the alert (Discord Message)
@@ -1485,7 +1537,13 @@ export class MarketPoller {
             type: position.option_type,
             strike: position.strike_price,
             expiration: position.expiration_date,
-            event: exitTriggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : exitTriggerType === 'THETA_STOP' ? 'THETA_STOP_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+            event: exitTriggerType === 'TAKE_PROFIT'
+              ? 'TAKE_PROFIT_TRIGGERED'
+              : exitTriggerType === 'THETA_STOP'
+                ? 'THETA_STOP_TRIGGERED'
+                : exitTriggerType === 'END_OF_DAY'
+                  ? 'END_OF_DAY_EXIT_TRIGGERED'
+                  : 'STOP_LOSS_TRIGGERED',
             price: price,
             pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
             greeks: {
@@ -1537,7 +1595,13 @@ export class MarketPoller {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : type === 'THETA_STOP' ? 'THETA_STOP_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+          event: type === 'TAKE_PROFIT'
+            ? 'TAKE_PROFIT_TRIGGERED'
+            : type === 'THETA_STOP'
+              ? 'THETA_STOP_TRIGGERED'
+              : type === 'END_OF_DAY'
+                ? 'END_OF_DAY_EXIT_TRIGGERED'
+                : 'STOP_LOSS_TRIGGERED',
           notification_type: 'alert',
           username: username,
           symbol: position.symbol,

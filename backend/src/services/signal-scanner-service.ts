@@ -844,6 +844,7 @@ Rules:
       execution_broker: 'none',
       auto_trade_mode: 'instant',
       snaptrade_auto_trade: 'false',
+      autonomous_live_entry_enabled: 'false',
       snaptrade_trading_account_id: '',
       max_trades_per_day: '2',
       contracts_per_trade: '1',
@@ -5289,7 +5290,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     }
   }
 
-  public async executeSignalForUser(userId: number, signalId: number) {
+  public async executeSignalForUser(userId: number, signalId: number, settingsOverride?: any) {
     const { rows } = await this.fastify.pg.query(
       'SELECT * FROM signals WHERE id = $1',
       [signalId]
@@ -5318,7 +5319,8 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       chosenExpiry: optionDetails.expiry || signal.option_expiration_date || new Date().toISOString().split('T')[0],
       stopUnderlying: Number(signal.stop_loss || currentPrice * 0.99),
       targetUnderlying: Number(signal.target_price || currentPrice * 1.01),
-      mark: optionDetails.mark != null ? Number(optionDetails.mark) : null
+      mark: optionDetails.mark != null ? Number(optionDetails.mark) : null,
+      settings: settingsOverride
     });
   }
 

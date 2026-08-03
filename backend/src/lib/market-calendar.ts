@@ -138,6 +138,28 @@ export function getNewYorkMarketState(date: Date = new Date(), openMinutes = 9 *
   };
 }
 
+export function getUSMarketCloseMinutes(date: Date = new Date()): number {
+  const parts = getNewYorkDateParts(date);
+  const marketDate = new Date(parts.year, parts.month - 1, parts.day);
+  const weekday = marketDate.getDay();
+
+  // NYSE core sessions close at 13:00 ET on these recurring shortened sessions.
+  const isJulyThird = parts.month === 7 && parts.day === 3 && weekday >= 1 && weekday <= 4;
+  const isChristmasEve = parts.month === 12 && parts.day === 24 && weekday >= 1 && weekday <= 4;
+  const thanksgiving = nthWeekdayOfMonth(parts.year, 11, 4, 4);
+  const dayAfterThanksgiving = new Date(thanksgiving);
+  dayAfterThanksgiving.setDate(thanksgiving.getDate() + 1);
+  const isDayAfterThanksgiving = toMarketDateKey(marketDate) === toMarketDateKey(dayAfterThanksgiving);
+
+  return isJulyThird || isChristmasEve || isDayAfterThanksgiving ? 13 * 60 : 16 * 60;
+}
+
+function nthWeekdayOfMonth(year: number, month: number, weekday: number, n: number): Date {
+  const first = new Date(year, month - 1, 1);
+  const day = 1 + ((weekday - first.getDay() + 7) % 7) + (n - 1) * 7;
+  return new Date(year, month - 1, day);
+}
+
 function computeEaster(year: number): Date {
   const a = year % 19;
   const b = Math.floor(year / 100);

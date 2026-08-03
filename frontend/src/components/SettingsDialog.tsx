@@ -236,6 +236,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [stopLossEngineEnabled, setStopLossEngineEnabled] = useState(true);
     const [syntheticTrailingStopEnabled, setSyntheticTrailingStopEnabled] = useState(false);
     const [syntheticTrailingStopPct, setSyntheticTrailingStopPct] = useState('15');
+    const [autonomousLiveEntryEnabled, setAutonomousLiveEntryEnabled] = useState(false);
     const [liveTradingAcknowledged, setLiveTradingAcknowledged] = useState(false);
     const [mcpTradingEnabled, setMcpTradingEnabled] = useState(false);
 
@@ -273,6 +274,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
         snaptradeAutoTrade && !snaptradeTradingAccountId ? 'Trading account' : null,
         snaptradeAutoTrade && !liveTradingAcknowledged ? 'Live trading acknowledgement' : null
     ].filter(Boolean) as string[];
+    const autonomousLiveEntryReady = executionBroker === 'wealthsimple_snaptrade'
+        && snaptradeAutoTrade
+        && Boolean(snaptradeTradingAccountId)
+        && liveTradingAcknowledged
+        && !shadowTradingEnabled;
 
     // Admin runtime config state
     const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigResponse | null>(null);
@@ -348,6 +354,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setStopLossEngineEnabled(data.stop_loss_engine_enabled !== 'false');
             setSyntheticTrailingStopEnabled(data.synthetic_trailing_stop_enabled === 'true');
             setSyntheticTrailingStopPct(data.synthetic_trailing_stop_pct || '15');
+            setAutonomousLiveEntryEnabled(data.autonomous_live_entry_enabled === 'true');
             setLiveTradingAcknowledged(data.live_trading_acknowledged === 'true');
             setMcpTradingEnabled(data.mcp_trading_enabled === 'true');
 
@@ -412,11 +419,15 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
     function handleExecutionBrokerChange(value: string) {
         setExecutionBroker(value);
-        if (value === 'wealthsimple_snaptrade') {
-            setSnaptradeAutoTrade(true);
-        } else {
+        if (value !== 'wealthsimple_snaptrade') {
             setSnaptradeAutoTrade(false);
+            setAutonomousLiveEntryEnabled(false);
         }
+    }
+
+    function handleAutonomousLiveEntryChange(checked: boolean) {
+        if (checked && !autonomousLiveEntryReady) return;
+        setAutonomousLiveEntryEnabled(checked);
     }
 
     function handleIbkrGatewayModeChange(value: string) {
@@ -605,6 +616,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 stop_loss_engine_enabled: stopLossEngineEnabled ? 'true' : 'false',
                 synthetic_trailing_stop_enabled: syntheticTrailingStopEnabled ? 'true' : 'false',
                 synthetic_trailing_stop_pct: syntheticTrailingStopPct || '15',
+                autonomous_live_entry_enabled: autonomousLiveEntryEnabled && autonomousLiveEntryReady ? 'true' : 'false',
                 live_trading_acknowledged: liveTradingAcknowledged ? 'true' : 'false',
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 day_trading_symbols: formatDayTradingSymbols(normalizedSymbols),
@@ -977,7 +989,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Execution mode</h5>
-                                            <p className="text-[10px] text-muted-foreground">Every order still requires explicit review in the Day Trading page.</p>
+                                            <p className="text-[10px] text-muted-foreground">
+                                                {autonomousLiveEntryEnabled && autonomousLiveEntryReady
+                                                    ? 'Qualified signal-only-v2 entries are submitted automatically after every backend gate passes.'
+                                                    : 'Live entries require explicit review in the Day Trading page unless autonomous entry is separately enabled.'}
+                                            </p>
                                         </div>
                                         <div className="grid gap-2">
                                             <Label htmlFor="executionBroker">Order destination</Label>
@@ -1016,6 +1032,36 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     </div>
                                                 </div>
                                             )}
+                                            <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <Label htmlFor="autonomousLiveEntryToggle" className="flex flex-col gap-1">
+                                                        <span className="flex items-center gap-2">
+                                                            Autonomous live strategy entries
+                                                            {autonomousLiveEntryEnabled ? (
+                                                                <Badge variant="destructive" className="h-5 text-[10px]">Live auto</Badge>
+                                                            ) : (
+                                                                <Badge variant="secondary" className="h-5 text-[10px]">Off</Badge>
+                                                            )}
+                                                        </span>
+                                                        <span className="text-[10px] font-normal text-muted-foreground">
+                                                            Automatically submits one signal-only-v2 contract after every entry and risk gate passes.
+                                                        </span>
+                                                    </Label>
+                                                    <Switch
+                                                        id="autonomousLiveEntryToggle"
+                                                        checked={autonomousLiveEntryEnabled}
+                                                        onCheckedChange={handleAutonomousLiveEntryChange}
+                                                    />
+                                                </div>
+                                                <p className={`text-[10px] ${autonomousLiveEntryEnabled ? 'font-semibold text-amber-500' : 'text-muted-foreground'}`}>
+                                                    One contract and one concurrent SPY/QQQ position are enforced in the backend. New entries stop 60 minutes before the NYSE close; 0DTE strategy positions are flattened 40 minutes before close. Disabling this switch stops new autonomous entries but does not stop management of an open position.
+                                                </p>
+                                                {!autonomousLiveEntryReady && (
+                                                    <p className="text-[10px] font-medium text-amber-500">
+                                                        Complete the live execution, account, acknowledgement, and non-shadow prerequisites before enabling autonomous entry. You can always switch an existing configuration off.
+                                                    </p>
+                                                )}
+                                            </div>
                                             {isAdmin && (
                                                 <div className="hidden">
                                                     <div className="flex items-center justify-between gap-3">

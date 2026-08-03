@@ -94,6 +94,8 @@ const stateLabel = (trade: Position) => {
     STOP_LOSS: 'Stop loss',
     TRAILING_STOP: 'Synthetic trailing stop',
     SYNTHETIC_TRAILING_STOP: 'Synthetic trailing stop',
+    END_OF_DAY: 'Mandatory day-trade flatten',
+    MANDATORY_DAY_TRADE_FLATTEN: 'Mandatory day-trade flatten',
     TAKE_PROFIT: 'Take profit',
     PROFIT_TRIM: 'Profit trim',
     MANUAL: 'Manual',

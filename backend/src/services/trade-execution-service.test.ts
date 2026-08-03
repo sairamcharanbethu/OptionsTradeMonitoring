@@ -258,6 +258,16 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
     broker_order_id: null,
     status: 'PENDING'
   });
+  const submitting = RiskDecisionService.forExistingSignalExecution(42, {
+    execution_status: 'SUBMITTING',
+    broker_order_id: null,
+    status: 'PENDING'
+  });
+  const pendingReconcile = RiskDecisionService.forExistingSignalExecution(42, {
+    execution_status: 'PENDING_RECONCILE',
+    broker_order_id: null,
+    status: 'EXECUTED'
+  });
   const grade = RiskDecisionService.forSetupGrade(42, 'B / LOTTO');
   const duplicate = RiskDecisionService.forDuplicateOpenEntry('QQQ 2026-06-16 PUT 738', {
     id: 679,
@@ -373,6 +383,8 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   });
 
   assert(existing.allowed === false && existing.code === 'EXISTING_SIGNAL_EXECUTION', 'Should block existing signal execution');
+  assert(submitting.allowed === false, 'A durable pre-broker submission claim must block duplicate execution');
+  assert(pendingReconcile.allowed === false, 'A broker-accepted order awaiting reconciliation must block duplicate execution');
   assert(grade.allowed === false && grade.code === 'SETUP_GRADE_NOT_EXECUTABLE', 'Should block non-executable setup grade');
   assert(duplicate.allowed === false && duplicate.metadata?.duplicatePositionId === 679, 'Should block duplicate open entry with metadata');
   assert(dailyLimit.allowed === false && dailyLimit.code === 'DAILY_TRADE_LIMIT', 'Should block daily trade limit');
@@ -402,6 +414,56 @@ async function testShadowModeNeverResolvesToLiveBroker() {
   assert(service.resolveBroker({ snaptrade_auto_trade: 'true', execution_broker: 'none' }) === 'none', 'Explicit broker none must remain a live-trading kill switch');
   assert(service.executionScopeSql('wealthsimple_snaptrade').includes("is_simulated, FALSE) = FALSE"), 'Live risk scope must exclude simulated positions');
   assert(service.executionScopeSql('simulated').includes("is_simulated, FALSE) = TRUE"), 'Shadow risk scope must exclude live positions');
+}
+
+async function testDuplicateSignalPreservesExecutedRecord() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  let failureMarked = false;
+  service.getSignalExecutionContract = async () => ({ engineVersion: null, optionDetails: {} });
+  service.getRiskState = async () => ({
+    dailyRealizedPnl: 0,
+    maxDailyLoss: 200,
+    consecutiveLosses: 0,
+    maxConsecutiveLosses: 3,
+    cooldownUntil: null,
+    maxPremiumRisk: 500,
+    maxCorrelatedPositions: 1
+  });
+  service.getExistingSignalExecution = async () => ({
+    status: 'EXECUTED',
+    execution_status: 'PENDING_RECONCILE',
+    broker_order_id: 'broker-order-1'
+  });
+  service.markSignalExecutionFailure = async () => { failureMarked = true; };
+
+  const result = await service.executeSignal(createSignalInput(), {
+    execution_broker: 'wealthsimple_snaptrade',
+    snaptrade_auto_trade: 'true',
+    contracts_per_trade: '1'
+  });
+  assert(result.duplicate === true && result.riskCode === 'EXISTING_SIGNAL_EXECUTION', 'Duplicate signal execution should return the preserved canonical state');
+  assert(failureMarked === false, 'Duplicate execution must not overwrite an executed signal with a failure or cancellation');
+}
+
+async function testDurableSubmissionClaim() {
+  let claimSql = '';
+  let claimParams: any[] = [];
+  const service = new TradeExecutionService({
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (sql: string, params: any[] = []) => {
+        claimSql = sql;
+        claimParams = params;
+        return { rows: [{ signal_id: 42 }], rowCount: 1 };
+      }
+    }
+  } as any) as any;
+
+  const claimed = await service.claimSignalSubmission(7, 42, 1);
+  assert(claimed === true, 'A new live submission should acquire its durable database claim');
+  assert(claimSql.includes("'SUBMITTING'"), 'The durable claim must be written before the external broker call');
+  assert(claimSql.includes('broker_order_id IS NULL'), 'A claim retry must never overwrite a broker-identified order');
+  assert(JSON.stringify(claimParams) === JSON.stringify([42, 7, 1]), `Unexpected submission claim parameters: ${JSON.stringify(claimParams)}`);
 }
 
 async function testStrategyPlanCapsConfiguredQuantity() {
@@ -618,6 +680,8 @@ async function runTests() {
   await testTheoreticalPricingDetectionCoversStoredShapes();
   await testRiskDecisionServiceCentralizesPreTradeBlocks();
   await testShadowModeNeverResolvesToLiveBroker();
+  await testDuplicateSignalPreservesExecutedRecord();
+  await testDurableSubmissionClaim();
   await testStrategyPlanCapsConfiguredQuantity();
   await testStrategyDebitPlanUsesSubmittedLimit();
   await testPreSubmitRiskDenialSkipsBeforeBrokerPath();

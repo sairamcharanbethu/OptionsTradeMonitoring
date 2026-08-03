@@ -145,7 +145,13 @@ export class RiskDecisionService {
   }
 
   static forExistingSignalExecution(signalId: number, existingExecution: any): RiskDecision {
-    if (existingExecution && (existingExecution.broker_order_id || existingExecution.execution_status === 'PENDING' || existingExecution.execution_status === 'EXECUTED')) {
+    const executionStatus = String(existingExecution?.execution_status || '').toUpperCase();
+    if (existingExecution && (
+      existingExecution.broker_order_id
+      || executionStatus === 'EXECUTED'
+      || executionStatus === 'SUBMITTING'
+      || executionStatus.startsWith('PENDING')
+    )) {
       return {
         allowed: false,
         skipped: true,

@@ -1800,6 +1800,12 @@ export interface StrategyEngineState {
   error: string | null;
   health: Record<string, any> | null;
   signal: Record<string, any> | null;
+  autonomousEntry?: {
+    lastAttemptAt: string | null;
+    lastResult: string | null;
+    contractLimit: number;
+    entryCutoffMinutesBeforeClose: number;
+  };
   transport?: {
     redis: 'DISABLED' | 'CONNECTING' | 'UP' | 'DEGRADED';
     lastRedisEventAt: string | null;

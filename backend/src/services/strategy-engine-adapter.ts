@@ -3,8 +3,9 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
-import { getGlobalSettings } from '../lib/settings-utils';
+import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
+import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { DiscordAlertService } from './discord-alert-service';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
@@ -36,6 +37,8 @@ export class StrategyEngineAdapter {
   private lastError: string | null = null;
   private lastPolicyFingerprint: string | null = null;
   private lastZeroGexKeyFingerprint: string | null = null;
+  private lastAutonomousEntryAt: string | null = null;
+  private lastAutonomousEntryResult: string | null = null;
 
   constructor(private fastify: FastifyInstance) {
     this.dataDir = process.env.STRATEGY_DATA_DIR || '/strategy-data/trade';
@@ -96,6 +99,12 @@ export class StrategyEngineAdapter {
       error: this.lastError,
       health: this.currentHealth,
       signal: this.currentSignal,
+      autonomousEntry: {
+        lastAttemptAt: this.lastAutonomousEntryAt,
+        lastResult: this.lastAutonomousEntryResult,
+        contractLimit: 1,
+        entryCutoffMinutesBeforeClose: 60
+      },
       transport: {
         redis: this.redisStatus,
         lastRedisEventAt: this.lastRedisEventAt,
@@ -278,8 +287,12 @@ export class StrategyEngineAdapter {
     const eventInserted = await this.persistEvent(signal, eventFingerprint);
     this.lastEventFingerprint = eventFingerprint;
 
+    let persistedSignalId: number | null = null;
     if (this.mode === 'primary') {
-      await this.persistPrimarySignal(signal);
+      persistedSignalId = await this.persistPrimarySignal(signal);
+      if (persistedSignalId) {
+        await this.maybeExecuteAutonomousLiveEntries(signal, persistedSignalId);
+      }
     }
     if (eventInserted) {
       this.notifyStrategyLifecycle(signal).catch((err: any) => {
@@ -500,21 +513,32 @@ export class StrategyEngineAdapter {
     ]);
     const signalId = signalResult.rows?.[0]?.id || null;
     const discord = new DiscordAlertService(this.fastify);
-    await Promise.allSettled((usersResult.rows || []).map((row: any) => discord.send({
-      userId: Number(row.user_id),
-      title: alert.title,
-      message: alert.message,
-      severity: alert.severity,
-      category: alert.category,
-      signalId,
-      dedupeKey: `strategy:${row.user_id}:${setupId}:${alert.eventKey}`,
-      dedupeSeconds: 86_400
-    })));
+    await Promise.allSettled((usersResult.rows || []).map(async (row: any) => {
+      const userId = Number(row.user_id);
+      const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
+      const autonomousActive = alert.category === 'strategy-active'
+        && this.isAutonomousLiveEntryConfigured(settings);
+      await discord.send({
+        userId,
+        title: autonomousActive ? alert.title.replace('REVIEW NOW', 'AUTO ENTRY') : alert.title,
+        message: autonomousActive
+          ? alert.message.replace(
+            'ACTION: OPEN THE APP AND REVIEW THE PLANNED ORDER NOW.\nThe trigger and activation checks passed. Entry still requires manual approval, a fresh quote, and every hard risk limit.',
+            'ACTION: MONITOR THE AUTONOMOUS ENTRY.\nThe backend will submit at most one contract only if the live account, market window, lifecycle, quote, debit, and hard risk checks all pass.'
+          )
+          : alert.message,
+        severity: alert.severity,
+        category: alert.category,
+        signalId,
+        dedupeKey: `strategy:${userId}:${setupId}:${alert.eventKey}`,
+        dedupeSeconds: 86_400
+      });
+    }));
   }
 
-  private async persistPrimarySignal(signal: StrategySnapshot): Promise<void> {
+  private async persistPrimarySignal(signal: StrategySnapshot): Promise<number | null> {
     const state = String(signal.state || 'WAIT');
-    if (!this.currentSetupId) return;
+    if (!this.currentSetupId) return null;
     if (this.isTerminal(signal)) {
       const terminalState = TERMINAL_STATES.has(state)
         ? state
@@ -540,9 +564,9 @@ export class StrategyEngineAdapter {
            AND status = 'OPEN'`,
         [this.currentSetupId, terminalState, JSON.stringify(signal)]
       );
-      return;
+      return null;
     }
-    if (!ACTIVE_STATES.has(state)) return;
+    if (!ACTIVE_STATES.has(state)) return null;
 
     const side = signal.favoring === 'puts' ? 'PUT' : 'CALL';
     const setup = side === 'CALL' ? signal.call_setup || {} : signal.put_setup || {};
@@ -553,7 +577,7 @@ export class StrategyEngineAdapter {
     const exitTargetNumber = Math.max(1, Number(signal.paper_policy?.exit_after_target || 2));
     const target = targets[Math.min(exitTargetNumber, targets.length) - 1] ?? targets[0] ?? null;
     const confidence = Math.max(0, Math.min(100, Math.round(Number(signal.confidence_score || 0))));
-    await (this.fastify as any).pg.query(
+    const signalResult = await (this.fastify as any).pg.query(
       `INSERT INTO signals (
          symbol, signal_type, trade_bias, current_price, entry_trigger, stop_loss,
          target_price, confidence_score, setup_grade, status, indicators, gex,
@@ -574,7 +598,8 @@ export class StrategyEngineAdapter {
            no_trade_reasons = EXCLUDED.no_trade_reasons,
            option_details = EXCLUDED.option_details,
            policy_fingerprint = EXCLUDED.policy_fingerprint,
-           strategy_snapshot = EXCLUDED.strategy_snapshot`,
+           strategy_snapshot = EXCLUDED.strategy_snapshot
+       RETURNING id`,
       [
         side,
         String(signal.strategy || 'signal-only-v2'),
@@ -628,13 +653,81 @@ export class StrategyEngineAdapter {
       [
         this.currentSetupId,
         setup.invalidation || null,
+        targets[0] ?? target,
         target,
-        targets[1] ?? null,
         state,
         signal.policy_fingerprint || null,
         JSON.stringify(signal)
       ]
     );
+    return Number(signalResult.rows?.[0]?.id || 0) || null;
+  }
+
+  private autonomousEntryWindow(date: Date = new Date()): { open: boolean; reason: string; cutoffMinutes: number; closeMinutes: number } {
+    const closeMinutes = getUSMarketCloseMinutes(date);
+    const cutoffMinutes = closeMinutes - 60;
+    const market = getNewYorkMarketState(date, 9 * 60 + 30, closeMinutes);
+    if (!market.isOpen) return { open: false, reason: market.reason, cutoffMinutes, closeMinutes };
+    if (market.minutes >= cutoffMinutes) return { open: false, reason: 'AUTO_ENTRY_CUTOFF', cutoffMinutes, closeMinutes };
+    return { open: true, reason: 'OPEN', cutoffMinutes, closeMinutes };
+  }
+
+  private isAutonomousLiveEntryConfigured(settings: Record<string, string>): boolean {
+    return settings.autonomous_live_entry_enabled === 'true'
+      && settings.day_trading_enabled === 'true'
+      && settings.execution_broker === 'wealthsimple_snaptrade'
+      && settings.snaptrade_auto_trade === 'true'
+      && settings.live_trading_acknowledged === 'true'
+      && Boolean(String(settings.snaptrade_trading_account_id || '').trim())
+      && settings.shadow_trading_enabled !== 'true';
+  }
+
+  private async maybeExecuteAutonomousLiveEntries(signal: StrategySnapshot, signalId: number): Promise<void> {
+    if (String(signal.state || '') !== 'ACTIVE' || signal.lifecycle?.entry_allowed !== true) return;
+    const entryWindow = this.autonomousEntryWindow();
+    if (!entryWindow.open) {
+      this.lastAutonomousEntryResult = `Blocked: ${entryWindow.reason}`;
+      return;
+    }
+
+    const { rows } = await (this.fastify as any).pg.query(
+      `SELECT DISTINCT user_id
+       FROM settings
+       WHERE key = 'autonomous_live_entry_enabled' AND value = 'true'`
+    );
+    if (!rows?.length) return;
+
+    const scanner = (this.fastify as any).scanner;
+    if (!scanner?.executeSignalForUser) {
+      this.lastAutonomousEntryResult = 'Blocked: scanner execution service unavailable';
+      return;
+    }
+
+    for (const row of rows) {
+      const userId = Number(row.user_id);
+      if (!Number.isInteger(userId) || userId <= 0) continue;
+      const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
+      if (!this.isAutonomousLiveEntryConfigured(settings)) {
+        this.fastify.log.warn(`[StrategyEngineAdapter] Autonomous live entry is enabled but incomplete for user ${userId}.`);
+        continue;
+      }
+
+      this.lastAutonomousEntryAt = new Date().toISOString();
+      try {
+        await this.assertSignalExecutable(signalId);
+        const result = await scanner.executeSignalForUser(userId, signalId, {
+          ...settings,
+          contracts_per_trade: '1',
+          max_correlated_positions: '1'
+        });
+        this.lastAutonomousEntryResult = result?.success
+          ? 'Order submitted'
+          : `Entry skipped: ${result?.message || 'risk check denied entry'}`;
+      } catch (err: any) {
+        this.lastAutonomousEntryResult = `Entry failed: ${err.message || String(err)}`;
+        this.fastify.log.error(`[StrategyEngineAdapter] Autonomous entry failed for user ${userId}: ${err.message || String(err)}`);
+      }
+    }
   }
 
   private async restoreSetupIdentity(): Promise<void> {

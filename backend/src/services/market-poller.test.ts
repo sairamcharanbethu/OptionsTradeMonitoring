@@ -89,6 +89,27 @@ async function testThetaStopMaxHoldWindows() {
   assert(anchoredStart?.triggered === true && anchoredStart.heldMinutes === 30, `Expected stored theta-stop anchor to survive later updates, got ${JSON.stringify(anchoredStart)}`);
 }
 
+async function testMandatoryLiveStrategyFlattenWindow() {
+  const poller = createPoller();
+  const position: any = {
+    strategy_managed: true,
+    is_simulated: false,
+    execution_broker: 'wealthsimple_snaptrade',
+    expiration_date: new Date('2026-08-03T00:00:00.000Z')
+  };
+  const before = poller.getMandatoryFlattenAssessment(position, new Date('2026-08-03T19:19:00.000Z'));
+  const regular = poller.getMandatoryFlattenAssessment(position, new Date('2026-08-03T19:20:00.000Z'));
+  const early = poller.getMandatoryFlattenAssessment({ ...position, expiration_date: '2026-11-27' }, new Date('2026-11-27T17:20:00.000Z'));
+  const oneDte = poller.getMandatoryFlattenAssessment({ ...position, expiration_date: '2026-08-04' }, new Date('2026-08-03T19:20:00.000Z'));
+  const paper = poller.getMandatoryFlattenAssessment({ ...position, is_simulated: true }, new Date('2026-08-03T19:20:00.000Z'));
+
+  assert(before?.triggered === false, 'Regular 0DTE flatten must not trigger before 15:20 ET');
+  assert(regular?.triggered === true && regular.flattenMinutes === 15 * 60 + 20, 'A PostgreSQL date-shaped 0DTE position must flatten at 15:20 ET');
+  assert(early?.triggered === true && early.flattenMinutes === 12 * 60 + 20, 'Early-close 0DTE flatten must trigger at 12:20 ET');
+  assert(oneDte === null, 'Non-0DTE positions must not be flattened by the day-trade deadline');
+  assert(paper === null, 'The live mandatory flatten must not duplicate paper management');
+}
+
 async function testTradeExcursionTracksLongAndShortPremium() {
   const poller = createPoller();
   const longFirst = poller.calculateTradeExcursion({ entry_price: 2 }, 2.5);
@@ -402,6 +423,52 @@ async function testSyntheticTrailRejectsStaleHardStopQuote() {
   assert(submitted.length === 0, 'A stale IBKR quote must not trigger a synthetic hard-stop exit');
 }
 
+async function testMandatoryFlattenSubmitsOneMarketExit() {
+  const redisMock = createMarketDataRedisMock() as any;
+  const submitted: any[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [], rowCount: 1 }) }
+  } as any;
+  const poller = new MarketPoller(fastify, redisMock) as any;
+  poller.getMandatoryFlattenAssessment = () => ({ triggered: true, flattenMinutes: 920, closeMinutes: 960 });
+  poller.submitSnapTradeExit = async (_position: any, orderType: string, limitPrice: string, reason: string, quantity: number) => {
+    submitted.push({ orderType, limitPrice, reason, quantity });
+    return true;
+  };
+  poller.notifyN8n = () => {};
+
+  await poller.processPositionExitUpdate({
+    id: 57,
+    user_id: 7,
+    symbol: 'SPY',
+    status: 'OPEN',
+    is_simulated: false,
+    execution_broker: 'wealthsimple_snaptrade',
+    execution_status: 'FILLED',
+    strategy_managed: true,
+    entry_price: 1,
+    current_price: 1.1,
+    quantity: 1,
+    stop_loss_trigger: 0.5,
+    take_profit_trigger: 1.05,
+    trailing_high_price: 1.1,
+    expiration_date: '2099-08-03',
+    option_type: 'CALL',
+    analysis_data: {}
+  }, 1.1, undefined, undefined, 755, {
+    bid: 1.09,
+    ask: 1.11,
+    mid: 1.1,
+    spreadPct: 1.82,
+    quoteAgeMs: 100,
+    source: 'ibkr'
+  });
+
+  assert(submitted.length === 1, `Mandatory flatten should submit one exit, got ${submitted.length}`);
+  assert(submitted[0].orderType === 'MARKET' && submitted[0].reason === 'END_OF_DAY' && submitted[0].quantity === 1, `Mandatory flatten must override a simultaneous take-profit with one MARKET contract, got ${JSON.stringify(submitted[0])}`);
+}
+
 async function testOrdinaryQuoteUpdatesStayOutOfPostgres() {
   const queries: string[] = [];
   const fastify = {
@@ -474,6 +541,7 @@ async function runTests() {
   console.log('Running MarketPoller tests...');
   await testUnderlyingStopDirection();
   await testThetaStopMaxHoldWindows();
+  await testMandatoryLiveStrategyFlattenWindow();
   await testTradeExcursionTracksLongAndShortPremium();
   await testStrategyLifecycleExitDoesNotPartialTrim();
   await testExitReviewStateCannotBeClaimedAgain();
@@ -485,6 +553,7 @@ async function runTests() {
   await testSyntheticTrailTp1TrimsMultipleContractsAtBid();
   await testSyntheticTrailNeedsTwoBreachQuotesBeforeMarketExit();
   await testSyntheticTrailRejectsStaleHardStopQuote();
+  await testMandatoryFlattenSubmitsOneMarketExit();
   await testSimulatedExitPersistsFinalCheckpoint();
   console.log('All MarketPoller tests passed!');
 }

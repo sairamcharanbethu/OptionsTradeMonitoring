@@ -353,6 +353,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'Synthetic trailing stop enabled must be true or false' });
                     }
+                    if (key === 'autonomous_live_entry_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Autonomous live entry enabled must be true or false' });
+                    }
                     if (key === 'market_poll_interval') {
                         const validationError = validateMarketPollIntervalSetting(trimmedValue);
                         if (validationError) {

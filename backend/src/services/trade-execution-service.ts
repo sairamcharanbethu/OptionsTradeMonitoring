@@ -28,6 +28,7 @@ interface ExecutionSettings {
   day_trading_enabled?: string;
   execution_broker?: string;
   snaptrade_auto_trade?: string;
+  autonomous_live_entry_enabled?: string;
   snaptrade_trading_account_id?: string;
   max_trades_per_day?: string;
   contracts_per_trade?: string;
@@ -85,6 +86,7 @@ export class TradeExecutionService {
       day_trading_enabled: 'true',
       execution_broker: 'none',
       snaptrade_auto_trade: 'false',
+      autonomous_live_entry_enabled: 'false',
       snaptrade_trading_account_id: '',
       max_trades_per_day: '2',
       contracts_per_trade: '1',
@@ -136,7 +138,16 @@ export class TradeExecutionService {
       existingExecution
     });
     if (!existingExecutionRisk.approved) {
-      return this.denyPreSubmitRisk(input, broker, existingExecutionRisk);
+      const message = existingExecutionRisk.denials[0]?.message || `Signal #${input.signalId} already has an execution record`;
+      this.fastify.log.info(`[TradeExecutionService] ${message}. Preserving the existing execution state.`);
+      return {
+        success: false,
+        skipped: true,
+        duplicate: true,
+        broker,
+        message,
+        riskCode: 'EXISTING_SIGNAL_EXECUTION'
+      };
     }
 
     const setupGrade = await this.getSignalSetupGrade(input.signalId);
@@ -800,6 +811,7 @@ export class TradeExecutionService {
     let limitPrice = useLimitOrder ? (input.mark! * (1 + slippagePct / 100)).toFixed(2) : undefined;
     let orderType: 'LIMIT' | 'MARKET' = useLimitOrder ? 'LIMIT' : 'MARKET';
     let entryQuoteValidation: EntryQuoteValidation | null = null;
+    let brokerSubmissionAccepted = false;
 
     try {
       try {
@@ -844,6 +856,18 @@ export class TradeExecutionService {
         return { success: false, skipped: true, broker: 'wealthsimple_snaptrade', message };
       }
 
+      const submissionClaimed = await this.claimSignalSubmission(input.userId, input.signalId, quantity);
+      if (!submissionClaimed) {
+        return {
+          success: false,
+          skipped: true,
+          duplicate: true,
+          broker: 'wealthsimple_snaptrade',
+          message: `Signal #${input.signalId} already has a live order submission in progress`,
+          riskCode: 'EXISTING_SIGNAL_EXECUTION'
+        };
+      }
+
       const snaptradeService = new SnaptradeService(this.fastify);
       const result = await snaptradeService.placeOptionOrder(
         input.userId,
@@ -854,6 +878,8 @@ export class TradeExecutionService {
         orderType,
         limitPrice
       );
+      brokerSubmissionAccepted = true;
+      await this.markSignalBrokerAccepted(input.userId, input.signalId, result.orderId || null, result.tradeId || null, quantity);
       const entryState = TradeLifecycleService.entrySubmittedStatus(orderType);
       const protectedLimitNote = orderType === 'LIMIT'
         ? ` protected LIMIT ${limitPrice || ''} pending broker reconciliation`
@@ -905,7 +931,11 @@ export class TradeExecutionService {
       this.scheduleSnapTradePendingSync(input.userId);
       return { success: true, broker: 'wealthsimple_snaptrade', orderId: result.orderId, tradeId: result.tradeId, quantity, executionStatus: entryState.executionStatus };
     } catch (err: any) {
-      await this.markSignalExecutionFailure(input.userId, input.signalId, err.message);
+      if (brokerSubmissionAccepted) {
+        await this.markPostBrokerPersistenceFailure(input.userId, input.signalId, err.message || String(err));
+      } else {
+        await this.markSignalExecutionFailure(input.userId, input.signalId, err.message || String(err));
+      }
       throw err;
     }
   }
@@ -1090,6 +1120,68 @@ export class TradeExecutionService {
     } catch (err: any) {
       this.fastify.log.warn(`[TradeExecutionService] Failed to record trade event ${event.eventType}: ${err.message}`);
     }
+  }
+
+  private async claimSignalSubmission(userId: number, signalId: number, quantity: number): Promise<boolean> {
+    const result = await this.fastify.pg.query(
+      `INSERT INTO signal_user_executions (
+         signal_id, user_id, status, execution_broker, execution_status,
+         execution_error, contracts_requested, updated_at
+       ) VALUES ($1, $2, 'PENDING', 'wealthsimple_snaptrade', 'SUBMITTING', NULL, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (signal_id, user_id) DO UPDATE
+       SET status = 'PENDING',
+           execution_broker = 'wealthsimple_snaptrade',
+           execution_status = 'SUBMITTING',
+           execution_error = NULL,
+           contracts_requested = EXCLUDED.contracts_requested,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE signal_user_executions.broker_order_id IS NULL
+         AND signal_user_executions.broker_trade_id IS NULL
+         AND (
+           signal_user_executions.status = 'CANCELLED'
+           OR signal_user_executions.execution_status IN ('FAILED', 'SKIPPED')
+         )
+       RETURNING signal_id`,
+      [signalId, userId, quantity]
+    );
+    return (result.rowCount ?? result.rows?.length ?? 0) > 0;
+  }
+
+  private async markSignalBrokerAccepted(userId: number, signalId: number, orderId: string | null, tradeId: string | null, quantity: number): Promise<void> {
+    await this.fastify.pg.query(
+      `UPDATE signal_user_executions
+       SET status = 'EXECUTED',
+           execution_status = 'PENDING_RECONCILE',
+           execution_broker = 'wealthsimple_snaptrade',
+           broker_order_id = $3,
+           broker_trade_id = $4,
+           contracts_requested = $5,
+           execution_error = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE signal_id = $1 AND user_id = $2 AND execution_status = 'SUBMITTING'`,
+      [signalId, userId, orderId, tradeId, quantity]
+    );
+  }
+
+  private async markPostBrokerPersistenceFailure(userId: number, signalId: number, error: string): Promise<void> {
+    await this.fastify.pg.query(
+      `UPDATE signal_user_executions
+       SET execution_error = $3,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE signal_id = $1 AND user_id = $2
+         AND execution_status = 'PENDING_RECONCILE'`,
+      [signalId, userId, `Broker accepted the order but local persistence failed: ${error}`]
+    );
+    await new DiscordAlertService(this.fastify).send({
+      userId,
+      title: 'Broker order requires reconciliation',
+      message: `Signal #${signalId}: the broker accepted an order, but the local position record failed. Do not retry. Verify the Wealthsimple order immediately.`,
+      severity: 'critical',
+      category: 'entry-reconciliation',
+      signalId,
+      dedupeKey: `signal:${userId}:${signalId}:post-broker-persistence`,
+      dedupeSeconds: 3600
+    });
   }
 
   private async markSignalExecuted(userId: number, signalId: number, broker: string, orderId: string | null, tradeId: string | null, quantity: number, executionStatus: string = 'EXECUTED') {

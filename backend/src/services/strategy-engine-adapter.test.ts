@@ -39,6 +39,27 @@ function signal(overrides: Record<string, any> = {}) {
 async function runTests() {
   const adapter = createAdapter();
   assert(adapter.getMode() === 'primary', 'The replacement strategy must remain the active signal source');
+  assert(adapter.autonomousEntryWindow(new Date('2026-08-03T18:59:00.000Z')).open, 'Regular-session autonomous entry should remain open before 15:00 ET');
+  assert(adapter.autonomousEntryWindow(new Date('2026-08-03T19:00:00.000Z')).reason === 'AUTO_ENTRY_CUTOFF', 'Regular-session autonomous entry must stop at 15:00 ET');
+  assert(adapter.autonomousEntryWindow(new Date('2026-11-27T16:59:00.000Z')).open, 'Early-close autonomous entry should remain open before 12:00 ET');
+  assert(adapter.autonomousEntryWindow(new Date('2026-11-27T17:00:00.000Z')).reason === 'AUTO_ENTRY_CUTOFF', 'Early-close autonomous entry must stop at 12:00 ET');
+  assert(adapter.isAutonomousLiveEntryConfigured({
+    autonomous_live_entry_enabled: 'true',
+    day_trading_enabled: 'true',
+    execution_broker: 'wealthsimple_snaptrade',
+    snaptrade_auto_trade: 'true',
+    live_trading_acknowledged: 'true',
+    snaptrade_trading_account_id: 'account-1',
+    shadow_trading_enabled: 'false'
+  }), 'Autonomous live entry should require every explicit live-routing gate');
+  assert(!adapter.isAutonomousLiveEntryConfigured({
+    autonomous_live_entry_enabled: 'true',
+    day_trading_enabled: 'true',
+    execution_broker: 'wealthsimple_snaptrade',
+    snaptrade_auto_trade: 'true',
+    live_trading_acknowledged: 'false',
+    snaptrade_trading_account_id: 'account-1'
+  }), 'Missing live acknowledgement must block autonomous entry');
   adapter.currentSignal = signal({ generated_at: Date.now() / 1000 + 60 });
   assert(adapter.getCurrentState().ageSeconds < 0, 'A future-dated strategy snapshot must remain visibly invalid instead of appearing fresh');
   adapter.currentSignal = null;
@@ -196,7 +217,59 @@ async function runTests() {
   assert(signalInsert?.values[5] === 554, 'Persisted strategy target must honor paper exit target 2');
   const persistedOption = JSON.parse(signalInsert?.values[13]);
   assert(persistedOption.planned_contracts === 2, 'Persisted signal must retain planned contract quantity');
-  assert(positionUpdate?.values[2] === 554, 'Open strategy positions must follow the same target-2 lifecycle');
+  assert(positionUpdate?.values[2] === 552, 'Open strategy positions must retain the first target as TP1');
+  assert(positionUpdate?.values[3] === 554, 'Open strategy positions must retain the configured final target as TP2');
+
+  let autonomousCall: any = null;
+  const autonomousUserId = 9191;
+  const autonomousAdapter = new StrategyEngineAdapter({
+    pg: {
+      query: async (sql: string, values: any[] = []) => {
+        if (sql.includes("key = 'autonomous_live_entry_enabled'")) return { rows: [{ user_id: autonomousUserId }] };
+        if (sql.includes('SELECT DISTINCT ON')) return { rows: [] };
+        if (sql.includes('SELECT key, value FROM settings')) {
+          return { rows: [
+            { key: 'autonomous_live_entry_enabled', value: 'true' },
+            { key: 'day_trading_enabled', value: 'true' },
+            { key: 'execution_broker', value: 'wealthsimple_snaptrade' },
+            { key: 'snaptrade_auto_trade', value: 'true' },
+            { key: 'live_trading_acknowledged', value: 'true' },
+            { key: 'snaptrade_trading_account_id', value: 'account-1' },
+            { key: 'shadow_trading_enabled', value: 'false' },
+            { key: 'contracts_per_trade', value: '4' },
+            { key: 'max_correlated_positions', value: '4' }
+          ] };
+        }
+        if (sql.includes('SELECT strategy_setup_id')) {
+          return { rows: [{ strategy_setup_id: autonomousAdapter.currentSetupId }] };
+        }
+        return { rows: [], values };
+      }
+    },
+    scanner: {
+      executeSignalForUser: async (userId: number, signalId: number, settings: any) => {
+        autonomousCall = { userId, signalId, settings };
+        return { success: true };
+      }
+    },
+    log: { info: () => undefined, warn: () => undefined, error: () => undefined }
+  } as any) as any;
+  autonomousAdapter.currentSetupId = '33333333-3333-4333-8333-333333333333';
+  autonomousAdapter.currentSignal = signal({
+    generated_at: Date.now() / 1000,
+    state: 'ACTIVE',
+    lifecycle: { entry_allowed: true },
+    gex: { provider_age_seconds: 2 },
+    call_setup: {
+      ...signal().call_setup,
+      option: { ...signal().call_setup.option, quote_age_seconds: 2 }
+    }
+  });
+  autonomousAdapter.autonomousEntryWindow = () => ({ open: true, reason: 'OPEN', cutoffMinutes: 900, closeMinutes: 960 });
+  await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 88);
+  assert(autonomousCall?.userId === autonomousUserId && autonomousCall?.signalId === 88, 'Eligible autonomous user must route the active strategy signal');
+  assert(autonomousCall?.settings.contracts_per_trade === '1', 'Autonomous live entry must hard-cap the order at one contract');
+  assert(autonomousCall?.settings.max_correlated_positions === '1', 'Autonomous live entry must hard-cap concurrent correlated exposure at one');
 
   queries.length = 0;
   await persistenceAdapter.persistPrimarySignal(signal({ state: 'WAIT', signal_phase: 'INVALIDATED' }));

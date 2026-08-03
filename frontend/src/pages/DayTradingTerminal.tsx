@@ -160,7 +160,7 @@ const toneClasses: Record<LifecycleTone, string> = {
   blocked: 'border-rose-500/30 bg-rose-950/15 text-rose-100'
 };
 
-const stateCopy = (state: string, side: string | null) => {
+const stateCopy = (state: string, side: string | null, autonomousEntry = false) => {
   switch (state) {
     case 'ARMED':
       return {
@@ -172,7 +172,9 @@ const stateCopy = (state: string, side: string | null) => {
       return {
         eyebrow: 'Entry window',
         title: `${side || 'Directional'} entry is active`,
-        description: 'Review the planned contract and confirm this order while the snapshot remains fresh.'
+        description: autonomousEntry
+          ? 'The backend is evaluating the one-contract autonomous entry against every live risk gate.'
+          : 'Review the planned contract and confirm this order while the snapshot remains fresh.'
       };
     case 'MANAGE':
     case 'EXTENDED':
@@ -245,12 +247,15 @@ const strategyDisplay = (strategy?: string | null) => {
 
 const getExecutionMode = (settings: Record<string, string>) => {
   if (settings.shadow_trading_enabled === 'true') {
-    return { label: 'Shadow simulation', live: false };
+    return { label: 'Shadow simulation', live: false, autonomous: false };
   }
   if (settings.execution_broker === 'wealthsimple_snaptrade' && settings.snaptrade_auto_trade === 'true') {
-    return { label: 'Wealthsimple live', live: true };
+    const autonomous = settings.autonomous_live_entry_enabled === 'true'
+      && settings.live_trading_acknowledged === 'true'
+      && Boolean(settings.snaptrade_trading_account_id);
+    return { label: autonomous ? 'Wealthsimple auto' : 'Wealthsimple live', live: true, autonomous };
   }
-  return { label: 'Simulation · live off', live: false };
+  return { label: 'Simulation · live off', live: false, autonomous: false };
 };
 
 const Metric = ({
@@ -593,7 +598,7 @@ export default function DayTradingTerminal() {
   ].filter(Boolean))) as string[];
   const executionMode = getExecutionMode(settings);
   const dayTradingEnabled = settings.day_trading_enabled !== 'false';
-  const configuredMaxContracts = Math.max(1, Number(settings.contracts_per_trade || 1));
+  const configuredMaxContracts = executionMode.autonomous ? 1 : Math.max(1, Number(settings.contracts_per_trade || 1));
   const plannedContracts = Math.max(0, Number(option.planned_contracts || 0));
   const orderQuantity = plannedContracts > 0
     ? Math.min(configuredMaxContracts, plannedContracts)
@@ -658,7 +663,7 @@ export default function DayTradingTerminal() {
     );
   }) || null, [positions, currentSignal?.id, strategySetupId]);
   const displayLifecycle = dismissedActionableSetup ? 'DISMISSED' : lifecycle;
-  const lifecycleView = stateCopy(displayLifecycle, side);
+  const lifecycleView = stateCopy(displayLifecycle, side, executionMode.autonomous);
   const currentTone = dismissedActionableSetup ? 'blocked' : lifecycleTone(lifecycle);
   const currentStrategyCode = strategySignal?.strategy || currentSignal?.strategy_name || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
@@ -1097,7 +1102,7 @@ export default function DayTradingTerminal() {
           <Metric
             label="Execution"
             value={executionMode.label}
-            detail={executionMode.live ? 'real orders enabled' : 'no live orders'}
+            detail={executionMode.autonomous ? 'one-contract autonomous entry' : executionMode.live ? 'manual real orders enabled' : 'no live orders'}
             tone={executionMode.live ? 'text-amber-300' : 'text-sky-300'}
           />
           <Metric
@@ -1247,9 +1252,13 @@ export default function DayTradingTerminal() {
                 </>
               ) : lifecycle === 'ACTIVE' ? (
                 <>
-                  <div className="mt-2 text-lg font-semibold text-zinc-50">Review the planned order</div>
+                  <div className="mt-2 text-lg font-semibold text-zinc-50">
+                    {executionMode.autonomous ? 'Autonomous entry evaluation' : 'Review the planned order'}
+                  </div>
                   <p className="mt-1 text-xs leading-relaxed text-zinc-500">
-                    Confirmation remains manual. The backend rechecks lifecycle, freshness, quote quality and debit limits.
+                    {executionMode.autonomous
+                      ? 'No click is required. The backend submits one contract only while lifecycle, market window, freshness, quote quality, debit and account risk checks remain valid.'
+                      : 'Confirmation remains manual. The backend rechecks lifecycle, freshness, quote quality and debit limits.'}
                   </p>
                   <PlannedEntryTicket
                     option={option}
@@ -1259,20 +1268,32 @@ export default function DayTradingTerminal() {
                     orderDebit={orderDebit}
                     quoteAge={quoteAge}
                   />
-                  <Button
-                    className="mt-5 h-11 w-full bg-emerald-500 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-500"
-                    onClick={requestExecution}
-                    disabled={!canExecute}
-                  >
-                    <Play className="mr-2 h-4 w-4" />
-                    Review order
-                  </Button>
+                  {executionMode.autonomous ? (
+                    <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-950/15 px-3 py-2.5 text-xs leading-relaxed text-amber-200">
+                      <div>Autonomous mode is armed. Monitor the broker reconciliation state below; do not place a duplicate manual order.</div>
+                      {strategyState?.autonomousEntry?.lastResult && (
+                        <div className="mt-1 text-amber-100">
+                          Last evaluation: {strategyState.autonomousEntry.lastResult}
+                          {strategyState.autonomousEntry.lastAttemptAt ? ` · ${dateTime(strategyState.autonomousEntry.lastAttemptAt)}` : ''}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <Button
+                      className="mt-5 h-11 w-full bg-emerald-500 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-500"
+                      onClick={requestExecution}
+                      disabled={!canExecute}
+                    >
+                      <Play className="mr-2 h-4 w-4" />
+                      Review order
+                    </Button>
+                  )}
                   {!canExecute && (
                     <div className="mt-3 space-y-1 text-xs leading-relaxed text-amber-300">
                       {executionBlockers.slice(0, 3).map(blocker => <div key={blocker}>• {blocker}</div>)}
                     </div>
                   )}
-                  {currentSignal && (
+                  {currentSignal && !executionMode.autonomous && (
                     <button
                       type="button"
                       onClick={() => setDismissSignal(currentSignal)}
@@ -1348,7 +1369,7 @@ export default function DayTradingTerminal() {
               </div>
               <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
-                Every distinct qualified setup can open concurrently at a protected market quote. Available cash, reservation accounting and per-setup deduplication preserve ledger integrity; live Wealthsimple entries remain manual, while configured exits can submit automatically.
+                Every distinct qualified setup can open concurrently at a protected market quote. Available cash, reservation accounting and per-setup deduplication preserve ledger integrity; Wealthsimple entries follow the configured manual or one-contract autonomous mode, while configured exits can submit automatically.
               </p>
             </div>
             {paperAccount.canManage && (
