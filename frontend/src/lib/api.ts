@@ -231,6 +231,7 @@ export interface PaperAccountSummary {
     cash_balance: number | string;
     reserved_cash: number | string;
     equity: number | string;
+    high_water_mark: number | string;
     start_of_day_equity: number | string;
     automation_status: 'ACTIVE' | 'PAUSED';
     updated_at: string;

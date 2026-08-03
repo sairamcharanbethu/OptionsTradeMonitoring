@@ -41,7 +41,8 @@ async function run() {
         id serial PRIMARY KEY, paper_account_id varchar(50), paper_decision_id bigint, strategy_setup_id uuid,
         signal_id integer, option_type varchar(4), strike_price numeric, expiration_date date,
         entry_price numeric, quantity integer, contracts_requested integer, current_price numeric,
-        underlying_price numeric, status varchar(20), realized_pnl numeric DEFAULT 0, exit_price numeric,
+        underlying_price numeric, trailing_high_price numeric, trailing_stop_loss_pct numeric,
+        suggested_stop_loss numeric, status varchar(20), realized_pnl numeric DEFAULT 0, exit_price numeric,
         execution_status varchar(30), exit_reason varchar(50), analysis_data jsonb DEFAULT '{}', updated_at timestamptz DEFAULT now()
       );
       CREATE TABLE paper_baseline_trades (
@@ -84,7 +85,16 @@ async function run() {
     );
 
     const fastify: any = { pg: pool, log: { warn() {}, info() {}, error() {} } };
-    const service = new PaperTradingService(fastify);
+    const liveState = new Map<string, Record<string, string>>();
+    const redis = {
+      isReady: () => true,
+      hset: async (key: string, values: Record<string, any>) => {
+        liveState.set(key, Object.fromEntries(Object.entries(values).map(([field, value]) => [field, String(value)])));
+      },
+      hgetall: async (key: string) => liveState.get(key) || {},
+      del: async (key: string) => { liveState.delete(key); }
+    };
+    const service = new PaperTradingService(fastify, redis);
     await service.recover();
     const recovered = await pool.query(`SELECT reserved_cash,equity FROM paper_accounts WHERE id='strategy-system'`);
     assert.equal(Number(recovered.rows[0].reserved_cash), 200, 'restart recovery must rebuild pending-order reserves');

@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { AIService } from './ai-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { getGlobalSettings } from '../lib/settings-utils';
+import { redis as defaultRedis } from '../lib/redis';
 
 const ACCOUNT_ID = 'strategy-system';
 const PROMPT_VERSION = 'paper-risk-v2';
@@ -28,12 +29,13 @@ export type PaperDecision = {
 };
 
 export class PaperTradingService {
-  private activeSetups = new Set<string>();
+  private queuedSnapshot: { signal: Record<string, any>; setupId: string } | null = null;
+  private snapshotProcessing: Promise<void> | null = null;
   private monthlyTimer: NodeJS.Timeout | null = null;
   private lastError: string | null = null;
   private lastProcessedAt: string | null = null;
 
-  constructor(private fastify: FastifyInstance) {}
+  constructor(private fastify: FastifyInstance, private redisClient: any = defaultRedis) {}
 
   public start(): void {
     if (this.monthlyTimer) return;
@@ -117,11 +119,16 @@ export class PaperTradingService {
          FROM paper_baseline_trades WHERE account_id=$1`, [ACCOUNT_ID]
       )
     ]);
-    const equity = Number(account.equity);
+    const openPositions = await this.applyLivePositions(positions.rows);
+    const equity = this.calculateEquity(account, openPositions);
     const startOfDayEquity = Number(account.start_of_day_equity);
     return {
-      account,
-      openPositions: positions.rows,
+      account: {
+        ...account,
+        equity,
+        high_water_mark: Math.max(Number(account.high_water_mark || 0), equity)
+      },
+      openPositions,
       recentDecisions: decisions.rows,
       recentOrders: orders.rows,
       monthlyReports: reports.rows,
@@ -164,6 +171,30 @@ export class PaperTradingService {
     };
   }
 
+  private async applyLivePositions(positions: any[]): Promise<any[]> {
+    return Promise.all(positions.map(async (position: any) => {
+      const live = await this.getLivePosition(position.id);
+      if (!live) return position;
+      return {
+        ...position,
+        current_price: live.currentPrice,
+        underlying_price: live.underlyingPrice,
+        trailing_high_price: live.trailingHighPrice,
+        trailing_stop_loss_pct: live.trailingStopPct,
+        suggested_stop_loss: live.suggestedStopLoss,
+        analysis_data: live.analysis,
+        updated_at: live.updatedAt
+      };
+    }));
+  }
+
+  private calculateEquity(account: any, openPositions: any[]): number {
+    return Number((Number(account.cash_balance) + openPositions.reduce(
+      (total: number, position: any) => total + Number(position.current_price || 0) * Number(position.quantity || 0) * 100,
+      0
+    )).toFixed(2));
+  }
+
   public async getJournal(limit = 100, offset = 0): Promise<any[]> {
     const boundedLimit = Number.isFinite(limit) ? Math.min(250, Math.max(1, Math.floor(limit))) : 100;
     const boundedOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
@@ -172,6 +203,67 @@ export class PaperTradingService {
       [ACCOUNT_ID, boundedLimit, boundedOffset]
     );
     return rows;
+  }
+
+  private livePositionKey(positionId: number | string): string {
+    return `paper:position:${positionId}:live`;
+  }
+
+  private async getLivePosition(positionId: number | string): Promise<any | null> {
+    if (!this.redisClient.isReady?.()) return null;
+    const raw = await this.redisClient.hgetall(this.livePositionKey(positionId));
+    if (!raw?.currentPrice) return null;
+    try {
+      return {
+        currentPrice: Number(raw.currentPrice),
+        underlyingPrice: raw.underlyingPrice ? Number(raw.underlyingPrice) : null,
+        trailingHighPrice: raw.trailingHighPrice ? Number(raw.trailingHighPrice) : null,
+        trailingStopPct: raw.trailingStopPct ? Number(raw.trailingStopPct) : null,
+        suggestedStopLoss: raw.suggestedStopLoss ? Number(raw.suggestedStopLoss) : null,
+        analysis: raw.analysis ? JSON.parse(raw.analysis) : {},
+        updatedAt: raw.updatedAt || null
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async setLivePosition(positionId: number | string, state: {
+    currentPrice: number;
+    underlyingPrice: number | null;
+    trailingHighPrice: number;
+    trailingStopPct: number;
+    suggestedStopLoss: number | null;
+    analysis: Record<string, any>;
+  }, shouldBroadcast = true): Promise<string> {
+    const updatedAt = new Date().toISOString();
+    await this.redisClient.hset(this.livePositionKey(positionId), {
+      currentPrice: state.currentPrice,
+      underlyingPrice: state.underlyingPrice,
+      trailingHighPrice: state.trailingHighPrice,
+      trailingStopPct: state.trailingStopPct,
+      suggestedStopLoss: state.suggestedStopLoss,
+      analysis: JSON.stringify(state.analysis),
+      updatedAt
+    });
+    const persisted = await this.redisClient.hgetall(this.livePositionKey(positionId));
+    if (persisted?.updatedAt !== updatedAt) {
+      throw new Error(`Redis did not persist live paper state for position ${positionId}`);
+    }
+    if (shouldBroadcast) this.broadcastLivePosition(positionId, state, updatedAt);
+    return updatedAt;
+  }
+
+  private broadcastLivePosition(positionId: number | string, state: Record<string, any>, updatedAt: string): void {
+    this.broadcast({ type: 'PAPER_POSITION_UPDATED', data: { positionId: Number(positionId), ...state, updatedAt } });
+  }
+
+  private broadcast(message: Record<string, any>): void {
+    const websocketServer = (this.fastify as any).websocketServer;
+    if (!websocketServer) return;
+    for (const client of websocketServer.clients) {
+      if ((client as any).readyState === 1) (client as any).send(JSON.stringify(message));
+    }
   }
 
   public async recover(): Promise<void> {
@@ -244,21 +336,42 @@ export class PaperTradingService {
   }
 
   public async processSnapshot(signal: Record<string, any>, setupId: string | null): Promise<void> {
-    if (!setupId || this.activeSetups.has(setupId)) return;
-    this.activeSetups.add(setupId);
+    if (!setupId) return;
+    this.queuedSnapshot = { signal, setupId };
+    if (!this.snapshotProcessing) {
+      this.snapshotProcessing = this.drainSnapshots().finally(() => {
+        this.snapshotProcessing = null;
+      });
+    }
+    return this.snapshotProcessing;
+  }
+
+  private async drainSnapshots(): Promise<void> {
+    let firstError: Error | null = null;
+    while (this.queuedSnapshot) {
+      const next = this.queuedSnapshot;
+      this.queuedSnapshot = null;
+      try {
+        await this.processSnapshotOnce(next.signal, next.setupId);
+      } catch (error: any) {
+        firstError ||= error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    if (firstError) throw firstError;
+  }
+
+  private async processSnapshotOnce(signal: Record<string, any>, setupId: string): Promise<void> {
     try {
+      if (!this.redisClient.isReady?.()) throw new Error('Redis is required for autonomous paper position management');
       await this.rollSessionIfNeeded();
       await this.refreshOpenPositions(signal, setupId);
       await this.processPendingEntry(signal, setupId);
       await this.maybeCreateEntry(signal, setupId);
-      await this.captureEquity(false);
       this.lastProcessedAt = new Date().toISOString();
       this.lastError = null;
     } catch (error: any) {
       this.lastError = error.message || String(error);
       throw error;
-    } finally {
-      this.activeSetups.delete(setupId);
     }
   }
 
@@ -317,8 +430,8 @@ export class PaperTradingService {
     return { side, setup, option: setup.option || {} };
   }
 
-  private async account() {
-    const { rows } = await (this.fastify as any).pg.query('SELECT * FROM paper_accounts WHERE id = $1', [ACCOUNT_ID]);
+  private async account(queryable: any = (this.fastify as any).pg) {
+    const { rows } = await queryable.query('SELECT * FROM paper_accounts WHERE id = $1', [ACCOUNT_ID]);
     if (!rows[0]) throw new Error('System paper account is unavailable');
     return rows[0];
   }
@@ -446,11 +559,21 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         `SELECT cash_balance, reserved_cash, automation_status FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]
       );
       const available = Number(lockedAccount.rows[0]?.cash_balance || 0) - Number(lockedAccount.rows[0]?.reserved_cash || 0);
-      if (lockedAccount.rows[0]?.automation_status !== 'ACTIVE' || available < reservedDebit) {
+      const lockedOpenCount = await client.query(
+        `SELECT
+           (SELECT COUNT(*) FROM positions WHERE paper_account_id=$1 AND status='OPEN')
+           + (SELECT COUNT(*) FROM paper_orders WHERE account_id=$1 AND intent='ENTRY' AND status='PENDING') AS count`,
+        [ACCOUNT_ID]
+      );
+      const positionAvailable = Number(lockedOpenCount.rows[0]?.count || 0) < 1;
+      if (lockedAccount.rows[0]?.automation_status !== 'ACTIVE' || available < reservedDebit || !positionAvailable) {
         await client.query('ROLLBACK');
-        await this.journal('DECISION_SKIPPED', lockedAccount.rows[0]?.automation_status !== 'ACTIVE'
+        const reason = lockedAccount.rows[0]?.automation_status !== 'ACTIVE'
           ? 'TRADE skipped because paper automation was paused before reservation.'
-          : 'TRADE skipped because available paper cash changed before reservation.', decisionRow, null, protectedLimit, { availableCash: available, requiredDebit: reservedDebit });
+          : !positionAvailable
+            ? 'TRADE skipped because another paper position or entry became active before reservation.'
+            : 'TRADE skipped because available paper cash changed before reservation.';
+        await this.journal('DECISION_SKIPPED', reason, decisionRow, null, protectedLimit, { availableCash: available, requiredDebit: reservedDebit });
         return;
       }
       const order = await client.query(
@@ -515,6 +638,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const targets = Array.isArray(setup.targets) ? setup.targets : [];
     const client = await (this.fastify as any).pg.connect();
     let filledPosition: any = null;
+    let liveEntryState: Record<string, any> | null = null;
+    let liveEntryUpdatedAt: string | null = null;
     try {
       await client.query('BEGIN');
       const lockedAccount = await client.query(
@@ -574,16 +699,40 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
          ) VALUES ($1,$2,$3,$4,$5,$5,$6,$7) ON CONFLICT (account_id,decision_id) DO NOTHING`,
         [ACCOUNT_ID, order.decision_id, setupId, positionResult.rows[0].id, fillPrice, order.policy_version, Number(order.trailing_stop_pct)]
       );
+      liveEntryState = {
+        currentPrice: Number(filledPosition.current_price),
+        underlyingPrice: Number(filledPosition.underlying_price) || null,
+        trailingHighPrice: Number(filledPosition.trailing_high_price || fillPrice),
+        trailingStopPct: Number(filledPosition.trailing_stop_loss_pct || order.trailing_stop_pct),
+        suggestedStopLoss: Number(filledPosition.suggested_stop_loss) || null,
+        analysis: typeof filledPosition.analysis_data === 'string'
+          ? JSON.parse(filledPosition.analysis_data)
+          : filledPosition.analysis_data || {}
+      };
+      liveEntryUpdatedAt = await this.setLivePosition(filledPosition.id, liveEntryState as any, false);
+      await this.refreshAccountEquity(client);
+      await this.captureEquity(client);
+      await this.journal(
+        'ENTRY_FILLED',
+        `${order.option_type} paper entry filled: ${order.quantity} contract${Number(order.quantity) === 1 ? '' : 's'} at $${fillPrice.toFixed(2)}.`,
+        order,
+        filledPosition.id,
+        fillPrice,
+        { quantity: Number(order.quantity), osiTicker: order.osi_ticker },
+        client
+      );
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
+      if (filledPosition?.id) await this.redisClient.del(this.livePositionKey(filledPosition.id));
       throw error;
     } finally {
       client.release();
     }
-    await this.refreshAccountEquity();
-    await this.captureEquity(true);
-    await this.journal('ENTRY_FILLED', `${order.option_type} paper entry filled: ${order.quantity} contract${Number(order.quantity) === 1 ? '' : 's'} at $${fillPrice.toFixed(2)}.`, order, filledPosition?.id || null, fillPrice, { quantity: Number(order.quantity), osiTicker: order.osi_ticker });
+    if (filledPosition && liveEntryState && liveEntryUpdatedAt) {
+      this.broadcastLivePosition(filledPosition.id, liveEntryState, liveEntryUpdatedAt);
+    }
+    this.broadcast({ type: 'PAPER_ACCOUNT_CHANGED', data: { reason: 'ENTRY_FILLED', positionId: filledPosition?.id || null } });
     await this.notifyPaperEvent('ENTRY', { ...order, position_id: filledPosition?.id }, `Filled ${order.quantity} ${order.option_type} contract${Number(order.quantity) === 1 ? '' : 's'} at $${fillPrice.toFixed(2)}. Follow the recorded SL, TP1, TP2, then ${Number(order.trailing_stop_pct).toFixed(1)}% premium trail.`);
   }
 
@@ -633,30 +782,34 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         String(storedSnapshot.lifecycle?.status || storedSnapshot.state).toUpperCase()
       );
       const flattenDue = this.mandatoryFlattenDue();
-      if (!sameSetup && !storedTerminal && !flattenDue) continue;
       let bid = sameSetup
         && this.canonicalTicker(option.local_symbol) === this.canonicalTicker(this.osiTicker(position))
         && Number(option.quote_age_seconds) <= 15
         ? Number(option.bid || 0)
         : 0;
-      if (!bid && (currentTerminal || storedTerminal || flattenDue)) {
+      if (!bid) {
         const quote = await (this.fastify as any).ibkrMarketData.getOptionQuoteForOsi(null, this.osiTicker(position));
         bid = Number(quote?.bid || 0);
       }
-      const spot = sameSetup ? Number(signal.spot || 0) : Number(position.underlying_price || 0);
+      const spot = Number(signal.spot || position.underlying_price || 0);
       if (!bid) continue;
-      const analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {};
+      const live = await this.getLivePosition(position.id);
+      const analysis = live?.analysis || (typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {});
       const trailingStopPct = Number(analysis.trailingStopPct || position.decision_trailing_stop_pct || DEFAULT_PAPER_TRAILING_STOP_PCT);
       const previousTrailingStop = Number(analysis.trailingStopPremium || 0);
       const t1 = Number(position.suggested_take_profit_1 || 0);
       const t2 = Number(position.suggested_take_profit_2 || t1 || 0);
-      const stop = Number(position.suggested_stop_loss || 0);
+      const stop = Number(live?.suggestedStopLoss || position.suggested_stop_loss || 0);
       const invalidated = stop > 0 && (isCall ? spot <= stop : spot >= stop);
       const emergency = bid <= Number(position.entry_price) * 0.65;
-      const terminal = currentTerminal || storedTerminal;
-      const hitT1 = sameSetup && t1 > 0 && (isCall ? spot >= t1 : spot <= t1);
-      const hitT2 = sameSetup && t2 > 0 && (isCall ? spot >= t2 : spot <= t2);
-      const trailingHighPremium = Math.max(Number(position.trailing_high_price || position.entry_price), Number(analysis.trailingHighPremium || 0), bid);
+      if (sameSetup) analysis.strategyLifecycleStatus = String(signal.lifecycle?.status || signal.state || '').toUpperCase();
+      const liveTerminal = ['COMPLETED', 'FAILED', 'INVALIDATED', 'TRACKING_ABORTED'].includes(
+        String(analysis.strategyLifecycleStatus || '').toUpperCase()
+      );
+      const terminal = currentTerminal || storedTerminal || liveTerminal;
+      const hitT1 = t1 > 0 && (isCall ? spot >= t1 : spot <= t1);
+      const hitT2 = t2 > 0 && (isCall ? spot >= t2 : spot <= t2);
+      const trailingHighPremium = Math.max(Number(live?.trailingHighPrice || position.trailing_high_price || position.entry_price), Number(analysis.trailingHighPremium || 0), bid);
       analysis.trailingHighPremium = trailingHighPremium;
       analysis.trailingStopPct = trailingStopPct;
       analysis.policyVersion = analysis.policyVersion || position.policy_version || PAPER_POLICY_VERSION;
@@ -665,27 +818,35 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         ? Number(Math.max(Number(position.entry_price), trailingHighPremium * (1 - trailingStopPct / 100)).toFixed(2))
         : null;
       analysis.trailingStopPremium = trailingStopPremium;
-      await (this.fastify as any).pg.query(
-        `UPDATE positions SET current_price=$1, underlying_price=$2, strategy_snapshot=$3,
-           trailing_high_price=$4, trailing_stop_loss_pct=$5, analysis_data=$6, updated_at=NOW() WHERE id=$7`,
-        [bid, spot || null, JSON.stringify(signal), trailingHighPremium, trailingStopPct, JSON.stringify(analysis), position.id]
-      );
-      await (this.fastify as any).pg.query(
-        `UPDATE paper_baseline_trades SET current_price=$1, updated_at=NOW()
-         WHERE account_id=$2 AND decision_id=$3 AND status='OPEN'`, [bid, ACCOUNT_ID, position.paper_decision_id]
-      );
+      await this.setLivePosition(position.id, {
+        currentPrice: bid,
+        underlyingPrice: spot || null,
+        trailingHighPrice: trailingHighPremium,
+        trailingStopPct,
+        suggestedStopLoss: stop || null,
+        analysis
+      });
+      const managedPosition = {
+        ...position,
+        current_price: bid,
+        underlying_price: spot || null,
+        trailing_high_price: trailingHighPremium,
+        trailing_stop_loss_pct: trailingStopPct,
+        suggested_stop_loss: stop || null,
+        strategy_snapshot: sameSetup ? signal : storedSnapshot,
+        analysis_data: analysis
+      };
       if (trailingStopPremium && trailingStopPremium > previousTrailingStop + 0.009) {
-        await this.journal('TRAILING_STOP_MOVED', `Premium trailing stop moved to $${trailingStopPremium.toFixed(2)} after a new $${trailingHighPremium.toFixed(2)} high.`, position, position.id, bid, { trailingHighPremium, trailingStopPremium, trailingStopPct });
         if (!previousTrailingStop || trailingStopPremium >= previousTrailingStop + 0.05) {
           await this.notifyPaperEvent('TRAILING_MOVE', position, `Trail moved to $${trailingStopPremium.toFixed(2)} after premium reached $${trailingHighPremium.toFixed(2)}. Hold unless the bid touches the trail.`);
         }
       }
       if (invalidated || emergency || terminal) {
-        await this.closePaperQuantity(position, Number(position.quantity), bid, invalidated ? 'INVALIDATION' : emergency ? 'EMERGENCY_PREMIUM_STOP' : 'STRATEGY_TERMINAL');
+        await this.closePaperQuantity(managedPosition, Number(position.quantity), bid, invalidated ? 'INVALIDATION' : emergency ? 'EMERGENCY_PREMIUM_STOP' : 'STRATEGY_TERMINAL');
         continue;
       }
       if (position.exit_profile === 'CONSERVATIVE_T1' && hitT1) {
-        await this.closePaperQuantity(position, Number(position.quantity), bid, 'TARGET_1');
+        await this.closePaperQuantity(managedPosition, Number(position.quantity), bid, 'TARGET_1');
         continue;
       }
       if (position.exit_profile === 'BALANCED_T2') {
@@ -698,45 +859,68 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           analysis.trailingStopPremium = Number(Math.max(Number(position.entry_price), trailingHighPremium * (1 - trailingStopPct / 100)).toFixed(2));
           const currentSetup = isCall ? signal.call_setup : signal.put_setup;
           const storedSetup = isCall ? storedSnapshot.call_setup : storedSnapshot.put_setup;
-          await (this.fastify as any).pg.query(
-            `UPDATE positions SET suggested_stop_loss=$1, analysis_data=$2, updated_at=NOW() WHERE id=$3`,
-            [Number(currentSetup?.trigger || storedSetup?.trigger || stop), JSON.stringify(analysis), position.id]
-          );
-          await this.journal('TP1_REACHED', trim > 0 ? `TP1 reached; trimming ${trim} contract${trim === 1 ? '' : 's'} and activating the premium trail.` : 'TP1 reached; activating the premium trail.', position, position.id, bid, { trim, trailingStopPremium: analysis.trailingStopPremium });
+          const positionSetup = sameSetup ? currentSetup : storedSetup;
+          managedPosition.suggested_stop_loss = Number(positionSetup?.trigger || stop);
+          managedPosition.analysis_data = analysis;
+          await this.setLivePosition(position.id, {
+            currentPrice: bid,
+            underlyingPrice: spot || null,
+            trailingHighPrice: trailingHighPremium,
+            trailingStopPct,
+            suggestedStopLoss: Number(managedPosition.suggested_stop_loss) || null,
+            analysis
+          });
           await this.notifyPaperEvent('TP1', position, trim > 0 ? `TP1 reached at SPY $${spot.toFixed(2)}. Trim ${trim}; the remainder now follows the $${Number(analysis.trailingStopPremium).toFixed(2)} premium trail.` : `TP1 reached at SPY $${spot.toFixed(2)}. No trim is possible with one contract; follow the $${Number(analysis.trailingStopPremium).toFixed(2)} premium trail.`);
-          if (trim > 0) await this.closePaperQuantity(position, trim, bid, 'TARGET_1_TRIM');
+          if (trim > 0) await this.closePaperQuantity(managedPosition, trim, bid, 'TARGET_1_TRIM');
         }
         if (hitT2) {
           const current = await (this.fastify as any).pg.query('SELECT * FROM positions WHERE id=$1', [position.id]);
           if (current.rows[0]?.status === 'OPEN') {
-            await this.closePaperQuantity(current.rows[0], Number(current.rows[0].quantity), bid, 'TARGET_2');
+            await this.closePaperQuantity({ ...current.rows[0], ...managedPosition, quantity: current.rows[0].quantity }, Number(current.rows[0].quantity), bid, 'TARGET_2');
             continue;
           }
         }
         if (analysis.t1Reached && analysis.trailingStopPremium && bid <= Number(analysis.trailingStopPremium)) {
           const current = await (this.fastify as any).pg.query('SELECT * FROM positions WHERE id=$1', [position.id]);
           if (current.rows[0]?.status === 'OPEN') {
-            await this.closePaperQuantity(current.rows[0], Number(current.rows[0].quantity), bid, 'TRAILING_STOP');
+            await this.closePaperQuantity({ ...current.rows[0], ...managedPosition, quantity: current.rows[0].quantity }, Number(current.rows[0].quantity), bid, 'TRAILING_STOP');
             continue;
           }
         }
       }
       if (flattenDue) {
         const current = await (this.fastify as any).pg.query('SELECT * FROM positions WHERE id=$1', [position.id]);
-        if (current.rows[0]?.status === 'OPEN') await this.closePaperQuantity(current.rows[0], Number(current.rows[0].quantity), bid, 'END_OF_DAY');
+        if (current.rows[0]?.status === 'OPEN') await this.closePaperQuantity({ ...current.rows[0], ...managedPosition, quantity: current.rows[0].quantity }, Number(current.rows[0].quantity), bid, 'END_OF_DAY');
       }
     }
   }
 
   public async closePaperQuantity(position: any, quantity: number, bid: number, intent: string): Promise<void> {
-    const closeQty = Math.max(1, Math.min(Number(position.quantity), Math.floor(quantity)));
-    const proceeds = Number((bid * closeQty * 100).toFixed(2));
-    const pnl = Number(((bid - Number(position.entry_price)) * closeQty * 100).toFixed(2));
-    const remaining = Number(position.quantity) - closeQty;
+    let closeQty = 0;
+    let proceeds = 0;
+    let pnl = 0;
+    let remaining = 0;
+    let priorRealizedPnl = Number(position.realized_pnl || 0);
     const setupId = String(position.strategy_setup_id);
+    const analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {};
     const client = await (this.fastify as any).pg.connect();
     try {
       await client.query('BEGIN');
+      const lockedPosition = await client.query(
+        `SELECT quantity, status, realized_pnl FROM positions
+         WHERE id=$1 AND paper_account_id=$2 FOR UPDATE`,
+        [position.id, ACCOUNT_ID]
+      );
+      if (lockedPosition.rows[0]?.status !== 'OPEN') {
+        await client.query('ROLLBACK');
+        return;
+      }
+      const availableQuantity = Number(lockedPosition.rows[0].quantity);
+      closeQty = Math.max(1, Math.min(availableQuantity, Math.floor(quantity)));
+      proceeds = Number((bid * closeQty * 100).toFixed(2));
+      pnl = Number(((bid - Number(position.entry_price)) * closeQty * 100).toFixed(2));
+      remaining = availableQuantity - closeQty;
+      priorRealizedPnl = Number(lockedPosition.rows[0].realized_pnl || 0);
       const inserted = await client.query(
         `INSERT INTO paper_orders (
            account_id, decision_id, position_id, setup_id, signal_id, intent, action, status,
@@ -755,10 +939,36 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         `UPDATE positions SET quantity=$1, status=$2, current_price=$3,
            realized_pnl=COALESCE(realized_pnl,0)+$4, exit_price=CASE WHEN $2='CLOSED' THEN $3 ELSE exit_price END,
            execution_status=CASE WHEN $2='CLOSED' THEN 'EXIT_FILLED' ELSE 'PARTIAL_EXIT_FILLED' END,
-           exit_reason=$5, updated_at=NOW() WHERE id=$6`,
-        [remaining, remaining === 0 ? 'CLOSED' : 'OPEN', bid, pnl, intent, position.id]
+           exit_reason=$5, underlying_price=$6, trailing_high_price=$7, trailing_stop_loss_pct=$8,
+           analysis_data=$9, suggested_stop_loss=COALESCE($10,suggested_stop_loss), updated_at=NOW() WHERE id=$11`,
+        [remaining, remaining === 0 ? 'CLOSED' : 'OPEN', bid, pnl, intent,
+          position.underlying_price || null, position.trailing_high_price || bid,
+          position.trailing_stop_loss_pct || null, JSON.stringify(position.analysis_data || {}),
+          position.suggested_stop_loss || null, position.id]
       );
       await client.query(`UPDATE paper_accounts SET cash_balance=cash_balance+$1, updated_at=NOW() WHERE id=$2`, [proceeds, ACCOUNT_ID]);
+      if (remaining === 0) {
+        const originalQuantity = Math.max(1, Number(analysis.originalQuantity || position.contracts_requested || 1));
+        const managedRealizedPnl = priorRealizedPnl + pnl;
+        const baselinePnl = Number((managedRealizedPnl / originalQuantity).toFixed(2));
+        await client.query(
+          `UPDATE paper_baseline_trades SET status='CLOSED', current_price=$1, exit_price=$1,
+             realized_pnl=$2, exit_reason=$3, closed_at=NOW(), updated_at=NOW()
+           WHERE account_id=$4 AND decision_id=$5 AND status='OPEN'`,
+          [bid, baselinePnl, intent, ACCOUNT_ID, position.paper_decision_id]
+        );
+      }
+      await this.journal(
+        intent,
+        `${intent.replace(/_/g, ' ')} filled: ${closeQty} contract${closeQty === 1 ? '' : 's'} at $${bid.toFixed(2)} (${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}).`,
+        position,
+        position.id,
+        bid,
+        { closeQuantity: closeQty, remaining, realizedPnl: pnl },
+        client
+      );
+      await this.refreshAccountEquity(client);
+      await this.captureEquity(client);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -766,30 +976,33 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     } finally {
       client.release();
     }
-    const updated = await (this.fastify as any).pg.query('SELECT * FROM positions WHERE id=$1', [position.id]);
-    const current = updated.rows[0];
-    if (current?.status === 'CLOSED') {
-      const analysis = typeof current.analysis_data === 'string' ? JSON.parse(current.analysis_data) : current.analysis_data || {};
-      const originalQuantity = Math.max(1, Number(analysis.originalQuantity || current.contracts_requested || 1));
-      const baselinePnl = Number((Number(current.realized_pnl || 0) / originalQuantity).toFixed(2));
-      await (this.fastify as any).pg.query(
-        `UPDATE paper_baseline_trades SET status='CLOSED', current_price=$1, exit_price=$1,
-           realized_pnl=$2, exit_reason=$3, closed_at=NOW(), updated_at=NOW()
-         WHERE account_id=$4 AND decision_id=$5 AND status='OPEN'`,
-        [bid, baselinePnl, intent, ACCOUNT_ID, position.paper_decision_id]
-      );
+    let redisError: Error | null = null;
+    try {
+      if (remaining === 0) {
+        await this.redisClient.del(this.livePositionKey(position.id));
+      } else {
+        await this.setLivePosition(position.id, {
+          currentPrice: bid,
+          underlyingPrice: Number(position.underlying_price) || null,
+          trailingHighPrice: Number(position.trailing_high_price || bid),
+          trailingStopPct: Number(position.trailing_stop_loss_pct || DEFAULT_PAPER_TRAILING_STOP_PCT),
+          suggestedStopLoss: Number(position.suggested_stop_loss) || null,
+          analysis
+        });
+      }
+    } catch (error: any) {
+      redisError = error instanceof Error ? error : new Error(String(error));
     }
-    await this.journal(intent, `${intent.replace(/_/g, ' ')} filled: ${closeQty} contract${closeQty === 1 ? '' : 's'} at $${bid.toFixed(2)} (${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}).`, position, position.id, bid, { closeQuantity: closeQty, remaining, realizedPnl: pnl });
     const alertType = intent === 'TARGET_1_TRIM' || intent === 'TARGET_1' ? 'TP1'
       : intent === 'TARGET_2' ? 'TP2'
         : intent === 'TRAILING_STOP' ? 'TRAILING_STOP' : 'SL';
+    this.broadcast({ type: 'PAPER_ACCOUNT_CHANGED', data: { reason: intent, positionId: position.id } });
     await this.notifyPaperEvent(alertType, position, `${intent.replace(/_/g, ' ')}: sold ${closeQty} at $${bid.toFixed(2)} for ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}. ${remaining > 0 ? `${remaining} contract${remaining === 1 ? '' : 's'} remain.` : 'Position is closed.'}`);
-    await this.refreshAccountEquity();
-    await this.captureEquity(true);
+    if (redisError) throw redisError;
   }
 
-  private async refreshAccountEquity(): Promise<void> {
-    await (this.fastify as any).pg.query(
+  private async refreshAccountEquity(queryable: any = (this.fastify as any).pg): Promise<void> {
+    await queryable.query(
       `UPDATE paper_accounts pa SET
          equity = pa.cash_balance + COALESCE((SELECT SUM(current_price * quantity * 100) FROM positions WHERE paper_account_id=pa.id AND status='OPEN'),0),
          high_water_mark = GREATEST(pa.high_water_mark, pa.cash_balance + COALESCE((SELECT SUM(current_price * quantity * 100) FROM positions WHERE paper_account_id=pa.id AND status='OPEN'),0)),
@@ -798,18 +1011,14 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     );
   }
 
-  private async captureEquity(force: boolean): Promise<void> {
-    const last = await (this.fastify as any).pg.query(
-      `SELECT captured_at FROM paper_equity_snapshots WHERE account_id=$1 ORDER BY captured_at DESC LIMIT 1`, [ACCOUNT_ID]
-    );
-    if (!force && last.rows[0] && Date.now() - new Date(last.rows[0].captured_at).getTime() < 60_000) return;
-    const account = await this.account();
-    const pnl = await (this.fastify as any).pg.query(
+  private async captureEquity(queryable: any = (this.fastify as any).pg): Promise<void> {
+    const account = await this.account(queryable);
+    const pnl = await queryable.query(
       `SELECT COALESCE(SUM(realized_pnl),0) AS realized,
               COALESCE(SUM(CASE WHEN status='OPEN' THEN (current_price-entry_price)*quantity*100 ELSE 0 END),0) AS unrealized
        FROM positions WHERE paper_account_id=$1`, [ACCOUNT_ID]
     );
-    await (this.fastify as any).pg.query(
+    await queryable.query(
       `INSERT INTO paper_equity_snapshots (account_id,equity,cash_balance,reserved_cash,realized_pnl,unrealized_pnl)
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [ACCOUNT_ID, account.equity, account.cash_balance, account.reserved_cash, pnl.rows[0].realized, pnl.rows[0].unrealized]
@@ -818,11 +1027,35 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
 
   private async rollSessionIfNeeded(): Promise<void> {
     const today = ET_DATE.format(new Date());
-    await this.refreshAccountEquity();
-    await (this.fastify as any).pg.query(
-      `UPDATE paper_accounts SET start_of_day_date=$1::date, start_of_day_equity=equity, updated_at=NOW()
-       WHERE id=$2 AND start_of_day_date<>$1::date`, [today, ACCOUNT_ID]
-    );
+    const current = await this.account();
+    if (this.normalizeExpiry(current.start_of_day_date) === today) return;
+    const client = await (this.fastify as any).pg.connect();
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query('SELECT * FROM paper_accounts WHERE id=$1 FOR UPDATE', [ACCOUNT_ID]);
+      const account = locked.rows[0];
+      if (!account || this.normalizeExpiry(account.start_of_day_date) === today) {
+        await client.query('ROLLBACK');
+        return;
+      }
+      const positions = await client.query(
+        `SELECT * FROM positions WHERE paper_account_id=$1 AND status='OPEN' ORDER BY created_at DESC`,
+        [ACCOUNT_ID]
+      );
+      const openPositions = await this.applyLivePositions(positions.rows);
+      const equity = this.calculateEquity(account, openPositions);
+      await client.query(
+        `UPDATE paper_accounts SET equity=$1, high_water_mark=GREATEST(high_water_mark,$1),
+           start_of_day_date=$2::date, start_of_day_equity=$1, updated_at=NOW() WHERE id=$3`,
+        [equity, today, ACCOUNT_ID]
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   public async ensurePriorMonthReport(): Promise<void> {
@@ -960,14 +1193,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     source: any,
     positionId: number | null,
     premium: number | null,
-    metadata: Record<string, any> = {}
+    metadata: Record<string, any> = {},
+    queryable: any = (this.fastify as any).pg
   ): Promise<void> {
     const setupId = source?.setup_id || source?.strategy_setup_id || null;
     const decisionId = source?.decision_id || source?.paper_decision_id || (source?.decision ? source?.id : null);
     const policyVersion = source?.policy_version
       || (typeof source?.analysis_data === 'object' ? source.analysis_data?.policyVersion : null)
       || PAPER_POLICY_VERSION;
-    await (this.fastify as any).pg.query(
+    await queryable.query(
       `INSERT INTO paper_trade_journal (
          account_id, setup_id, decision_id, position_id, event_type, policy_version,
          message, premium, underlying_price, quantity, metadata

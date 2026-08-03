@@ -28,7 +28,7 @@ import {
   useTradeUsage
 } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import { api, OptionDetailsJSON, Position, Signal, SignalRiskAssessment, StrategyHistorySetup } from '@/lib/api';
+import { api, OptionDetailsJSON, PaperAccountSummary, Position, Signal, SignalRiskAssessment, StrategyHistorySetup } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -795,6 +795,53 @@ export default function DayTradingTerminal() {
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyHistory });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.paperAccount });
     }
+    if (lastMessage.type === 'PAPER_POSITION_UPDATED' && lastMessage.data) {
+      queryClient.setQueryData<PaperAccountSummary>(QUERY_KEYS.paperAccount, current => {
+        if (!current) return current;
+        let matched = false;
+        const openPositions = current.openPositions.map(position => {
+          if (Number(position.id) !== Number(lastMessage.data.positionId)) return position;
+          matched = true;
+          return {
+            ...position,
+            current_price: Number(lastMessage.data.currentPrice),
+            underlying_price: lastMessage.data.underlyingPrice == null ? position.underlying_price : Number(lastMessage.data.underlyingPrice),
+            trailing_high_price: Number(lastMessage.data.trailingHighPrice),
+            trailing_stop_loss_pct: Number(lastMessage.data.trailingStopPct),
+            suggested_stop_loss: lastMessage.data.suggestedStopLoss == null ? position.suggested_stop_loss : Number(lastMessage.data.suggestedStopLoss),
+            analysis_data: lastMessage.data.analysis,
+            updated_at: lastMessage.data.updatedAt
+          };
+        });
+        if (!matched) return current;
+        const equity = Number((Number(current.account.cash_balance) + openPositions.reduce(
+          (total, position) => total + Number(position.current_price || 0) * Number(position.quantity || 0) * 100,
+          0
+        )).toFixed(2));
+        const startOfDayEquity = Number(current.account.start_of_day_equity);
+        return {
+          ...current,
+          account: {
+            ...current.account,
+            equity,
+            high_water_mark: Math.max(Number(current.account.high_water_mark || 0), equity),
+            updated_at: lastMessage.data.updatedAt
+          },
+          openPositions,
+          session: {
+            ...current.session,
+            pnl: Number((equity - startOfDayEquity).toFixed(2)),
+            pnlPct: startOfDayEquity > 0
+              ? Number((((equity - startOfDayEquity) / startOfDayEquity) * 100).toFixed(2))
+              : 0
+          },
+          health: { ...current.health, lastProcessedAt: lastMessage.data.updatedAt }
+        };
+      });
+    }
+    if (lastMessage.type === 'PAPER_ACCOUNT_CHANGED') {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.paperAccount });
+    }
   }, [lastMessage, queryClient]);
 
   useEffect(() => {
@@ -982,6 +1029,10 @@ export default function DayTradingTerminal() {
       next: 'Check database reachability, credentials, and schema verification logs.'
     }
   ];
+  const paperPosition = paperAccount?.openPositions[0];
+  const paperUnrealizedPnl = paperPosition
+    ? (Number(paperPosition.current_price) - Number(paperPosition.entry_price)) * Number(paperPosition.quantity) * 100
+    : 0;
 
   return (
     <main className="day-trading-terminal mx-auto w-full max-w-[1440px] space-y-3 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4 sm:px-0 sm:pb-0">
@@ -1335,7 +1386,7 @@ export default function DayTradingTerminal() {
           </div>
 
           <div className="mt-3 grid grid-cols-3 divide-x divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/35 py-2 text-center">
-            <Metric label="Managed P&L" value={money(paperAccount.baseline.managedRealizedPnl)} detail="AI/rules sizing" tone={paperAccount.baseline.managedRealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
+            <Metric label="Managed realized P&L" value={money(paperAccount.baseline.managedRealizedPnl)} detail="AI/rules exits" tone={paperAccount.baseline.managedRealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
             <Metric label="1-contract baseline" value={money(paperAccount.baseline.realizedPnl)} detail={`${paperAccount.baseline.closedTrades} closed`} tone={paperAccount.baseline.realizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
             <Metric label="Sizing value" value={`${paperAccount.baseline.valueAdded >= 0 ? '+' : ''}${money(paperAccount.baseline.valueAdded)}`} detail="managed − baseline" tone={paperAccount.baseline.valueAdded >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
           </div>
@@ -1353,8 +1404,13 @@ export default function DayTradingTerminal() {
                   Structural SL → TP1 protection/trim → TP2 · {Number(paperAccount.openPositions[0].decision_trailing_stop_pct || paperAccount.limits.trailingStopPct)}% premium trail · {paperAccount.openPositions[0].policy_version || paperAccount.limits.policyVersion}
                 </div>
               </div>
-              <div className="font-mono text-xs text-zinc-300">
-                {money(paperAccount.openPositions[0].entry_price)} → {money(paperAccount.openPositions[0].current_price)}
+              <div className="text-right font-mono text-xs">
+                <div className="text-zinc-300">
+                  {money(paperAccount.openPositions[0].entry_price)} → {money(paperAccount.openPositions[0].current_price)}
+                </div>
+                <div className={`mt-1 font-semibold ${paperUnrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  Unrealized {paperUnrealizedPnl >= 0 ? '+' : ''}{money(paperUnrealizedPnl)}
+                </div>
               </div>
             </div>
           ) : paperAccount.recentDecisions[0] ? (
