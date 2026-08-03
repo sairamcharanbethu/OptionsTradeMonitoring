@@ -465,11 +465,17 @@ async function run() {
   assert.equal(entryRedisDeletes, 1, 'a rolled-back entry must remove any partial Redis state');
 
   const exitQueries: string[] = [];
+  let exitOrderMetadata: Record<string, any> = {};
+  let exitJournalMetadata: Record<string, any> = {};
   const exitClient = {
-    query: async (sql: string) => {
+    query: async (sql: string, values: any[] = []) => {
       exitQueries.push(sql);
       if (sql.includes('FROM positions') && sql.includes('FOR UPDATE')) return { rows: [{ quantity: 2, status: 'OPEN', realized_pnl: 0 }] };
-      if (sql.includes('INSERT INTO paper_orders')) return { rows: [{ id: 71 }] };
+      if (sql.includes('INSERT INTO paper_orders')) {
+        exitOrderMetadata = JSON.parse(values[12]);
+        return { rows: [{ id: 71 }] };
+      }
+      if (sql.includes('INSERT INTO paper_trade_journal')) exitJournalMetadata = JSON.parse(values[10]);
       if (sql.includes('SELECT * FROM paper_accounts')) return { rows: [{
         equity: 100_000, cash_balance: 99_900, reserved_cash: 0
       }] };
@@ -506,7 +512,7 @@ async function run() {
     trailing_stop_loss_pct: 15,
     suggested_stop_loss: 754.39,
     analysis_data: { originalQuantity: 2, t1Reached: true }
-  }, 1, 1.5, 'TARGET_1_TRIM').then(
+  }, 1, 1.5, 'TARGET_1_TRIM', { requestedByUserId: 7, quoteAgeMs: 900 }).then(
     () => { throw new Error('The Redis verification failure should be surfaced after the durable exit commit'); },
     (error: Error) => assert.match(error.message, /Redis did not persist live paper state/)
   );
@@ -516,6 +522,8 @@ async function run() {
     'the exit journal must be inside the committed transaction');
   assert.ok(exitQueries.findIndex(sql => sql.includes('INSERT INTO paper_equity_snapshots')) < exitCommitIndex,
     'the exit equity checkpoint must be inside the committed transaction');
+  assert.equal(exitOrderMetadata.requestedByUserId, 7, 'exit order evidence must retain the requesting administrator');
+  assert.equal(exitJournalMetadata.quoteAgeMs, 900, 'exit journal evidence must retain quote freshness');
 
   const duplicateExitQueries: string[] = [];
   const duplicateExitService = new PaperTradingService({
@@ -549,6 +557,7 @@ async function run() {
   } as any, redis) as any;
   assert.equal(calendarService.exitAlertType('END_OF_DAY_RECOVERY'), 'EOD', 'recovered EOD exits must not be mislabeled as stop losses');
   assert.equal(calendarService.exitAlertType('STRATEGY_TERMINAL'), 'EXIT', 'strategy-terminal exits must use a neutral exit alert');
+  assert.equal(calendarService.exitAlertType('MANUAL_EXIT'), 'EXIT', 'manual exits must use a neutral exit alert');
   assert.equal(calendarService.exitAlertType('PREMIUM_STOP'), 'SL', 'premium stops must remain stop-loss alerts');
   assert.equal(
     calendarService.mandatoryFlattenDue({ expiration_date: '2026-11-27' }, new Date('2026-11-27T17:20:00.000Z')),
@@ -570,6 +579,63 @@ async function run() {
     'EXPIRED_RECOVERY',
     'an expired paper contract must remain recoverable on a later date'
   );
+
+  const manualPosition = {
+    ...openPosition,
+    id: 91,
+    strategy_setup_id: 'manual-close-setup',
+    quantity: 1,
+    entry_price: 1.20,
+    current_price: 0.90
+  };
+  let manualCloseCall: any = null;
+  let manualQuoteTicker = '';
+  let manualFinalExitReason = 'MANUAL_EXIT';
+  const manualCloseService = new PaperTradingService({
+    pg: {
+      query: async (sql: string) => sql.includes('SELECT status, exit_reason')
+        ? { rows: [{ status: 'CLOSED', exit_reason: manualFinalExitReason, exit_price: 0.85, realized_pnl: -35 }] }
+        : { rows: [manualPosition] }
+    },
+    ibkrMarketData: {
+      getOptionQuoteForOsi: async (_userId: number | null, ticker: string) => {
+        manualQuoteTicker = ticker;
+        return { source: 'ibkr', bid: 0.85, quoteAgeMs: 900, timestamp: '2026-08-03T15:00:00.000Z' };
+      }
+    },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  manualCloseService.getLivePosition = async () => ({ currentPrice: 0.90, underlyingPrice: 752, analysis: {} });
+  manualCloseService.closePaperQuantity = async (...args: any[]) => { manualCloseCall = args; };
+  const manualCloseResult = await manualCloseService.closeOpenPosition(91, 7);
+  assert.equal(manualQuoteTicker, 'SPY260803C00753000', 'manual close must quote the exact paper OSI contract');
+  assert.equal(manualCloseCall[2], 0.85, 'manual close must sell at the fresh IBKR bid');
+  assert.equal(manualCloseCall[3], 'MANUAL_EXIT', 'manual close must use an auditable exit intent');
+  assert.equal(manualCloseCall[4].requestedByUserId, 7, 'manual close must journal the requesting administrator');
+  assert.equal(manualCloseResult.realizedPnl, -35, 'manual close must report the realized one-contract loss');
+  assert.equal(manualCloseResult.warning, null, 'a clean manual close must not report a runtime warning');
+
+  manualCloseService.closePaperQuantity = async () => { throw new Error('Redis cleanup failed after commit'); };
+  const committedWithWarning = await manualCloseService.closeOpenPosition(91, 7);
+  assert.match(committedWithWarning.warning, /live cache cleanup needs attention/, 'a durable manual close must return a safe warning instead of a false failure');
+
+  manualCloseService.closePaperQuantity = async () => {};
+  manualFinalExitReason = 'TARGET_2';
+  await assert.rejects(
+    () => manualCloseService.closeOpenPosition(91, 7),
+    (error: any) => error.statusCode === 409 && /closed concurrently as TARGET_2/.test(error.message),
+    'manual close must not claim an automatic concurrent exit as its own fill'
+  );
+  manualFinalExitReason = 'MANUAL_EXIT';
+
+  manualCloseService.fastify.ibkrMarketData.getOptionQuoteForOsi = async () => ({ source: 'ibkr', bid: 0.85, quoteAgeMs: null });
+  manualCloseCall = null;
+  await assert.rejects(
+    () => manualCloseService.closeOpenPosition(91, 7),
+    (error: any) => error.statusCode === 409 && /no older than 15 seconds/.test(error.message),
+    'manual close must reject a quote without a trustworthy provider age'
+  );
+  assert.equal(manualCloseCall, null, 'a stale manual close must not enter the ledger path');
 
   let overdueExitIntent = '';
   let overdueExitBid = -1;

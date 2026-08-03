@@ -36,4 +36,19 @@ export async function paperAccountRoutes(fastify: FastifyInstance) {
     }
     return (fastify as any).paperTrading.setAutomationStatus('ACTIVE');
   });
+
+  fastify.post('/positions/:positionId/close', async (request, reply) => {
+    if (String((request as any).user?.role || '').toUpperCase() !== 'ADMIN') {
+      return reply.code(403).send({ error: 'Admin access required' });
+    }
+    const positionId = Number((request.params as { positionId?: string }).positionId);
+    if (!Number.isSafeInteger(positionId) || positionId <= 0) {
+      return reply.code(400).send({ error: 'A valid paper position id is required' });
+    }
+    const requestedByUserId = Number((request as any).user?.id);
+    return (fastify as any).paperTrading.closeOpenPosition(
+      positionId,
+      Number.isSafeInteger(requestedByUserId) && requestedByUserId > 0 ? requestedByUserId : null
+    );
+  });
 }

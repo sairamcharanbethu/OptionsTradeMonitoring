@@ -548,6 +548,8 @@ export default function DayTradingTerminal() {
   const [riskAssessment, setRiskAssessment] = useState<SignalRiskAssessment | null>(null);
   const [riskLoading, setRiskLoading] = useState(false);
   const [paperUpdating, setPaperUpdating] = useState(false);
+  const [paperClosePosition, setPaperClosePosition] = useState<PaperAccountSummary['openPositions'][number] | null>(null);
+  const [paperClosing, setPaperClosing] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
   const riskRequestRef = useRef(0);
   const lastAlertStateRef = useRef<string | null>(null);
@@ -914,6 +916,25 @@ export default function DayTradingTerminal() {
       setActionMessage({ tone: 'error', text: error.message || 'Could not update paper automation.' });
     } finally {
       setPaperUpdating(false);
+    }
+  };
+
+  const confirmPaperClose = async () => {
+    if (!paperClosePosition || !paperAccount?.canManage || paperClosing) return;
+    setPaperClosing(true);
+    setActionMessage(null);
+    try {
+      const result = await api.closePaperPosition(Number(paperClosePosition.id));
+      setPaperClosePosition(null);
+      await refetchPaperAccount();
+      setActionMessage({
+        tone: 'success',
+        text: `Paper position closed at ${money(result.fillPrice)}. Realized ${result.realizedPnl >= 0 ? '+' : ''}${money(result.realizedPnl)}.${result.warning ? ` Runtime warning: ${result.warning}` : ''}`
+      });
+    } catch (error: any) {
+      setActionMessage({ tone: 'error', text: error.message || 'Could not close the paper position.' });
+    } finally {
+      setPaperClosing(false);
     }
   };
 
@@ -1438,13 +1459,24 @@ export default function DayTradingTerminal() {
                         Structural SL → TP1 protection/trim → TP2 · {Number(position.decision_trailing_stop_pct || paperAccount.limits.trailingStopPct)}% premium trail · {position.policy_version || paperAccount.limits.policyVersion}
                       </div>
                     </div>
-                    <div className="text-right font-mono text-xs">
+                    <div className="flex flex-col items-start font-mono text-xs sm:items-end sm:text-right">
                       <div className="text-zinc-300">
                         {money(position.entry_price)} → {money(position.current_price)}
                       </div>
                       <div className={`mt-1 font-semibold ${unrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
                         Unrealized {unrealizedPnl >= 0 ? '+' : ''}{money(unrealizedPnl)}
                       </div>
+                      {paperAccount.canManage && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="mt-2 h-8 border-rose-500/25 bg-rose-950/15 px-2.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-950/35 hover:text-rose-100"
+                          onClick={() => setPaperClosePosition(position)}
+                          disabled={paperClosing}
+                        >
+                          Close paper position
+                        </Button>
+                      )}
                     </div>
                   </div>
                 );
@@ -1807,6 +1839,54 @@ export default function DayTradingTerminal() {
           Loading strategy state
         </div>
       )}
+
+      <Dialog open={!!paperClosePosition} onOpenChange={open => !open && !paperClosing && setPaperClosePosition(null)}>
+        <DialogContent className="w-[calc(100%_-_1.5rem)] max-w-md border-zinc-800 bg-[#101216] text-zinc-100 sm:w-full">
+          <DialogHeader>
+            <DialogTitle className="text-xl tracking-[-0.02em]">Close this paper position?</DialogTitle>
+            <DialogDescription className="text-zinc-500">
+              The complete paper quantity will be sold at a fresh IBKR bid and recorded in the system paper ledger.
+            </DialogDescription>
+          </DialogHeader>
+          {paperClosePosition && (
+            <div className="space-y-3">
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-950/10 px-3 py-2.5 text-xs leading-relaxed text-amber-200">
+                <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                Paper account only. No Wealthsimple order will be created, changed or cancelled. The close is rejected if IBKR cannot provide a bid no older than 15 seconds.
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-lg bg-zinc-950/65 p-3">
+                  <div className="text-[10px] text-zinc-500">Contract</div>
+                  <div className="mt-1 font-mono font-semibold text-zinc-100">
+                    {paperClosePosition.symbol} {paperClosePosition.option_type} {money(paperClosePosition.strike_price)}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-zinc-950/65 p-3">
+                  <div className="text-[10px] text-zinc-500">Quantity</div>
+                  <div className="mt-1 font-mono font-semibold text-zinc-100">{paperClosePosition.quantity}</div>
+                </div>
+                <div className="rounded-lg bg-zinc-950/65 p-3">
+                  <div className="text-[10px] text-zinc-500">Entry</div>
+                  <div className="mt-1 font-mono font-semibold text-zinc-100">{money(paperClosePosition.entry_price)}</div>
+                </div>
+                <div className="rounded-lg bg-zinc-950/65 p-3">
+                  <div className="text-[10px] text-zinc-500">Latest paper mark</div>
+                  <div className="mt-1 font-mono font-semibold text-zinc-100">{money(paperClosePosition.current_price)}</div>
+                </div>
+              </div>
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => setPaperClosePosition(null)} disabled={paperClosing} className="text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">
+              Keep position
+            </Button>
+            <Button onClick={confirmPaperClose} disabled={paperClosing} className="bg-rose-500 font-semibold text-white hover:bg-rose-400">
+              {paperClosing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Close paper position
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!dismissSignal} onOpenChange={open => !open && !dismissing && setDismissSignal(null)}>
         <DialogContent className="w-[calc(100%_-_1.5rem)] max-w-md border-zinc-800 bg-[#101216] text-zinc-100 sm:w-full">

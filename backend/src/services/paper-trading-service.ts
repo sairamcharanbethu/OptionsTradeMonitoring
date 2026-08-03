@@ -10,6 +10,7 @@ const PROMPT_VERSION = 'paper-risk-v2';
 export const PAPER_POLICY_VERSION = 'paper-exit-v2';
 const MAX_DAILY_AI_CALLS = 3;
 const DEFAULT_PAPER_TRAILING_STOP_PCT = 15;
+const MAX_MANUAL_EXIT_QUOTE_AGE_MS = 15_000;
 const ET_TIME = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false
 });
@@ -213,6 +214,93 @@ export class PaperTradingService {
       [ACCOUNT_ID, boundedLimit, boundedOffset]
     );
     return rows;
+  }
+
+  public async closeOpenPosition(positionId: number, requestedByUserId: number | null): Promise<Record<string, any>> {
+    if (!Number.isSafeInteger(positionId) || positionId <= 0) {
+      const error: any = new Error('A valid paper position id is required');
+      error.statusCode = 400;
+      throw error;
+    }
+    const { rows } = await (this.fastify as any).pg.query(
+      `SELECT p.*, ptd.exit_profile, ptd.policy_version,
+              ptd.trailing_stop_pct AS decision_trailing_stop_pct
+       FROM positions p
+       JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
+       WHERE p.id=$1 AND p.paper_account_id=$2 AND p.status='OPEN'`,
+      [positionId, ACCOUNT_ID]
+    );
+    const position = rows[0];
+    if (!position) {
+      const error: any = new Error('Open paper position not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    let quote: any;
+    try {
+      quote = await (this.fastify as any).ibkrMarketData.getOptionQuoteForOsi(null, this.osiTicker(position));
+    } catch (cause: any) {
+      const error: any = new Error(`Fresh IBKR exit quote is unavailable: ${cause.message || String(cause)}`);
+      error.statusCode = 503;
+      throw error;
+    }
+    const bid = Number(quote?.bid || 0);
+    const quoteAgeMs = quote?.quoteAgeMs == null ? Number.NaN : Number(quote.quoteAgeMs);
+    if (!(bid > 0) || !Number.isFinite(quoteAgeMs) || quoteAgeMs < 0 || quoteAgeMs > MAX_MANUAL_EXIT_QUOTE_AGE_MS) {
+      const error: any = new Error('Manual paper close requires an IBKR bid no older than 15 seconds');
+      error.statusCode = 409;
+      throw error;
+    }
+    const live = await this.getLivePosition(position.id);
+    const managedPosition = {
+      ...position,
+      current_price: bid,
+      underlying_price: live?.underlyingPrice ?? position.underlying_price,
+      trailing_high_price: live?.trailingHighPrice ?? position.trailing_high_price,
+      trailing_stop_loss_pct: live?.trailingStopPct ?? position.trailing_stop_loss_pct,
+      suggested_stop_loss: live?.suggestedStopLoss ?? position.suggested_stop_loss,
+      analysis_data: live?.analysis || position.analysis_data
+    };
+    let closeError: Error | null = null;
+    try {
+      await this.closePaperQuantity(managedPosition, Number(position.quantity), bid, 'MANUAL_EXIT', {
+        requestedByUserId,
+        quoteSource: quote.source || 'ibkr',
+        quoteAgeMs,
+        quoteTimestamp: quote.timestamp || null
+      });
+    } catch (error: any) {
+      closeError = error instanceof Error ? error : new Error(String(error));
+    }
+    const closedResult = await (this.fastify as any).pg.query(
+      `SELECT status, exit_reason, exit_price, realized_pnl
+       FROM positions WHERE id=$1 AND paper_account_id=$2`,
+      [positionId, ACCOUNT_ID]
+    );
+    const closed = closedResult.rows[0];
+    if (closed?.status !== 'CLOSED' || closed?.exit_reason !== 'MANUAL_EXIT') {
+      if (closeError) throw closeError;
+      const error: any = new Error(
+        closed?.status === 'CLOSED'
+          ? `Paper position closed concurrently as ${closed.exit_reason || 'another exit'}`
+          : 'Paper position did not close'
+      );
+      error.statusCode = 409;
+      throw error;
+    }
+    if (closeError) {
+      this.fastify.log.warn(`[PaperTrading] Manual position ${positionId} closed durably but runtime cleanup failed: ${closeError.message}`);
+    }
+    return {
+      positionId,
+      status: 'CLOSED',
+      intent: 'MANUAL_EXIT',
+      quantity: Number(position.quantity),
+      fillPrice: Number(closed.exit_price),
+      realizedPnl: Number(closed.realized_pnl),
+      quoteAgeMs,
+      warning: closeError ? 'Paper ledger closed, but live cache cleanup needs attention.' : null
+    };
   }
 
   private livePositionKey(positionId: number | string): string {
@@ -972,7 +1060,13 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     }
   }
 
-  public async closePaperQuantity(position: any, quantity: number, bid: number, intent: string): Promise<void> {
+  public async closePaperQuantity(
+    position: any,
+    quantity: number,
+    bid: number,
+    intent: string,
+    exitMetadata: Record<string, any> = {}
+  ): Promise<void> {
     let closeQty = 0;
     let proceeds = 0;
     let pnl = 0;
@@ -1006,7 +1100,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
          ON CONFLICT (account_id, setup_id, intent) DO NOTHING RETURNING id`,
         [ACCOUNT_ID, position.paper_decision_id, position.id, setupId, position.signal_id, intent,
           this.osiTicker(position), position.option_type, Number(position.strike_price), this.normalizeExpiry(position.expiration_date), closeQty, bid,
-          JSON.stringify({ bid, underlyingPrice: position.underlying_price })]
+          JSON.stringify({ bid, underlyingPrice: position.underlying_price, ...exitMetadata })]
       );
       if (!inserted.rows[0]) {
         await client.query('ROLLBACK');
@@ -1041,7 +1135,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         position,
         position.id,
         bid,
-        { closeQuantity: closeQty, remaining, realizedPnl: pnl },
+        { closeQuantity: closeQty, remaining, realizedPnl: pnl, ...exitMetadata },
         client
       );
       await this.refreshAccountEquity(client);
@@ -1281,7 +1375,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     if (intent === 'TARGET_2') return 'TP2';
     if (intent === 'TRAILING_STOP') return 'TRAILING_STOP';
     if (['END_OF_DAY', 'END_OF_DAY_RECOVERY', 'EXPIRED_RECOVERY'].includes(intent)) return 'EOD';
-    if (intent === 'STRATEGY_TERMINAL') return 'EXIT';
+    if (intent === 'STRATEGY_TERMINAL' || intent === 'MANUAL_EXIT') return 'EXIT';
     return 'SL';
   }
 

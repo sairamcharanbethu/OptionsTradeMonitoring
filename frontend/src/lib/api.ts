@@ -1420,6 +1420,24 @@ export const api = {
     return res.json();
   },
 
+  async closePaperPosition(positionId: number): Promise<{
+    positionId: number;
+    status: 'CLOSED';
+    intent: 'MANUAL_EXIT';
+    quantity: number;
+    fillPrice: number;
+    realizedPnl: number;
+    quoteAgeMs: number;
+    warning: string | null;
+  }> {
+    const res = await authFetch(`${API_BASE}/paper-account/positions/${positionId}/close`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || err.message || 'Failed to close the paper position');
+    }
+    return res.json();
+  },
+
   async injectDevQuote(payload: {
     provider: string;
     symbol: string;
