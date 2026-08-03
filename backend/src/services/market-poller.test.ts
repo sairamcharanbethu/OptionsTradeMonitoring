@@ -29,6 +29,13 @@ async function testUnderlyingStopDirection() {
   assert(poller.isUnderlyingStopBroken({ option_type: 'CALL' }, 747.2, 747) === false, 'CALL should not stop above underlying stop');
   assert(poller.isUnderlyingStopBroken({ option_type: 'PUT' }, 750.1, 750) === true, 'PUT should stop when underlying breaks above stop');
   assert(poller.isUnderlyingStopBroken({ option_type: 'PUT' }, 749.8, 750) === false, 'PUT should not stop below underlying stop');
+  assert(poller.isUnderlyingTargetReached({ option_type: 'CALL' }, 755.1, 755) === true, 'CALL should reach a target above it');
+  assert(poller.isUnderlyingTargetReached({ option_type: 'CALL' }, 754.9, 755) === false, 'CALL should not reach a target below it');
+  assert(poller.isUnderlyingTargetReached({ option_type: 'PUT' }, 749.9, 750) === true, 'PUT should reach a target below it');
+  assert(poller.isUnderlyingTargetReached({ option_type: 'PUT' }, 750.1, 750) === false, 'PUT should not reach a target above it');
+  assert(poller.isFreshSyntheticTrailQuote({ source: 'ibkr', quoteAgeMs: 15_000 }) === true, 'A 15-second IBKR quote should remain eligible');
+  assert(poller.isFreshSyntheticTrailQuote({ source: 'ibkr', quoteAgeMs: null }) === false, 'A missing quote age must not be treated as fresh');
+  assert(poller.isFreshSyntheticTrailQuote({ source: 'ibkr', quoteAgeMs: 15_001 }) === false, 'A quote older than 15 seconds must be rejected');
 }
 
 async function testThetaStopMaxHoldWindows() {
@@ -102,6 +109,31 @@ async function testStrategyLifecycleExitDoesNotPartialTrim() {
   assert(
     poller.isPartialProfitTrim({ quantity: 4, strategy_managed: false }, 'TAKE_PROFIT') === true,
     'Legacy take-profit behavior should retain partial trimming'
+  );
+  assert(
+    poller.isPartialProfitTrim({
+      quantity: 4,
+      strategy_managed: true,
+      analysis_data: { syntheticTrailing: { tp1TrimPending: true } }
+    }, 'TAKE_PROFIT') === true,
+    'A strategy synthetic trail should allow its explicit TP1 partial trim'
+  );
+  assert(
+    poller.isPartialProfitTrim({
+      quantity: 4,
+      strategy_managed: true,
+      analysis_data: { syntheticTrailing: { tp1TrimPending: false, exitAtT2: true } }
+    }, 'TAKE_PROFIT') === false,
+    'A strategy synthetic trail must fully close at TP2'
+  );
+  assert(
+    poller.getProfitTrimQuantity({
+      quantity: 3,
+      contracts_requested: 3,
+      strategy_managed: true,
+      analysis_data: { syntheticTrailing: { tp1TrimPending: true } }
+    }) === 2,
+    'A three-contract strategy TP1 should trim two contracts to match the paper policy'
   );
 }
 
@@ -178,6 +210,7 @@ function createMarketDataRedisMock() {
   const hashes = new Map<string, Record<string, string>>();
   return {
     isReady: () => true,
+    getHash: (key: string) => ({ ...(hashes.get(key) || {}) }),
     hgetall: async (key: string) => ({ ...(hashes.get(key) || {}) }),
     hset: async (key: string, values: Record<string, any>) => {
       const current = hashes.get(key) || {};
@@ -189,6 +222,184 @@ function createMarketDataRedisMock() {
     sadd: async () => {},
     zadd: async () => {}
   };
+}
+
+async function testSyntheticTrailActivatesAtTp1WithoutClosingOneContract() {
+  const queries: string[] = [];
+  const redisMock = createMarketDataRedisMock() as any;
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async (sql: string) => { queries.push(sql); return { rows: [], rowCount: 1 }; } }
+  } as any;
+  const poller = new MarketPoller(fastify, redisMock) as any;
+
+  await poller.processPositionExitUpdate({
+    id: 53,
+    user_id: 7,
+    symbol: 'SPY',
+    status: 'OPEN',
+    is_simulated: false,
+    execution_broker: 'wealthsimple_snaptrade',
+    execution_status: 'FILLED',
+    strategy_managed: true,
+    entry_price: 1,
+    current_price: 1,
+    quantity: 1,
+    stop_loss_trigger: 0.8,
+    take_profit_trigger: null,
+    trailing_high_price: 1,
+    trailing_stop_loss_pct: 15,
+    suggested_take_profit_1: 755,
+    suggested_take_profit_2: 756,
+    expiration_date: '2099-08-03',
+    option_type: 'CALL',
+    analysis_data: {}
+  }, 1.2, undefined, undefined, 755.2, {
+    bid: 1.2,
+    ask: 1.22,
+    mid: 1.21,
+    spreadPct: 1.65,
+    quoteAgeMs: 100,
+    source: 'ibkr'
+  });
+
+  assert(queries.length === 0, `A one-contract TP1 activation should stay Redis-only, got ${queries.length} DB writes`);
+  const buffered = redisMock.getHash('market-data-buffer:current:53');
+  const analysis = JSON.parse(buffered.analysisData || '{}');
+  assert(analysis.syntheticTrailing?.active === true, 'TP1 should activate the synthetic trail');
+  assert(Number(buffered.trailingHighPrice) === 1.2, `Expected buffered high $1.20, got ${buffered.trailingHighPrice}`);
+  assert(Number(buffered.stopLossTrigger) === 1.02, `Expected 15% trail at $1.02, got ${buffered.stopLossTrigger}`);
+}
+
+async function testSyntheticTrailTp1TrimsMultipleContractsAtBid() {
+  const redisMock = createMarketDataRedisMock() as any;
+  const submitted: any[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [], rowCount: 1 }) }
+  } as any;
+  const poller = new MarketPoller(fastify, redisMock) as any;
+  poller.submitSnapTradeExit = async (_position: any, orderType: string, limitPrice: string, reason: string, quantity: number) => {
+    submitted.push({ orderType, limitPrice, reason, quantity });
+    return true;
+  };
+  poller.notifyN8n = () => {};
+
+  await poller.processPositionExitUpdate({
+    id: 54,
+    user_id: 7,
+    symbol: 'SPY',
+    status: 'OPEN',
+    is_simulated: false,
+    execution_broker: 'wealthsimple_snaptrade',
+    execution_status: 'FILLED',
+    strategy_managed: true,
+    entry_price: 1,
+    current_price: 1,
+    quantity: 4,
+    stop_loss_trigger: 0.8,
+    trailing_high_price: 1,
+    trailing_stop_loss_pct: 15,
+    suggested_take_profit_1: 755,
+    suggested_take_profit_2: 756,
+    expiration_date: '2099-08-03',
+    option_type: 'CALL',
+    analysis_data: {}
+  }, 1.2, undefined, undefined, 755.2, {
+    bid: 1.19,
+    ask: 1.21,
+    mid: 1.2,
+    spreadPct: 1.67,
+    quoteAgeMs: 100,
+    source: 'ibkr'
+  });
+
+  assert(submitted.length === 1, `TP1 should submit one trim, got ${submitted.length}`);
+  assert(submitted[0].orderType === 'LIMIT' && submitted[0].limitPrice === '1.19', `TP1 trim should use the current bid, got ${JSON.stringify(submitted[0])}`);
+  assert(submitted[0].reason === 'TAKE_PROFIT' && submitted[0].quantity === 2, `TP1 should trim half of four contracts, got ${JSON.stringify(submitted[0])}`);
+}
+
+async function testSyntheticTrailNeedsTwoBreachQuotesBeforeMarketExit() {
+  const redisMock = createMarketDataRedisMock() as any;
+  const submitted: any[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [], rowCount: 1 }) }
+  } as any;
+  const poller = new MarketPoller(fastify, redisMock) as any;
+  poller.submitSnapTradeExit = async (_position: any, orderType: string, limitPrice: string, reason: string, quantity: number) => {
+    submitted.push({ orderType, limitPrice, reason, quantity });
+    return true;
+  };
+  poller.notifyN8n = () => {};
+
+  const position = {
+    id: 55,
+    user_id: 7,
+    symbol: 'SPY',
+    status: 'OPEN',
+    is_simulated: false,
+    execution_broker: 'wealthsimple_snaptrade',
+    execution_status: 'FILLED',
+    strategy_managed: false,
+    entry_price: 1,
+    current_price: 1.2,
+    quantity: 1,
+    stop_loss_trigger: 1.02,
+    trailing_high_price: 1.2,
+    trailing_stop_loss_pct: 15,
+    expiration_date: '2099-08-03',
+    option_type: 'CALL',
+    analysis_data: { syntheticTrailing: { enabled: true, active: true, pct: 15 } }
+  };
+  const quote = { bid: 1, ask: 1.02, mid: 1.01, spreadPct: 1.98, quoteAgeMs: 100, source: 'ibkr' };
+
+  await poller.processPositionExitUpdate(position, 1.01, undefined, undefined, undefined, quote);
+  assert(submitted.length === 0, 'The first soft trail breach should only arm confirmation');
+  await poller.processPositionExitUpdate(position, 1.01, undefined, undefined, undefined, quote);
+  assert(submitted.length === 1, `The second trail breach should submit one exit, got ${submitted.length}`);
+  assert(submitted[0].orderType === 'MARKET' && submitted[0].reason === 'TRAILING_STOP', `Trail breach should submit a MARKET trailing exit, got ${JSON.stringify(submitted[0])}`);
+}
+
+async function testSyntheticTrailRejectsStaleHardStopQuote() {
+  const redisMock = createMarketDataRedisMock() as any;
+  const submitted: any[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [], rowCount: 1 }) }
+  } as any;
+  const poller = new MarketPoller(fastify, redisMock) as any;
+  poller.submitSnapTradeExit = async (...args: any[]) => { submitted.push(args); return true; };
+  poller.notifyN8n = () => {};
+
+  await poller.processPositionExitUpdate({
+    id: 56,
+    user_id: 7,
+    symbol: 'SPY',
+    status: 'OPEN',
+    is_simulated: false,
+    execution_broker: 'wealthsimple_snaptrade',
+    execution_status: 'FILLED',
+    strategy_managed: false,
+    entry_price: 1,
+    current_price: 1.2,
+    quantity: 1,
+    stop_loss_trigger: 1.02,
+    trailing_high_price: 1.2,
+    trailing_stop_loss_pct: 15,
+    expiration_date: '2099-08-03',
+    option_type: 'CALL',
+    analysis_data: { syntheticTrailing: { enabled: true, active: true, pct: 15 } }
+  }, 0.6, undefined, undefined, undefined, {
+    bid: 0.6,
+    ask: 0.65,
+    mid: 0.63,
+    spreadPct: 7.94,
+    quoteAgeMs: 15_001,
+    source: 'ibkr'
+  });
+
+  assert(submitted.length === 0, 'A stale IBKR quote must not trigger a synthetic hard-stop exit');
 }
 
 async function testOrdinaryQuoteUpdatesStayOutOfPostgres() {
@@ -270,6 +481,10 @@ async function runTests() {
   await testPendingAndReviewExitsStayUnresolved();
   await testExpirationUsesNewYorkTradingDate();
   await testOrdinaryQuoteUpdatesStayOutOfPostgres();
+  await testSyntheticTrailActivatesAtTp1WithoutClosingOneContract();
+  await testSyntheticTrailTp1TrimsMultipleContractsAtBid();
+  await testSyntheticTrailNeedsTwoBreachQuotesBeforeMarketExit();
+  await testSyntheticTrailRejectsStaleHardStopQuote();
   await testSimulatedExitPersistsFinalCheckpoint();
   console.log('All MarketPoller tests passed!');
 }

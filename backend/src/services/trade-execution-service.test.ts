@@ -563,7 +563,16 @@ async function testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit() {
     pg: {
       query: async (sql: string, params: any[] = []) => {
         if (sql.includes('FROM signals')) {
-          return { rows: [{ strategy_setup_id: 'setup-42', engine_version: 'signal-only-v2', lifecycle_status: 'ACTIVE' }] };
+          return {
+            rows: [{
+              strategy_setup_id: 'setup-42',
+              engine_version: 'signal-only-v2',
+              lifecycle_status: 'ACTIVE',
+              strategy_snapshot: {
+                put_setup: { targets: [740, 738] }
+              }
+            }]
+          };
         }
         if (sql.includes('INSERT INTO positions')) {
           insertParams = params;
@@ -574,7 +583,7 @@ async function testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit() {
     }
   } as any);
 
-  await (service as any).insertExecutedPosition(createSignalInput({ mark: 0.49 }), {
+  await (service as any).insertExecutedPosition(createSignalInput({ mark: 0.49, targetUnderlying: 738 }), {
     quantity: 1,
     entryPrice: 0.49,
     isSimulated: false,
@@ -585,11 +594,16 @@ async function testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit() {
     executionStatus: 'PENDING_RECONCILE',
     positionStatus: 'PENDING_ORDER',
     takeProfitPct: '10',
+    syntheticTrailingEnabled: true,
+    syntheticTrailingPct: '15',
     notes: '[test entry]'
   });
 
   assert(insertParams[8] === 0.54, `A 10% strategy premium override on a $0.49 entry should store $0.54, got ${insertParams[8]}`);
-  assert(insertParams[32] === true, 'The strategy position must remain marked as strategy-managed');
+  assert(insertParams[10] === 15, `A live synthetic trail should freeze 15% on the position, got ${insertParams[10]}`);
+  assert(insertParams[25] === 740, `The first strategy target must be stored as TP1, got ${insertParams[25]}`);
+  assert(insertParams[26] === 738, `The final strategy target must be stored as TP2, got ${insertParams[26]}`);
+  assert(insertParams[33] === true, 'The strategy position must remain marked as strategy-managed');
 }
 
 async function runTests() {

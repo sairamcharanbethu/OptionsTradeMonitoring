@@ -6,6 +6,10 @@ export interface PositionEvaluationResult {
   lossAvoided?: number;
 }
 
+export function roundProtectiveStop(value: number): number {
+  return Math.ceil(Number(value) * 100 - 1e-9) / 100;
+}
+
 export class StopLossEngine {
   /**
    * Evaluates a position against a new price point.
@@ -20,6 +24,7 @@ export class StopLossEngine {
       take_profit_trigger?: number;
       trailing_high_price: number;
       trailing_stop_loss_pct?: number;
+      trailing_floor_price?: number;
     }
   ): PositionEvaluationResult {
     let newHigh = position.trailing_high_price;
@@ -39,13 +44,17 @@ export class StopLossEngine {
     // 2. Update Trailing High if current price is higher
     if (currentPrice > position.trailing_high_price) {
       newHigh = currentPrice;
+    }
 
-      // 3. Trail Stop-Loss upward if we have a trailing percentage
-      if (position.trailing_stop_loss_pct) {
-        const potentialStop = currentPrice * (1 - position.trailing_stop_loss_pct / 100);
-        if (potentialStop > position.stop_loss_trigger) {
-          newStopLoss = potentialStop;
-        }
+    // 3. Trail Stop-Loss upward if we have a trailing percentage. Evaluate
+    // from the recorded high even on activation so the first stop is armed.
+    const trailingPct = Number(position.trailing_stop_loss_pct || 0);
+    if (trailingPct > 0 && trailingPct < 100) {
+      const potentialStop = roundProtectiveStop(newHigh * (1 - trailingPct / 100));
+      const configuredFloor = Number(position.trailing_floor_price || 0);
+      const nextStop = configuredFloor > 0 ? Math.max(potentialStop, configuredFloor) : potentialStop;
+      if (nextStop > newStopLoss) {
+        newStopLoss = nextStop;
       }
     }
 

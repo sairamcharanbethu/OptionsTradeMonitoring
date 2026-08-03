@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
+import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
@@ -341,6 +341,17 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                             await client.query('ROLLBACK');
                             return reply.code(400).send({ error: validationError });
                         }
+                    }
+                    if (key === 'synthetic_trailing_stop_pct') {
+                        const validationError = validateSyntheticTrailingStopPctSetting(trimmedValue);
+                        if (validationError) {
+                            await client.query('ROLLBACK');
+                            return reply.code(400).send({ error: validationError });
+                        }
+                    }
+                    if (key === 'synthetic_trailing_stop_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Synthetic trailing stop enabled must be true or false' });
                     }
                     if (key === 'market_poll_interval') {
                         const validationError = validateMarketPollIntervalSetting(trimmedValue);

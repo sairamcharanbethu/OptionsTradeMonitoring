@@ -36,6 +36,8 @@ interface ExecutionSettings {
   entry_limit_offset_pct?: string;
   take_profit_pct?: string;
   stop_loss_engine_enabled?: string;
+  synthetic_trailing_stop_enabled?: string;
+  synthetic_trailing_stop_pct?: string;
   live_trading_acknowledged?: string;
   max_daily_loss_dollars?: string;
   max_consecutive_losses?: string;
@@ -91,6 +93,8 @@ export class TradeExecutionService {
       entry_limit_offset_pct: String(this.ENTRY_LIMIT_MID_TO_ASK_OFFSET_PCT),
       take_profit_pct: '',
       stop_loss_engine_enabled: 'true',
+      synthetic_trailing_stop_enabled: 'false',
+      synthetic_trailing_stop_pct: '15',
       live_trading_acknowledged: 'false',
       max_daily_loss_dollars: '200',
       max_consecutive_losses: '3',
@@ -866,6 +870,8 @@ export class TradeExecutionService {
         executionStatus: entryState.executionStatus,
         positionStatus: 'PENDING_ORDER',
         takeProfitPct: settings.take_profit_pct,
+        syntheticTrailingEnabled: settings.synthetic_trailing_stop_enabled === 'true',
+        syntheticTrailingPct: settings.synthetic_trailing_stop_pct,
         notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId};${protectedLimitNote}]`
       });
 
@@ -960,6 +966,8 @@ export class TradeExecutionService {
     executionStatus: string;
     positionStatus?: string;
     takeProfitPct?: string;
+    syntheticTrailingEnabled?: boolean;
+    syntheticTrailingPct?: string;
     notes: string;
   }) {
     const { rows: signalRows } = await this.fastify.pg.query(
@@ -971,11 +979,32 @@ export class TradeExecutionService {
     );
     const signal = signalRows[0] || {};
     const strategyManaged = signal.engine_version === 'signal-only-v2' && Boolean(signal.strategy_setup_id);
+    let strategySnapshot: any = signal.strategy_snapshot || null;
+    if (typeof strategySnapshot === 'string') {
+      try {
+        strategySnapshot = JSON.parse(strategySnapshot);
+      } catch {
+        strategySnapshot = null;
+      }
+    }
+    const strategySetup = input.winningSide === 'CALL'
+      ? strategySnapshot?.call_setup
+      : strategySnapshot?.put_setup;
+    const strategyTargets = Array.isArray(strategySetup?.targets)
+      ? strategySetup.targets.map(Number).filter((value: number) => Number.isFinite(value) && value > 0)
+      : [];
+    const firstUnderlyingTarget = strategyManaged && strategyTargets.length > 0
+      ? strategyTargets[0]
+      : input.targetUnderlying;
+    const finalUnderlyingTarget = input.targetUnderlying;
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
     const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
     const configuredTakeProfitPct = this.parseOptionalPct(execution.takeProfitPct, 500);
     const premiumTakeProfit = configuredTakeProfitPct !== null
       ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
+      : null;
+    const syntheticTrailingPct = !execution.isSimulated && execution.syntheticTrailingEnabled
+      ? this.parseOptionalPct(execution.syntheticTrailingPct || '15', 50)
       : null;
 
     const { rows } = await this.fastify.pg.query(
@@ -986,7 +1015,7 @@ export class TradeExecutionService {
         status, is_simulated, account_id, notes, execution_broker,
         broker_order_id, broker_trade_id, execution_account_id, execution_status, contracts_requested,
         entry_action, exit_action,
-        suggested_stop_loss, suggested_take_profit_1,
+        suggested_stop_loss, suggested_take_profit_1, suggested_take_profit_2,
         signal_id, strategy_setup_id, strategy_engine_version,
         strategy_lifecycle_status, strategy_policy_fingerprint,
         strategy_snapshot, strategy_managed,
@@ -995,8 +1024,8 @@ export class TradeExecutionService {
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
         $23, $24,
-        $25, $26,
-        $27, $28, $29, $30, $31, $32, $33,
+        $25, $26, $27,
+        $28, $29, $30, $31, $32, $33, $34,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       RETURNING *`,
@@ -1011,12 +1040,12 @@ export class TradeExecutionService {
         premiumStopLoss,
         premiumTakeProfit,
         entryPrice,
-        null,
+        syntheticTrailingPct,
         entryPrice,
         execution.positionStatus || 'OPEN',
         execution.isSimulated,
         execution.accountId,
-        `${execution.notes} [Auto exits: premium SL $${premiumStopLoss}, premium TP ${premiumTakeProfit === null ? 'suggested TP only' : `$${premiumTakeProfit}`}, underlying SL ${input.stopUnderlying}, underlying TP ${input.targetUnderlying}]`,
+        `${execution.notes} [Auto exits: premium SL $${premiumStopLoss}, premium TP ${premiumTakeProfit === null ? 'suggested TP only' : `$${premiumTakeProfit}`}, synthetic trail ${syntheticTrailingPct === null ? 'off' : `${syntheticTrailingPct}% after TP1`}, underlying SL ${input.stopUnderlying}, underlying TP ${input.targetUnderlying}]`,
         execution.executionBroker,
         execution.brokerOrderId,
         execution.brokerTradeId,
@@ -1026,13 +1055,14 @@ export class TradeExecutionService {
         'BUY_TO_OPEN',
         'SELL_TO_CLOSE',
         input.stopUnderlying,
-        input.targetUnderlying,
+        firstUnderlyingTarget,
+        finalUnderlyingTarget,
         input.signalId,
         signal.strategy_setup_id || null,
         signal.engine_version || null,
         signal.lifecycle_status || null,
         signal.policy_fingerprint || null,
-        signal.strategy_snapshot || null,
+        strategySnapshot,
         strategyManaged
       ]
     );

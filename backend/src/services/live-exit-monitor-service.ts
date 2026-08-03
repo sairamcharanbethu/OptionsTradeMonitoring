@@ -207,12 +207,15 @@ export class LiveExitMonitorService {
     const last = Number(quote.lastTradePrice ?? quote.last ?? quote.price ?? 0);
     const mid = bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : price;
     const spreadPct = bid > 0 && ask > 0 && mid > 0 ? Number((((ask - bid) / mid) * 100).toFixed(2)) : undefined;
+    const quoteTimestamp = Date.parse(String(quote.quoteTimestamp || quote.timestamp || ''));
+    const quoteAgeMs = Number.isFinite(quoteTimestamp) ? Math.max(0, Date.now() - quoteTimestamp) : undefined;
     return {
       bid: bid > 0 ? bid : undefined,
       ask: ask > 0 ? ask : undefined,
       last: last > 0 ? last : undefined,
       mid: mid > 0 ? mid : undefined,
       spreadPct,
+      quoteAgeMs,
       source: this.provider
     };
   }

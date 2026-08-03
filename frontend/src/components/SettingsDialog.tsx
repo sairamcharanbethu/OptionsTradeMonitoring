@@ -234,6 +234,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [entrySlippagePct, setEntrySlippagePct] = useState('3');
     const [takeProfitPct, setTakeProfitPct] = useState('');
     const [stopLossEngineEnabled, setStopLossEngineEnabled] = useState(true);
+    const [syntheticTrailingStopEnabled, setSyntheticTrailingStopEnabled] = useState(false);
+    const [syntheticTrailingStopPct, setSyntheticTrailingStopPct] = useState('15');
     const [liveTradingAcknowledged, setLiveTradingAcknowledged] = useState(false);
     const [mcpTradingEnabled, setMcpTradingEnabled] = useState(false);
 
@@ -344,6 +346,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setEntrySlippagePct(data.entry_slippage_pct || '3');
             setTakeProfitPct(data.take_profit_pct || '');
             setStopLossEngineEnabled(data.stop_loss_engine_enabled !== 'false');
+            setSyntheticTrailingStopEnabled(data.synthetic_trailing_stop_enabled === 'true');
+            setSyntheticTrailingStopPct(data.synthetic_trailing_stop_pct || '15');
             setLiveTradingAcknowledged(data.live_trading_acknowledged === 'true');
             setMcpTradingEnabled(data.mcp_trading_enabled === 'true');
 
@@ -599,6 +603,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 entry_slippage_pct: entrySlippagePct,
                 take_profit_pct: takeProfitPct,
                 stop_loss_engine_enabled: stopLossEngineEnabled ? 'true' : 'false',
+                synthetic_trailing_stop_enabled: syntheticTrailingStopEnabled ? 'true' : 'false',
+                synthetic_trailing_stop_pct: syntheticTrailingStopPct || '15',
                 live_trading_acknowledged: liveTradingAcknowledged ? 'true' : 'false',
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 day_trading_symbols: formatDayTradingSymbols(normalizedSymbols),
@@ -1176,6 +1182,40 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 {stopLossEngineEnabled
                                                     ? 'Emergency premium and underlying stops can submit exits automatically. Strategy lifecycle exits remain active.'
                                                     : 'Emergency stop automation is paused for this user. Terminal strategy lifecycle and target exits remain active.'}
+                                            </p>
+                                        </div>
+
+                                        <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <Label htmlFor="syntheticTrailingStopToggle" className="flex items-center gap-2">
+                                                    Synthetic Premium Trailing Stop
+                                                    {syntheticTrailingStopEnabled ? (
+                                                        <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
+                                                    ) : (
+                                                        <Badge variant="secondary" className="h-5 text-[10px]">Off</Badge>
+                                                    )}
+                                                </Label>
+                                                <Switch
+                                                    id="syntheticTrailingStopToggle"
+                                                    checked={syntheticTrailingStopEnabled}
+                                                    onCheckedChange={setSyntheticTrailingStopEnabled}
+                                                />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="syntheticTrailingStopPct">Trail from highest option bid (%)</Label>
+                                                <Input
+                                                    id="syntheticTrailingStopPct"
+                                                    type="number"
+                                                    min="1"
+                                                    max="50"
+                                                    step="0.5"
+                                                    value={syntheticTrailingStopPct}
+                                                    disabled={!syntheticTrailingStopEnabled}
+                                                    onChange={(e) => setSyntheticTrailingStopPct(e.target.value)}
+                                                />
+                                            </div>
+                                            <p className="text-[10px] text-muted-foreground">
+                                                App-managed only; no trailing order is sent to Wealthsimple. The saved policy is frozen onto new live positions: strategy trades activate after TP1, while manual long entries activate from fill and keep configured take-profit exits inside the app monitor. Existing positions keep their entry-time policy. Protection requires a healthy backend and fresh IBKR quotes.
                                             </p>
                                         </div>
                                     </div>

@@ -70,6 +70,16 @@ function getManualEntryData(trade: Position) {
   return parsed?.manualEntry || null;
 }
 
+function getSyntheticTrailData(trade: Position) {
+  const raw = trade.analysis_data;
+  const parsed = typeof raw === 'string'
+    ? (() => {
+        try { return JSON.parse(raw); } catch { return null; }
+      })()
+    : raw;
+  return parsed?.syntheticTrailing || null;
+}
+
 function getUnderlyingStopPrice(trade: Position) {
   const manualEntry = getManualEntryData(trade);
   const stop = trade.underlying_stop_price ?? manualEntry?.underlyingStopPrice;
@@ -760,6 +770,7 @@ export default function ManualEntryPage() {
                 <div className="py-6 text-center text-sm text-muted-foreground">No active managed entries.</div>
               ) : manualTrades.map((trade) => {
                 const manualEntry = getManualEntryData(trade);
+                const syntheticTrail = getSyntheticTrailData(trade);
                 const stopBreached = isUnderlyingStopBreached(trade);
                 const underlyingStop = getUnderlyingStopPrice(trade);
                 return (
@@ -802,8 +813,9 @@ export default function ManualEntryPage() {
                         <div className="font-mono">{currency(trade.entry_price)}</div>
                       </div>
                       <div>
-                        <div className="text-xs text-muted-foreground">TP / SL</div>
-                        <div className="font-mono">{currency(trade.take_profit_trigger)} / {currency(manualEntry?.stopLossDisplay)}</div>
+                        <div className="text-xs text-muted-foreground">TP / Active stop</div>
+                        <div className="font-mono">{currency(trade.take_profit_trigger)} / {currency(trade.stop_loss_trigger ?? manualEntry?.stopLossDisplay)}</div>
+                        {syntheticTrail?.active && <div className="text-[10px] text-emerald-500">Synthetic {Number(syntheticTrail.pct || trade.trailing_stop_loss_pct).toFixed(1)}%</div>}
                       </div>
                     </div>
                     {trade.execution_error && <div className="mt-2 break-words text-xs text-amber-600">{trade.execution_error}</div>}
@@ -834,6 +846,7 @@ export default function ManualEntryPage() {
                     <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No active managed entries.</td></tr>
                   ) : manualTrades.map((trade) => {
                     const manualEntry = getManualEntryData(trade);
+                    const syntheticTrail = getSyntheticTrailData(trade);
                     const stopBreached = isUnderlyingStopBreached(trade);
                     const underlyingStop = getUnderlyingStopPrice(trade);
                     return (
@@ -852,7 +865,12 @@ export default function ManualEntryPage() {
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.current_price)}</td>
                         <td className="px-3 py-3 text-right font-mono text-emerald-500">{currency(trade.take_profit_trigger)}</td>
                         <td className="px-3 py-3 text-right">
-                          <div className="font-mono text-muted-foreground">{currency(manualEntry?.stopLossDisplay)}</div>
+                          <div className="font-mono text-muted-foreground">{currency(trade.stop_loss_trigger ?? manualEntry?.stopLossDisplay)}</div>
+                          {syntheticTrail?.active && (
+                            <div className="text-[10px] font-mono text-emerald-500">
+                              Trail {Number(syntheticTrail.pct || trade.trailing_stop_loss_pct).toFixed(1)}% · high {currency(syntheticTrail.highPremium ?? trade.trailing_high_price)}
+                            </div>
+                          )}
                           <div className={`text-xs font-mono ${stopBreached ? 'font-semibold text-red-500' : 'text-muted-foreground'}`}>
                             {trade.option_type === 'PUT' ? 'Over' : 'Under'} {currency(underlyingStop)}
                           </div>

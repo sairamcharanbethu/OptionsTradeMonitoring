@@ -58,6 +58,34 @@ async function runTests() {
   assert(res5.triggered === true, 'Should trigger at 9.5');
   assert(res5.triggerType === 'STOP_LOSS', 'Trigger type should be STOP_LOSS');
 
+  // Test 6: arm the trail from the existing high on activation
+  const res6 = StopLossEngine.evaluate(12, {
+    entry_price: 10,
+    stop_loss_trigger: 8,
+    trailing_high_price: 12,
+    trailing_stop_loss_pct: 15
+  });
+  assert(res6.newStopLoss === 10.2, `Existing $12 high with a 15% trail should arm at $10.20, got ${res6.newStopLoss}`);
+
+  // Test 7: strategy trails protect at least breakeven after TP1
+  const res7 = StopLossEngine.evaluate(11, {
+    entry_price: 10,
+    stop_loss_trigger: 8,
+    trailing_high_price: 11,
+    trailing_stop_loss_pct: 15,
+    trailing_floor_price: 10
+  });
+  assert(res7.newStopLoss === 10, `Strategy trail should respect its $10 breakeven floor, got ${res7.newStopLoss}`);
+
+  // Test 8: half-cent floating point values must not loosen a protective stop
+  const res8 = StopLossEngine.evaluate(0.5, {
+    entry_price: 0.5,
+    stop_loss_trigger: 0,
+    trailing_high_price: 0.5,
+    trailing_stop_loss_pct: 15
+  });
+  assert(res8.newStopLoss === 0.43, `A 15% trail from $0.50 should protect at $0.43, got ${res8.newStopLoss}`);
+
   console.log('All tests passed!');
 }
 

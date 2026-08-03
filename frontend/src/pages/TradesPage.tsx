@@ -92,6 +92,8 @@ const stateLabel = (trade: Position) => {
     EXIT_REJECTED: 'Exit rejected',
     EXIT_FAILED: 'Exit failed',
     STOP_LOSS: 'Stop loss',
+    TRAILING_STOP: 'Synthetic trailing stop',
+    SYNTHETIC_TRAILING_STOP: 'Synthetic trailing stop',
     TAKE_PROFIT: 'Take profit',
     PROFIT_TRIM: 'Profit trim',
     MANUAL: 'Manual',

@@ -162,6 +162,15 @@ export function validateTakeProfitPctSetting(value: unknown): string | null {
   return null;
 }
 
+export function validateSyntheticTrailingStopPctSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  const trailingPct = Number(raw);
+  if (!Number.isFinite(trailingPct) || trailingPct < 1 || trailingPct > 50) {
+    return 'Synthetic trailing stop must be between 1% and 50%';
+  }
+  return null;
+}
+
 export function validateMarketPollIntervalSetting(value: unknown): string | null {
   const raw = String(value ?? '').trim();
   const seconds = Number(raw);

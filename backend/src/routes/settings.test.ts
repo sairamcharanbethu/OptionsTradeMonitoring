@@ -1,4 +1,4 @@
-import { isGlobalSettingKey, isPublicGlobalSettingKey, validateMarketPollIntervalSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
+import { isGlobalSettingKey, isPublicGlobalSettingKey, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
@@ -13,6 +13,12 @@ async function runTests() {
   assert(Boolean(validateTakeProfitPctSetting('-10')), 'Negative percentages should be rejected');
   assert(Boolean(validateTakeProfitPctSetting('501')), 'Values above 500% should be rejected');
   assert(Boolean(validateTakeProfitPctSetting('not-a-number')), 'Non-numeric values should be rejected');
+  assert(validateSyntheticTrailingStopPctSetting('1') === null, '1% synthetic trail should be accepted');
+  assert(validateSyntheticTrailingStopPctSetting('15') === null, '15% synthetic trail should be accepted');
+  assert(validateSyntheticTrailingStopPctSetting('50') === null, '50% synthetic trail should be accepted');
+  assert(Boolean(validateSyntheticTrailingStopPctSetting('0')), 'A zero synthetic trail should be rejected');
+  assert(Boolean(validateSyntheticTrailingStopPctSetting('50.1')), 'Synthetic trails above 50% should be rejected');
+  assert(Boolean(validateSyntheticTrailingStopPctSetting('')), 'A synthetic trail percentage is required');
   assert(isGlobalSettingKey('market_poll_interval'), 'The shared market poll interval must be a global setting');
   assert(isGlobalSettingKey('polling_enabled'), 'The shared market polling toggle must be a global setting');
   assert(isPublicGlobalSettingKey('polling_enabled'), 'Users should be able to see the admin-controlled polling state');

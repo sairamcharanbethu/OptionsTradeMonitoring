@@ -17,10 +17,11 @@ type ExitQuoteContext = {
   last?: number;
   mid?: number;
   spreadPct?: number;
+  quoteAgeMs?: number;
   source?: string;
 };
 
-type ExitTriggerType = 'STOP_LOSS' | 'TAKE_PROFIT' | 'THETA_STOP';
+type ExitTriggerType = 'STOP_LOSS' | 'TRAILING_STOP' | 'TAKE_PROFIT' | 'THETA_STOP';
 
 export class MarketPoller {
   private fastify: FastifyInstance;
@@ -227,13 +228,38 @@ export class MarketPoller {
     const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
     if (quantity <= 1) return quantity;
     if (String(position.profit_trim_status || '').toUpperCase() === 'DONE') return quantity;
+    let syntheticTp1Trim = false;
+    try {
+      const analysis = typeof position.analysis_data === 'string'
+        ? JSON.parse(position.analysis_data)
+        : position.analysis_data;
+      syntheticTp1Trim = Boolean(position.strategy_managed) && analysis?.syntheticTrailing?.tp1TrimPending === true;
+    } catch {
+      syntheticTp1Trim = false;
+    }
+    if (syntheticTp1Trim) {
+      const originalQuantity = Math.max(quantity, Math.floor(Number(position.contracts_requested || quantity)));
+      return Math.min(quantity, Math.ceil(originalQuantity / 2));
+    }
     return Math.max(1, Math.floor(quantity / 2));
   }
 
   private isPartialProfitTrim(position: any, exitTriggerType: ExitTriggerType): boolean {
     const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
+    let syntheticTrailing: any = null;
+    try {
+      const analysis = typeof position.analysis_data === 'string'
+        ? JSON.parse(position.analysis_data)
+        : position.analysis_data;
+      syntheticTrailing = analysis?.syntheticTrailing || null;
+    } catch {
+      syntheticTrailing = null;
+    }
+    const strategySyntheticTrim = Boolean(position.strategy_managed)
+      && syntheticTrailing?.tp1TrimPending === true
+      && syntheticTrailing?.exitAtT2 !== true;
     return exitTriggerType === 'TAKE_PROFIT'
-      && !position.strategy_managed
+      && (!position.strategy_managed || strategySyntheticTrim)
       && quantity > 1
       && String(position.profit_trim_status || '').toUpperCase() !== 'DONE';
   }
@@ -331,8 +357,21 @@ export class MarketPoller {
       last: last > 0 ? last : undefined,
       mid: mid > 0 ? mid : undefined,
       spreadPct: spreadPct > 0 ? spreadPct : undefined,
+      quoteAgeMs: quote?.quoteAgeMs !== undefined
+        && quote?.quoteAgeMs !== null
+        && Number.isFinite(Number(quote.quoteAgeMs))
+        ? Math.max(0, Number(quote.quoteAgeMs))
+        : undefined,
       source: quote?.source
     };
+  }
+
+  private isFreshSyntheticTrailQuote(quote?: ExitQuoteContext): boolean {
+    return quote?.source === 'ibkr'
+      && quote.quoteAgeMs !== undefined
+      && quote.quoteAgeMs !== null
+      && Number.isFinite(Number(quote.quoteAgeMs))
+      && Number(quote.quoteAgeMs) <= 15_000;
   }
 
   private getSellablePremium(price: number, quote?: ExitQuoteContext): number {
@@ -349,6 +388,11 @@ export class MarketPoller {
 
   private isUnderlyingStopBroken(position: any, underlyingPrice: number | undefined, underlyingStop: number | null): boolean {
     return TradeLifecycleService.isUnderlyingStopBroken(position, underlyingPrice, underlyingStop);
+  }
+
+  private isUnderlyingTargetReached(position: any, underlyingPrice: number | undefined, target: number | null): boolean {
+    if (!underlyingPrice || !target) return false;
+    return position.option_type === 'CALL' ? underlyingPrice >= target : underlyingPrice <= target;
   }
 
   private async isStopLossEngineEnabledForUser(userId: number): Promise<boolean> {
@@ -399,7 +443,11 @@ export class MarketPoller {
     ));
     const exitAction = TradeLifecycleService.getExitAction(position);
     const nextExecutionStatus = partialTrim ? 'PENDING_TRIM' : 'PENDING_EXIT';
-    const nextExitReason = partialTrim ? 'PROFIT_TRIM' : 'AUTO_EXIT';
+    const nextExitReason = partialTrim
+      ? 'PROFIT_TRIM'
+      : exitTriggerType === 'TRAILING_STOP'
+        ? 'SYNTHETIC_TRAILING_STOP'
+        : 'AUTO_EXIT';
     const claimNote = partialTrim
       ? ` [Profit trim claim created before SnapTrade ${orderType} ${exitAction} for ${exitQuantity}/${position.quantity} contracts]`
       : ` [Exit claim created before SnapTrade ${orderType} submission]`;
@@ -573,6 +621,7 @@ export class MarketPoller {
               last: quote.last,
               mid: quote.mid,
               spreadPct: quote.spreadPct || undefined,
+              quoteAgeMs: quote.quoteAgeMs ?? undefined,
               source: 'ibkr'
             }),
             iv: 0,
@@ -845,20 +894,76 @@ export class MarketPoller {
     const takeProfitReferencePremium = this.getTakeProfitReferencePremium(price, quoteContext);
     const noBidQuote = this.isNoBidQuote(quoteContext);
     const wideExitSpread = this.isWideExitSpread(quoteContext);
+    const isShortPremiumPosition = TradeLifecycleService.isShortPremiumPosition(position);
+    const configuredSyntheticTrailingPct = Number(position.trailing_stop_loss_pct || 0);
+    const syntheticTrailingConfigured = !position.is_simulated
+      && String(position.execution_broker || '').toLowerCase() === 'wealthsimple_snaptrade'
+      && !isShortPremiumPosition
+      && configuredSyntheticTrailingPct >= 1
+      && configuredSyntheticTrailingPct <= 50;
+    const syntheticQuoteFresh = this.isFreshSyntheticTrailQuote(quoteContext);
+    const syntheticState = analysis.syntheticTrailing && typeof analysis.syntheticTrailing === 'object'
+      ? analysis.syntheticTrailing
+      : {};
+    const syntheticT1 = Number(position.suggested_take_profit_1 || 0) || null;
+    const syntheticT2 = Number(position.suggested_take_profit_2 || 0) || null;
+    const syntheticT1Reached = this.isUnderlyingTargetReached(position, underlyingPrice, syntheticT1);
+    const strategySyntheticTrail = syntheticTrailingConfigured && Boolean(position.strategy_managed);
+    let syntheticTrailingActive = syntheticTrailingConfigured
+      && (!strategySyntheticTrail || syntheticState.active === true || String(position.profit_trim_status || '').toUpperCase() === 'DONE');
+
+    if (strategySyntheticTrail && !syntheticTrailingActive && syntheticT1Reached && syntheticQuoteFresh) {
+      syntheticTrailingActive = true;
+      analysis.syntheticTrailing = {
+        ...syntheticState,
+        enabled: true,
+        active: true,
+        pct: configuredSyntheticTrailingPct,
+        activation: 'TP1',
+        activatedAt: new Date().toISOString(),
+        t1Underlying: syntheticT1,
+        t2Underlying: syntheticT2
+      };
+      analysisDirty = true;
+      this.fastify.log.info(`[MarketPoller] Synthetic premium trail activated for position ${position.id} at TP1 with ${configuredSyntheticTrailingPct}%.`);
+    }
 
     const engineResult = StopLossEngine.evaluate(sellablePremium, {
       entry_price: Number(position.entry_price),
       stop_loss_trigger: Number(position.stop_loss_trigger),
       take_profit_trigger: position.take_profit_trigger ? Number(position.take_profit_trigger) : undefined,
       trailing_high_price: Number(position.trailing_high_price || position.entry_price),
-      trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
+      trailing_stop_loss_pct: syntheticTrailingActive && syntheticQuoteFresh ? configuredSyntheticTrailingPct : undefined,
+      trailing_floor_price: strategySyntheticTrail && syntheticTrailingActive ? Number(position.entry_price) : undefined,
     });
-    const bufferedTrailingHighPrice = engineResult.newHigh ?? Number(position.trailing_high_price || position.entry_price);
-    const bufferedStopLossTrigger = engineResult.newStopLoss
-      ?? (position.stop_loss_trigger == null ? null : Number(position.stop_loss_trigger));
+    const priorTrailingHighPrice = Number(position.trailing_high_price || position.entry_price);
+    const bufferedTrailingHighPrice = syntheticTrailingActive && !syntheticQuoteFresh
+      ? priorTrailingHighPrice
+      : engineResult.newHigh ?? priorTrailingHighPrice;
+    const bufferedStopLossTrigger = syntheticTrailingActive && !syntheticQuoteFresh
+      ? (position.stop_loss_trigger == null ? null : Number(position.stop_loss_trigger))
+      : engineResult.newStopLoss ?? (position.stop_loss_trigger == null ? null : Number(position.stop_loss_trigger));
 
-    const isShortPremiumPosition = TradeLifecycleService.isShortPremiumPosition(position);
-    let triggered = !isShortPremiumPosition && !noBidQuote && engineResult.triggered && engineResult.triggerType === 'TAKE_PROFIT';
+    if (syntheticTrailingActive && syntheticQuoteFresh) {
+      analysis.syntheticTrailing = {
+        ...syntheticState,
+        ...analysis.syntheticTrailing,
+        enabled: true,
+        active: true,
+        pct: configuredSyntheticTrailingPct,
+        highPremium: bufferedTrailingHighPrice,
+        stopPremium: bufferedStopLossTrigger,
+        quoteAgeMs: quoteContext.quoteAgeMs,
+        updatedAt: new Date().toISOString()
+      };
+      analysisDirty = true;
+    }
+
+    let triggered = !isShortPremiumPosition
+      && !noBidQuote
+      && engineResult.triggered
+      && engineResult.triggerType === 'TAKE_PROFIT'
+      && (!syntheticTrailingConfigured || syntheticQuoteFresh);
     let triggerType: ExitTriggerType | undefined = triggered ? 'TAKE_PROFIT' : undefined;
     let lossAvoided = engineResult.lossAvoided;
     if (position.strategy_managed && position.strategy_exit_requested_at) {
@@ -879,26 +984,40 @@ export class MarketPoller {
       position.mfe_pct = excursion.mfePct;
       position.mae_pct = excursion.maePct;
     }
-    const softPremiumStop = Number(position.stop_loss_trigger);
+    const softPremiumStop = Number(bufferedStopLossTrigger ?? position.stop_loss_trigger);
     const hardPremiumStop = Number(Math.max(entryPrice * 0.65, softPremiumStop * 0.85).toFixed(2));
     const softStopConfirmationMs = 10_000;
-    const premiumSoftStopHit = !isShortPremiumPosition && engineResult.triggered && engineResult.triggerType === 'STOP_LOSS';
-    const premiumHardStopHit = !isShortPremiumPosition && sellablePremium <= hardPremiumStop;
+    const premiumSoftStopHit = !isShortPremiumPosition
+      && engineResult.triggered
+      && engineResult.triggerType === 'STOP_LOSS'
+      && (!syntheticTrailingActive || syntheticQuoteFresh);
+    const premiumHardStopHit = !isShortPremiumPosition
+      && sellablePremium <= hardPremiumStop
+      && (!syntheticTrailingActive || syntheticQuoteFresh);
     const premiumTakeProfit = Number(position.take_profit_trigger || 0);
     const nearTakeProfitThreshold = premiumTakeProfit > 0 ? Number((premiumTakeProfit * 0.95).toFixed(2)) : null;
 
     // Strategy 1: Underlying structure informs stop-loss confirmation.
     const underlyingStop = position.suggested_stop_loss ? Number(position.suggested_stop_loss) : null;
-    const underlyingTarget = position.suggested_take_profit_1 ? Number(position.suggested_take_profit_1) : null;
+    const underlyingTarget = position.suggested_take_profit_2
+      ? Number(position.suggested_take_profit_2)
+      : position.suggested_take_profit_1
+        ? Number(position.suggested_take_profit_1)
+        : null;
     const underlyingStopBroken = this.isUnderlyingStopBroken(position, underlyingPrice, underlyingStop);
 
     const stopLossCandidate = !triggered && (
       underlyingStopBroken ||
-      (noBidQuote && softPremiumStop > 0) ||
+      (noBidQuote && softPremiumStop > 0 && (!syntheticTrailingActive || syntheticQuoteFresh)) ||
       premiumHardStopHit ||
       premiumSoftStopHit
     );
-    const stopLossEngineEnabled = stopLossCandidate ? await this.isStopLossEngineEnabledForUser(Number(position.user_id)) : true;
+    const syntheticTrailCandidate = syntheticTrailingActive && premiumSoftStopHit;
+    const stopLossEngineEnabled = syntheticTrailCandidate
+      ? true
+      : stopLossCandidate
+        ? await this.isStopLossEngineEnabledForUser(Number(position.user_id))
+        : true;
 
     if (!triggered && stopLossEngineEnabled) {
       if (underlyingStopBroken) {
@@ -950,10 +1069,12 @@ export class MarketPoller {
 
         if (underlyingStopBroken || confirmedByTime || confirmedByQuotes) {
           triggered = true;
-          triggerType = 'STOP_LOSS';
+          triggerType = syntheticTrailingActive ? 'TRAILING_STOP' : 'STOP_LOSS';
           lossAvoided = entryPrice - sellablePremium;
           analysis.smartStopWarning = {
-            status: underlyingStopBroken
+            status: syntheticTrailingActive
+              ? 'SYNTHETIC_TRAILING_STOP_CONFIRMED'
+              : underlyingStopBroken
               ? 'PREMIUM_STOP_STRUCTURE_CONFIRMED'
               : confirmedByQuotes
                 ? 'PREMIUM_STOP_QUOTE_CONFIRMED'
@@ -1003,6 +1124,7 @@ export class MarketPoller {
       && premiumTakeProfit > 0
       && nearTakeProfitThreshold !== null
       && takeProfitReferencePremium >= nearTakeProfitThreshold
+      && (!syntheticTrailingConfigured || syntheticQuoteFresh)
       && String(position.profit_trim_status || '').toUpperCase() !== 'DONE'
     ) {
       if (wideExitSpread && sellablePremium < premiumTakeProfit && !this.isLateDayExitWindow()) {
@@ -1043,7 +1165,33 @@ export class MarketPoller {
       analysisDirty = true;
     }
 
-    if (underlyingPrice && underlyingTarget && !triggered) {
+    if (strategySyntheticTrail && syntheticTrailingActive && !triggered) {
+      const t2Reached = this.isUnderlyingTargetReached(position, underlyingPrice, syntheticT2);
+      const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
+      const trimComplete = String(position.profit_trim_status || '').toUpperCase() === 'DONE';
+
+      if (t2Reached) {
+        analysis.syntheticTrailing = {
+          ...analysis.syntheticTrailing,
+          exitAtT2: true,
+          tp1TrimPending: false,
+          t2ReachedAt: new Date().toISOString()
+        };
+        analysisDirty = true;
+        triggered = true;
+        triggerType = 'TAKE_PROFIT';
+        this.fastify.log.info(`[MarketPoller] Synthetic trail position ${position.id} reached TP2; closing the remaining position.`);
+      } else if (syntheticT1Reached && quantity > 1 && !trimComplete) {
+        analysis.syntheticTrailing = {
+          ...analysis.syntheticTrailing,
+          tp1TrimPending: true
+        };
+        analysisDirty = true;
+        triggered = true;
+        triggerType = 'TAKE_PROFIT';
+        this.fastify.log.info(`[MarketPoller] Synthetic trail position ${position.id} reached TP1; submitting a protected partial trim.`);
+      }
+    } else if (underlyingPrice && underlyingTarget && !triggered && !strategySyntheticTrail) {
       const gexRegime = analysis.gexRegime || 'POSITIVE';
 
       if (gexRegime === 'NEGATIVE') {
@@ -1168,6 +1316,7 @@ export class MarketPoller {
         analysisData: analysisDirty ? analysis : undefined
       });
     }
+    if (analysisDirty) position.analysis_data = analysis;
 
     const currentExecutionStatus = String(position.execution_status || '');
     if (currentExecutionStatus.startsWith('EXIT_')) {
@@ -1225,17 +1374,31 @@ export class MarketPoller {
             let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
 
             if (exitTriggerType === 'TAKE_PROFIT') {
-                const takeProfitOrder = this.getTakeProfitOrderPreference(position, price, quoteContext);
-                limitPrice = takeProfitOrder.limitPrice;
-                orderType = takeProfitOrder.orderType;
-                this.fastify.log.info(`[MarketPoller] TAKE_PROFIT order preference for position ${position.id}: ${orderType}${limitPrice ? ` @ $${limitPrice}` : ''} (${takeProfitOrder.mode}).`);
+                if (partialTrim && analysis.syntheticTrailing?.tp1TrimPending === true) {
+                  orderType = 'LIMIT';
+                  limitPrice = sellablePremium.toFixed(2);
+                  this.fastify.log.info(`[MarketPoller] Synthetic TP1 trim for position ${position.id}: protected marketable LIMIT @ $${limitPrice}.`);
+                } else if (analysis.syntheticTrailing?.exitAtT2 === true) {
+                  orderType = 'LIMIT';
+                  limitPrice = sellablePremium.toFixed(2);
+                  this.fastify.log.info(`[MarketPoller] Synthetic TP2 exit for position ${position.id}: protected marketable LIMIT @ $${limitPrice}.`);
+                } else {
+                  const takeProfitOrder = this.getTakeProfitOrderPreference(position, price, quoteContext);
+                  limitPrice = takeProfitOrder.limitPrice;
+                  orderType = takeProfitOrder.orderType;
+                  this.fastify.log.info(`[MarketPoller] TAKE_PROFIT order preference for position ${position.id}: ${orderType}${limitPrice ? ` @ $${limitPrice}` : ''} (${takeProfitOrder.mode}).`);
+                }
             }
 
             const submitted = await this.submitSnapTradeExit(position, orderType, limitPrice, exitTriggerType, exitQuantity);
             if (submitted) {
               await (this.fastify as any).pg.query(
                 'INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)',
-                [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT' ? (position.suggested_take_profit_1 || position.take_profit_trigger) : (position.suggested_stop_loss || position.stop_loss_trigger), price]
+                [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT'
+                  ? (analysis.syntheticTrailing?.exitAtT2 === true
+                    ? (position.suggested_take_profit_2 || position.suggested_take_profit_1 || position.take_profit_trigger)
+                    : (position.suggested_take_profit_1 || position.take_profit_trigger))
+                  : (position.suggested_stop_loss || position.stop_loss_trigger), price]
               );
               this.notifyN8n(
                 position,

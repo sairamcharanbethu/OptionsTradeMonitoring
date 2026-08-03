@@ -5,6 +5,8 @@ import crypto from 'crypto';
 import { TradeRedisService } from './trade-redis-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
+import { MarketDataWriteBufferService } from './market-data-write-buffer-service';
+import { roundProtectiveStop } from './stop-loss-engine';
 import { getSettingsWithGlobalFallback, invalidateSettingsCache } from '../lib/settings-utils';
 
 const SNAPTRADE_API_TIMEOUT_MS = Number(process.env.SNAPTRADE_API_TIMEOUT_MS || 15000);
@@ -976,6 +978,7 @@ export class SnaptradeService {
                         if (isTrim && filledQty < currentQty) {
                             const isManualTrim = String(position.exit_reason || '').startsWith('MANUAL_TRIM');
                             const trimLabel = isManualTrim ? 'manual trim' : 'profit trim';
+                            const completedTrimAnalysis = this.markSyntheticTrimComplete(position.analysis_data);
                             await this.fastify.pg.query(
                                 `UPDATE positions
                                  SET quantity = quantity - $1,
@@ -991,11 +994,19 @@ export class SnaptradeService {
                                      profit_trimmed_at = CURRENT_TIMESTAMP,
                                      stop_loss_trigger = GREATEST(COALESCE(stop_loss_trigger, 0), entry_price),
                                      take_profit_trigger = NULL,
+                                     analysis_data = COALESCE($6::jsonb, analysis_data),
                                      notes = COALESCE(notes, '') || $5,
                                      updated_at = CURRENT_TIMESTAMP
-                                 WHERE id = $6`,
-                                [filledQty, status, fillPrice, realizedPnl, ` [SnapTrade ${trimLabel} fill confirmed: sold ${filledQty}/${currentQty} @ $${fillPrice}]`, position.id]
+                                 WHERE id = $7`,
+                                [filledQty, status, fillPrice, realizedPnl, ` [SnapTrade ${trimLabel} fill confirmed: sold ${filledQty}/${currentQty} @ $${fillPrice}]`,
+                                    completedTrimAnalysis, position.id]
                             );
+                            if (completedTrimAnalysis) {
+                                await redis.hset(`${MarketDataWriteBufferService.currentPrefix}:${position.id}`, {
+                                    analysisData: completedTrimAnalysis,
+                                    updatedAt: new Date().toISOString()
+                                });
+                            }
                             summary.trimmed += 1;
                             orderAction = 'trimmed';
                             await TradeRedisService.recordEvent(this.fastify.pg, {
@@ -1038,7 +1049,13 @@ export class SnaptradeService {
                         const finalEntryStatus = terminalEntryWithFill ? `${status}_WITH_FILL` : status;
                         const manualEntry = this.getManualEntryConfig(position);
                         const isShortOpen = TradeLifecycleService.isShortPremiumPosition(position);
-                        const stopLoss = manualEntry || isShortOpen ? null : Number((fillPrice * 0.8).toFixed(2));
+                        const syntheticTrailingPct = !isShortOpen
+                            ? Number(position.trailing_stop_loss_pct || 0)
+                            : 0;
+                        const syntheticManualStop = manualEntry && syntheticTrailingPct >= 1 && syntheticTrailingPct <= 50
+                            ? roundProtectiveStop(fillPrice * (1 - syntheticTrailingPct / 100))
+                            : null;
+                        const stopLoss = syntheticManualStop ?? (manualEntry || isShortOpen ? null : Number((fillPrice * 0.8).toFixed(2)));
                         const takeProfit = !isShortOpen && manualEntry?.takeProfitPct
                             ? Number((fillPrice * (1 + manualEntry.takeProfitPct / 100)).toFixed(2))
                             : !isShortOpen && takeProfitPct !== null
@@ -1053,7 +1070,10 @@ export class SnaptradeService {
                                  current_price = $3,
                                  stop_loss_trigger = $4,
                                  take_profit_trigger = $5,
-                                 trailing_high_price = GREATEST(COALESCE(trailing_high_price, 0), $3),
+                                 trailing_high_price = CASE
+                                   WHEN trailing_stop_loss_pct IS NOT NULL THEN $3
+                                   ELSE GREATEST(COALESCE(trailing_high_price, 0), $3)
+                                 END,
                                  execution_error = NULL,
                                  notes = COALESCE(notes, '') || $6,
                                  updated_at = CURRENT_TIMESTAMP
@@ -1071,7 +1091,17 @@ export class SnaptradeService {
                             metadata: { status: finalEntryStatus, fillPrice, filledQuantity, requestedQuantity }
                         });
                         if (!isShortOpen && manualEntry?.takeProfitPct && takeProfit) {
-                            await this.submitManualTakeProfit({ ...position, quantity: filledQuantity }, accountId, takeProfit, finalEntryStatus);
+                            if (syntheticTrailingPct >= 1 && syntheticTrailingPct <= 50) {
+                                await TradeRedisService.recordEvent(this.fastify.pg, {
+                                    userId,
+                                    positionId: position.id,
+                                    eventType: 'SYNTHETIC_TAKE_PROFIT_ARMED',
+                                    message: `App-managed take-profit armed at $${takeProfit.toFixed(2)} while synthetic trailing is enabled`,
+                                    metadata: { takeProfit, trailingStopPct: syntheticTrailingPct, fillStatus: finalEntryStatus }
+                                });
+                            } else {
+                                await this.submitManualTakeProfit({ ...position, quantity: filledQuantity }, accountId, takeProfit, finalEntryStatus);
+                            }
                         }
                     }
                     summary.orders.push({
@@ -1248,6 +1278,22 @@ export class SnaptradeService {
         };
     }
 
+    private markSyntheticTrimComplete(rawAnalysis: any): string | null {
+        let analysis: any = rawAnalysis;
+        if (typeof rawAnalysis === 'string') {
+            try { analysis = JSON.parse(rawAnalysis); } catch { return null; }
+        }
+        if (!analysis?.syntheticTrailing) return null;
+        return JSON.stringify({
+            ...analysis,
+            syntheticTrailing: {
+                ...analysis.syntheticTrailing,
+                tp1TrimPending: false,
+                trimCompletedAt: new Date().toISOString()
+            }
+        });
+    }
+
     private async submitManualTakeProfit(position: any, accountId: string, takeProfit: number, fillStatus: string) {
         const userId = Number(position.user_id);
         const quantity = Number(position.quantity || 1);
@@ -1400,7 +1446,14 @@ export class SnaptradeService {
 
         const optionSymbol = this.constructOSITicker(input.symbol, input.strike, input.optionType, input.expiration);
         const entryPrice = Math.max(Number(input.mark || limitPrice || 1), 0.01);
-        const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
+        const configuredSyntheticPct = Number(settings.synthetic_trailing_stop_pct || 15);
+        const syntheticTrailingPct = settings.synthetic_trailing_stop_enabled === 'true'
+            && Number.isFinite(configuredSyntheticPct)
+            && configuredSyntheticPct >= 1
+            && configuredSyntheticPct <= 50
+            ? configuredSyntheticPct
+            : null;
+        const premiumStopLoss = roundProtectiveStop(entryPrice * (1 - (syntheticTrailingPct ?? 20) / 100));
         const takeProfitPct = await this.getTakeProfitPct(userId);
         const premiumTakeProfit = takeProfitPct !== null
             ? Number((entryPrice * (1 + takeProfitPct / 100)).toFixed(2))
@@ -1444,10 +1497,10 @@ export class SnaptradeService {
                 premiumStopLoss,
                 premiumTakeProfit,
                 entryPrice,
-                null,
+                syntheticTrailingPct,
                 entryPrice,
                 accountId,
-                `[Dev SnapTrade live option test ${order.orderId || order.tradeId || 'submitted'}] [Auto exits: premium SL $${premiumStopLoss}, premium TP ${premiumTakeProfit === null ? 'suggested TP only' : `$${premiumTakeProfit}`}]`,
+                `[Dev SnapTrade live option test ${order.orderId || order.tradeId || 'submitted'}] [Auto exits: premium SL $${premiumStopLoss}, premium TP ${premiumTakeProfit === null ? 'suggested TP only' : `$${premiumTakeProfit}`}, synthetic trail ${syntheticTrailingPct === null ? 'off' : `${syntheticTrailingPct}%`}]`,
                 order.orderId || null,
                 order.tradeId || null,
                 premiumStopLoss,

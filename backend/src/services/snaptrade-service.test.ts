@@ -369,6 +369,74 @@ async function testPartialExitDoesNotCloseRemainingPosition() {
   assert(summary.orders[0]?.action === 'exit_partially_filled', 'A partial exit must be visible in broker reconciliation output');
 }
 
+async function testSyntheticManualFillKeepsTakeProfitInsideApp() {
+  const position = {
+    id: 79,
+    user_id: 7,
+    symbol: 'SPY',
+    option_type: 'CALL',
+    strike_price: 755,
+    expiration_date: '2026-08-03',
+    entry_price: 0.49,
+    current_price: 0.49,
+    quantity: 1,
+    contracts_requested: 1,
+    status: 'PENDING_ORDER',
+    execution_status: 'ACCEPTED',
+    execution_broker: 'wealthsimple_snaptrade',
+    broker_order_id: 'synthetic-entry',
+    execution_account_id: '7:snap-account',
+    account_id: '7:snap-account',
+    entry_action: 'BUY_TO_OPEN',
+    trailing_stop_loss_pct: 15,
+    analysis_data: {
+      manualEntry: { enabled: true, takeProfitPct: 10, stopLossPct: null },
+      syntheticTrailing: { enabled: true, active: true, pct: 15 }
+    }
+  };
+  let returnedPendingRows = false;
+  let fillUpdateSql = '';
+  let fillUpdateParams: any[] = [];
+  let nativeTakeProfitSubmitted = false;
+  const service = new SnaptradeService(createFastifyMockWithQueries(async (sql: string, params: any[] = []) => {
+    if (sql.includes('FROM positions') && sql.includes("status = 'PENDING_ORDER'") && !returnedPendingRows) {
+      returnedPendingRows = true;
+      return { rows: [position] };
+    }
+    if (sql.includes("key = 'take_profit_pct'")) return { rows: [] };
+    if (sql.includes("SET status = 'OPEN'")) {
+      fillUpdateSql = sql;
+      fillUpdateParams = params;
+    }
+    return { rows: [], rowCount: 1 };
+  }));
+  (service as any).submitManualTakeProfit = async () => { nativeTakeProfitSubmitted = true; };
+  (service as any).getSnaptradeClient = async () => ({
+    userIdStr: 'snap-user',
+    userSecret: 'snap-secret',
+    snaptrade: {
+      accountInformation: {
+        getUserAccountRecentOrders: async () => ({
+          data: [{
+            brokerage_order_id: 'synthetic-entry',
+            status: 'EXECUTED',
+            filled_quantity: 1,
+            execution_price: 0.50,
+            time_executed: '2026-08-03T14:00:00.000Z'
+          }]
+        })
+      }
+    }
+  });
+
+  const summary = await service.syncPendingBrokerOrders(7);
+  assert(summary.opened === 1, 'Synthetic manual entry should reconcile to OPEN');
+  assert(fillUpdateParams[3] === 0.43, `15% trail from a $0.50 fill should arm at $0.43, got ${fillUpdateParams[3]}`);
+  assert(fillUpdateParams[4] === 0.55, `10% app-managed take profit should be $0.55, got ${fillUpdateParams[4]}`);
+  assert(fillUpdateSql.includes('WHEN trailing_stop_loss_pct IS NOT NULL THEN $3'), 'Synthetic entry high must reset to the actual fill price');
+  assert(nativeTakeProfitSubmitted === false, 'Synthetic management must not place a conflicting standing broker take-profit order');
+}
+
 async function runTests() {
   console.log('Running SnaptradeService order payload tests...');
   await testPlaceOptionOrderUsesSingleLegForceOrderPayload();
@@ -378,6 +446,7 @@ async function runTests() {
   await testOrderStatusRepairsClosedAcceptedEntry();
   await testPartialEntryRemainsPendingUntilRemainderIsResolved();
   await testPartialExitDoesNotCloseRemainingPosition();
+  await testSyntheticManualFillKeepsTakeProfitInsideApp();
   console.log('All SnaptradeService order payload tests passed!');
 }
 

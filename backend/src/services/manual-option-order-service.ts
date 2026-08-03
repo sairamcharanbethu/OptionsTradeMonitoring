@@ -48,12 +48,16 @@ type ManualEntrySettings = {
   slippagePct: number;
   takeProfitPct: number | null;
   stopLossPct: number | null;
+  syntheticTrailingEnabled: boolean;
+  syntheticTrailingPct: number;
 };
 
 const SETTING_KEYS = {
   slippagePct: 'manual_entry_slippage_pct',
   takeProfitPct: 'manual_entry_take_profit_pct',
-  stopLossPct: 'manual_entry_stop_loss_pct'
+  stopLossPct: 'manual_entry_stop_loss_pct',
+  syntheticTrailingEnabled: 'synthetic_trailing_stop_enabled',
+  syntheticTrailingPct: 'synthetic_trailing_stop_pct'
 };
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
@@ -65,11 +69,16 @@ function normalizeSettings(settings: Record<string, string>): ManualEntrySetting
   const slippagePct = Number(settings[SETTING_KEYS.slippagePct] || 3);
   const takeProfitPct = Number(settings[SETTING_KEYS.takeProfitPct] || 0);
   const stopLossPct = Number(settings[SETTING_KEYS.stopLossPct] || 0);
+  const syntheticTrailingPct = Number(settings[SETTING_KEYS.syntheticTrailingPct] || 15);
 
   return {
     slippagePct: Number.isFinite(slippagePct) && slippagePct >= 0 ? slippagePct : 3,
     takeProfitPct: Number.isFinite(takeProfitPct) && takeProfitPct > 0 ? takeProfitPct : null,
-    stopLossPct: Number.isFinite(stopLossPct) && stopLossPct > 0 ? stopLossPct : null
+    stopLossPct: Number.isFinite(stopLossPct) && stopLossPct > 0 ? stopLossPct : null,
+    syntheticTrailingEnabled: settings[SETTING_KEYS.syntheticTrailingEnabled] === 'true',
+    syntheticTrailingPct: Number.isFinite(syntheticTrailingPct) && syntheticTrailingPct >= 1 && syntheticTrailingPct <= 50
+      ? syntheticTrailingPct
+      : 15
   };
 }
 
@@ -290,6 +299,9 @@ export class ManualOptionOrderService {
         ? (brokerFillPending ? MCP_MARKET_PENDING_ENTRY_PRICE : Number(Number(input.limitPrice).toFixed(2)))
         : Number(quote!.mark.toFixed(2));
       const isShortOpen = input.action === 'SELL_TO_OPEN';
+      const syntheticTrailingPct = !isShortOpen && manualSettings.syntheticTrailingEnabled
+        ? manualSettings.syntheticTrailingPct
+        : null;
       const takeProfitTrigger = !brokerFillPending && !isShortOpen && manualSettings.takeProfitPct
         ? Number((entryPrice * (1 + manualSettings.takeProfitPct / 100)).toFixed(2))
         : null;
@@ -313,8 +325,8 @@ export class ManualOptionOrderService {
           analysis_data, created_at, updated_at
         ) VALUES (
           $1, $2, $3, $4, $5,
-          $6, $7, NULL, $8,
-          $6, NULL, $6, $12, $13,
+          $6, $7, CASE WHEN $16::numeric IS NULL THEN NULL ELSE CEIL($6 * (1 - $16 / 100) * 100) / 100 END, $8,
+          $6, $16, $6, $12, $13,
           'PENDING_ORDER', FALSE, $9, $10, 'wealthsimple_snaptrade',
           NULL, NULL, $9, 'ENTRY_SUBMITTING', $7,
           $14, $15,
@@ -331,7 +343,7 @@ export class ManualOptionOrderService {
           input.quantity,
           takeProfitTrigger,
           accountId,
-          `[${sourceLabel}] ${input.orderType} ${input.action} preparing. ${brokerFillPending ? 'Broker fill price pending.' : `Stop loss display ${stopLossDisplay === null ? 'not set' : `$${stopLossDisplay}`}.`} Underlying stop ${underlyingStopPrice === null ? 'not set' : `$${underlyingStopPrice}`}.`,
+          `[${sourceLabel}] ${input.orderType} ${input.action} preparing. ${brokerFillPending ? 'Broker fill price pending.' : `Stop loss display ${stopLossDisplay === null ? 'not set' : `$${stopLossDisplay}`}.`} Synthetic trail ${syntheticTrailingPct === null ? 'off' : `${syntheticTrailingPct}% from fill`}. Underlying stop ${underlyingStopPrice === null ? 'not set' : `$${underlyingStopPrice}`}.`,
           {
             manualEntry: {
               enabled: input.source !== 'mcp',
@@ -348,12 +360,19 @@ export class ManualOptionOrderService {
               quote: quote ? toQuotePayload(quote) : null,
               quoteValidation: isMcpRelay ? 'skipped_mcp_relay' : 'ibkr_live_quote',
               brokerFillPending
+            },
+            syntheticTrailing: syntheticTrailingPct === null ? null : {
+              enabled: true,
+              active: true,
+              pct: syntheticTrailingPct,
+              activation: 'ENTRY_FILL'
             }
           },
           underlyingPrice,
           underlyingStopPrice,
           input.action,
-          TradeLifecycleService.exitActionForEntryAction(input.action)
+          TradeLifecycleService.exitActionForEntryAction(input.action),
+          syntheticTrailingPct
         ]
       );
       const positionId = insertResult.rows[0]?.id;

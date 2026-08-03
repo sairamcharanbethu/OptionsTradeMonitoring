@@ -834,7 +834,7 @@ Rules:
       discord_webhook_url: '',
       discord_alerts_enabled: 'false',
       trading_start_time: '09:30',
-      trading_cutoff_time: '15:30',
+      trading_cutoff_time: '16:00',
       strike_offset: '0',
       min_signal_score: '70',
       day_trading_ai_enabled: 'true',
@@ -858,6 +858,8 @@ Rules:
       entry_slippage_pct: '3',
       take_profit_pct: '',
       stop_loss_engine_enabled: 'true',
+      synthetic_trailing_stop_enabled: 'false',
+      synthetic_trailing_stop_pct: '15',
       live_trading_acknowledged: 'false'
     };
 
