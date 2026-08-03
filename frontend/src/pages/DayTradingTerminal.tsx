@@ -1029,10 +1029,10 @@ export default function DayTradingTerminal() {
       next: 'Check database reachability, credentials, and schema verification logs.'
     }
   ];
-  const paperPosition = paperAccount?.openPositions[0];
-  const paperUnrealizedPnl = paperPosition
-    ? (Number(paperPosition.current_price) - Number(paperPosition.entry_price)) * Number(paperPosition.quantity) * 100
-    : 0;
+  const paperUnrealizedPnl = paperAccount?.openPositions.reduce(
+    (total, position) => total + (Number(position.current_price) - Number(position.entry_price)) * Number(position.quantity) * 100,
+    0
+  ) || 0;
 
   return (
     <main className="day-trading-terminal mx-auto w-full max-w-[1440px] space-y-3 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4 sm:px-0 sm:pb-0">
@@ -1347,7 +1347,7 @@ export default function DayTradingTerminal() {
               </div>
               <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
-                Qualified setups are filled at protected market quotes with no paper trade-count or debit ceiling. Available cash and one concurrent position still preserve ledger integrity; live Wealthsimple orders remain manual.
+                Every distinct qualified setup can open concurrently at a protected market quote. Available cash, reservation accounting and per-setup deduplication preserve ledger integrity; live Wealthsimple orders remain manual.
               </p>
             </div>
             {paperAccount.canManage && (
@@ -1373,8 +1373,8 @@ export default function DayTradingTerminal() {
               detail={`${number(paperAccount.session.pnlPct)}%`}
               tone={paperAccount.session.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
             />
-            <Metric label="Trades today" value={`${paperAccount.session.entries} · unlimited`} detail="one position at a time" />
-            <Metric label="Open position" value={paperAccount.openPositions.length ? 'Managing' : 'Flat'} detail={paperAccount.health.lastProcessedAt ? `checked ${dateTime(paperAccount.health.lastProcessedAt)}` : 'waiting for snapshot'} />
+            <Metric label="Trades today" value={`${paperAccount.session.entries} · unlimited`} detail="distinct qualified setups" />
+            <Metric label="Open positions" value={String(paperAccount.openPositions.length)} detail={paperAccount.health.lastProcessedAt ? `checked ${dateTime(paperAccount.health.lastProcessedAt)}` : 'waiting for snapshot'} />
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-950/35 px-3 py-2 text-[11px] text-zinc-400">
@@ -1391,26 +1391,36 @@ export default function DayTradingTerminal() {
             <Metric label="Sizing value" value={`${paperAccount.baseline.valueAdded >= 0 ? '+' : ''}${money(paperAccount.baseline.valueAdded)}`} detail="managed − baseline" tone={paperAccount.baseline.valueAdded >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
           </div>
 
-          {paperAccount.openPositions[0] ? (
-            <div className="mt-4 grid gap-3 rounded-lg border border-violet-500/15 bg-violet-950/10 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
-              <div className="min-w-0">
-                <div className="break-all font-mono text-sm font-semibold text-zinc-100">
-                  {paperAccount.openPositions[0].symbol} {paperAccount.openPositions[0].option_type} {money(paperAccount.openPositions[0].strike_price)}
-                </div>
-                <div className="mt-1 text-xs text-zinc-400">
-                  {paperAccount.openPositions[0].quantity} contract{Number(paperAccount.openPositions[0].quantity) === 1 ? '' : 's'} · {paperAccount.openPositions[0].risk_tier || 'bounded'} risk · {String(paperAccount.openPositions[0].exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
-                </div>
-                <div className="mt-1 text-[11px] text-zinc-500">
-                  Structural SL → TP1 protection/trim → TP2 · {Number(paperAccount.openPositions[0].decision_trailing_stop_pct || paperAccount.limits.trailingStopPct)}% premium trail · {paperAccount.openPositions[0].policy_version || paperAccount.limits.policyVersion}
-                </div>
-              </div>
-              <div className="text-right font-mono text-xs">
-                <div className="text-zinc-300">
-                  {money(paperAccount.openPositions[0].entry_price)} → {money(paperAccount.openPositions[0].current_price)}
-                </div>
-                <div className={`mt-1 font-semibold ${paperUnrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
-                  Unrealized {paperUnrealizedPnl >= 0 ? '+' : ''}{money(paperUnrealizedPnl)}
-                </div>
+          {paperAccount.openPositions.length > 0 ? (
+            <div className="mt-4 space-y-2">
+              {paperAccount.openPositions.map(position => {
+                const unrealizedPnl = (Number(position.current_price) - Number(position.entry_price)) * Number(position.quantity) * 100;
+                return (
+                  <div key={position.id} className="grid gap-3 rounded-lg border border-violet-500/15 bg-violet-950/10 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                    <div className="min-w-0">
+                      <div className="break-all font-mono text-sm font-semibold text-zinc-100">
+                        {position.symbol} {position.option_type} {money(position.strike_price)}
+                      </div>
+                      <div className="mt-1 text-xs text-zinc-400">
+                        {position.quantity} contract{Number(position.quantity) === 1 ? '' : 's'} · {position.risk_tier || 'bounded'} risk · {String(position.exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
+                      </div>
+                      <div className="mt-1 text-[11px] text-zinc-500">
+                        Structural SL → TP1 protection/trim → TP2 · {Number(position.decision_trailing_stop_pct || paperAccount.limits.trailingStopPct)}% premium trail · {position.policy_version || paperAccount.limits.policyVersion}
+                      </div>
+                    </div>
+                    <div className="text-right font-mono text-xs">
+                      <div className="text-zinc-300">
+                        {money(position.entry_price)} → {money(position.current_price)}
+                      </div>
+                      <div className={`mt-1 font-semibold ${unrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                        Unrealized {unrealizedPnl >= 0 ? '+' : ''}{money(unrealizedPnl)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className={`text-right font-mono text-xs font-semibold ${paperUnrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                Total unrealized {paperUnrealizedPnl >= 0 ? '+' : ''}{money(paperUnrealizedPnl)}
               </div>
             </div>
           ) : paperAccount.recentDecisions[0] ? (

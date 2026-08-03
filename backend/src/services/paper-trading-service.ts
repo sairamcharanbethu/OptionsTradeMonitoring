@@ -29,7 +29,7 @@ export type PaperDecision = {
 };
 
 export class PaperTradingService {
-  private queuedSnapshot: { signal: Record<string, any>; setupId: string } | null = null;
+  private queuedSnapshots = new Map<string, { signal: Record<string, any>; setupId: string }>();
   private snapshotProcessing: Promise<void> | null = null;
   private monthlyTimer: NodeJS.Timeout | null = null;
   private lastError: string | null = null;
@@ -105,7 +105,7 @@ export class PaperTradingService {
         [ACCOUNT_ID, ET_DATE.format(new Date())]
       ),
       (this.fastify as any).pg.query(
-        `SELECT * FROM paper_trade_journal WHERE account_id=$1 ORDER BY created_at DESC LIMIT 50`, [ACCOUNT_ID]
+        `SELECT * FROM paper_trade_journal WHERE account_id=$1 ORDER BY created_at DESC LIMIT 250`, [ACCOUNT_ID]
       ),
       (this.fastify as any).pg.query(
         `SELECT
@@ -137,7 +137,7 @@ export class PaperTradingService {
         maxDebitPct: null,
         dailyLossPct: null,
         maxTradesPerDay: null,
-        maxOpenPositions: 1,
+        maxOpenPositions: null,
         maxContracts: null,
         trailingStopPct: this.trailingStopPct(settings),
         policyVersion: PAPER_POLICY_VERSION
@@ -337,7 +337,7 @@ export class PaperTradingService {
 
   public async processSnapshot(signal: Record<string, any>, setupId: string | null): Promise<void> {
     if (!setupId) return;
-    this.queuedSnapshot = { signal, setupId };
+    this.queuedSnapshots.set(setupId, { signal, setupId });
     if (!this.snapshotProcessing) {
       this.snapshotProcessing = this.drainSnapshots().finally(() => {
         this.snapshotProcessing = null;
@@ -348,16 +348,20 @@ export class PaperTradingService {
 
   private async drainSnapshots(): Promise<void> {
     let firstError: Error | null = null;
-    while (this.queuedSnapshot) {
-      const next = this.queuedSnapshot;
-      this.queuedSnapshot = null;
+    while (this.queuedSnapshots.size > 0) {
+      const nextSetupId = this.queuedSnapshots.keys().next().value as string;
+      const next = this.queuedSnapshots.get(nextSetupId)!;
+      this.queuedSnapshots.delete(nextSetupId);
       try {
         await this.processSnapshotOnce(next.signal, next.setupId);
       } catch (error: any) {
         firstError ||= error instanceof Error ? error : new Error(String(error));
       }
     }
-    if (firstError) throw firstError;
+    if (firstError) {
+      this.lastError = firstError.message;
+      throw firstError;
+    }
   }
 
   private async processSnapshotOnce(signal: Record<string, any>, setupId: string): Promise<void> {
@@ -450,13 +454,6 @@ export class PaperTradingService {
       'SELECT id FROM paper_trade_decisions WHERE account_id = $1 AND setup_id = $2', [ACCOUNT_ID, setupId]
     );
     if (existing.rows.length > 0) return;
-    const openCount = await (this.fastify as any).pg.query(
-      `SELECT
-         (SELECT COUNT(*) FROM positions WHERE paper_account_id=$1 AND status='OPEN')
-         + (SELECT COUNT(*) FROM paper_orders WHERE account_id=$1 AND intent='ENTRY' AND status='PENDING') AS count`,
-      [ACCOUNT_ID]
-    );
-    if (Number(openCount.rows[0]?.count || 0) >= 1) return;
     const today = ET_DATE.format(new Date());
     const bid = Number(option.bid);
     const ask = Number(option.ask);
@@ -559,20 +556,11 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         `SELECT cash_balance, reserved_cash, automation_status FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]
       );
       const available = Number(lockedAccount.rows[0]?.cash_balance || 0) - Number(lockedAccount.rows[0]?.reserved_cash || 0);
-      const lockedOpenCount = await client.query(
-        `SELECT
-           (SELECT COUNT(*) FROM positions WHERE paper_account_id=$1 AND status='OPEN')
-           + (SELECT COUNT(*) FROM paper_orders WHERE account_id=$1 AND intent='ENTRY' AND status='PENDING') AS count`,
-        [ACCOUNT_ID]
-      );
-      const positionAvailable = Number(lockedOpenCount.rows[0]?.count || 0) < 1;
-      if (lockedAccount.rows[0]?.automation_status !== 'ACTIVE' || available < reservedDebit || !positionAvailable) {
+      if (lockedAccount.rows[0]?.automation_status !== 'ACTIVE' || available < reservedDebit) {
         await client.query('ROLLBACK');
         const reason = lockedAccount.rows[0]?.automation_status !== 'ACTIVE'
           ? 'TRADE skipped because paper automation was paused before reservation.'
-          : !positionAvailable
-            ? 'TRADE skipped because another paper position or entry became active before reservation.'
-            : 'TRADE skipped because available paper cash changed before reservation.';
+          : 'TRADE skipped because available paper cash changed before reservation.';
         await this.journal('DECISION_SKIPPED', reason, decisionRow, null, protectedLimit, { availableCash: available, requiredDebit: reservedDebit });
         return;
       }
@@ -1002,26 +990,40 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
   }
 
   private async refreshAccountEquity(queryable: any = (this.fastify as any).pg): Promise<void> {
+    const account = await this.account(queryable);
+    const positions = await queryable.query(
+      `SELECT * FROM positions WHERE paper_account_id=$1 AND status='OPEN'`, [ACCOUNT_ID]
+    );
+    const openPositions = await this.applyLivePositions(positions.rows);
+    const equity = this.calculateEquity(account, openPositions);
     await queryable.query(
       `UPDATE paper_accounts pa SET
-         equity = pa.cash_balance + COALESCE((SELECT SUM(current_price * quantity * 100) FROM positions WHERE paper_account_id=pa.id AND status='OPEN'),0),
-         high_water_mark = GREATEST(pa.high_water_mark, pa.cash_balance + COALESCE((SELECT SUM(current_price * quantity * 100) FROM positions WHERE paper_account_id=pa.id AND status='OPEN'),0)),
+         equity = $1,
+         high_water_mark = GREATEST(pa.high_water_mark, $1),
          updated_at=NOW()
-       WHERE pa.id=$1`, [ACCOUNT_ID]
+       WHERE pa.id=$2`, [equity, ACCOUNT_ID]
     );
   }
 
   private async captureEquity(queryable: any = (this.fastify as any).pg): Promise<void> {
     const account = await this.account(queryable);
     const pnl = await queryable.query(
-      `SELECT COALESCE(SUM(realized_pnl),0) AS realized,
-              COALESCE(SUM(CASE WHEN status='OPEN' THEN (current_price-entry_price)*quantity*100 ELSE 0 END),0) AS unrealized
+      `SELECT COALESCE(SUM(realized_pnl),0) AS realized
        FROM positions WHERE paper_account_id=$1`, [ACCOUNT_ID]
     );
+    const positions = await queryable.query(
+      `SELECT * FROM positions WHERE paper_account_id=$1 AND status='OPEN'`, [ACCOUNT_ID]
+    );
+    const openPositions = await this.applyLivePositions(positions.rows);
+    const unrealized = Number(openPositions.reduce(
+      (total: number, position: any) => total
+        + (Number(position.current_price || 0) - Number(position.entry_price || 0)) * Number(position.quantity || 0) * 100,
+      0
+    ).toFixed(2));
     await queryable.query(
       `INSERT INTO paper_equity_snapshots (account_id,equity,cash_balance,reserved_cash,realized_pnl,unrealized_pnl)
        VALUES ($1,$2,$3,$4,$5,$6)`,
-      [ACCOUNT_ID, account.equity, account.cash_balance, account.reserved_cash, pnl.rows[0].realized, pnl.rows[0].unrealized]
+      [ACCOUNT_ID, account.equity, account.cash_balance, account.reserved_cash, pnl.rows[0].realized, unrealized]
     );
   }
 

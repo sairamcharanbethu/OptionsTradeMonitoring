@@ -137,6 +137,47 @@ async function run() {
   assert.equal(summary.openPositions[0].current_price, 1.31, 'paper summary must overlay the Redis option mark');
   assert.equal(summary.account.equity, 100_034, 'paper summary must calculate live equity from cash and the Redis mark');
   assert.equal(summary.session.pnl, 34, 'paper summary must calculate live session P&L without a PostgreSQL write');
+  assert.equal(summary.limits.maxOpenPositions, null, 'paper trading must not expose a concurrent-position ceiling');
+
+  const checkpointAccount = {
+    id: 'strategy-system', cash_balance: 99_500, reserved_cash: 0,
+    equity: 100_000, high_water_mark: 100_000
+  };
+  const checkpointPositions = [
+    { id: 21, entry_price: 1, current_price: 1, quantity: 1, status: 'OPEN' },
+    { id: 22, entry_price: 2, current_price: 2, quantity: 2, status: 'OPEN' }
+  ];
+  let capturedSnapshotValues: any[] | null = null;
+  const checkpointPg = {
+    query: async (sql: string, values: any[] = []) => {
+      if (sql.includes('SELECT * FROM paper_accounts')) return { rows: [checkpointAccount] };
+      if (sql.includes("FROM positions WHERE paper_account_id=$1 AND status='OPEN'")) return { rows: checkpointPositions };
+      if (sql.includes('SUM(realized_pnl)')) return { rows: [{ realized: 25 }] };
+      if (sql.includes('UPDATE paper_accounts pa SET')) {
+        checkpointAccount.equity = values[0];
+        checkpointAccount.high_water_mark = Math.max(checkpointAccount.high_water_mark, Number(values[0]));
+      }
+      if (sql.includes('INSERT INTO paper_equity_snapshots')) capturedSnapshotValues = values;
+      return { rows: [] };
+    }
+  };
+  const checkpointLiveState = new Map<string, Record<string, string>>([
+    ['paper:position:21:live', { currentPrice: '1.5', updatedAt: new Date().toISOString() }],
+    ['paper:position:22:live', { currentPrice: '2.5', updatedAt: new Date().toISOString() }]
+  ]);
+  const checkpointService = new PaperTradingService({
+    pg: checkpointPg,
+    log: { warn() {}, info() {}, error() {} }
+  } as any, {
+    isReady: () => true,
+    hgetall: async (key: string) => checkpointLiveState.get(key) || {}
+  }) as any;
+  await checkpointService.refreshAccountEquity();
+  await checkpointService.captureEquity();
+  assert.equal(checkpointAccount.equity, 100_150,
+    'a durable checkpoint must value every concurrent position from its Redis mark');
+  assert.deepEqual((capturedSnapshotValues as unknown as any[]).slice(1), [100_150, 99_500, 0, 25, 150],
+    'the equity snapshot must persist combined realized and Redis-priced unrealized P&L');
 
   let blockedDatabaseQueries = 0;
   const blockedService = new PaperTradingService({
@@ -176,9 +217,93 @@ async function run() {
   };
   const firstSnapshot = serializedService.processSnapshot({ state: 'ACTIVE' }, 'setup-one');
   const secondSnapshot = serializedService.processSnapshot({ state: 'ACTIVE' }, 'setup-two');
-  await Promise.all([firstSnapshot, secondSnapshot]);
+  const thirdSnapshot = serializedService.processSnapshot({ state: 'ACTIVE' }, 'setup-three');
+  await Promise.all([firstSnapshot, secondSnapshot, thirdSnapshot]);
   assert.equal(maxActiveSnapshots, 1, 'different strategy setups must never mutate the paper ledger concurrently');
-  assert.deepEqual(processedSetups, ['setup-one', 'setup-two'], 'the latest queued setup must run after the active setup');
+  assert.deepEqual(processedSetups, ['setup-one', 'setup-two', 'setup-three'],
+    'every distinct queued setup must run without overlapping ledger mutations');
+
+  const failureQueueService = new PaperTradingService({ log: { warn() {}, info() {}, error() {} } } as any, redis) as any;
+  failureQueueService.processSnapshotOnce = async (_signal: any, setupId: string) => {
+    failureQueueService.lastError = null;
+    if (setupId === 'setup-fails') throw new Error('first setup failed');
+  };
+  const failedSnapshot = failureQueueService.processSnapshot({ state: 'ACTIVE' }, 'setup-fails');
+  const successfulSnapshot = failureQueueService.processSnapshot({ state: 'ACTIVE' }, 'setup-succeeds');
+  await Promise.all([failedSnapshot, successfulSnapshot]).then(
+    () => { throw new Error('a queued setup failure must be surfaced'); },
+    (error: Error) => assert.match(error.message, /first setup failed/)
+  );
+  assert.equal(failureQueueService.getHealth().lastError, 'first setup failed',
+    'a later queued success must not erase an earlier setup failure from paper health');
+
+  let concurrentCapacityQueries = 0;
+  let concurrentOrderCreated = false;
+  let concurrentPendingProcessed = false;
+  const concurrentEntryClient = {
+    query: async (sql: string) => {
+      if (sql.includes('SELECT cash_balance, reserved_cash, automation_status')) {
+        return { rows: [{ cash_balance: 99_000, reserved_cash: 0, automation_status: 'ACTIVE' }] };
+      }
+      if (sql.includes('INSERT INTO paper_orders')) {
+        concurrentOrderCreated = true;
+        return { rows: [{ id: 301 }] };
+      }
+      return { rows: [] };
+    },
+    release() {}
+  };
+  const concurrentEntryService = new PaperTradingService({
+    pg: {
+      query: async (sql: string) => {
+        if (sql.includes('COUNT(*) FROM positions')) {
+          concurrentCapacityQueries += 1;
+          return { rows: [{ count: 1 }] };
+        }
+        if (sql.includes('SELECT * FROM paper_accounts')) {
+          return { rows: [{ cash_balance: 99_000, reserved_cash: 0, automation_status: 'ACTIVE' }] };
+        }
+        if (sql.includes('SELECT id FROM paper_trade_decisions')) return { rows: [] };
+        if (sql.includes('FROM settings s')) return { rows: [] };
+        if (sql.includes('SELECT id FROM signals')) return { rows: [{ id: 201 }] };
+        if (sql.includes('INSERT INTO paper_trade_decisions')) return { rows: [{
+          id: 202, setup_id: 'concurrent-setup', signal_id: 201, decision: 'TRADE',
+          policy_version: 'paper-exit-v2', quantity: 2
+        }] };
+        return { rows: [] };
+      },
+      connect: async () => concurrentEntryClient
+    },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  concurrentEntryService.processPendingEntry = async () => { concurrentPendingProcessed = true; };
+  await concurrentEntryService.maybeCreateEntry({
+    state: 'ACTIVE',
+    generated_at: Date.now() / 1000,
+    lifecycle: { entry_allowed: true },
+    favoring: 'calls',
+    confidence_score: 90,
+    market_context: { rvol_1m: 1.5 },
+    call_setup: {
+      invalidation: 754,
+      targets: [756, 757],
+      option: {
+        eligible: true,
+        bid: 0.49,
+        ask: 0.50,
+        mid: 0.495,
+        spread_pct: 2,
+        quote_age_seconds: 0.1,
+        expiry: '2026-08-03',
+        local_symbol: 'SPY 260803C00756000',
+        strike: 756
+      }
+    }
+  }, 'concurrent-setup');
+  assert.equal(concurrentCapacityQueries, 0,
+    'an existing paper position must not be queried as a capacity blocker for a distinct setup');
+  assert.equal(concurrentOrderCreated, true, 'a distinct qualified setup must reserve its own paper entry');
+  assert.equal(concurrentPendingProcessed, true, 'a newly reserved concurrent entry must proceed to autonomous fill processing');
 
   const entryQueries: string[] = [];
   let entryRedisDeletes = 0;
