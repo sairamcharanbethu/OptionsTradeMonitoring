@@ -11,7 +11,8 @@ import { blockingEconomicEvent, WallReactionProviders, WallReactionSymbol } from
 export const WALL_REACTION_POLICY_VERSION = 'wall-reaction-v1';
 const SYMBOLS: WallReactionSymbol[] = ['SPY', 'QQQ'];
 const LOOP_MS = 20_000;
-const CALENDAR_REFRESH_MS = 15 * 60_000;
+const CALENDAR_REFRESH_MS = 6 * 60 * 60_000;
+const CALENDAR_RETRY_MS = 15 * 60_000;
 
 export type WallReactionPlan = {
   wall: number;
@@ -163,7 +164,12 @@ export class WallReactionService {
   }
 
   public getState() {
-    return { policyVersion: WALL_REACTION_POLICY_VERSION, health: this.health, symbols: Object.fromEntries(this.state) };
+    return {
+      policyVersion: WALL_REACTION_POLICY_VERSION,
+      health: this.health,
+      calendar: this.providers.getCalendarHealth(),
+      symbols: Object.fromEntries(this.state)
+    };
   }
 
   public getCandidate(symbol: WallReactionSymbol): WallReactionCandidate | null {
@@ -192,20 +198,22 @@ export class WallReactionService {
         this.health = { status: 'DISABLED', lastRunAt: now.toISOString(), lastError: null };
         return;
       }
-      const apiKey = settings.trading_economics_api_key || '';
-      const calendarRetryMs = this.lastCalendarRefresh ? CALENDAR_REFRESH_MS : 60_000;
-      if (Date.now() - this.lastCalendarAttempt >= calendarRetryMs) {
-        this.lastCalendarAttempt = Date.now();
+      const calendarRetryMs = this.lastCalendarRefresh ? CALENDAR_REFRESH_MS : CALENDAR_RETRY_MS;
+      if (now.getTime() - this.lastCalendarAttempt >= calendarRetryMs) {
+        this.lastCalendarAttempt = now.getTime();
         try {
-          await this.providers.refreshCalendar(apiKey, now);
-          this.lastCalendarRefresh = Date.now();
+          await this.providers.refreshCalendar(now);
+          this.lastCalendarRefresh = now.getTime();
         } catch (error: any) {
           this.fastify.log.warn(`[WallReaction] Economic calendar refresh failed: ${error.message}`);
         }
       }
       const results = await Promise.allSettled(SYMBOLS.map((symbol) => this.runSymbol(symbol, settings, now)));
       const errors = results.flatMap((result) => result.status === 'rejected' ? [String(result.reason?.message || result.reason)] : []);
-      this.health = { status: errors.length ? 'DEGRADED' : 'UP', lastRunAt: now.toISOString(), lastError: errors.join('; ') || null };
+      const calendarHealth = this.providers.getCalendarHealth(now);
+      if (calendarHealth.status !== 'READY' && calendarHealth.lastError) errors.push(calendarHealth.lastError);
+      if (calendarHealth.status === 'COVERAGE_MISSING') errors.push(`Economic calendar coverage ends ${calendarHealth.coverageThrough}`);
+      this.health = { status: errors.length ? 'DEGRADED' : 'UP', lastRunAt: now.toISOString(), lastError: [...new Set(errors)].join('; ') || null };
     } catch (error: any) {
       this.health = { status: 'ERROR', lastRunAt: now.toISOString(), lastError: error.message || String(error) };
       this.fastify.log.error(`[WallReaction] Runtime failed: ${this.health.lastError}`);
