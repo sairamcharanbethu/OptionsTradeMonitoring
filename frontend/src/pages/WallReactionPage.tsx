@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, AlertTriangle, CheckCircle2, Clock3, Loader2, Pause, Play, RefreshCw, ShieldCheck, Target } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle2, Clock3, Info, Loader2, Pause, Play, RefreshCw, ShieldCheck, Target } from 'lucide-react';
 import { api, User, WallReactionCandidate, WallReactionPaperSummary, WallReactionState } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -27,6 +27,74 @@ function eventTime(timestamp?: string | null) {
   return new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
   }).format(parsed);
+}
+
+function CalendarHealthPanel({ calendar }: { calendar: WallReactionState['calendar'] }) {
+  const ready = calendar.status === 'READY';
+  const upcomingEvents = calendar.upcomingEvents || (calendar.nextEvent ? [calendar.nextEvent] : []);
+  const sources = calendar.sources || [];
+  const blockingEventCount = calendar.blockingEventCount ?? calendar.eventCount;
+  const informationalEventCount = calendar.informationalEventCount ?? 0;
+  return (
+    <section aria-labelledby="wall-reaction-calendar-title" className={`rounded-lg border p-4 ${ready ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/10'}`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-2">
+          {ready ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />}
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 id="wall-reaction-calendar-title" className="font-medium">Official macro calendar</h2>
+              <Badge variant="outline">{blockingEventCount} blocking</Badge>
+              <Badge variant="secondary">{informationalEventCount} informational</Badge>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">Verified coverage through {calendar.coverageThrough}. Only blocking events close the entry gate.</p>
+          </div>
+        </div>
+        <div className="text-xs text-muted-foreground sm:text-right">
+          <div>{calendar.eventCount} events in verified coverage</div>
+          <div>Last live refresh: {calendar.lastRefreshAt ? eventTime(calendar.lastRefreshAt) : 'Bundled schedule active'}</div>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        <div className="rounded-md border bg-background/60 p-3">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Next blocking window</div>
+          <div className="mt-1 font-medium">{calendar.nextBlockingEvent?.name || 'None in current coverage'}</div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            {eventTime(calendar.nextBlockingEvent?.scheduledAt)}{calendar.nextBlockingEvent ? ` · ${calendar.nextBlockingEvent.source}` : ''}
+          </div>
+        </div>
+        <div className="rounded-md border bg-background/60 p-3">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Source status</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {sources.map((source) => (
+              <Badge key={source.source} variant={source.mode === 'LIVE' ? 'default' : source.mode === 'CACHED' ? 'outline' : 'secondary'} title={source.lastError || undefined}>
+                {source.source} · {source.mode.toLowerCase()}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {calendar.lastError && <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">Live refresh degraded; verified fallback remains active. {calendar.lastError}</p>}
+
+      <details className="mt-3 rounded-md border bg-background/40 px-3 py-2 text-xs">
+        <summary className="cursor-pointer font-medium text-foreground">Next verified events ({upcomingEvents.length} shown)</summary>
+        {upcomingEvents.length === 0 ? <p className="mt-2 text-muted-foreground">No upcoming events in current coverage.</p> : (
+          <div className="mt-2 divide-y">
+            {upcomingEvents.map((event) => (
+              <div key={`${event.source}-${event.name}-${event.scheduledAt}`} className="flex flex-col gap-1 py-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-start gap-2">
+                  {event.impact === 'BLOCKING' ? <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" /> : <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+                  <div className="min-w-0"><div className="font-medium text-foreground">{event.name}</div><div className="text-muted-foreground">{event.source} · {event.impact === 'BLOCKING' ? 'Entry gate closes 30 min before to 15 min after' : 'Information only'}</div></div>
+                </div>
+                <time dateTime={event.scheduledAt} className="shrink-0 pl-5 tabular-nums text-muted-foreground sm:pl-0">{eventTime(event.scheduledAt)}</time>
+              </div>
+            ))}
+          </div>
+        )}
+      </details>
+    </section>
+  );
 }
 
 function CandidateCard({ candidate, canManage, busy, onArm }: { candidate?: WallReactionCandidate; canManage: boolean; busy: boolean; onArm: (candidate: WallReactionCandidate) => void }) {
@@ -154,15 +222,7 @@ export default function WallReactionPage({ user }: { user: User }) {
 
       {error && <div role="alert" className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"><AlertTriangle className="mt-0.5 h-4 w-4" /><span>{error}</span></div>}
 
-      {state?.calendar && (
-        <div className={`flex flex-col gap-2 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between ${state.calendar.status === 'READY' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/10'}`}>
-          <div className="flex items-start gap-2">
-            {state.calendar.status === 'READY' ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />}
-            <div><div className="font-medium">Official macro calendar · covered through {state.calendar.coverageThrough}</div><p className="mt-0.5 text-xs text-muted-foreground">BLS, BEA, Federal Reserve, and ISM · {state.calendar.eventCount} verified events</p>{state.calendar.lastError && <p className="mt-1 text-xs text-muted-foreground">Refresh note: {state.calendar.lastError}</p>}</div>
-          </div>
-          <div className="text-xs text-muted-foreground sm:text-right"><div className="font-medium text-foreground">Next: {state.calendar.nextEvent?.name || 'None scheduled'}</div><div>{eventTime(state.calendar.nextEvent?.scheduledAt)}</div></div>
-        </div>
-      )}
+      {state?.calendar && <CalendarHealthPanel calendar={state.calendar} />}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card><CardContent className="pt-5"><Metric label="Paper equity" value={paper ? money.format(Number(paper.account.equity)) : '—'} /></CardContent></Card>

@@ -266,7 +266,7 @@ export interface WallReactionCandidate {
     msi: number; gapPct: number | null; gapBasis: string; warnings: string[];
   };
   decision: { code: string; setup: string; direction: string; confidence: number; riskMultiplier: number; action: string; reasons: string[]; warnings: string[] };
-  macro: { blocked: boolean; reason: string; event: null | { name: string; scheduledAt: string } };
+  macro: { blocked: boolean; reason: string; event: null | { name: string; source: string; impact: 'BLOCKING' | 'INFORMATIONAL'; scheduledAt: string } };
   plan: null | { wall: number; invalidation: number; target1: number; target2: number | null; riskPoints: number; baseRiskDollars: number; debitBudget: number };
   contract: null | { ticker: string; expiration: string; right: 'call' | 'put'; strike: number; bid: number; ask: number; mark: number; spreadPct: number; delta: number; protectedLimit: number; quantity: number; quoteTimestamp: string };
 }
@@ -281,9 +281,22 @@ export interface WallReactionState {
     lastRefreshAt: string | null;
     lastError: string | null;
     eventCount: number;
-    nextEvent: null | { name: string; source: string; scheduledAt: string };
+    blockingEventCount: number;
+    informationalEventCount: number;
+    nextEvent: null | WallReactionCalendarEvent;
+    nextBlockingEvent: null | WallReactionCalendarEvent;
+    upcomingEvents: WallReactionCalendarEvent[];
+    sources: Array<{ source: string; mode: 'LIVE' | 'CACHED' | 'BUNDLED'; lastRefreshAt: string | null; lastError: string | null }>;
   };
   symbols: Partial<Record<'SPY' | 'QQQ', WallReactionCandidate>>;
+}
+
+export interface WallReactionCalendarEvent {
+  id: string;
+  name: string;
+  source: string;
+  impact: 'BLOCKING' | 'INFORMATIONAL';
+  scheduledAt: string;
 }
 
 export interface WallReactionPaperSummary {

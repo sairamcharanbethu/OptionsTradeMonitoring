@@ -203,7 +203,7 @@ export class WallReactionService {
         this.lastCalendarAttempt = now.getTime();
         try {
           await this.providers.refreshCalendar(now);
-          this.lastCalendarRefresh = now.getTime();
+          if (this.providers.getCalendarHealth(now).status === 'READY') this.lastCalendarRefresh = now.getTime();
         } catch (error: any) {
           this.fastify.log.warn(`[WallReaction] Economic calendar refresh failed: ${error.message}`);
         }

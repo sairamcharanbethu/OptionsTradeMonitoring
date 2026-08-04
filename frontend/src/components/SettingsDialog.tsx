@@ -1331,8 +1331,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </div>
                                     <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
                                         <div className="font-semibold text-foreground">Official US macro calendar</div>
-                                        <p className="mt-1 leading-relaxed">No API key is required. Verified BLS, BEA, Federal Reserve, and ISM events close the entry gate from 30 minutes before through 15 minutes after.</p>
-                                        <p className="mt-2 text-[10px] leading-relaxed">The dashboard reports calendar coverage and refresh health. Entries fail closed when verified date coverage expires.</p>
+                                        <p className="mt-1 leading-relaxed">No API key is required. Blocking BLS, BEA, Federal Reserve, and ISM events close the entry gate from 30 minutes before through 15 minutes after; selected Census releases are informational.</p>
+                                        <p className="mt-2 text-[10px] leading-relaxed">The dashboard distinguishes live, cached, and bundled sources. Entries fail closed when verified date coverage expires.</p>
                                     </div>
                                 </div>
                                 <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-muted-foreground">
