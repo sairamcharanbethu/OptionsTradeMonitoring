@@ -112,7 +112,7 @@ export default function StrategyGuidePage() {
           <BulletList
             items={[
               'On entry, the default premium stop is 20 percent below fill or mark. A $2.00 entry creates a $1.60 displayed stop.',
-              'If take-profit percentage is configured, the app stores a premium take-profit trigger from the entry price.',
+              'If take-profit percentage is configured, manual and non-synthetic positions store a premium take-profit trigger from the entry price. Autonomous strategy positions with synthetic trailing use TP1/TP2 instead.',
               'The signal also stores underlying stop and target levels, so the exit monitor can consider both option premium and underlying structure.',
               'Entry orders default to LIMIT when mark is available and order settings allow it; otherwise the app can use MARKET based on settings.'
             ]}
@@ -131,6 +131,7 @@ export default function StrategyGuidePage() {
           <BulletList
             items={[
               'The sellable premium is used for TP decisions, not only the last traded price.',
+              'For an autonomous strategy position with synthetic trailing, the fixed premium override is suppressed so TP1 can activate the trail and TP2 can complete the exit.',
               'At or past the TP premium, the app prefers MARKET exits so profit is not missed.',
               'Near TP means 95 percent or more of the configured TP. In that zone, the app can submit a LIMIT order at the TP price.',
               'If the exit spread is wide and price is below target, near-TP limit submission can be blocked until conditions improve.',

@@ -1087,11 +1087,12 @@ export class TradeExecutionService {
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
     const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
     const configuredTakeProfitPct = this.parseOptionalPct(execution.takeProfitPct, 500);
-    const premiumTakeProfit = configuredTakeProfitPct !== null
-      ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
-      : null;
     const syntheticTrailingPct = !execution.isSimulated && execution.syntheticTrailingEnabled
       ? this.parseOptionalPct(execution.syntheticTrailingPct || '15', 50)
+      : null;
+    const premiumTakeProfit = configuredTakeProfitPct !== null
+      && !(strategyManaged && syntheticTrailingPct !== null)
+      ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
       : null;
 
     const { rows } = await this.fastify.pg.query(

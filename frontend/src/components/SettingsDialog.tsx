@@ -1219,7 +1219,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 placeholder="Blank = no premium override"
                                             />
                                             <p className="text-[10px] text-muted-foreground">
-                                                Live long positions can submit an automatic exit near this premium gain. Example: 10 turns a $0.49 fill into a $0.54 target. Leave blank to use strategy targets only.
+                                                Live long positions can submit an automatic exit near this premium gain. Example: 10 turns a $0.49 fill into a $0.54 target. Autonomous strategy positions use TP1/TP2 instead while synthetic trailing is enabled. Leave blank to use strategy targets only.
                                             </p>
                                         </div>
 
@@ -1276,7 +1276,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 />
                                             </div>
                                             <p className="text-[10px] text-muted-foreground">
-                                                App-managed only; no trailing order is sent to Wealthsimple. The saved policy is frozen onto new live positions: strategy trades activate after TP1, while manual long entries activate from fill and keep configured take-profit exits inside the app monitor. Existing positions keep their entry-time policy. Protection requires a healthy backend and fresh IBKR quotes.
+                                                App-managed only; no trailing order is sent to Wealthsimple. The saved policy is frozen onto new live positions: autonomous strategy trades follow TP1/TP2 and activate the trail after TP1 without a fixed premium take-profit override, while manual long entries activate from fill and keep configured take-profit exits inside the app monitor. Existing positions keep their entry-time policy. Protection requires a healthy backend and fresh IBKR quotes.
                                             </p>
                                         </div>
                                     </div>

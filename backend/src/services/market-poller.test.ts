@@ -297,6 +297,50 @@ async function testSyntheticTrailActivatesAtTp1WithoutClosingOneContract() {
   assert(Number(buffered.stopLossTrigger) === 1.02, `Expected 15% trail at $1.02, got ${buffered.stopLossTrigger}`);
 }
 
+async function testStrategySyntheticTrailIgnoresFixedPremiumTakeProfitBeforeTp1() {
+  const redisMock = createMarketDataRedisMock() as any;
+  const submitted: any[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [], rowCount: 1 }) }
+  } as any;
+  const poller = new MarketPoller(fastify, redisMock) as any;
+  poller.submitSnapTradeExit = async (...args: any[]) => { submitted.push(args); return true; };
+  poller.notifyN8n = () => {};
+
+  await poller.processPositionExitUpdate({
+    id: 58,
+    user_id: 7,
+    symbol: 'SPY',
+    status: 'OPEN',
+    is_simulated: false,
+    execution_broker: 'wealthsimple_snaptrade',
+    execution_status: 'FILLED',
+    strategy_managed: true,
+    entry_price: 1,
+    current_price: 1,
+    quantity: 1,
+    stop_loss_trigger: 0.8,
+    take_profit_trigger: 1.1,
+    trailing_high_price: 1,
+    trailing_stop_loss_pct: 15,
+    suggested_take_profit_1: 755,
+    suggested_take_profit_2: 756,
+    expiration_date: '2099-08-03',
+    option_type: 'CALL',
+    analysis_data: {}
+  }, 1.2, undefined, undefined, 754.8, {
+    bid: 1.19,
+    ask: 1.21,
+    mid: 1.2,
+    spreadPct: 1.67,
+    quoteAgeMs: 100,
+    source: 'ibkr'
+  });
+
+  assert(submitted.length === 0, 'A fixed premium override must not preempt an autonomous strategy synthetic trail before TP1');
+}
+
 async function testSyntheticTrailTp1TrimsMultipleContractsAtBid() {
   const redisMock = createMarketDataRedisMock() as any;
   const submitted: any[] = [];
@@ -554,6 +598,7 @@ async function runTests() {
   await testPendingAndReviewExitsStayUnresolved();
   await testExpirationUsesNewYorkTradingDate();
   await testOrdinaryQuoteUpdatesStayOutOfPostgres();
+  await testStrategySyntheticTrailIgnoresFixedPremiumTakeProfitBeforeTp1();
   await testSyntheticTrailActivatesAtTp1WithoutClosingOneContract();
   await testSyntheticTrailTp1TrimsMultipleContractsAtBid();
   await testSyntheticTrailNeedsTwoBreachQuotesBeforeMarketExit();

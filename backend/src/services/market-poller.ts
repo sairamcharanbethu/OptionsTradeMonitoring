@@ -966,7 +966,9 @@ export class MarketPoller {
     const engineResult = StopLossEngine.evaluate(sellablePremium, {
       entry_price: Number(position.entry_price),
       stop_loss_trigger: Number(position.stop_loss_trigger),
-      take_profit_trigger: position.take_profit_trigger ? Number(position.take_profit_trigger) : undefined,
+      take_profit_trigger: !strategySyntheticTrail && position.take_profit_trigger
+        ? Number(position.take_profit_trigger)
+        : undefined,
       trailing_high_price: Number(position.trailing_high_price || position.entry_price),
       trailing_stop_loss_pct: syntheticTrailingActive && syntheticQuoteFresh ? configuredSyntheticTrailingPct : undefined,
       trailing_floor_price: strategySyntheticTrail && syntheticTrailingActive ? Number(position.entry_price) : undefined,
@@ -1029,7 +1031,7 @@ export class MarketPoller {
     const premiumHardStopHit = !isShortPremiumPosition
       && sellablePremium <= hardPremiumStop
       && (!syntheticTrailingActive || syntheticQuoteFresh);
-    const premiumTakeProfit = Number(position.take_profit_trigger || 0);
+    const premiumTakeProfit = strategySyntheticTrail ? 0 : Number(position.take_profit_trigger || 0);
     const nearTakeProfitThreshold = premiumTakeProfit > 0 ? Number((premiumTakeProfit * 0.95).toFixed(2)) : null;
 
     // Strategy 1: Underlying structure informs stop-loss confirmation.

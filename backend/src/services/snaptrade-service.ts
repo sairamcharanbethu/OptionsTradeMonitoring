@@ -1162,13 +1162,16 @@ export class SnaptradeService {
                         const syntheticTrailingPct = !isShortOpen
                             ? Number(position.trailing_stop_loss_pct || 0)
                             : 0;
+                        const strategySyntheticTrailing = Boolean(position.strategy_managed)
+                            && syntheticTrailingPct >= 1
+                            && syntheticTrailingPct <= 50;
                         const syntheticManualStop = manualEntry && syntheticTrailingPct >= 1 && syntheticTrailingPct <= 50
                             ? roundProtectiveStop(fillPrice * (1 - syntheticTrailingPct / 100))
                             : null;
                         const stopLoss = syntheticManualStop ?? (manualEntry || isShortOpen ? null : Number((fillPrice * 0.8).toFixed(2)));
-                        const takeProfit = !isShortOpen && manualEntry?.takeProfitPct
+                        const takeProfit = !strategySyntheticTrailing && !isShortOpen && manualEntry?.takeProfitPct
                             ? Number((fillPrice * (1 + manualEntry.takeProfitPct / 100)).toFixed(2))
-                            : !isShortOpen && takeProfitPct !== null
+                            : !strategySyntheticTrailing && !isShortOpen && takeProfitPct !== null
                             ? Number((fillPrice * (1 + takeProfitPct / 100)).toFixed(2))
                             : null;
                         await this.fastify.pg.query(

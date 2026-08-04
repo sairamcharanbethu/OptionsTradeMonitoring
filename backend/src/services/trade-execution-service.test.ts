@@ -621,7 +621,7 @@ async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
   }
 }
 
-async function testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit() {
+async function testStrategyManagedSyntheticTrailUsesStrategyTargets() {
   let insertParams: any[] = [];
   const service = new TradeExecutionService({
     log: { info: () => {}, warn: () => {}, error: () => {} },
@@ -664,7 +664,7 @@ async function testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit() {
     notes: '[test entry]'
   });
 
-  assert(insertParams[8] === 0.54, `A 10% strategy premium override on a $0.49 entry should store $0.54, got ${insertParams[8]}`);
+  assert(insertParams[8] === null, `A strategy synthetic trail should leave the fixed premium take-profit unset, got ${insertParams[8]}`);
   assert(insertParams[10] === 15, `A live synthetic trail should freeze 15% on the position, got ${insertParams[10]}`);
   assert(insertParams[25] === 740, `The first strategy target must be stored as TP1, got ${insertParams[25]}`);
   assert(insertParams[26] === 738, `The final strategy target must be stored as TP2, got ${insertParams[26]}`);
@@ -773,7 +773,7 @@ async function runTests() {
   await testStrategyDebitPlanUsesSubmittedLimit();
   await testPreSubmitRiskDenialSkipsBeforeBrokerPath();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
-  await testStrategyManagedEntryKeepsConfiguredPremiumTakeProfit();
+  await testStrategyManagedSyntheticTrailUsesStrategyTargets();
   await testLiveEntryUsesCorrelatedExposureLockAndFailsClosed();
   await testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim();
   await testFreshQuotePlannedLossRespectsRemainingDailyBudget();
