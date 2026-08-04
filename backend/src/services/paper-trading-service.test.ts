@@ -558,6 +558,7 @@ async function run() {
   assert.equal(calendarService.exitAlertType('END_OF_DAY_RECOVERY'), 'EOD', 'recovered EOD exits must not be mislabeled as stop losses');
   assert.equal(calendarService.exitAlertType('STRATEGY_TERMINAL'), 'EXIT', 'strategy-terminal exits must use a neutral exit alert');
   assert.equal(calendarService.exitAlertType('MANUAL_EXIT'), 'EXIT', 'manual exits must use a neutral exit alert');
+  assert.equal(calendarService.exitAlertType('MANUAL_FORCE_EXIT'), 'EXIT', 'forced paper exits must use a neutral exit alert');
   assert.equal(calendarService.exitAlertType('PREMIUM_STOP'), 'SL', 'premium stops must remain stop-loss alerts');
   assert.equal(
     calendarService.mandatoryFlattenDue({ expiration_date: '2026-11-27' }, new Date('2026-11-27T17:20:00.000Z')),
@@ -591,10 +592,12 @@ async function run() {
   let manualCloseCall: any = null;
   let manualQuoteTicker = '';
   let manualFinalExitReason = 'MANUAL_EXIT';
+  let manualFinalExitPrice = 0.85;
+  let manualFinalRealizedPnl = -35;
   const manualCloseService = new PaperTradingService({
     pg: {
       query: async (sql: string) => sql.includes('SELECT status, exit_reason')
-        ? { rows: [{ status: 'CLOSED', exit_reason: manualFinalExitReason, exit_price: 0.85, realized_pnl: -35 }] }
+        ? { rows: [{ status: 'CLOSED', exit_reason: manualFinalExitReason, exit_price: manualFinalExitPrice, realized_pnl: manualFinalRealizedPnl }] }
         : { rows: [manualPosition] }
     },
     ibkrMarketData: {
@@ -632,10 +635,46 @@ async function run() {
   manualCloseCall = null;
   await assert.rejects(
     () => manualCloseService.closeOpenPosition(91, 7),
-    (error: any) => error.statusCode === 409 && /no older than 15 seconds/.test(error.message),
+    (error: any) => error.statusCode === 409
+      && error.code === 'PAPER_FRESH_QUOTE_REQUIRED'
+      && /no older than 15 seconds/.test(error.message),
     'manual close must reject a quote without a trustworthy provider age'
   );
   assert.equal(manualCloseCall, null, 'a stale manual close must not enter the ledger path');
+
+  manualFinalExitReason = 'MANUAL_FORCE_EXIT';
+  manualFinalExitPrice = 0.90;
+  manualFinalRealizedPnl = -30;
+  manualCloseService.getLivePosition = async () => ({
+    currentPrice: 0.90,
+    underlyingPrice: 752,
+    analysis: {},
+    updatedAt: new Date(Date.now() - 2_000).toISOString()
+  });
+  manualCloseService.closePaperQuantity = async (...args: any[]) => { manualCloseCall = args; };
+  const forcedCloseResult = await manualCloseService.closeOpenPosition(91, 7, true);
+  const forcedLedgerCall = manualCloseCall as any[] | null;
+  assert.ok(forcedLedgerCall, 'force close must enter the ledger path');
+  assert.equal(forcedLedgerCall[2], 0.90, 'force close must use the latest Redis paper mark when IBKR is stale');
+  assert.equal(forcedLedgerCall[3], 'MANUAL_FORCE_EXIT', 'force close must use a distinct auditable exit intent');
+  assert.equal(forcedLedgerCall[4].forced, true, 'force close metadata must identify the forced ledger exit');
+  assert.equal(forcedLedgerCall[4].priceSource, 'REDIS_LAST_MARK', 'force close metadata must identify the Redis price source');
+  assert.equal(forcedCloseResult.forced, true, 'force close response must identify the fallback close');
+  assert.equal(forcedCloseResult.priceSource, 'REDIS_LAST_MARK', 'force close response must identify the fallback price source');
+  assert.equal(forcedCloseResult.realizedPnl, -30, 'force close must report P&L from the durable ledger row');
+
+  manualCloseService.getLivePosition = async () => null;
+  manualCloseCall = null;
+  const databaseMarkClose = await manualCloseService.closeOpenPosition(91, 7, true);
+  const databaseLedgerCall = manualCloseCall as any[] | null;
+  assert.ok(databaseLedgerCall, 'stored-mark force close must enter the ledger path');
+  assert.equal(databaseLedgerCall[2], 0.90, 'force close must fall back to the stored paper mark when Redis has no mark');
+  assert.equal(databaseMarkClose.priceSource, 'DATABASE_LAST_MARK', 'force close must disclose a stored-mark fallback');
+
+  manualCloseService.getLivePosition = async () => { throw new Error('Redis unavailable'); };
+  manualCloseCall = null;
+  const redisFailureClose = await manualCloseService.closeOpenPosition(91, 7, true);
+  assert.equal(redisFailureClose.priceSource, 'DATABASE_LAST_MARK', 'a Redis failure must not block a stored-mark force close');
 
   let overdueExitIntent = '';
   let overdueExitBid = -1;

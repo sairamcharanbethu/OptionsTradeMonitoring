@@ -550,6 +550,7 @@ export default function DayTradingTerminal() {
   const [paperUpdating, setPaperUpdating] = useState(false);
   const [paperClosePosition, setPaperClosePosition] = useState<PaperAccountSummary['openPositions'][number] | null>(null);
   const [paperClosing, setPaperClosing] = useState(false);
+  const [paperForceCloseAvailable, setPaperForceCloseAvailable] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
   const riskRequestRef = useRef(0);
   const lastAlertStateRef = useRef<string | null>(null);
@@ -919,19 +920,23 @@ export default function DayTradingTerminal() {
     }
   };
 
-  const confirmPaperClose = async () => {
+  const confirmPaperClose = async (force = false) => {
     if (!paperClosePosition || !paperAccount?.canManage || paperClosing) return;
     setPaperClosing(true);
     setActionMessage(null);
     try {
-      const result = await api.closePaperPosition(Number(paperClosePosition.id));
+      const result = await api.closePaperPosition(Number(paperClosePosition.id), force);
       setPaperClosePosition(null);
+      setPaperForceCloseAvailable(false);
       await refetchPaperAccount();
       setActionMessage({
         tone: 'success',
-        text: `Paper position closed at ${money(result.fillPrice)}. Realized ${result.realizedPnl >= 0 ? '+' : ''}${money(result.realizedPnl)}.${result.warning ? ` Runtime warning: ${result.warning}` : ''}`
+        text: `Paper position ${result.forced ? 'force ' : ''}closed at ${money(result.fillPrice)} using ${result.priceSource.replace(/_/g, ' ').toLowerCase()}. Realized ${result.realizedPnl >= 0 ? '+' : ''}${money(result.realizedPnl)}.${result.warning ? ` Runtime warning: ${result.warning}` : ''}`
       });
     } catch (error: any) {
+      if (!force && error.code === 'PAPER_FRESH_QUOTE_REQUIRED') {
+        setPaperForceCloseAvailable(true);
+      }
       setActionMessage({ tone: 'error', text: error.message || 'Could not close the paper position.' });
     } finally {
       setPaperClosing(false);
@@ -1471,7 +1476,10 @@ export default function DayTradingTerminal() {
                           variant="outline"
                           size="sm"
                           className="mt-2 h-8 border-rose-500/25 bg-rose-950/15 px-2.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-950/35 hover:text-rose-100"
-                          onClick={() => setPaperClosePosition(position)}
+                          onClick={() => {
+                            setPaperForceCloseAvailable(false);
+                            setPaperClosePosition(position);
+                          }}
                           disabled={paperClosing}
                         >
                           Close paper position
@@ -1840,7 +1848,12 @@ export default function DayTradingTerminal() {
         </div>
       )}
 
-      <Dialog open={!!paperClosePosition} onOpenChange={open => !open && !paperClosing && setPaperClosePosition(null)}>
+      <Dialog open={!!paperClosePosition} onOpenChange={open => {
+        if (!open && !paperClosing) {
+          setPaperClosePosition(null);
+          setPaperForceCloseAvailable(false);
+        }
+      }}>
         <DialogContent className="w-[calc(100%_-_1.5rem)] max-w-md border-zinc-800 bg-[#101216] text-zinc-100 sm:w-full">
           <DialogHeader>
             <DialogTitle className="text-xl tracking-[-0.02em]">Close this paper position?</DialogTitle>
@@ -1852,8 +1865,14 @@ export default function DayTradingTerminal() {
             <div className="space-y-3">
               <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-950/10 px-3 py-2.5 text-xs leading-relaxed text-amber-200">
                 <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                Paper account only. No Wealthsimple order will be created, changed or cancelled. The close is rejected if IBKR cannot provide a bid no older than 15 seconds.
+                Paper account only. No Wealthsimple order will be created, changed or cancelled. The first close attempt requires an IBKR bid no older than 15 seconds.
               </div>
+              {paperForceCloseAvailable && (
+                <div className="flex items-start gap-2 rounded-lg border border-rose-500/25 bg-rose-950/15 px-3 py-2.5 text-xs leading-relaxed text-rose-200">
+                  <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  Fresh IBKR pricing is unavailable. Force close records the exit at the latest Redis paper mark, or the stored paper mark when Redis has none. This price may not be executable in the market.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="rounded-lg bg-zinc-950/65 p-3">
                   <div className="text-[10px] text-zinc-500">Contract</div>
@@ -1877,12 +1896,21 @@ export default function DayTradingTerminal() {
             </div>
           )}
           <DialogFooter className="gap-2">
-            <Button variant="ghost" onClick={() => setPaperClosePosition(null)} disabled={paperClosing} className="text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">
+            <Button variant="ghost" onClick={() => {
+              setPaperClosePosition(null);
+              setPaperForceCloseAvailable(false);
+            }} disabled={paperClosing} className="text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">
               Keep position
             </Button>
-            <Button onClick={confirmPaperClose} disabled={paperClosing} className="bg-rose-500 font-semibold text-white hover:bg-rose-400">
+            {paperForceCloseAvailable && (
+              <Button onClick={() => confirmPaperClose(true)} disabled={paperClosing} className="bg-rose-700 font-semibold text-white hover:bg-rose-600">
+                {paperClosing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Force close at paper mark
+              </Button>
+            )}
+            <Button onClick={() => confirmPaperClose(false)} disabled={paperClosing} className="bg-rose-500 font-semibold text-white hover:bg-rose-400">
               {paperClosing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Close paper position
+              {paperForceCloseAvailable ? 'Retry fresh bid' : 'Close paper position'}
             </Button>
           </DialogFooter>
         </DialogContent>

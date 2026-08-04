@@ -22,7 +22,8 @@ function replyMock() {
 async function runTests() {
   console.log('Running paper account route tests...');
   const postHandlers: Record<string, (request: any, reply: any) => Promise<any>> = {};
-  let closeRequest: { positionId: number; userId: number | null } | null = null;
+  let closeRequest: { positionId: number; userId: number | null; force: boolean } | null = null;
+  let rejectFreshQuote = false;
   const fastify = {
     authenticate: async () => {},
     addHook: () => {},
@@ -31,9 +32,15 @@ async function runTests() {
       postHandlers[path] = handler;
     },
     paperTrading: {
-      closeOpenPosition: async (positionId: number, userId: number | null) => {
-        closeRequest = { positionId, userId };
-        return { positionId, status: 'CLOSED', intent: 'MANUAL_EXIT' };
+      closeOpenPosition: async (positionId: number, userId: number | null, force: boolean) => {
+        closeRequest = { positionId, userId, force };
+        if (rejectFreshQuote && !force) {
+          const error: any = new Error('Manual paper close requires a fresh quote');
+          error.statusCode = 409;
+          error.code = 'PAPER_FRESH_QUOTE_REQUIRED';
+          throw error;
+        }
+        return { positionId, status: 'CLOSED', intent: force ? 'MANUAL_FORCE_EXIT' : 'MANUAL_EXIT' };
       }
     }
   } as any;
@@ -52,12 +59,24 @@ async function runTests() {
   assert(closeRequest === null, 'an invalid close must not reach the paper ledger service');
 
   const acceptedReply = replyMock();
-  const result = await closeHandler({ user: { id: 7, role: 'ADMIN' }, params: { positionId: '91' } }, acceptedReply);
-  const acceptedClose = closeRequest as { positionId: number; userId: number | null } | null;
+  const result = await closeHandler({ user: { id: 7, role: 'ADMIN' }, params: { positionId: '91' }, body: {} }, acceptedReply);
+  const acceptedClose = closeRequest as { positionId: number; userId: number | null; force: boolean } | null;
   assert(Boolean(acceptedClose), 'admin close must reach the paper ledger service');
   if (!acceptedClose) throw new Error('Admin close request was not captured');
-  assert(acceptedClose.positionId === 91 && acceptedClose.userId === 7, 'admin close must pass the exact position and actor ids');
+  assert(acceptedClose.positionId === 91 && acceptedClose.userId === 7 && acceptedClose.force === false, 'admin close must pass the exact position and actor ids');
   assert(result.status === 'CLOSED' && result.intent === 'MANUAL_EXIT', 'admin close must return the ledger result');
+
+  rejectFreshQuote = true;
+  const staleReply = replyMock();
+  const staleResult = await closeHandler({ user: { id: 7, role: 'ADMIN' }, params: { positionId: '91' }, body: {} }, staleReply);
+  assert(staleReply.statusCode === 409, 'a stale quote must preserve its response status');
+  assert(staleResult.code === 'PAPER_FRESH_QUOTE_REQUIRED', 'a stale quote response must advertise the force-close path');
+
+  closeRequest = null;
+  const forcedResult = await closeHandler({ user: { id: 7, role: 'ADMIN' }, params: { positionId: '91' }, body: { force: true } }, replyMock());
+  const forcedClose = closeRequest as { positionId: number; userId: number | null; force: boolean } | null;
+  assert(Boolean(forcedClose?.force), 'an explicit force flag must reach the paper ledger service');
+  assert(forcedResult.intent === 'MANUAL_FORCE_EXIT', 'the force route must return the forced ledger result');
   console.log('All paper account route tests passed!');
 }
 

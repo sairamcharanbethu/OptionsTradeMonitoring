@@ -216,7 +216,11 @@ export class PaperTradingService {
     return rows;
   }
 
-  public async closeOpenPosition(positionId: number, requestedByUserId: number | null): Promise<Record<string, any>> {
+  public async closeOpenPosition(
+    positionId: number,
+    requestedByUserId: number | null,
+    force = false
+  ): Promise<Record<string, any>> {
     if (!Number.isSafeInteger(positionId) || positionId <= 0) {
       const error: any = new Error('A valid paper position id is required');
       error.statusCode = 400;
@@ -236,25 +240,69 @@ export class PaperTradingService {
       error.statusCode = 404;
       throw error;
     }
-    let quote: any;
+    let live: any = null;
+    try {
+      live = await this.getLivePosition(position.id);
+    } catch (error: any) {
+      this.fastify.log.warn(`[PaperTrading] Redis mark unavailable for manual position ${positionId}: ${error.message || String(error)}`);
+    }
+    let quote: any = null;
+    let quoteFailure: Error | null = null;
     try {
       quote = await (this.fastify as any).ibkrMarketData.getOptionQuoteForOsi(null, this.osiTicker(position));
     } catch (cause: any) {
-      const error: any = new Error(`Fresh IBKR exit quote is unavailable: ${cause.message || String(cause)}`);
-      error.statusCode = 503;
-      throw error;
+      quoteFailure = cause instanceof Error ? cause : new Error(String(cause));
     }
     const bid = Number(quote?.bid || 0);
     const quoteAgeMs = quote?.quoteAgeMs == null ? Number.NaN : Number(quote.quoteAgeMs);
-    if (!(bid > 0) || !Number.isFinite(quoteAgeMs) || quoteAgeMs < 0 || quoteAgeMs > MAX_MANUAL_EXIT_QUOTE_AGE_MS) {
+    const hasFreshBid = bid > 0
+      && Number.isFinite(quoteAgeMs)
+      && quoteAgeMs >= 0
+      && quoteAgeMs <= MAX_MANUAL_EXIT_QUOTE_AGE_MS;
+    if (!hasFreshBid && !force) {
+      if (quoteFailure) {
+        const error: any = new Error(`Fresh IBKR exit quote is unavailable: ${quoteFailure.message}`);
+        error.statusCode = 503;
+        error.code = 'PAPER_FRESH_QUOTE_REQUIRED';
+        throw error;
+      }
       const error: any = new Error('Manual paper close requires an IBKR bid no older than 15 seconds');
+      error.statusCode = 409;
+      error.code = 'PAPER_FRESH_QUOTE_REQUIRED';
+      throw error;
+    }
+    const redisMark = Number(live?.currentPrice);
+    const storedMark = Number(position.current_price);
+    const hasRedisMark = live?.currentPrice != null && live.currentPrice !== ''
+      && Number.isFinite(redisMark) && redisMark >= 0;
+    const hasStoredMark = position.current_price != null && position.current_price !== ''
+      && Number.isFinite(storedMark) && storedMark >= 0;
+    const fallbackPrice = hasRedisMark
+      ? redisMark
+      : hasStoredMark
+        ? storedMark
+        : Number.NaN;
+    if (!hasFreshBid && !Number.isFinite(fallbackPrice)) {
+      const error: any = new Error('Force close requires a valid last paper mark');
       error.statusCode = 409;
       throw error;
     }
-    const live = await this.getLivePosition(position.id);
+    const intent = hasFreshBid ? 'MANUAL_EXIT' : 'MANUAL_FORCE_EXIT';
+    const exitPrice = hasFreshBid ? bid : fallbackPrice;
+    const priceSource = hasFreshBid
+      ? 'IBKR_BID'
+      : hasRedisMark
+        ? 'REDIS_LAST_MARK'
+        : 'DATABASE_LAST_MARK';
+    const liveUpdatedAtMs = live?.updatedAt ? Date.parse(live.updatedAt) : Number.NaN;
+    const effectiveQuoteAgeMs = hasFreshBid
+      ? quoteAgeMs
+      : Number.isFinite(liveUpdatedAtMs)
+        ? Math.max(0, Date.now() - liveUpdatedAtMs)
+        : null;
     const managedPosition = {
       ...position,
-      current_price: bid,
+      current_price: exitPrice,
       underlying_price: live?.underlyingPrice ?? position.underlying_price,
       trailing_high_price: live?.trailingHighPrice ?? position.trailing_high_price,
       trailing_stop_loss_pct: live?.trailingStopPct ?? position.trailing_stop_loss_pct,
@@ -263,11 +311,14 @@ export class PaperTradingService {
     };
     let closeError: Error | null = null;
     try {
-      await this.closePaperQuantity(managedPosition, Number(position.quantity), bid, 'MANUAL_EXIT', {
+      await this.closePaperQuantity(managedPosition, Number(position.quantity), exitPrice, intent, {
         requestedByUserId,
-        quoteSource: quote.source || 'ibkr',
-        quoteAgeMs,
-        quoteTimestamp: quote.timestamp || null
+        forced: !hasFreshBid,
+        priceSource,
+        quoteSource: hasFreshBid ? quote.source || 'ibkr' : null,
+        quoteAgeMs: effectiveQuoteAgeMs,
+        quoteTimestamp: hasFreshBid ? quote.timestamp || null : live?.updatedAt || null,
+        freshQuoteFailure: !hasFreshBid ? (quoteFailure ? 'IBKR_UNAVAILABLE' : 'IBKR_BID_STALE_OR_MISSING') : null
       });
     } catch (error: any) {
       closeError = error instanceof Error ? error : new Error(String(error));
@@ -278,7 +329,7 @@ export class PaperTradingService {
       [positionId, ACCOUNT_ID]
     );
     const closed = closedResult.rows[0];
-    if (closed?.status !== 'CLOSED' || closed?.exit_reason !== 'MANUAL_EXIT') {
+    if (closed?.status !== 'CLOSED' || closed?.exit_reason !== intent) {
       if (closeError) throw closeError;
       const error: any = new Error(
         closed?.status === 'CLOSED'
@@ -294,11 +345,13 @@ export class PaperTradingService {
     return {
       positionId,
       status: 'CLOSED',
-      intent: 'MANUAL_EXIT',
+      intent,
       quantity: Number(position.quantity),
       fillPrice: Number(closed.exit_price),
       realizedPnl: Number(closed.realized_pnl),
-      quoteAgeMs,
+      quoteAgeMs: effectiveQuoteAgeMs,
+      forced: !hasFreshBid,
+      priceSource,
       warning: closeError ? 'Paper ledger closed, but live cache cleanup needs attention.' : null
     };
   }
@@ -1375,7 +1428,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     if (intent === 'TARGET_2') return 'TP2';
     if (intent === 'TRAILING_STOP') return 'TRAILING_STOP';
     if (['END_OF_DAY', 'END_OF_DAY_RECOVERY', 'EXPIRED_RECOVERY'].includes(intent)) return 'EOD';
-    if (intent === 'STRATEGY_TERMINAL' || intent === 'MANUAL_EXIT') return 'EXIT';
+    if (intent === 'STRATEGY_TERMINAL' || intent === 'MANUAL_EXIT' || intent === 'MANUAL_FORCE_EXIT') return 'EXIT';
     return 'SL';
   }
 

@@ -1420,20 +1420,28 @@ export const api = {
     return res.json();
   },
 
-  async closePaperPosition(positionId: number): Promise<{
+  async closePaperPosition(positionId: number, force = false): Promise<{
     positionId: number;
     status: 'CLOSED';
-    intent: 'MANUAL_EXIT';
+    intent: 'MANUAL_EXIT' | 'MANUAL_FORCE_EXIT';
     quantity: number;
     fillPrice: number;
     realizedPnl: number;
-    quoteAgeMs: number;
+    quoteAgeMs: number | null;
+    forced: boolean;
+    priceSource: 'IBKR_BID' | 'REDIS_LAST_MARK' | 'DATABASE_LAST_MARK';
     warning: string | null;
   }> {
-    const res = await authFetch(`${API_BASE}/paper-account/positions/${positionId}/close`, { method: 'POST' });
+    const res = await authFetch(`${API_BASE}/paper-account/positions/${positionId}/close`, {
+      method: 'POST',
+      body: JSON.stringify({ force })
+    });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || err.message || 'Failed to close the paper position');
+      const error: any = new Error(err.error || err.message || 'Failed to close the paper position');
+      error.status = res.status;
+      error.code = err.code;
+      throw error;
     }
     return res.json();
   },

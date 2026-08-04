@@ -46,9 +46,18 @@ export async function paperAccountRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'A valid paper position id is required' });
     }
     const requestedByUserId = Number((request as any).user?.id);
-    return (fastify as any).paperTrading.closeOpenPosition(
-      positionId,
-      Number.isSafeInteger(requestedByUserId) && requestedByUserId > 0 ? requestedByUserId : null
-    );
+    const force = (request.body as { force?: boolean } | null)?.force === true;
+    try {
+      return await (fastify as any).paperTrading.closeOpenPosition(
+        positionId,
+        Number.isSafeInteger(requestedByUserId) && requestedByUserId > 0 ? requestedByUserId : null,
+        force
+      );
+    } catch (error: any) {
+      if (error.code === 'PAPER_FRESH_QUOTE_REQUIRED') {
+        return reply.code(error.statusCode || 409).send({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
   });
 }
