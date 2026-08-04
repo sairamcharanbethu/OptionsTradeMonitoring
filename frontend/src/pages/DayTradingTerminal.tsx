@@ -950,6 +950,8 @@ export default function DayTradingTerminal() {
     } catch (error: any) {
       if (!force && error.code === 'PAPER_FRESH_QUOTE_REQUIRED') {
         setPaperForceCloseAvailable(true);
+      } else {
+        await refetchPaperAccount().catch(() => undefined);
       }
       setActionMessage({ tone: 'error', text: error.message || 'Could not close the paper position.' });
     } finally {

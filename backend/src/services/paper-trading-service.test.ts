@@ -467,15 +467,21 @@ async function run() {
   const exitQueries: string[] = [];
   let exitOrderMetadata: Record<string, any> = {};
   let exitJournalMetadata: Record<string, any> = {};
+  let exitOrderSetupId = '';
+  let exitJournalSetupId = '';
   const exitClient = {
     query: async (sql: string, values: any[] = []) => {
       exitQueries.push(sql);
       if (sql.includes('FROM positions') && sql.includes('FOR UPDATE')) return { rows: [{ quantity: 2, status: 'OPEN', realized_pnl: 0 }] };
       if (sql.includes('INSERT INTO paper_orders')) {
+        exitOrderSetupId = values[3];
         exitOrderMetadata = JSON.parse(values[12]);
         return { rows: [{ id: 71 }] };
       }
-      if (sql.includes('INSERT INTO paper_trade_journal')) exitJournalMetadata = JSON.parse(values[10]);
+      if (sql.includes('INSERT INTO paper_trade_journal')) {
+        exitJournalSetupId = values[1];
+        exitJournalMetadata = JSON.parse(values[10]);
+      }
       if (sql.includes('SELECT * FROM paper_accounts')) return { rows: [{
         equity: 100_000, cash_balance: 99_900, reserved_cash: 0
       }] };
@@ -524,6 +530,13 @@ async function run() {
     'the exit equity checkpoint must be inside the committed transaction');
   assert.equal(exitOrderMetadata.requestedByUserId, 7, 'exit order evidence must retain the requesting administrator');
   assert.equal(exitJournalMetadata.quoteAgeMs, 900, 'exit journal evidence must retain quote freshness');
+  assert.match(exitOrderSetupId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/, 'a legacy paper close must use a valid deterministic UUID');
+  assert.equal(exitJournalSetupId, exitOrderSetupId, 'the exit order and journal must share the same recovered setup id');
+  assert.equal(
+    exitService.paperLedgerSetupId({ id: 81, strategy_setup_id: null }),
+    exitOrderSetupId,
+    'a missing setup id must recover deterministically from the position id'
+  );
 
   const duplicateExitQueries: string[] = [];
   const duplicateExitService = new PaperTradingService({

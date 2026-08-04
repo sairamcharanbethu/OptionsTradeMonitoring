@@ -57,7 +57,14 @@ export async function paperAccountRoutes(fastify: FastifyInstance) {
       if (error.code === 'PAPER_FRESH_QUOTE_REQUIRED') {
         return reply.code(error.statusCode || 409).send({ error: error.message, code: error.code });
       }
-      throw error;
+      if (Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500) {
+        return reply.code(error.statusCode).send({ error: error.message, code: error.code || 'PAPER_CLOSE_REJECTED' });
+      }
+      fastify.log.error({ error, positionId }, '[PaperAccount] Manual paper close failed');
+      return reply.code(500).send({
+        error: 'Paper close could not be verified. Refresh the paper account before retrying.',
+        code: 'PAPER_CLOSE_FAILED'
+      });
     }
   });
 }

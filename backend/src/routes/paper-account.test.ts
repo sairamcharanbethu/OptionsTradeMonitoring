@@ -24,6 +24,7 @@ async function runTests() {
   const postHandlers: Record<string, (request: any, reply: any) => Promise<any>> = {};
   let closeRequest: { positionId: number; userId: number | null; force: boolean } | null = null;
   let rejectFreshQuote = false;
+  let failUnexpectedly = false;
   const fastify = {
     authenticate: async () => {},
     addHook: () => {},
@@ -34,6 +35,7 @@ async function runTests() {
     paperTrading: {
       closeOpenPosition: async (positionId: number, userId: number | null, force: boolean) => {
         closeRequest = { positionId, userId, force };
+        if (failUnexpectedly) throw new Error('invalid input syntax for type uuid: "null"');
         if (rejectFreshQuote && !force) {
           const error: any = new Error('Manual paper close requires a fresh quote');
           error.statusCode = 409;
@@ -42,7 +44,8 @@ async function runTests() {
         }
         return { positionId, status: 'CLOSED', intent: force ? 'MANUAL_FORCE_EXIT' : 'MANUAL_EXIT' };
       }
-    }
+    },
+    log: { error() {} }
   } as any;
   await paperAccountRoutes(fastify);
   const closeHandler = postHandlers['/positions/:positionId/close'];
@@ -77,6 +80,14 @@ async function runTests() {
   const forcedClose = closeRequest as { positionId: number; userId: number | null; force: boolean } | null;
   assert(Boolean(forcedClose?.force), 'an explicit force flag must reach the paper ledger service');
   assert(forcedResult.intent === 'MANUAL_FORCE_EXIT', 'the force route must return the forced ledger result');
+
+  rejectFreshQuote = false;
+  failUnexpectedly = true;
+  const failedReply = replyMock();
+  const failedResult = await closeHandler({ user: { id: 7, role: 'ADMIN' }, params: { positionId: '91' }, body: {} }, failedReply);
+  assert(failedReply.statusCode === 500, 'an unexpected ledger failure must remain a server error');
+  assert(failedResult.code === 'PAPER_CLOSE_FAILED', 'an unexpected close failure must return an actionable application code');
+  assert(/Refresh the paper account/.test(failedResult.error), 'an uncertain close must tell the user to refresh before retrying');
   console.log('All paper account route tests passed!');
 }
 

@@ -1125,7 +1125,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     let pnl = 0;
     let remaining = 0;
     let priorRealizedPnl = Number(position.realized_pnl || 0);
-    const setupId = String(position.strategy_setup_id);
+    const setupId = this.paperLedgerSetupId(position);
+    const ledgerPosition = { ...position, strategy_setup_id: setupId };
     const analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {};
     const client = await (this.fastify as any).pg.connect();
     try {
@@ -1185,7 +1186,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       await this.journal(
         intent,
         `${intent.replace(/_/g, ' ')} filled: ${closeQty} contract${closeQty === 1 ? '' : 's'} at $${bid.toFixed(2)} (${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}).`,
-        position,
+        ledgerPosition,
         position.id,
         bid,
         { closeQuantity: closeQty, remaining, realizedPnl: pnl, ...exitMetadata },
@@ -1499,6 +1500,18 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
     if (/^\d{8}$/.test(raw)) return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
     return null;
+  }
+
+  private paperLedgerSetupId(position: any): string {
+    const configured = String(position?.strategy_setup_id || '').trim().toLowerCase();
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(configured)) {
+      return configured;
+    }
+    const positionId = Number(position?.id);
+    if (!Number.isSafeInteger(positionId) || positionId <= 0 || positionId > 0xffffffffffff) {
+      throw new Error('Paper position is missing a valid setup and position id');
+    }
+    return `00000000-0000-5000-8000-${positionId.toString(16).padStart(12, '0')}`;
   }
 
   private osiTicker(position: any): string {
