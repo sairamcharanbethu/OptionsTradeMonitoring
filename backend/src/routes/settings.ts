@@ -188,16 +188,6 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     detail: 'Used server-side by the ZeroGEX prefetch service. The key is never returned to the browser.'
                 }),
                 runtimeItem({
-                    id: 'market:trading-economics-key',
-                    group: 'Market Data',
-                    label: 'Trading Economics API key',
-                    source: configured(settings.trading_economics_api_key) ? 'settings' : 'default',
-                    status: secretStatus(settings.trading_economics_api_key),
-                    secret: true,
-                    value: secretValue(settings.trading_economics_api_key),
-                    detail: 'Server-side macro calendar gate for Wall Reaction. The key is never returned to the browser.'
-                }),
-                runtimeItem({
                     id: 'ai:provider',
                     group: 'AI Service',
                     label: 'AI provider',
@@ -330,6 +320,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 await client.query('BEGIN');
 
                 for (const [key, value] of Object.entries(updates)) {
+                    if (key === 'trading_economics_api_key') {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Trading Economics is no longer used; Wall Reaction now uses the official US macro calendar' });
+                    }
                     if (role !== 'ADMIN' && isGlobalSettingKey(key)) {
                         continue;
                     }
@@ -338,10 +332,6 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     if (key === 'zerogex_api_key' && /[\r\n]/.test(String(trimmedValue || ''))) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'ZeroGEX API key must be a single line' });
-                    }
-                    if (key === 'trading_economics_api_key' && /[\r\n]/.test(String(trimmedValue || ''))) {
-                        await client.query('ROLLBACK');
-                        return reply.code(400).send({ error: 'Trading Economics API key must be a single line' });
                     }
                     if (key === 'wall_reaction_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
                         await client.query('ROLLBACK');

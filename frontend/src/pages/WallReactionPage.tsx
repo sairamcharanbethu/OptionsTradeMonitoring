@@ -15,9 +15,18 @@ function value(value: unknown, digits = 2) {
 }
 
 function statusVariant(status?: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (status === 'CANDIDATE' || status === 'ARMED' || status === 'UP' || status === 'ACTIVE') return 'default';
-  if (status === 'BLOCKED' || status === 'DEGRADED' || status === 'ERROR') return 'destructive';
+  if (status === 'CANDIDATE' || status === 'ARMED' || status === 'UP' || status === 'ACTIVE' || status === 'READY') return 'default';
+  if (status === 'BLOCKED' || status === 'DEGRADED' || status === 'ERROR' || status === 'COVERAGE_MISSING') return 'destructive';
   return 'secondary';
+}
+
+function eventTime(timestamp?: string | null) {
+  if (!timestamp) return 'No upcoming event in current coverage';
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) return 'Invalid event timestamp';
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+  }).format(parsed);
 }
 
 function CandidateCard({ candidate, canManage, busy, onArm }: { candidate?: WallReactionCandidate; canManage: boolean; busy: boolean; onArm: (candidate: WallReactionCandidate) => void }) {
@@ -138,11 +147,22 @@ export default function WallReactionPage({ user }: { user: User }) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={statusVariant(state?.health.status)}><Activity className="mr-1 h-3 w-3" />Runtime {state?.health.status || 'unknown'}</Badge>
+          <Badge variant={statusVariant(state?.calendar.status)}><Clock3 className="mr-1 h-3 w-3" />Calendar {state?.calendar.status || 'unknown'}</Badge>
           <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
         </div>
       </div>
 
       {error && <div role="alert" className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"><AlertTriangle className="mt-0.5 h-4 w-4" /><span>{error}</span></div>}
+
+      {state?.calendar && (
+        <div className={`flex flex-col gap-2 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between ${state.calendar.status === 'READY' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/10'}`}>
+          <div className="flex items-start gap-2">
+            {state.calendar.status === 'READY' ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />}
+            <div><div className="font-medium">Official macro calendar · covered through {state.calendar.coverageThrough}</div><p className="mt-0.5 text-xs text-muted-foreground">BLS, BEA, Federal Reserve, and ISM · {state.calendar.eventCount} verified events</p>{state.calendar.lastError && <p className="mt-1 text-xs text-muted-foreground">Refresh note: {state.calendar.lastError}</p>}</div>
+          </div>
+          <div className="text-xs text-muted-foreground sm:text-right"><div className="font-medium text-foreground">Next: {state.calendar.nextEvent?.name || 'None scheduled'}</div><div>{eventTime(state.calendar.nextEvent?.scheduledAt)}</div></div>
+        </div>
+      )}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card><CardContent className="pt-5"><Metric label="Paper equity" value={paper ? money.format(Number(paper.account.equity)) : '—'} /></CardContent></Card>

@@ -274,6 +274,15 @@ export interface WallReactionCandidate {
 export interface WallReactionState {
   policyVersion: string;
   health: { status: string; lastRunAt: string | null; lastError: string | null };
+  calendar: {
+    status: 'READY' | 'DEGRADED' | 'COVERAGE_MISSING';
+    coverageStart: string;
+    coverageThrough: string;
+    lastRefreshAt: string | null;
+    lastError: string | null;
+    eventCount: number;
+    nextEvent: null | { name: string; source: string; scheduledAt: string };
+  };
   symbols: Partial<Record<'SPY' | 'QQQ', WallReactionCandidate>>;
 }
 

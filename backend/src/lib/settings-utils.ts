@@ -8,7 +8,6 @@ const GLOBAL_SETTING_KEYS = [
   'ibkr_host',
   'ibkr_port',
   'zerogex_api_key',
-  'trading_economics_api_key',
   'wall_reaction_enabled',
   'wall_reaction_max_risk_dollars',
   'discord_webhook_url',
@@ -37,7 +36,6 @@ const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
   'ibkr_host',
   'ibkr_port',
   'zerogex_api_key',
-  'trading_economics_api_key',
   'wall_reaction_enabled',
   'wall_reaction_max_risk_dollars',
   'mcp_trading_enabled'

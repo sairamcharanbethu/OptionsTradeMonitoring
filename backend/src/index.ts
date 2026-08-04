@@ -232,6 +232,14 @@ const ensureSchema = async (instance: any) => {
         ON wall_reaction_candidates (symbol, created_at DESC);
     `);
 
+    const retiredCalendarSetting = await instance.pg.query(
+      `DELETE FROM settings WHERE key = $1`,
+      ['trading_economics_api_key']
+    );
+    if (retiredCalendarSetting.rowCount) {
+      instance.log.info('[Database] Removed retired Trading Economics setting');
+    }
+
     await instance.pg.query(`
       ALTER TABLE signals
         ADD COLUMN IF NOT EXISTS engine_version VARCHAR(50),

@@ -6,7 +6,7 @@ Wall Reaction is a paper-only SPY/QQQ feature. It translates the `NewStrategy` w
 
 - ZeroGEX prefetch: SPY keeps using `/strategy-data/trade/zerogex.json`. A separate QQQ prefetch container writes `/strategy-data/wall-reaction/QQQ-zerogex.json`.
 - Market data: the backend uses IBKR Gateway for underlying snapshots, one-minute bars, expirations, option chains, and exact-contract quotes.
-- Macro data: Trading Economics US importance-3 events block new entries from 30 minutes before through 15 minutes after. Missing, stale, or future-dated calendar data fails closed.
+- Macro data: a keyless Wall Reaction calendar combines a bundled schedule verified from BLS, BEA, Federal Reserve, and ISM sources with BEA's machine-readable release feed. Events block new entries from 30 minutes before through 15 minutes after. The last valid BEA schedule is persisted in the Wall Reaction data directory, and entries fail closed when verified calendar coverage expires.
 - Account: all decisions, orders, positions, and journal events use `wall-reaction-system`. Day Trading continues to use `strategy-system`.
 - Execution: there is no broker-order call in the Wall Reaction routes or services. Every fill is recorded as `wall_reaction_paper`.
 
@@ -38,8 +38,9 @@ Open positions are repriced from the exact IBKR OSI contract. They close on inva
 
 - `wall_reaction_enabled`: enables the independent evaluator. Default behavior is enabled unless explicitly set to `false`.
 - `wall_reaction_max_risk_dollars`: base risk from $50 through $10,000; default $500.
-- `trading_economics_api_key`: server-side secret for the macro calendar.
 - Existing `IBKR_HOST`, `IBKR_PORT`, `IBKR_CLIENT_ID_MARKET_DATA`, and `IBKR_MARKET_DATA_TYPE` settings remain the market-data path.
+
+The bundled calendar is reviewed through the `coverageThrough` date reported on the Wall Reaction dashboard. Extend `wall-reaction-economic-calendar.ts` from official schedules before that date. A temporary BEA outage degrades calendar health but continues using the bundled and persisted schedules; it does not turn a covered empty day into an unavailable calendar.
 
 Settings are available under **Settings > Wall Reaction**. The dashboard workspace is a separate top-level **Wall Reaction** tab and is labeled **Paper only**.
 

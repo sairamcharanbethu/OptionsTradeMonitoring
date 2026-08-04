@@ -241,7 +241,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [mcpTradingEnabled, setMcpTradingEnabled] = useState(false);
     const [wallReactionEnabled, setWallReactionEnabled] = useState(true);
     const [wallReactionMaxRiskDollars, setWallReactionMaxRiskDollars] = useState('500');
-    const [tradingEconomicsApiKey, setTradingEconomicsApiKey] = useState('');
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -362,7 +361,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setMcpTradingEnabled(data.mcp_trading_enabled === 'true');
             setWallReactionEnabled(data.wall_reaction_enabled !== 'false');
             setWallReactionMaxRiskDollars(data.wall_reaction_max_risk_dollars || '500');
-            setTradingEconomicsApiKey('');
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
@@ -653,7 +651,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 settingsPayload.paper_trailing_stop_pct = paperTrailingStopPct;
                 settingsPayload.wall_reaction_enabled = wallReactionEnabled ? 'true' : 'false';
                 settingsPayload.wall_reaction_max_risk_dollars = wallReactionMaxRiskDollars;
-                if (tradingEconomicsApiKey.trim()) settingsPayload.trading_economics_api_key = tradingEconomicsApiKey.trim();
             }
             await api.updateSettings(settingsPayload);
             queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -1332,10 +1329,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         <Input id="wallReactionRisk" type="number" min="50" max="10000" step="50" value={wallReactionMaxRiskDollars} onChange={(event) => setWallReactionMaxRiskDollars(event.target.value)} disabled={!isAdmin} />
                                         <p className="text-[10px] leading-relaxed text-muted-foreground">The engine applies a 0.25x or 0.50x multiplier, then caps the paper entry at two contracts.</p>
                                     </div>
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="tradingEconomicsApiKey">Trading Economics API key</Label>
-                                        <Input id="tradingEconomicsApiKey" type="password" value={tradingEconomicsApiKey} onChange={(event) => setTradingEconomicsApiKey(event.target.value)} placeholder={isAdmin ? 'Leave blank to keep the configured key' : 'Admin managed'} disabled={!isAdmin} autoComplete="new-password" />
-                                        <p className="text-[10px] leading-relaxed text-muted-foreground">US importance-3 events close the entry gate from 30 minutes before through 15 minutes after. Missing or stale calendar data fails closed.</p>
+                                    <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+                                        <div className="font-semibold text-foreground">Official US macro calendar</div>
+                                        <p className="mt-1 leading-relaxed">No API key is required. Verified BLS, BEA, Federal Reserve, and ISM events close the entry gate from 30 minutes before through 15 minutes after.</p>
+                                        <p className="mt-2 text-[10px] leading-relaxed">The dashboard reports calendar coverage and refresh health. Entries fail closed when verified date coverage expires.</p>
                                     </div>
                                 </div>
                                 <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-muted-foreground">
