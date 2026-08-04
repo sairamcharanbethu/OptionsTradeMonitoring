@@ -95,7 +95,7 @@ export default function StrategyGuidePage() {
               'Entries fail closed when market data, provider timestamps, GEX, or the selected option quote is stale, future-dated, incomplete, or illiquid.',
               'A move already extended beyond 0.75R is tracked but not entered. Spent walls with less than 1.5R runway block entry.',
               'T1 moves protection to the frozen trigger. T2 normally completes the paper lifecycle; premium lock and structural invalidation can close it earlier.',
-              'Every close starts a 15-minute same-side cooldown and requires a new structural reset before re-entry.'
+              'A planned-target close may qualify again on the next fresh setup. Invalidation, protected, and safety exits start a 15-minute same-side cooldown and require a new structural reset.'
             ]}
           />
           <div className="mt-4 grid gap-3 sm:grid-cols-2">

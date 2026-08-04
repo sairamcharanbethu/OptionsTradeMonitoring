@@ -2067,13 +2067,13 @@ class ContinuationStateTest(unittest.TestCase):
         self.assertEqual(signal["state"], "WAIT")
         self.assertTrue(any("new entries blocked" in blocker for blocker in signal["blockers"]))
 
-    def test_completed_continuation_blocks_immediate_same_side_reentry(self) -> None:
+    def test_planned_target_exit_can_reenter_on_next_qualified_setup(self) -> None:
         first = self.build()
         completed = self.build(previous=first, spot=first["call_setup"]["targets"][-1])
         completed["lifecycle"]["closed_at"] = time.time() - 16
-        immediate = self.build(previous=completed, spot=100.20)
-        self.assertNotEqual(immediate["state"], "ACTIVE")
-        self.assertTrue(any("cooldown/reset" in blocker for blocker in immediate["blockers"]))
+        resumed = self.build(previous=completed, spot=100.20)
+        self.assertEqual(resumed["state"], "ACTIVE")
+        self.assertFalse(any("cooldown/reset" in blocker for blocker in resumed["blockers"]))
 
     def test_continuation_can_reenter_after_cooldown_and_structural_reset(self) -> None:
         first = self.build()
@@ -2084,6 +2084,14 @@ class ContinuationStateTest(unittest.TestCase):
         completed["lifecycle"]["closed_at"] = time.time() - 16
         resumed = self.build(previous=completed, spot=100.20)
         self.assertEqual(resumed["state"], "ACTIVE")
+
+    def test_invalidated_continuation_still_blocks_immediate_same_side_reentry(self) -> None:
+        first = self.build()
+        stopped = self.build(previous=first, spot=first["call_setup"]["invalidation"])
+        stopped["lifecycle"]["closed_at"] = time.time() - 16
+        immediate = self.build(previous=stopped, spot=100.20)
+        self.assertNotEqual(immediate["state"], "ACTIVE")
+        self.assertTrue(any("cooldown/reset" in blocker for blocker in immediate["blockers"]))
 
     def test_same_side_cooldown_does_not_block_opposite_side_breakdown(self) -> None:
         first = self.build()

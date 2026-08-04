@@ -1269,7 +1269,7 @@ def main() -> None:
         "--same-side-reentry-cooldown-seconds",
         type=float,
         default=15 * 60,
-        help="Minimum same-side cooldown after every paper lifecycle closes.",
+        help="Minimum same-side cooldown after a protective or failed paper lifecycle closes.",
     )
     parser.add_argument(
         "--max-tracking-gap-seconds",

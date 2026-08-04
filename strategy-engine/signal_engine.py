@@ -1938,7 +1938,7 @@ def _apply_same_side_reentry_reset(
     indicators: dict[str, Any],
     cooldown_seconds: float,
 ) -> None:
-    """Require time plus a new completed 5m structural reset after every exit."""
+    """Require time plus a new completed 5m reset after a protective or failed exit."""
     result.update(
         continuation_cooldown_until=now + cooldown_seconds,
         continuation_reset_after_bar=(
@@ -3437,13 +3437,6 @@ def build_signal(
                     "same_side_failure_reset_after_bar",
                 ):
                     result.pop(key, None)
-        _apply_same_side_reentry_reset(
-            result,
-            side=str(previous_side),
-            now=now,
-            indicators=spy,
-            cooldown_seconds=float(same_side_reentry_cooldown_seconds),
-        )
         result["confirmations"] = [
             f"prior {previous_side} planned T{exit_target_index} paper exit reached"
         ]
