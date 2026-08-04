@@ -207,6 +207,31 @@ const ensureSchema = async (instance: any) => {
     `);
 
     await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS wall_reaction_candidates (
+        id UUID PRIMARY KEY,
+        symbol VARCHAR(10) NOT NULL,
+        fingerprint VARCHAR(64) NOT NULL,
+        decision_code VARCHAR(40) NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        context JSONB NOT NULL,
+        plan JSONB NOT NULL DEFAULT '{}'::jsonb,
+        contract JSONB NOT NULL DEFAULT '{}'::jsonb,
+        generated_at TIMESTAMPTZ NOT NULL,
+        armed_at TIMESTAMPTZ,
+        armed_until TIMESTAMPTZ,
+        entered_at TIMESTAMPTZ,
+        invalidated_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (symbol, fingerprint)
+      );
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_wall_reaction_candidates_symbol_created
+        ON wall_reaction_candidates (symbol, created_at DESC);
+    `);
+
+    await instance.pg.query(`
       ALTER TABLE signals
         ADD COLUMN IF NOT EXISTS engine_version VARCHAR(50),
         ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50),
