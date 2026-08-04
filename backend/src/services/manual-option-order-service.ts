@@ -591,8 +591,7 @@ export class ManualOptionOrderService {
             }
           });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
-          await TradeRedisService.requestBrokerSync(userId);
+          await TradeRedisService.refreshAfterCommittedMutation((this.fastify as any).pg, userId, this.fastify, 'MCP position close');
           return {
             success: true,
             orderId: order.orderId || null,
@@ -618,7 +617,7 @@ export class ManualOptionOrderService {
             metadata: { contract: optionSymbol, quantity: closeQty, orderType: input.orderType, action: exitAction }
           });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades((this.fastify as any).pg, userId, this.fastify);
+          await TradeRedisService.refreshAfterCommittedMutation((this.fastify as any).pg, userId, this.fastify, 'failed MCP position close reconciliation');
           throw err;
         }
       } catch (err) {

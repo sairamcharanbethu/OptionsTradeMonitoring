@@ -1,5 +1,6 @@
 import '@fastify/postgres';
 import { SnaptradeService, SnapTradeOrderSubmissionError, SnapTradeRateLimitError } from './snaptrade-service';
+import { TradeRedisService } from './trade-redis-service';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -559,6 +560,23 @@ async function testSyntheticStrategyFillKeepsFixedTakeProfitDisabled() {
   assert(fillUpdateParams[4] === null, `Synthetic strategy reconciliation must not restore a fixed premium take-profit, got ${fillUpdateParams[4]}`);
 }
 
+async function testBrokerSyncSurvivesCacheRefreshFailure() {
+  const originalRebuild = TradeRedisService.rebuildOpenTrades;
+  const warnings: string[] = [];
+  const fastify = createFastifyMockWithQueries(async () => ({ rows: [], rowCount: 0 }));
+  fastify.log.warn = (message: string) => warnings.push(message);
+  const service = new SnaptradeService(fastify);
+
+  try {
+    (TradeRedisService as any).rebuildOpenTrades = async () => { throw new Error('cache unavailable'); };
+    const summary = await service.syncPendingBrokerOrders(7);
+    assert(summary.success === true && summary.checked === 0, 'Broker sync must retain its durable success when cache refresh fails');
+    assert(warnings.some(message => message.includes('cache unavailable')), 'Cache refresh failure should remain observable as a warning');
+  } finally {
+    (TradeRedisService as any).rebuildOpenTrades = originalRebuild;
+  }
+}
+
 async function runTests() {
   console.log('Running SnaptradeService order payload tests...');
   await testPlaceOptionOrderUsesSingleLegForceOrderPayload();
@@ -572,6 +590,7 @@ async function runTests() {
   await testPartialExitDoesNotCloseRemainingPosition();
   await testSyntheticManualFillKeepsTakeProfitInsideApp();
   await testSyntheticStrategyFillKeepsFixedTakeProfitDisabled();
+  await testBrokerSyncSurvivesCacheRefreshFailure();
   console.log('All SnaptradeService order payload tests passed!');
 }
 

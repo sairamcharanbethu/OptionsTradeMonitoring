@@ -182,11 +182,14 @@ export class RiskDecisionService {
 
   static forDuplicateOpenEntry(contractLabel: string, duplicate: any): RiskDecision {
     if (!duplicate) return this.allow();
+    const isManualExposure = duplicate.strategy_managed !== true;
     return {
       allowed: false,
       skipped: true,
       code: 'DUPLICATE_OPEN_ENTRY',
-      message: `Skipped duplicate entry: ${contractLabel} already exists as position #${duplicate.id} (${duplicate.status}${duplicate.execution_status ? `/${duplicate.execution_status}` : ''})`,
+      message: isManualExposure
+        ? `Autonomous entry skipped: ${contractLabel} already exists as manual position #${duplicate.id} (${duplicate.status}${duplicate.execution_status ? `/${duplicate.execution_status}` : ''}). The manual position remains separate and is not linked to this setup.`
+        : `Skipped duplicate entry: ${contractLabel} already exists as autonomous position #${duplicate.id} (${duplicate.status}${duplicate.execution_status ? `/${duplicate.execution_status}` : ''})`,
       metadata: { duplicatePositionId: duplicate.id }
     };
   }

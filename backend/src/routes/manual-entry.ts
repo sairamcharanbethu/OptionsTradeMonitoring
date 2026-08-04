@@ -374,8 +374,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
             metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: trimQty, currentQty, orderType: 'MARKET', action: exitAction }
           });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades((fastify as any).pg, userId, fastify);
-          await TradeRedisService.requestBrokerSync(userId);
+          await TradeRedisService.refreshAfterCommittedMutation((fastify as any).pg, userId, fastify, 'Manual Entry trim');
           return updatedPosition;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual Entry trim failed', {
@@ -392,7 +391,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
             metadata: { requestedQuantity }
           });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades((fastify as any).pg, userId, fastify);
+          await TradeRedisService.refreshAfterCommittedMutation((fastify as any).pg, userId, fastify, 'failed Manual Entry trim reconciliation');
           return reply.code(400).send({ error: err.message || 'Failed to submit manual entry trim order' });
         }
       } catch (err) {

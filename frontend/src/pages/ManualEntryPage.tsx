@@ -151,6 +151,7 @@ export default function ManualEntryPage() {
   const [submitting, setSubmitting] = useState(false);
   const [closingId, setClosingId] = useState<number | null>(null);
   const [trimmingId, setTrimmingId] = useState<number | null>(null);
+  const [syncingId, setSyncingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const expiration = chain?.expiration || '';
@@ -406,8 +407,9 @@ export default function ManualEntryPage() {
     setClosingId(trade.id);
     setError(null);
     try {
-      await api.closeWealthsimpleTrade(trade.id, trade.quantity);
-      await refreshTrades(true);
+      const updated = await api.closeWealthsimpleTrade(trade.id, trade.quantity);
+      setOpenTrades(current => current.map(item => item.id === updated.id ? updated : item));
+      await refreshTrades(false, false, true);
     } catch (err: any) {
       setError(err.message || 'Failed to submit sell order');
     } finally {
@@ -419,12 +421,27 @@ export default function ManualEntryPage() {
     setTrimmingId(trade.id);
     setError(null);
     try {
-      await api.trimManualEntryPosition(trade.id, settings.trimCount);
-      await refreshTrades(false);
+      const updated = await api.trimManualEntryPosition(trade.id, settings.trimCount);
+      setOpenTrades(current => current.map(item => item.id === updated.id ? updated : item));
+      await refreshTrades(false, false, true);
     } catch (err: any) {
       setError(err.message || 'Failed to submit trim order');
     } finally {
       setTrimmingId(null);
+    }
+  };
+
+  const verifyExitStatus = async (trade: Position) => {
+    setSyncingId(trade.id);
+    setError(null);
+    try {
+      const result = await api.refreshWealthsimpleTradeOrderStatus(trade.id);
+      setOpenTrades(current => current.map(item => item.id === result.trade.id ? result.trade : item));
+      await refreshTrades(false, false, true);
+    } catch (err: any) {
+      setError(err.message || 'Failed to verify the broker exit status');
+    } finally {
+      setSyncingId(null);
     }
   };
 
@@ -503,6 +520,7 @@ export default function ManualEntryPage() {
 
   const tradeActions = (trade: Position, compact = false) => {
     const canSell = trade.status === 'OPEN' && !isExitPending(trade);
+    const needsExitReview = String(trade.execution_status || '').startsWith('EXIT_');
     const trimCount = Math.max(1, Math.floor(Number(settings.trimCount || 1)));
     const canTrim = canSell && Number(trade.quantity || 0) > 0 && Number.isFinite(trimCount);
     const trimLabel = trimmingId === trade.id ? 'Trimming' : `TRIM ${Math.min(trimCount, Number(trade.quantity || 0))}`;
@@ -512,6 +530,12 @@ export default function ManualEntryPage() {
         <Button asChild variant="outline" size="sm" className={compact ? 'flex-1' : ''}>
           <Link to={`/trades/${trade.id}/command`}>Command</Link>
         </Button>
+        {needsExitReview && (
+          <Button variant="outline" size="sm" className={`gap-1 ${compact ? 'flex-1' : ''}`} disabled={syncingId === trade.id} onClick={() => verifyExitStatus(trade)}>
+            <RefreshCw className={`h-3.5 w-3.5 ${syncingId === trade.id ? 'animate-spin' : ''}`} />
+            {syncingId === trade.id ? 'Verifying' : 'Verify exit'}
+          </Button>
+        )}
         <Button variant="outline" size="sm" className={`gap-1 ${compact ? 'flex-1' : ''}`} disabled={!canTrim || trimmingId === trade.id || closingId === trade.id} onClick={() => submitTrim(trade)}>
           <Scissors className="h-3.5 w-3.5" />
           {trimLabel}

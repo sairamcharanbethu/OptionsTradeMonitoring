@@ -805,7 +805,7 @@ export class SnaptradeService {
         };
 
         if (pendingPositions.length === 0) {
-            await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId, this.fastify);
+            await TradeRedisService.rebuildOpenTradesBestEffort(this.fastify.pg, userId, this.fastify, 'SnapTrade pending-order sync');
             return summary;
         }
 
@@ -1365,7 +1365,7 @@ export class SnaptradeService {
         }
 
         if (summary.unmatched > 0 || summary.checked > 0) {
-            await TradeRedisService.rebuildOpenTrades(this.fastify.pg, userId, this.fastify);
+            await TradeRedisService.rebuildOpenTradesBestEffort(this.fastify.pg, userId, this.fastify, 'SnapTrade pending-order sync');
         }
 
         return summary;

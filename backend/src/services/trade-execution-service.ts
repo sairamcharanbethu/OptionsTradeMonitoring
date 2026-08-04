@@ -373,7 +373,7 @@ export class TradeExecutionService {
 
   private async findDuplicateOpenEntry(input: ExecuteSignalInput, broker: ExecutionBroker) {
     const { rows } = await this.fastify.pg.query(
-      `SELECT id, status, execution_status, broker_order_id
+      `SELECT id, status, execution_status, broker_order_id, strategy_managed
        FROM positions
        WHERE user_id = $1
          AND symbol = $2

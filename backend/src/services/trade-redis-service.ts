@@ -154,6 +154,31 @@ export class TradeRedisService {
     return rowsWithMarketData;
   }
 
+  static async rebuildOpenTradesBestEffort(db: Queryable, userId: number, broadcaster?: any, context = 'trade mutation') {
+    try {
+      await this.rebuildOpenTrades(db, userId, broadcaster);
+      return null;
+    } catch (error: any) {
+      const message = `Failed to refresh trade cache after committed ${context}: ${error.message || String(error)}`;
+      broadcaster?.log?.warn?.(`[TradeRedisService] ${message}`);
+      return message;
+    }
+  }
+
+  static async refreshAfterCommittedMutation(db: Queryable, userId: number, broadcaster?: any, context = 'trade mutation') {
+    const warnings: string[] = [];
+    const cacheWarning = await this.rebuildOpenTradesBestEffort(db, userId, broadcaster, context);
+    if (cacheWarning) warnings.push(cacheWarning);
+    try {
+      await this.requestBrokerSync(userId);
+    } catch (error: any) {
+      const message = `Failed to queue broker sync after committed ${context}: ${error.message || String(error)}`;
+      warnings.push(message);
+      broadcaster?.log?.warn?.(`[TradeRedisService] ${message}`);
+    }
+    return warnings;
+  }
+
   static async invalidateUser(userId: number) {
     await Promise.all([
       redis.del(this.keys.userOpenTrades(userId)),

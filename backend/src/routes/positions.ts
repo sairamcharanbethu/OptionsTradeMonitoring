@@ -630,8 +630,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQty, orderType: 'MARKET', action: exitAction }
           });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
-          await TradeRedisService.requestBrokerSync(userId);
+          await TradeRedisService.refreshAfterCommittedMutation(fastify.pg, userId, fastify, 'manual SnapTrade position close');
           return updatedPosition;
         } catch (err: any) {
           await TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual SnapTrade exit failed', {
@@ -648,7 +647,7 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
             metadata: { source: 'positions-close-snaptrade' }
           });
           await client.query('COMMIT');
-          await TradeRedisService.rebuildOpenTrades(fastify.pg, userId, fastify);
+          await TradeRedisService.refreshAfterCommittedMutation(fastify.pg, userId, fastify, 'failed manual SnapTrade position close reconciliation');
           return reply.code(400).send({ error: err.message || 'Failed to submit SnapTrade close order' });
         }
       }

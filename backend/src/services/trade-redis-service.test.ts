@@ -39,10 +39,34 @@ async function testCorrelatedEntryExposureKeys() {
   assert(spy !== aapl, 'An unrelated underlying must use a separate exposure lock');
 }
 
+async function testCommittedMutationRefreshIsBestEffort() {
+  const originalRebuild = TradeRedisService.rebuildOpenTrades;
+  const originalRequestSync = TradeRedisService.requestBrokerSync;
+  const warnings: string[] = [];
+  try {
+    (TradeRedisService as any).rebuildOpenTrades = async () => { throw new Error('cache unavailable'); };
+    (TradeRedisService as any).requestBrokerSync = async () => { throw new Error('queue unavailable'); };
+
+    const result = await TradeRedisService.refreshAfterCommittedMutation(
+      { query: async () => ({ rows: [] }) },
+      7,
+      { log: { warn: (message: string) => warnings.push(message) } },
+      'manual trim'
+    );
+
+    assert(result.length === 2, `Expected both post-commit warnings, got ${JSON.stringify(result)}`);
+    assert(warnings.length === 2, 'Post-commit refresh failures should be logged without replacing durable success');
+  } finally {
+    (TradeRedisService as any).rebuildOpenTrades = originalRebuild;
+    (TradeRedisService as any).requestBrokerSync = originalRequestSync;
+  }
+}
+
 async function runTests() {
   console.log('Running TradeRedisService tests...');
   await testRecordEventPersistsSignalId();
   await testCorrelatedEntryExposureKeys();
+  await testCommittedMutationRefreshIsBestEffort();
   console.log('All TradeRedisService tests passed!');
 }
 

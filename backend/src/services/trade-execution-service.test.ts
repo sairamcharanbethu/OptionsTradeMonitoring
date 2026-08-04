@@ -272,7 +272,8 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   const duplicate = RiskDecisionService.forDuplicateOpenEntry('QQQ 2026-06-16 PUT 738', {
     id: 679,
     status: 'OPEN',
-    execution_status: 'PENDING'
+    execution_status: 'PENDING',
+    strategy_managed: false
   });
   const dailyLimit = RiskDecisionService.forDailyTradeLimit(3, 3);
   const dailyLoss = RiskDecisionService.forDailyLossLimit(-250, 200);
@@ -388,6 +389,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(pendingReconcile.allowed === false, 'A broker-accepted order awaiting reconciliation must block duplicate execution');
   assert(grade.allowed === false && grade.code === 'SETUP_GRADE_NOT_EXECUTABLE', 'Should block non-executable setup grade');
   assert(duplicate.allowed === false && duplicate.metadata?.duplicatePositionId === 679, 'Should block duplicate open entry with metadata');
+  assert(duplicate.message.includes('manual position #679') && duplicate.message.includes('not linked'), 'A matching manual position should stay separate from the autonomous setup');
   assert(dailyLimit.allowed === false && dailyLimit.code === 'DAILY_TRADE_LIMIT', 'Should block daily trade limit');
   assert(dailyLoss.allowed === false && dailyLoss.code === 'DAILY_LOSS_LIMIT', 'Should block daily loss limit');
   assert(cooldown.allowed === false && cooldown.code === 'CONSECUTIVE_LOSS_COOLDOWN', 'Should block consecutive-loss cooldown');
@@ -589,10 +591,11 @@ async function testDuplicateOpenEntrySkipsBeforeOrderLifecycle() {
       id: 679,
       status: 'OPEN',
       execution_status: 'PENDING',
-      broker_order_id: 'order-existing'
+      broker_order_id: 'order-existing',
+      strategy_managed: false
     });
     (service as any).markSignalExecutionFailure = async (_userId: number, _signalId: number, message: string, skipped: boolean) => {
-      failureMarked = skipped && message.includes('already exists as position #679');
+      failureMarked = skipped && message.includes('manual position #679') && message.includes('not linked');
     };
     (service as any).closeSupersededPositions = async () => {
       closeSupersededCalled = true;
