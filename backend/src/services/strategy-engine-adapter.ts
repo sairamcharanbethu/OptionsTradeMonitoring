@@ -755,29 +755,37 @@ export class StrategyEngineAdapter {
       return;
     }
 
-    for (const row of rows) {
+    const attemptedAt = new Date().toISOString();
+    const outcomes = await Promise.all(rows.map(async (row: any) => {
       const userId = Number(row.user_id);
-      if (!Number.isInteger(userId) || userId <= 0) continue;
+      if (!Number.isInteger(userId) || userId <= 0) return null;
       const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
       if (!this.isAutonomousLiveEntryConfigured(settings)) {
         this.fastify.log.warn(`[StrategyEngineAdapter] Autonomous live entry is enabled but incomplete for user ${userId}.`);
-        continue;
+        return { userId, result: 'configuration incomplete' };
       }
 
-      this.lastAutonomousEntryAt = new Date().toISOString();
       try {
         await this.assertSignalExecutable(signalId);
         const result = await scanner.executeSignalForUser(userId, signalId, {
           ...settings,
           contracts_per_trade: '1'
         });
-        this.lastAutonomousEntryResult = result?.success
-          ? 'Order submitted'
-          : `Entry skipped: ${result?.message || 'risk check denied entry'}`;
+        return {
+          userId,
+          result: result?.success
+            ? 'order submitted'
+            : `entry skipped: ${result?.message || 'risk check denied entry'}`
+        };
       } catch (err: any) {
-        this.lastAutonomousEntryResult = `Entry failed: ${err.message || String(err)}`;
         this.fastify.log.error(`[StrategyEngineAdapter] Autonomous entry failed for user ${userId}: ${err.message || String(err)}`);
+        return { userId, result: `entry failed: ${err.message || String(err)}` };
       }
+    }));
+    const completed = outcomes.filter((outcome): outcome is { userId: number; result: string } => Boolean(outcome));
+    if (completed.length > 0) {
+      this.lastAutonomousEntryAt = attemptedAt;
+      this.lastAutonomousEntryResult = completed.map(outcome => `User ${outcome.userId}: ${outcome.result}`).join('; ');
     }
   }
 

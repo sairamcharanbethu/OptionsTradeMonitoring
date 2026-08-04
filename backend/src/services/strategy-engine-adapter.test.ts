@@ -269,12 +269,14 @@ async function runTests() {
   assert(queries.some((query) => query.sql.includes("lifecycle_status = 'SUPERSEDED'")), 'A replaced setup signal must become terminal');
   assert(queries.some((query) => query.sql.includes("strategy_exit_reason = 'SUPERSEDED'")), 'A linked open position must receive a superseded exit request');
 
-  let autonomousCall: any = null;
-  const autonomousUserId = 9191;
+  const autonomousCalls: any[] = [];
+  const autonomousUserIds = [9191, 9192];
+  let activeAutonomousCalls = 0;
+  let maxActiveAutonomousCalls = 0;
   const autonomousAdapter = new StrategyEngineAdapter({
     pg: {
       query: async (sql: string, values: any[] = []) => {
-        if (sql.includes("key = 'autonomous_live_entry_enabled'")) return { rows: [{ user_id: autonomousUserId }] };
+        if (sql.includes("key = 'autonomous_live_entry_enabled'")) return { rows: autonomousUserIds.map(user_id => ({ user_id })) };
         if (sql.includes('SELECT DISTINCT ON')) return { rows: [] };
         if (sql.includes('SELECT key, value FROM settings')) {
           return { rows: [
@@ -297,7 +299,11 @@ async function runTests() {
     },
     scanner: {
       executeSignalForUser: async (userId: number, signalId: number, settings: any) => {
-        autonomousCall = { userId, signalId, settings };
+        autonomousCalls.push({ userId, signalId, settings });
+        activeAutonomousCalls += 1;
+        maxActiveAutonomousCalls = Math.max(maxActiveAutonomousCalls, activeAutonomousCalls);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        activeAutonomousCalls -= 1;
         return { success: true };
       }
     },
@@ -316,9 +322,10 @@ async function runTests() {
   });
   autonomousAdapter.autonomousEntryWindow = () => ({ open: true, reason: 'OPEN', cutoffMinutes: 900, closeMinutes: 960 });
   await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 88);
-  assert(autonomousCall?.userId === autonomousUserId && autonomousCall?.signalId === 88, 'Eligible autonomous user must route the active strategy signal');
-  assert(autonomousCall?.settings.contracts_per_trade === '1', 'Autonomous live entry must hard-cap the order at one contract');
-  assert(autonomousCall?.settings.max_correlated_positions === '4', 'Autonomous live entry must preserve the configured concurrent exposure limit');
+  assert(autonomousCalls.length === 2 && autonomousCalls.every(call => call.signalId === 88), 'Every eligible autonomous user must route the active strategy signal');
+  assert(maxActiveAutonomousCalls === 2, 'Independent autonomous users must execute concurrently');
+  assert(autonomousCalls.every(call => call.settings.contracts_per_trade === '1'), 'Autonomous live entries must hard-cap each order at one contract');
+  assert(autonomousCalls.every(call => call.settings.max_correlated_positions === '4'), 'Autonomous live entries must preserve each configured concurrent exposure limit');
 
   queries.length = 0;
   await persistenceAdapter.persistPrimarySignal(signal({ state: 'WAIT', signal_phase: 'INVALIDATED' }));

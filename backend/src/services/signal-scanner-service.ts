@@ -5270,7 +5270,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
     const targets = await this.getAutoExecutionTargets(input.userId, input.symbol, input.autoTradeMode);
     if (targets.length === 0) return;
 
-    for (const target of targets) {
+    await Promise.all(targets.map(async target => {
       try {
         await this.executeSignalWithConfiguredBroker({
           userId: target.userId,
@@ -5287,7 +5287,7 @@ Respond JSON: {"verdict":"GO|WAIT|ABORT","analysis":"your single-sentence recomm
       } catch (err: any) {
         this.fastify.log.error(`[SignalScannerService] Auto-execution failed for signal #${input.signalId}, user ${target.userId}: ${err.message}`);
       }
-    }
+    }));
   }
 
   public async executeSignalForUser(userId: number, signalId: number, settingsOverride?: any) {

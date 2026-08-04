@@ -1540,22 +1540,33 @@ export class SnaptradeService {
             errors: [] as string[]
         };
 
-        for (const row of rows) {
+        const outcomes = await Promise.all(rows.map(async row => {
             try {
                 const result = await this.syncPendingBrokerOrders(Number(row.user_id));
-                summary.checked += result.checked;
-                summary.opened += result.opened;
-                summary.closed += result.closed;
-                summary.trimmed += result.trimmed || 0;
-                summary.stillPending += result.stillPending;
-                summary.unmatched += result.unmatched;
-                summary.errors.push(...result.errors);
+                return { userId: Number(row.user_id), result, error: null };
             } catch (err: any) {
                 const message = `User ${row.user_id}: ${err.message}`;
-                summary.errors.push(message);
                 this.fastify.log.warn(`[SnaptradeService] Pending order background sync failed: ${message}`);
+                return { userId: Number(row.user_id), result: null, error: message };
             }
+        }));
+
+        for (const outcome of outcomes) {
+            if (outcome.error) {
+                summary.errors.push(outcome.error);
+                continue;
+            }
+            const result = outcome.result;
+            if (!result) continue;
+            summary.checked += result.checked;
+            summary.opened += result.opened;
+            summary.closed += result.closed;
+            summary.trimmed += result.trimmed || 0;
+            summary.stillPending += result.stillPending;
+            summary.unmatched += result.unmatched;
+            summary.errors.push(...result.errors.map((message: string) => `User ${outcome.userId}: ${message}`));
         }
+        summary.success = summary.errors.length === 0;
 
         return summary;
     }

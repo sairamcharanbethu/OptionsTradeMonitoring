@@ -577,6 +577,28 @@ async function testBrokerSyncSurvivesCacheRefreshFailure() {
   }
 }
 
+async function testAllUserBrokerSyncRunsInParallelAndIsolatesFailures() {
+  const service = new SnaptradeService(createFastifyMockWithQueries(async (sql: string) => {
+    if (sql.includes('SELECT DISTINCT user_id')) return { rows: [{ user_id: 7 }, { user_id: 8 }, { user_id: 9 }] };
+    return { rows: [] };
+  })) as any;
+  let active = 0;
+  let maxActive = 0;
+  service.syncPendingBrokerOrders = async (userId: number) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    active -= 1;
+    if (userId === 8) throw new Error('user-specific broker failure');
+    return { checked: 1, opened: 1, closed: 0, trimmed: 0, stillPending: 0, unmatched: 0, errors: [] };
+  };
+
+  const summary = await service.syncAllPendingBrokerOrders();
+  assert(maxActive === 3, `Expected three user broker syncs in parallel, got ${maxActive}`);
+  assert(summary.checked === 2 && summary.opened === 2, 'Successful users must reconcile even when another user fails');
+  assert(summary.success === false && summary.errors.some((message: string) => message.includes('User 8')), 'One user failure must be isolated and reported in the aggregate result');
+}
+
 async function runTests() {
   console.log('Running SnaptradeService order payload tests...');
   await testPlaceOptionOrderUsesSingleLegForceOrderPayload();
@@ -591,6 +613,7 @@ async function runTests() {
   await testSyntheticManualFillKeepsTakeProfitInsideApp();
   await testSyntheticStrategyFillKeepsFixedTakeProfitDisabled();
   await testBrokerSyncSurvivesCacheRefreshFailure();
+  await testAllUserBrokerSyncRunsInParallelAndIsolatesFailures();
   console.log('All SnaptradeService order payload tests passed!');
 }
 

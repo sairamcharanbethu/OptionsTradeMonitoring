@@ -79,23 +79,38 @@ export class LiveExitMonitorService {
       };
       const iv = Number(quote.volatility ?? quote.iv ?? 0) || undefined;
 
+      const positionsByUser = new Map<number, any[]>();
       for (const position of matchedPositions) {
-        const positionId = Number(position.id);
-        if (this.streamUpdateLocks.has(positionId)) continue;
-
-        this.streamUpdateLocks.add(positionId);
-        try {
-          const underlyingPrice = this.getStreamUnderlyingPrice(quote, position);
-          const quoteContext = this.getStreamQuoteContext(quote, price);
-          this.fastify.log.info(`[LiveExitMonitor] ${this.provider} update for ${ticker}: $${price}`);
-          await (this.fastify as any).poller.processPositionExitUpdate(position, price, greeks, iv, underlyingPrice, quoteContext);
-          this.matchedUpdates++;
-          this.lastMatchedAt = new Date().toISOString();
-          this.lastError = null;
-        } finally {
-          this.streamUpdateLocks.delete(positionId);
-        }
+        const userId = Number(position.user_id);
+        const userPositions = positionsByUser.get(userId) || [];
+        userPositions.push(position);
+        positionsByUser.set(userId, userPositions);
       }
+      const userErrors = (await Promise.all(Array.from(positionsByUser.entries()).map(async ([userId, positions]) => {
+        const errors: string[] = [];
+        for (const position of positions) {
+          const positionId = Number(position.id);
+          if (this.streamUpdateLocks.has(positionId)) continue;
+
+          this.streamUpdateLocks.add(positionId);
+          try {
+            const underlyingPrice = this.getStreamUnderlyingPrice(quote, position);
+            const quoteContext = this.getStreamQuoteContext(quote, price);
+            this.fastify.log.info(`[LiveExitMonitor] ${this.provider} update for ${ticker}: $${price}`);
+            await (this.fastify as any).poller.processPositionExitUpdate(position, price, greeks, iv, underlyingPrice, quoteContext);
+            this.matchedUpdates++;
+            this.lastMatchedAt = new Date().toISOString();
+          } catch (err: any) {
+            const message = `User ${userId}, position ${position.id}: ${err.message || String(err)}`;
+            errors.push(message);
+            this.fastify.log.error(`[LiveExitMonitor] ${message}`);
+          } finally {
+            this.streamUpdateLocks.delete(positionId);
+          }
+        }
+        return errors;
+      }))).flat();
+      this.lastError = userErrors.length > 0 ? userErrors.join('; ') : null;
     } catch (err: any) {
       this.lastError = err.message || String(err);
       this.fastify.log.error(`[LiveExitMonitor] Failed to process stream quote: ${this.lastError}`);

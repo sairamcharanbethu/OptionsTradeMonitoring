@@ -1649,6 +1649,39 @@ async function testBlockedDecisionSnapshotCapturesBlockersAndNoOptionSelection()
   assert(snapshot.scoring.dynamicMinScore === 95, 'Blocked snapshot should capture dynamic threshold');
 }
 
+async function testAutoExecutionRunsInParallelAcrossUsersAndIsolatesFailures() {
+  const scanner = createScanner();
+  let active = 0;
+  let maxActive = 0;
+  const completed: number[] = [];
+  scanner.getAutoExecutionTargets = async () => [7, 8, 9].map(userId => ({ userId, settings: {} }));
+  scanner.executeSignalWithConfiguredBroker = async ({ userId }: { userId: number }) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    active -= 1;
+    if (userId === 8) throw new Error('user-specific entry failure');
+    completed.push(userId);
+  };
+
+  await scanner.executeSignalForEligibleUsers({
+    userId: 7,
+    signalId: 88,
+    symbol: 'SPY',
+    winningSide: 'CALL',
+    chosenStrike: 769,
+    chosenExpiry: '2026-08-05',
+    stopUnderlying: 768,
+    targetUnderlying: 770,
+    mark: 1,
+    settings: {},
+    autoTradeMode: 'instant'
+  });
+
+  assert(maxActive === 3, `Expected three user entries in parallel, got ${maxActive}`);
+  assert(completed.length === 2 && completed.includes(7) && completed.includes(9), 'One user failure must not cancel other user entries');
+}
+
 async function runTests() {
   console.log('Running SignalScannerService candidate and macro tests...');
   await testVixTermStructureRequiresContango();
@@ -1700,6 +1733,7 @@ async function runTests() {
   await testSignalConfigSnapshotCapturesReplayAndExecutionSettings();
   await testGeneratedDecisionSnapshotCapturesInputsImmutably();
   await testBlockedDecisionSnapshotCapturesBlockersAndNoOptionSelection();
+  await testAutoExecutionRunsInParallelAcrossUsersAndIsolatesFailures();
   console.log('All SignalScannerService candidate and macro tests passed!');
 }
 

@@ -526,6 +526,7 @@ async function run() {
   assert.ok(exitCommitIndex > -1, 'a partial exit must commit its durable ledger even if the subsequent Redis refresh fails');
   assert.ok(exitQueries.findIndex(sql => sql.includes('INSERT INTO paper_trade_journal')) < exitCommitIndex,
     'the exit journal must be inside the committed transaction');
+  assert.ok(exitQueries.some(sql => sql.includes('CASE WHEN $12::boolean')), 'the paper position update must use an explicitly typed close-state parameter');
   assert.ok(exitQueries.findIndex(sql => sql.includes('INSERT INTO paper_equity_snapshots')) < exitCommitIndex,
     'the exit equity checkpoint must be inside the committed transaction');
   assert.equal(exitOrderMetadata.requestedByUserId, 7, 'exit order evidence must retain the requesting administrator');
@@ -778,7 +779,7 @@ async function run() {
     id: 93,
     option_type: 'CALL',
     strike_price: 755,
-    expiration_date: '2026-08-04',
+    expiration_date: '2099-12-31',
     strategy_setup_id: 'premium-stop-setup',
     strategy_snapshot: {},
     entry_price: 1,
@@ -814,7 +815,7 @@ async function run() {
     lifecycle: { status: 'ACTIVE' },
     call_setup: {
       option: {
-        local_symbol: 'SPY260804C00755000',
+        local_symbol: 'SPY991231C00755000',
         bid: 0.79,
         quote_age_seconds: 0.1
       }

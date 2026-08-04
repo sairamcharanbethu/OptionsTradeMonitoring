@@ -1173,14 +1173,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       closeStage = 'UPDATE_POSITION';
       await client.query(
         `UPDATE positions SET quantity=$1, status=$2, current_price=$3,
-           realized_pnl=COALESCE(realized_pnl,0)+$4, exit_price=CASE WHEN $2='CLOSED' THEN $3 ELSE exit_price END,
-           execution_status=CASE WHEN $2='CLOSED' THEN 'EXIT_FILLED' ELSE 'PARTIAL_EXIT_FILLED' END,
+           realized_pnl=COALESCE(realized_pnl,0)+$4, exit_price=CASE WHEN $12::boolean THEN $3 ELSE exit_price END,
+           execution_status=$13,
            exit_reason=$5, underlying_price=$6, trailing_high_price=$7, trailing_stop_loss_pct=$8,
            analysis_data=$9, suggested_stop_loss=COALESCE($10,suggested_stop_loss), updated_at=NOW() WHERE id=$11`,
         [remaining, remaining === 0 ? 'CLOSED' : 'OPEN', bid, pnl, intent,
           position.underlying_price || null, position.trailing_high_price || bid,
           position.trailing_stop_loss_pct || null, JSON.stringify(position.analysis_data || {}),
-          position.suggested_stop_loss || null, position.id]
+          position.suggested_stop_loss || null, position.id, remaining === 0,
+          remaining === 0 ? 'EXIT_FILLED' : 'PARTIAL_EXIT_FILLED']
       );
       closeStage = 'UPDATE_ACCOUNT_CASH';
       await client.query(`UPDATE paper_accounts SET cash_balance=cash_balance+$1, updated_at=NOW() WHERE id=$2`, [proceeds, ACCOUNT_ID]);
