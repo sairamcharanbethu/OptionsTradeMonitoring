@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw, Server, ShieldCheck, ChevronDown } from 'lucide-react';
+import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw, Server, ShieldCheck, ChevronDown, Target } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { api } from '@/lib/api';
 
@@ -239,6 +239,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [autonomousLiveEntryEnabled, setAutonomousLiveEntryEnabled] = useState(false);
     const [liveTradingAcknowledged, setLiveTradingAcknowledged] = useState(false);
     const [mcpTradingEnabled, setMcpTradingEnabled] = useState(false);
+    const [wallReactionEnabled, setWallReactionEnabled] = useState(true);
+    const [wallReactionMaxRiskDollars, setWallReactionMaxRiskDollars] = useState('500');
+    const [tradingEconomicsApiKey, setTradingEconomicsApiKey] = useState('');
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -357,6 +360,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setAutonomousLiveEntryEnabled(data.autonomous_live_entry_enabled === 'true');
             setLiveTradingAcknowledged(data.live_trading_acknowledged === 'true');
             setMcpTradingEnabled(data.mcp_trading_enabled === 'true');
+            setWallReactionEnabled(data.wall_reaction_enabled !== 'false');
+            setWallReactionMaxRiskDollars(data.wall_reaction_max_risk_dollars || '500');
+            setTradingEconomicsApiKey('');
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
@@ -586,6 +592,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             alert('Enable at least one day-trading symbol.');
             return;
         }
+        const wallReactionRisk = Number(wallReactionMaxRiskDollars);
+        if (isAdmin && (!Number.isFinite(wallReactionRisk) || wallReactionRisk < 50 || wallReactionRisk > 10000)) {
+            alert('Wall Reaction base risk must be between $50 and $10,000.');
+            return;
+        }
         setSaving(true);
         try {
             const settingsPayload: Record<string, string> = {
@@ -640,6 +651,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 settingsPayload.strategy_preferred_contracts = strategyPreferredContracts;
                 settingsPayload.strategy_max_contracts = strategyMaxContracts;
                 settingsPayload.paper_trailing_stop_pct = paperTrailingStopPct;
+                settingsPayload.wall_reaction_enabled = wallReactionEnabled ? 'true' : 'false';
+                settingsPayload.wall_reaction_max_risk_dollars = wallReactionMaxRiskDollars;
+                if (tradingEconomicsApiKey.trim()) settingsPayload.trading_economics_api_key = tradingEconomicsApiKey.trim();
             }
             await api.updateSettings(settingsPayload);
             queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -672,6 +686,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                         <TabsTrigger value="daytrading" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Zap className="h-4 w-4 text-muted-foreground" />
                             Day trading
+                        </TabsTrigger>
+                        <TabsTrigger value="wallreaction" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
+                            <Target className="h-4 w-4 text-muted-foreground" />
+                            Wall Reaction
                         </TabsTrigger>
                         <TabsTrigger value="credentials" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Key className="h-4 w-4 text-muted-foreground" />
@@ -1293,6 +1311,39 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     )}
                                 </section>
                             </div>
+                        </TabsContent>
+
+                        <TabsContent value="wallreaction" className="m-0 space-y-5">
+                            <div>
+                                <h3 className="text-lg font-semibold">Wall Reaction</h3>
+                                <p className="text-sm text-muted-foreground">Independent SPY/QQQ wall-reaction candidates and a dedicated paper account.</p>
+                            </div>
+                            <section className="rounded-lg border bg-card p-4 space-y-5">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-semibold">Candidate runtime</h4><Badge variant="outline" className="border-sky-500/40 text-sky-600">Paper only</Badge></div>
+                                        <p className="mt-1 text-xs text-muted-foreground">This switch does not enable, disable, or reconfigure Day Trading.</p>
+                                    </div>
+                                    <Switch id="wallReactionEnabled" checked={wallReactionEnabled} onCheckedChange={setWallReactionEnabled} disabled={!isAdmin} />
+                                </div>
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="wallReactionRisk">Base risk budget</Label>
+                                        <Input id="wallReactionRisk" type="number" min="50" max="10000" step="50" value={wallReactionMaxRiskDollars} onChange={(event) => setWallReactionMaxRiskDollars(event.target.value)} disabled={!isAdmin} />
+                                        <p className="text-[10px] leading-relaxed text-muted-foreground">The engine applies a 0.25x or 0.50x multiplier, then caps the paper entry at two contracts.</p>
+                                    </div>
+                                    <div className="grid gap-2">
+                                        <Label htmlFor="tradingEconomicsApiKey">Trading Economics API key</Label>
+                                        <Input id="tradingEconomicsApiKey" type="password" value={tradingEconomicsApiKey} onChange={(event) => setTradingEconomicsApiKey(event.target.value)} placeholder={isAdmin ? 'Leave blank to keep the configured key' : 'Admin managed'} disabled={!isAdmin} autoComplete="new-password" />
+                                        <p className="text-[10px] leading-relaxed text-muted-foreground">US importance-3 events close the entry gate from 30 minutes before through 15 minutes after. Missing or stale calendar data fails closed.</p>
+                                    </div>
+                                </div>
+                                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-muted-foreground">
+                                    <div className="font-semibold text-foreground">Manual approval remains required</div>
+                                    <p className="mt-1">An admin must arm each candidate for five minutes. The system creates only protected paper orders in the Wall Reaction account; it has no live-broker execution path.</p>
+                                </div>
+                                {!isAdmin && <Badge variant="secondary">Admin-managed settings</Badge>}
+                            </section>
                         </TabsContent>
 
                         {/* Tab 3: API Keys & Credentials */}

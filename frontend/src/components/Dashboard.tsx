@@ -88,13 +88,14 @@ import { PositionsTable } from './PositionsTable';
 import { cn, getDte, getPnL, getRoi } from '@/lib/utils';
 
 const DayTradingTerminal = lazy(() => import('@/pages/DayTradingTerminal'));
+const WallReactionPage = lazy(() => import('@/pages/WallReactionPage'));
 
 interface DashboardProps {
   user: User;
   onUserUpdate: (user: User) => void;
 }
 
-const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'users'] as const;
+const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'wall-reaction', 'users'] as const;
 const DASHBOARD_TAB_STORAGE_KEY = 'options-monitoring:dashboard-tab';
 
 const getInitialDashboardTab = () => {
@@ -399,12 +400,13 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               )}
             </div>
 
-            <TabsList className="hidden h-9 shrink-0 rounded-md bg-muted/60 p-1 lg:flex">
+            <TabsList className="hidden h-9 shrink-0 rounded-md bg-muted/60 p-1 xl:flex">
               <TabsTrigger value="overview">Overview</TabsTrigger>
               <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
               <TabsTrigger value="wealthsimple">Wealthsimple</TabsTrigger>
               <TabsTrigger value="goals">Goals</TabsTrigger>
               <TabsTrigger value="day-trading">Day Trading</TabsTrigger>
+              <TabsTrigger value="wall-reaction">Wall Reaction</TabsTrigger>
               <TabsTrigger value="manual-entry">Manual Entry</TabsTrigger>
               <TabsTrigger value="covered-calls">Covered Calls</TabsTrigger>
               {user.role === 'ADMIN' && (
@@ -413,9 +415,9 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </TabsList>
 
             <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
-            <div className="lg:hidden">
+            <div className="xl:hidden">
               <Select value={activeTab} onValueChange={handleTabChange}>
-                <SelectTrigger className="h-9 w-[150px]">
+                <SelectTrigger className="h-9 w-[170px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -424,6 +426,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                   <SelectItem value="wealthsimple">Wealthsimple</SelectItem>
                   <SelectItem value="goals">Goals</SelectItem>
                   <SelectItem value="day-trading">Day Trading</SelectItem>
+                  <SelectItem value="wall-reaction">Wall Reaction</SelectItem>
                   <SelectItem value="manual-entry">Manual Entry</SelectItem>
                   <SelectItem value="covered-calls">Covered Calls</SelectItem>
                   {user.role === 'ADMIN' && (
@@ -886,6 +889,12 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
         <TabsContent value="day-trading" className="mt-0">
           <Suspense fallback={<div className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">Loading day trading workspace...</div>}>
             <DayTradingTerminal />
+          </Suspense>
+        </TabsContent>
+
+        <TabsContent value="wall-reaction" className="mt-0">
+          <Suspense fallback={<div className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">Loading Wall Reaction workspace...</div>}>
+            <WallReactionPage user={user} />
           </Suspense>
         </TabsContent>
 

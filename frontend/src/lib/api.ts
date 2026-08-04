@@ -255,6 +255,37 @@ export interface PaperAccountSummary {
   canManage: boolean;
 }
 
+export interface WallReactionCandidate {
+  id: string;
+  symbol: 'SPY' | 'QQQ';
+  fingerprint: string;
+  status: 'CANDIDATE' | 'WATCHING' | 'BLOCKED' | 'ARMED' | 'ENTERED' | 'EXPIRED' | 'INVALIDATED';
+  generatedAt: string;
+  context: null | {
+    spot: number; netGex: number; gammaFlip: number; callWall: number; putWall: number; maxPain: number | null;
+    msi: number; gapPct: number | null; gapBasis: string; warnings: string[];
+  };
+  decision: { code: string; setup: string; direction: string; confidence: number; riskMultiplier: number; action: string; reasons: string[]; warnings: string[] };
+  macro: { blocked: boolean; reason: string; event: null | { name: string; scheduledAt: string } };
+  plan: null | { wall: number; invalidation: number; target1: number; target2: number | null; riskPoints: number; baseRiskDollars: number; debitBudget: number };
+  contract: null | { ticker: string; expiration: string; right: 'call' | 'put'; strike: number; bid: number; ask: number; mark: number; spreadPct: number; delta: number; protectedLimit: number; quantity: number; quoteTimestamp: string };
+}
+
+export interface WallReactionState {
+  policyVersion: string;
+  health: { status: string; lastRunAt: string | null; lastError: string | null };
+  symbols: Partial<Record<'SPY' | 'QQQ', WallReactionCandidate>>;
+}
+
+export interface WallReactionPaperSummary {
+  account: PaperAccountSummary['account'];
+  positions: Position[];
+  orders: Array<Record<string, any>>;
+  decisions: Array<Record<string, any>>;
+  health: { status: string; lastRunAt: string | null; lastError: string | null };
+  paperOnly: true;
+}
+
 export interface RuntimeConfigItem {
   id: string;
   group: 'Deployment' | 'Market Data' | 'AI Service' | 'Broker Execution' | 'Alerts';
@@ -1408,6 +1439,51 @@ export const api = {
   async getPaperAccount(): Promise<PaperAccountSummary> {
     const res = await authFetch(`${API_BASE}/paper-account`);
     if (!res.ok) throw new Error('Failed to fetch the system paper account');
+    return res.json();
+  },
+
+  async getWallReaction(): Promise<WallReactionState> {
+    const res = await authFetch(`${API_BASE}/wall-reaction`);
+    if (!res.ok) throw new Error('Failed to fetch Wall Reaction state');
+    return res.json();
+  },
+
+  async getWallReactionPaperAccount(): Promise<WallReactionPaperSummary> {
+    const res = await authFetch(`${API_BASE}/wall-reaction/paper-account`);
+    if (!res.ok) throw new Error('Failed to fetch Wall Reaction paper account');
+    return res.json();
+  },
+
+  async getWallReactionJournal(limit = 30): Promise<{ items: Array<Record<string, any>> }> {
+    const res = await authFetch(`${API_BASE}/wall-reaction/paper-account/journal?limit=${limit}`);
+    if (!res.ok) throw new Error('Failed to fetch Wall Reaction ledger');
+    return res.json();
+  },
+
+  async armWallReactionCandidate(candidateId: string): Promise<any> {
+    const res = await authFetch(`${API_BASE}/wall-reaction/candidates/${candidateId}/arm`, { method: 'POST' });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || 'Candidate could not be armed');
+    }
+    return res.json();
+  },
+
+  async setWallReactionPaperAutomation(active: boolean): Promise<any> {
+    const res = await authFetch(`${API_BASE}/wall-reaction/paper-account/${active ? 'resume' : 'pause'}`, { method: 'POST' });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || 'Paper account status could not be changed');
+    }
+    return res.json();
+  },
+
+  async closeWallReactionPosition(positionId: number): Promise<any> {
+    const res = await authFetch(`${API_BASE}/wall-reaction/paper-account/positions/${positionId}/close`, { method: 'POST' });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error(error.error || 'Paper position could not be closed');
+    }
     return res.json();
   },
 

@@ -188,6 +188,16 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     detail: 'Used server-side by the ZeroGEX prefetch service. The key is never returned to the browser.'
                 }),
                 runtimeItem({
+                    id: 'market:trading-economics-key',
+                    group: 'Market Data',
+                    label: 'Trading Economics API key',
+                    source: configured(settings.trading_economics_api_key) ? 'settings' : 'default',
+                    status: secretStatus(settings.trading_economics_api_key),
+                    secret: true,
+                    value: secretValue(settings.trading_economics_api_key),
+                    detail: 'Server-side macro calendar gate for Wall Reaction. The key is never returned to the browser.'
+                }),
+                runtimeItem({
                     id: 'ai:provider',
                     group: 'AI Service',
                     label: 'AI provider',
