@@ -597,6 +597,7 @@ async function run() {
   const manualPosition = {
     ...openPosition,
     id: 91,
+    paper_decision_id: 701,
     strategy_setup_id: 'manual-close-setup',
     quantity: 1,
     entry_price: 1.20,
@@ -616,7 +617,11 @@ async function run() {
         }
         if (sql.includes('FROM positions p')) {
           manualCloseUsedLegacyCompatibleJoin = sql.includes('LEFT JOIN paper_trade_decisions');
-          return { rows: manualCloseUsedLegacyCompatibleJoin ? [manualPosition] : [] };
+          return {
+            rows: manualCloseUsedLegacyCompatibleJoin
+              ? [{ ...manualPosition, resolved_paper_decision_id: null, resolved_strategy_setup_id: null }]
+              : []
+          };
         }
         return { rows: [] };
       }
@@ -633,6 +638,7 @@ async function run() {
   manualCloseService.closePaperQuantity = async (...args: any[]) => { manualCloseCall = args; };
   const manualCloseResult = await manualCloseService.closeOpenPosition(91, 7);
   assert.equal(manualCloseUsedLegacyCompatibleJoin, true, 'manual close must include visible legacy paper positions whose decision row is unavailable');
+  assert.equal(manualCloseCall[0].paper_decision_id, null, 'a missing legacy paper decision must not be forwarded into foreign-keyed exit records');
   assert.equal(manualQuoteTicker, 'SPY260803C00753000', 'manual close must quote the exact paper OSI contract');
   assert.equal(manualCloseCall[2], 0.85, 'manual close must sell at the fresh IBKR bid');
   assert.equal(manualCloseCall[3], 'MANUAL_EXIT', 'manual close must use an auditable exit intent');

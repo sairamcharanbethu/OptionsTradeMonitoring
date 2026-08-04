@@ -227,19 +227,26 @@ export class PaperTradingService {
       throw error;
     }
     const { rows } = await (this.fastify as any).pg.query(
-      `SELECT p.*, ptd.exit_profile, ptd.policy_version,
+      `SELECT p.*, ptd.id AS resolved_paper_decision_id,
+              ptd.setup_id AS resolved_strategy_setup_id,
+              ptd.exit_profile, ptd.policy_version,
               ptd.trailing_stop_pct AS decision_trailing_stop_pct
        FROM positions p
        LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
        WHERE p.id=$1 AND p.paper_account_id=$2 AND p.status='OPEN'`,
       [positionId, ACCOUNT_ID]
     );
-    const position = rows[0];
-    if (!position) {
+    const selectedPosition = rows[0];
+    if (!selectedPosition) {
       const error: any = new Error('Open paper position not found');
       error.statusCode = 404;
       throw error;
     }
+    const position = {
+      ...selectedPosition,
+      paper_decision_id: selectedPosition.resolved_paper_decision_id ?? null,
+      strategy_setup_id: selectedPosition.resolved_strategy_setup_id ?? selectedPosition.strategy_setup_id
+    };
     let live: any = null;
     try {
       live = await this.getLivePosition(position.id);

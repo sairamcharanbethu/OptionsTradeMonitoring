@@ -45,6 +45,18 @@ type ServicesHealth = Awaited<ReturnType<typeof api.getServicesHealth>>;
 const MAX_GEX_PROVIDER_AGE_SECONDS = 120;
 const BROWSER_SETUP_ALERTS_KEY = 'day-trading-browser-setup-alerts';
 
+const dateInNewYork = (date = new Date()) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+}).format(date);
+
+const isExpiredOption = (expiration: unknown) => {
+  const value = String(expiration || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && value < dateInNewYork();
+};
+
 const money = (value: unknown, decimals = 2) => {
   const number = Number(value);
   return Number.isFinite(number) ? `$${number.toFixed(decimals)}` : '—';
@@ -1493,7 +1505,8 @@ export default function DayTradingTerminal() {
                           size="sm"
                           className="mt-2 h-8 border-rose-500/25 bg-rose-950/15 px-2.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-950/35 hover:text-rose-100"
                           onClick={() => {
-                            setPaperForceCloseAvailable(false);
+                            setActionMessage(null);
+                            setPaperForceCloseAvailable(isExpiredOption(position.expiration_date));
                             setPaperClosePosition(position);
                           }}
                           disabled={paperClosing}
@@ -1874,7 +1887,9 @@ export default function DayTradingTerminal() {
           <DialogHeader>
             <DialogTitle className="text-xl tracking-[-0.02em]">Close this paper position?</DialogTitle>
             <DialogDescription className="text-zinc-500">
-              The complete paper quantity will be sold at a fresh IBKR bid and recorded in the system paper ledger.
+              {paperClosePosition && isExpiredOption(paperClosePosition.expiration_date)
+                ? 'This expired contract cannot provide a fresh executable IBKR bid. Close it explicitly at the last recorded paper mark.'
+                : 'The complete paper quantity will be sold at a fresh IBKR bid and recorded in the system paper ledger.'}
             </DialogDescription>
           </DialogHeader>
           {paperClosePosition && (
@@ -1886,7 +1901,14 @@ export default function DayTradingTerminal() {
               {paperForceCloseAvailable && (
                 <div className="flex items-start gap-2 rounded-lg border border-rose-500/25 bg-rose-950/15 px-3 py-2.5 text-xs leading-relaxed text-rose-200">
                   <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                  Fresh IBKR pricing is unavailable. Force close records the exit at the latest Redis paper mark, or the stored paper mark when Redis has none. This price may not be executable in the market.
+                  {isExpiredOption(paperClosePosition.expiration_date)
+                    ? 'This contract has expired. Force close records the exit at the latest Redis paper mark, or the stored paper mark when Redis has none. This is ledger recovery, not an executable market price.'
+                    : 'Fresh IBKR pricing is unavailable. Force close records the exit at the latest Redis paper mark, or the stored paper mark when Redis has none. This price may not be executable in the market.'}
+                </div>
+              )}
+              {actionMessage?.tone === 'error' && (
+                <div className="rounded-lg border border-rose-500/25 bg-rose-950/15 px-3 py-2.5 text-xs leading-relaxed text-rose-200">
+                  {actionMessage.text}
                 </div>
               )}
               <div className="grid grid-cols-2 gap-2 text-xs">
