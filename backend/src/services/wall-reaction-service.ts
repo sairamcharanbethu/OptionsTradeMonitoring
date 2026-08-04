@@ -216,9 +216,10 @@ export class WallReactionService {
 
   private async storeGated(symbol: WallReactionSymbol, reason: string, now: Date): Promise<void> {
     const decision = standDown(reason);
+    const macro = blockingEconomicEvent(this.providers.getCalendar(), now);
     const candidate: WallReactionCandidate = {
       id: newWallReactionCandidateId(), symbol, fingerprint: wallReactionFingerprint(symbol, decision, {}), status: 'BLOCKED',
-      generatedAt: now.toISOString(), context: null, decision, macro: { blocked: true, reason, event: null }, plan: null, contract: null
+      generatedAt: now.toISOString(), context: null, decision, macro, plan: null, contract: null
     };
     this.state.set(symbol, candidate);
     await this.persist(candidate);

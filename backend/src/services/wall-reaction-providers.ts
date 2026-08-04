@@ -100,7 +100,17 @@ export class WallReactionProviders {
   }
 
   public async readZeroGex(symbol: WallReactionSymbol): Promise<ZeroGexWallSnapshot> {
-    const raw = JSON.parse(await readFile(this.zeroGexPath(symbol), 'utf8'));
+    const snapshotPath = this.zeroGexPath(symbol);
+    let raw: Record<string, any>;
+    try {
+      raw = JSON.parse(await readFile(snapshotPath, 'utf8'));
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        const service = symbol === 'QQQ' ? 'zerogex-prefetch-qqq' : 'zerogex-prefetch';
+        throw new Error(`ZeroGEX ${symbol} provider unavailable: ${service} has not produced its snapshot`);
+      }
+      throw new Error(`ZeroGEX ${symbol} snapshot could not be read: ${error?.message || String(error)}`);
+    }
     if (!raw || typeof raw !== 'object' || String(raw.symbol || '').toUpperCase() !== symbol) {
       throw new Error(`ZeroGEX ${symbol} snapshot is missing or has the wrong symbol`);
     }

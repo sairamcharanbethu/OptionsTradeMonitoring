@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { blockingEconomicEvent, normalizeTradingEconomicsEvents, providerAgeSeconds, WallReactionProviders } from './wall-reaction-providers';
 
 async function run() {
@@ -30,6 +33,14 @@ async function run() {
   assert.equal(authorization, 'Client private-key');
   assert.equal(providers.zeroGexPath('SPY'), '/tmp/trade/zerogex.json');
   assert.equal(providers.zeroGexPath('QQQ'), '/tmp/wall-reaction/QQQ-zerogex.json');
+
+  const missingRoot = await mkdtemp(path.join(os.tmpdir(), 'wall-reaction-provider-'));
+  try {
+    const missing = new WallReactionProviders(path.join(missingRoot, 'trade'));
+    await assert.rejects(missing.readZeroGex('QQQ'), /zerogex-prefetch-qqq has not produced its snapshot/);
+  } finally {
+    await rm(missingRoot, { recursive: true, force: true });
+  }
 }
 
 run().then(() => console.log('All WallReactionProviders tests passed!')).catch((error) => {
