@@ -769,8 +769,7 @@ export class StrategyEngineAdapter {
         await this.assertSignalExecutable(signalId);
         const result = await scanner.executeSignalForUser(userId, signalId, {
           ...settings,
-          contracts_per_trade: '1',
-          max_correlated_positions: '1'
+          contracts_per_trade: '1'
         });
         this.lastAutonomousEntryResult = result?.success
           ? 'Order submitted'

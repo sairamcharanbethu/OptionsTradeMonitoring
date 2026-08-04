@@ -208,12 +208,15 @@ export class TradeExecutionService {
       return { success: false, broker, message: supersededSummary.message, superseded: supersededSummary };
     }
 
-    const correlatedOpenPositions = await this.countCorrelatedOpenPositions(input.userId, input.symbol, broker);
+    const correlatedPositions = await this.getCorrelatedOpenPositions(input.userId, input.symbol, broker);
+    const correlatedOpenPositions = correlatedPositions.length;
+    const correlatedLabel = ['SPY', 'QQQ'].includes(String(input.symbol || '').toUpperCase()) ? 'SPY/QQQ' : input.symbol;
     const correlatedRisk = RiskDecisionService.evaluatePreSubmit({
       signalId: input.signalId,
       broker,
-      contractLabel: input.symbol,
+      contractLabel: correlatedLabel,
       correlatedOpenPositions,
+      correlatedPositions,
       maxCorrelatedPositions: riskState.maxCorrelatedPositions
     });
     if (!correlatedRisk.approved) {
@@ -457,20 +460,21 @@ export class TradeExecutionService {
     };
   }
 
-  private async countCorrelatedOpenPositions(userId: number, symbol: string, broker: ExecutionBroker): Promise<number> {
+  private async getCorrelatedOpenPositions(userId: number, symbol: string, broker: ExecutionBroker): Promise<any[]> {
     const normalized = String(symbol || '').toUpperCase();
     const correlatedSymbols = ['SPY', 'QQQ'].includes(normalized) ? ['SPY', 'QQQ'] : [normalized];
     const { rows } = await this.fastify.pg.query(
-      `SELECT COUNT(*)::int AS count
+      `SELECT id, symbol, option_type, strike_price, expiration_date, status, execution_status
        FROM positions
        WHERE user_id = $1
          AND symbol = ANY($2::text[])
          AND status IN ('OPEN', 'PENDING_ORDER')
          AND ${this.executionScopeSql(broker)}
-         AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')`,
+         AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')
+       ORDER BY created_at DESC`,
       [userId, correlatedSymbols]
     );
-    return Number(rows[0]?.count || 0);
+    return rows;
   }
 
   private async closeSupersededPositions(input: ExecuteSignalInput, settings: ExecutionSettings, broker: ExecutionBroker) {

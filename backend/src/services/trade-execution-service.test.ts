@@ -280,7 +280,15 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   const cooldown = RiskDecisionService.forConsecutiveLosses(3, 3, new Date(Date.now() + 60_000).toISOString());
   const premiumRisk = RiskDecisionService.forPremiumRisk(600, 500);
   const plannedLoss = RiskDecisionService.forPlannedLoss(90, 75);
-  const correlated = RiskDecisionService.forCorrelatedExposure(1, 1, 'SPY/QQQ');
+  const correlated = RiskDecisionService.forCorrelatedExposure(1, 1, 'SPY/QQQ', [{
+    id: 679,
+    symbol: 'SPY',
+    strike_price: 769,
+    option_type: 'CALL',
+    expiration_date: '2026-08-04',
+    status: 'OPEN',
+    execution_status: 'EXIT_RECONCILE_REQUIRED'
+  }]);
   const executionRealism = RiskDecisionService.forExecutionRealism({
     decision: {
       grade: {
@@ -397,6 +405,7 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(plannedLoss.allowed === false && plannedLoss.code === 'PLANNED_LOSS_LIMIT', 'Should block planned loss above the remaining daily budget');
   assert(RiskDecisionService.forPlannedLoss(75, 75).allowed === true, 'Should allow planned loss at the remaining daily budget');
   assert(correlated.allowed === false && correlated.code === 'CORRELATED_EXPOSURE_LIMIT', 'Should block correlated exposure');
+  assert(correlated.message.includes('#679 SPY 769 CALL 2026-08-04') && correlated.message.includes('broker review'), 'Correlated exposure denial must identify the counted position and reconciliation requirement');
   assert(executionRealism.allowed === false && executionRealism.code === 'EXECUTION_REALISM_TOO_LOW', 'Should block low execution realism');
   assert(theoretical.allowed === false && theoretical.code === 'THEORETICAL_PRICING', 'Should block theoretical pricing');
   assert(liveAck.denials[0]?.code === 'LIVE_TRADING_NOT_ACKNOWLEDGED', 'Should block missing live acknowledgement');
@@ -496,7 +505,7 @@ async function testStrategyPlanCapsConfiguredQuantity() {
     service.getSignalSetupGrade = async () => 'A+';
     service.findDuplicateOpenEntry = async () => null;
     service.closeSupersededPositions = async () => ({ blocked: false, checked: 0, closed: 0, supersededPending: 0, errors: [], message: '' });
-    service.countCorrelatedOpenPositions = async () => 0;
+    service.getCorrelatedOpenPositions = async () => [];
     service.countTradesToday = async () => 0;
     service.createSimulatedPosition = async (_input: any, quantity: number) => {
       simulatedQuantity = quantity;

@@ -318,7 +318,7 @@ async function runTests() {
   await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 88);
   assert(autonomousCall?.userId === autonomousUserId && autonomousCall?.signalId === 88, 'Eligible autonomous user must route the active strategy signal');
   assert(autonomousCall?.settings.contracts_per_trade === '1', 'Autonomous live entry must hard-cap the order at one contract');
-  assert(autonomousCall?.settings.max_correlated_positions === '1', 'Autonomous live entry must hard-cap concurrent correlated exposure at one');
+  assert(autonomousCall?.settings.max_correlated_positions === '4', 'Autonomous live entry must preserve the configured concurrent exposure limit');
 
   queries.length = 0;
   await persistenceAdapter.persistPrimarySignal(signal({ state: 'WAIT', signal_phase: 'INVALIDATED' }));

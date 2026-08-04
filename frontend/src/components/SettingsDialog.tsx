@@ -1148,8 +1148,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <Input id="lossCooldownMinutes" type="number" min="1" value={lossCooldownMinutes} onChange={(e) => setLossCooldownMinutes(e.target.value)} />
                                             </div>
                                             <div className="grid gap-2">
-                                                <Label htmlFor="maxCorrelatedPositions">Maximum SPY Positions</Label>
+                                                <Label htmlFor="maxCorrelatedPositions">Maximum Concurrent SPY/QQQ Positions</Label>
                                                 <Input id="maxCorrelatedPositions" type="number" min="1" value={maxCorrelatedPositions} onChange={(e) => setMaxCorrelatedPositions(e.target.value)} />
+                                                <p className="text-[10px] text-muted-foreground">Controls simultaneous correlated exposure. Max Trades Per Day remains a separate daily frequency limit.</p>
                                             </div>
                                         </div>
                                         <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">

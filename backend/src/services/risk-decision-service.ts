@@ -51,6 +51,7 @@ export type PreSubmitRiskInput = {
   plannedLoss?: number;
   remainingDailyLossBudget?: number;
   correlatedOpenPositions?: number;
+  correlatedPositions?: Array<Record<string, any>>;
   maxCorrelatedPositions?: number;
   optionDetails?: any;
   quoteValidation?: {
@@ -100,7 +101,12 @@ export class RiskDecisionService {
         ? this.forPlannedLoss(input.plannedLoss, input.remainingDailyLossBudget)
         : this.allow(),
       input.correlatedOpenPositions !== undefined && input.maxCorrelatedPositions !== undefined
-        ? this.forCorrelatedExposure(input.correlatedOpenPositions, input.maxCorrelatedPositions, input.contractLabel || 'underlying')
+        ? this.forCorrelatedExposure(
+            input.correlatedOpenPositions,
+            input.maxCorrelatedPositions,
+            input.contractLabel || 'underlying',
+            input.correlatedPositions
+          )
         : this.allow(),
       input.broker === 'wealthsimple_snaptrade' && input.settings !== undefined ? this.forLiveTradingAcknowledgement(input.settings) : this.allow(),
       input.broker === 'wealthsimple_snaptrade' && input.settings !== undefined ? this.forTradingAccount(input.settings) : this.allow(),
@@ -134,6 +140,7 @@ export class RiskDecisionService {
         plannedLoss: input.plannedLoss ?? null,
         remainingDailyLossBudget: input.remainingDailyLossBudget ?? null,
         correlatedOpenPositions: input.correlatedOpenPositions ?? null,
+        correlatedPositions: input.correlatedPositions ?? null,
         maxCorrelatedPositions: input.maxCorrelatedPositions ?? null,
         quote: input.quoteValidation?.quote ? {
           source: input.quoteValidation.quote.source || null,
@@ -249,13 +256,28 @@ export class RiskDecisionService {
     };
   }
 
-  static forCorrelatedExposure(current: number, max: number, contractLabel: string): RiskDecision {
+  static forCorrelatedExposure(
+    current: number,
+    max: number,
+    contractLabel: string,
+    positions: Array<Record<string, any>> = []
+  ): RiskDecision {
     if (current < max) return this.allow();
+    const counted = positions.slice(0, 3).map(position => {
+      const expiry = String(position.expiration_date || '').slice(0, 10) || 'expiry unavailable';
+      const lifecycle = [position.status, position.execution_status].filter(Boolean).join(' / ');
+      return `#${position.id} ${position.symbol} ${Number(position.strike_price)} ${position.option_type} ${expiry}${lifecycle ? ` (${lifecycle})` : ''}`;
+    });
+    const remaining = Math.max(0, positions.length - counted.length);
+    const exposureDetail = counted.length
+      ? ` Counted: ${counted.join(', ')}${remaining ? `, plus ${remaining} more` : ''}.`
+      : '';
     return {
       allowed: false,
       skipped: true,
       code: 'CORRELATED_EXPOSURE_LIMIT',
-      message: `Correlated exposure limit reached for ${contractLabel} (${current}/${max})`
+      message: `Concurrent ${contractLabel} exposure limit reached (${current}/${max} configured).${exposureDetail} Positions awaiting broker review remain counted until closure is confirmed.`,
+      metadata: { current, max, positions }
     };
   }
 
