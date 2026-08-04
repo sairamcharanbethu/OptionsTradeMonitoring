@@ -386,6 +386,14 @@ const ensureSchema = async (instance: any) => {
       ON CONFLICT (id) DO NOTHING;
     `);
     await instance.pg.query(`
+      INSERT INTO paper_accounts (
+        id, name, initial_equity, cash_balance, equity, high_water_mark,
+        start_of_day_equity, start_of_day_date
+      ) VALUES ('wall-reaction-system', 'Wall Reaction Paper Account', 100000, 100000, 100000, 100000, 100000,
+                (NOW() AT TIME ZONE 'America/New_York')::date)
+      ON CONFLICT (id) DO NOTHING;
+    `);
+    await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS paper_trade_decisions (
         id BIGSERIAL PRIMARY KEY,
         account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
@@ -869,6 +877,11 @@ const start = async () => {
     fastify.addHook('onClose', async () => wallReaction.stop());
     fastify.register(wallReactionRoutes, { prefix: '/api/wall-reaction' });
 
+    const { WallReactionPaperService } = await import('./services/wall-reaction-paper-service');
+    const wallReactionPaper = new WallReactionPaperService(fastify);
+    fastify.decorate('wallReactionPaper', wallReactionPaper);
+    fastify.addHook('onClose', async () => wallReactionPaper.stop());
+
     // Initialize poller BEFORE listen
     const { MarketPoller } = await import('./services/market-poller');
     const poller = new MarketPoller(fastify);
@@ -1343,6 +1356,7 @@ const start = async () => {
       fastify.log.info('[System] Starting background services...');
       poller.start();
       wallReaction.start();
+      wallReactionPaper.start();
       if (strategyEngine.getMode() !== 'primary') {
         scanner.start();
       } else {

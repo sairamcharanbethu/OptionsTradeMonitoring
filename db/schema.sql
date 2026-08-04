@@ -122,6 +122,14 @@ INSERT INTO paper_accounts (
     100000, (NOW() AT TIME ZONE 'America/New_York')::date
 ) ON CONFLICT (id) DO NOTHING;
 
+INSERT INTO paper_accounts (
+    id, name, initial_equity, cash_balance, equity, high_water_mark,
+    start_of_day_equity, start_of_day_date
+) VALUES (
+    'wall-reaction-system', 'Wall Reaction Paper Account', 100000, 100000, 100000, 100000,
+    100000, (NOW() AT TIME ZONE 'America/New_York')::date
+) ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS paper_trade_decisions (
     id BIGSERIAL PRIMARY KEY,
     account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
