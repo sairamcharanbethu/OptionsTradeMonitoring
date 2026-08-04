@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { getNewYorkDateParts, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
-import { WallReactionCandidate, WALL_REACTION_POLICY_VERSION } from './wall-reaction-service';
+import { isFreshWallReactionQuote, WallReactionCandidate, WALL_REACTION_POLICY_VERSION } from './wall-reaction-service';
 
 export const WALL_REACTION_ACCOUNT_ID = 'wall-reaction-system';
 const ARM_MS = 5 * 60_000;
@@ -113,7 +113,7 @@ export class WallReactionPaperService {
     const position = rows[0];
     if (!position) { const error: any = new Error('Open Wall Reaction paper position not found'); error.statusCode = 404; throw error; }
     const quote = await this.marketData.getOptionQuoteForOsi(null, this.osiTicker(position));
-    if (!quote || quote.bid <= 0 || quote.quoteAgeMs === null || quote.quoteAgeMs < -5_000 || quote.quoteAgeMs > 15_000) {
+    if (!quote || quote.bid <= 0 || !isFreshWallReactionQuote(quote.timestamp)) {
       const error: any = new Error('A fresh IBKR bid is required for paper close'); error.statusCode = 409; throw error;
     }
     await this.closeQuantity(position, Number(position.quantity), quote.bid, 'MANUAL_CLOSE');
@@ -238,7 +238,7 @@ export class WallReactionPaperService {
       const account = await this.account();
       if (account.automation_status !== 'ACTIVE') { await this.cancelOrder(order, 'Wall Reaction paper account is paused'); continue; }
       const quote = await this.marketData.getOptionQuoteForOsi(null, order.osi_ticker);
-      if (!quote || quote.ask <= 0 || quote.quoteAgeMs === null || quote.quoteAgeMs < -5_000 || quote.quoteAgeMs > 15_000) continue;
+      if (!quote || quote.ask <= 0 || !isFreshWallReactionQuote(quote.timestamp, now)) continue;
       if (quote.ask > Number(order.limit_price)) continue;
       await this.fillOrder(order, quote.ask);
     }
@@ -300,7 +300,7 @@ export class WallReactionPaperService {
           this.marketData.getUnderlyingQuote(position.symbol),
           this.marketData.getOptionQuoteForOsi(null, this.osiTicker(position))
         ]);
-        if (!option || option.bid <= 0 || option.quoteAgeMs === null || option.quoteAgeMs < -5_000 || option.quoteAgeMs > 15_000) continue;
+        if (!option || option.bid <= 0 || !isFreshWallReactionQuote(option.timestamp, now) || !isFreshWallReactionQuote(underlying.timestamp, now)) continue;
         const spot = underlying.mark;
         const analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {};
         await (this.fastify as any).pg.query(`UPDATE positions SET current_price=$1, underlying_price=$2, updated_at=NOW() WHERE id=$3 AND status='OPEN'`, [option.bid, spot, position.id]);

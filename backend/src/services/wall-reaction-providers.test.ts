@@ -9,6 +9,7 @@ async function run() {
   ]);
   assert.equal(events.length, 1);
   assert.equal(events[0].name, 'ISM');
+  assert.equal(normalizeTradingEconomicsEvents([{ Date: '2026-08-03T14:00:00', Country: 'United States', Event: 'UTC event', Importance: 3 }])[0].scheduledAt, '2026-08-03T14:00:00.000Z');
   assert.equal(providerAgeSeconds('2026-08-03T14:00:00Z', new Date('2026-08-03T14:00:08Z')), 8);
   assert.equal(providerAgeSeconds('2026-08-03T14:00:10Z', new Date('2026-08-03T14:00:08Z')), -2);
   const snapshot = { fetchedAt: '2026-08-03T13:20:00Z', events };

@@ -272,6 +272,14 @@ function wallReaction(context: WallReactionContext, kind: 'call' | 'put'): WallR
   const riskWarnings: string[] = [];
   const adverseGap = context.gapPct !== null && (call ? context.gapPct > STRONG_GAP_PCT : context.gapPct < -STRONG_GAP_PCT);
   if (context.gapPct === null || adverseGap || imminence >= 40 || context.msi < 20 || context.msi >= 70 || (volatility !== null && volatility >= 6)) risk = 0.25;
+  if (adverseGap) riskWarnings.push(`Adverse ${context.gapBasis.replaceAll('_', ' ')} ${context.gapPct!.toFixed(2)}%`);
+  if (imminence >= 40) riskWarnings.push(`Range-break imminence is elevated at ${imminence.toFixed(1)}`);
+  if (context.msi < 20 || context.msi >= 70) riskWarnings.push(`MSI ${context.msi.toFixed(1)} is ${msiRegime(context.msi)}`);
+  if (volatility !== null && volatility >= 6) riskWarnings.push(`Volatility level is elevated at ${volatility.toFixed(1)}/10`);
+  if (hasPayload(context.tradeBias) && direction(context.tradeBias.direction) === opposite && Number(context.tradeBias.confidence || 0) >= 0.6) {
+    riskWarnings.push('Intraday trade bias confidently opposes the setup');
+  }
+  if (context.playbook.state === 'stand_down') riskWarnings.push('ZeroGEX playbook currently says stand down');
   if (context.zeroDte.triggered === true && direction(context.zeroDte.direction) === opposite) {
     risk = 0.25;
     riskWarnings.push('Triggered 0DTE imbalance opposes the wall reaction');
@@ -281,8 +289,12 @@ function wallReaction(context: WallReactionContext, kind: 'call' | 'put'): WallR
     riskWarnings.push('Gamma/VWAP confluence opposes the wall reaction');
   }
   if (imminence >= 80) risk = 0;
-  if (imminence >= 80) return decision(context, { code: 'STAND_DOWN', setup, direction: side, confidence: Math.min(confidence, 10), riskMultiplier: 0,
-    action: 'Breakout Mode is active; do not initiate a wall reaction.', reasons });
+  if (imminence >= 80) {
+    const result = decision(context, { code: 'STAND_DOWN', setup, direction: side, confidence: Math.min(confidence, 10), riskMultiplier: 0,
+      action: 'Breakout Mode is active; do not initiate a wall reaction.', reasons });
+    result.warnings.push(...riskWarnings);
+    return result;
+  }
   const result = decision(context, {
     code: call ? 'CALL_WALL_FADE' : 'PUT_WALL_BOUNCE', setup, direction: side,
     confidence: Math.min(confidence, 10), riskMultiplier: risk,

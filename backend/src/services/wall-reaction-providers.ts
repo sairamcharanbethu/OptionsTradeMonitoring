@@ -44,7 +44,11 @@ export function providerAgeSeconds(value: unknown, now = new Date()): number | n
 export function normalizeTradingEconomicsEvents(payload: unknown): EconomicEvent[] {
   if (!Array.isArray(payload)) return [];
   return payload.flatMap((row: any) => {
-    const scheduledAt = safeTimestamp(row?.Date ?? row?.date);
+    const rawDate = row?.Date ?? row?.date;
+    const utcDate = typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(rawDate)
+      ? `${rawDate}Z`
+      : rawDate;
+    const scheduledAt = safeTimestamp(utcDate);
     const importance = Number(row?.Importance ?? row?.importance);
     const country = String(row?.Country ?? row?.country ?? '').trim();
     const name = String(row?.Event ?? row?.event ?? row?.Category ?? row?.category ?? '').trim();

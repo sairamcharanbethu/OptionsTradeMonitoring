@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildWallReactionPlan, chooseWallReactionExpiration, selectWallReactionContract } from './wall-reaction-service';
+import { buildWallReactionPlan, chooseWallReactionExpiration, isFreshWallReactionQuote, selectWallReactionContract } from './wall-reaction-service';
 import { WallReactionContext, WallReactionDecision } from './wall-reaction-engine';
 import { IbkrOptionChainQuote } from './ibkr-market-data-service';
 
@@ -18,6 +18,9 @@ assert.equal(plan.debitBudget, 250);
 assert.equal(buildWallReactionPlan({ ...context, trap: {} }, decision, 500), null);
 assert.equal(chooseWallReactionExpiration(['2026-08-03', '2026-08-04'], new Date('2026-08-03T16:59:00Z')), '2026-08-03');
 assert.equal(chooseWallReactionExpiration(['2026-08-03', '2026-08-04'], new Date('2026-08-03T17:00:00Z')), '2026-08-04');
+assert.equal(isFreshWallReactionQuote('2026-08-03T14:00:00Z', new Date('2026-08-03T14:00:15Z')), true);
+assert.equal(isFreshWallReactionQuote('2026-08-03T14:00:21Z', new Date('2026-08-03T14:00:15Z')), false);
+assert.equal(isFreshWallReactionQuote(null, new Date('2026-08-03T14:00:15Z')), false);
 
 const quote = {
   source: 'ibkr_chain', ticker: 'SPY260803P00750000', symbol: 'SPY', expiration: '2026-08-03', right: 'put', strike: 750,

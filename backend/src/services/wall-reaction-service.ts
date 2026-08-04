@@ -54,6 +54,12 @@ export type WallReactionCandidate = {
   contract: WallReactionContract | null;
 };
 
+export function isFreshWallReactionQuote(timestamp: string | null | undefined, now = new Date(), maxAgeSeconds = 15): boolean {
+  if (!timestamp) return false;
+  const ageSeconds = (now.getTime() - Date.parse(timestamp)) / 1000;
+  return Number.isFinite(ageSeconds) && ageSeconds >= -5 && ageSeconds <= maxAgeSeconds;
+}
+
 function round(value: number, places = 2): number {
   return Number(value.toFixed(places));
 }
@@ -105,10 +111,9 @@ export function selectWallReactionContract(
   const right = direction === 'bearish' ? 'put' : direction === 'bullish' ? 'call' : null;
   if (!right) return null;
   const eligible = chain.filter((quote) => {
-    const age = quote.timestamp ? (now.getTime() - Date.parse(quote.timestamp)) / 1000 : NaN;
     const isOtm = right === 'call' ? quote.strike >= spot : quote.strike <= spot;
     return quote.right === right && isOtm
-      && Number.isFinite(age) && age >= -5 && age <= 15
+      && isFreshWallReactionQuote(quote.timestamp, now)
       && Number(quote.bid) > 0 && Number(quote.ask) >= Number(quote.bid) && Number(quote.mark) > 0
       && Number(quote.spreadPct) <= 5 && Number(quote.volume) > 0 && Number(quote.openInterest) > 0
       && Number(quote.impliedVolatility) > 0 && Math.abs(Number(quote.delta)) >= 0.15 && Math.abs(Number(quote.delta)) <= 0.65;
@@ -221,17 +226,23 @@ export class WallReactionService {
 
   private async runSymbol(symbol: WallReactionSymbol, settings: Record<string, string>, now: Date): Promise<void> {
     try {
-      const [snapshot, bars] = await Promise.all([
+      const [snapshot, bars, underlying] = await Promise.all([
         this.providers.readZeroGex(symbol),
-        this.marketData.getHistoricalBars(symbol, '5 D', '1 min')
+        this.marketData.getHistoricalBars(symbol, '5 D', '1 min'),
+        this.marketData.getUnderlyingQuote(symbol)
       ]);
       const context = contextFromZeroGex(snapshot, bars, now);
+      const providerSpot = context.spot;
+      context.spot = underlying.mark;
+      const spotDifferencePct = Math.abs(providerSpot - underlying.mark) / underlying.mark * 100;
+      if (spotDifferencePct > 0.25) context.warnings.push(`IBKR spot differs from the ZeroGEX snapshot by ${spotDifferencePct.toFixed(2)}%`);
       let decision = evaluateWallReaction(context);
       const macro = blockingEconomicEvent(this.providers.getCalendar(), now);
       const market = getNewYorkMarketState(now);
       const closeMinutes = getUSMarketCloseMinutes(now);
       if (['CALL_WALL_FADE', 'PUT_WALL_BOUNCE'].includes(decision.code)) {
-        if (macro.blocked) decision = standDown(macro.reason);
+        if (!isFreshWallReactionQuote(underlying.timestamp, now)) decision = standDown('IBKR underlying quote is missing, stale, or future-dated');
+        else if (macro.blocked) decision = standDown(macro.reason);
         else if (!market.isOpen) decision = standDown(`Entry window closed: ${market.reason}`);
         else if (market.minutes >= closeMinutes - 40) decision = standDown('Entry window closes 40 minutes before the cash close');
       }
