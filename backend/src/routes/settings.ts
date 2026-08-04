@@ -19,6 +19,7 @@ type RuntimeConfigItem = {
 function redactGlobalSettingsForUser(settings: Record<string, string>, role?: string) {
     const redacted = { ...settings };
     delete redacted.zerogex_api_key;
+    delete redacted.trading_economics_api_key;
     if (role === 'ADMIN') return redacted;
 
     for (const key of Object.keys(redacted)) {
@@ -327,6 +328,21 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     if (key === 'zerogex_api_key' && /[\r\n]/.test(String(trimmedValue || ''))) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'ZeroGEX API key must be a single line' });
+                    }
+                    if (key === 'trading_economics_api_key' && /[\r\n]/.test(String(trimmedValue || ''))) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Trading Economics API key must be a single line' });
+                    }
+                    if (key === 'wall_reaction_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Wall Reaction enabled must be true or false' });
+                    }
+                    if (key === 'wall_reaction_max_risk_dollars') {
+                        const risk = Number(trimmedValue);
+                        if (!Number.isFinite(risk) || risk < 50 || risk > 10000) {
+                            await client.query('ROLLBACK');
+                            return reply.code(400).send({ error: 'Wall Reaction maximum risk must be between $50 and $10,000' });
+                        }
                     }
                     if (key === 'paper_trailing_stop_pct') {
                         const trailingPct = Number(trimmedValue);
