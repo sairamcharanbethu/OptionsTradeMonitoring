@@ -1539,6 +1539,7 @@ export const api = {
       const error: any = new Error(err.error || err.message || 'Failed to close the paper position');
       error.status = res.status;
       error.code = err.code;
+      error.diagnostic = err.diagnostic;
       throw error;
     }
     return res.json();

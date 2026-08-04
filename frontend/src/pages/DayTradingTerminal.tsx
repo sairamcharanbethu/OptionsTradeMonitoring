@@ -965,7 +965,13 @@ export default function DayTradingTerminal() {
       } else {
         await refetchPaperAccount().catch(() => undefined);
       }
-      setActionMessage({ tone: 'error', text: error.message || 'Could not close the paper position.' });
+      const diagnostic = error.diagnostic
+        ? [error.diagnostic.stage, error.diagnostic.databaseCode, error.diagnostic.constraint].filter(Boolean).join(' · ')
+        : '';
+      setActionMessage({
+        tone: 'error',
+        text: `${error.message || 'Could not close the paper position.'}${diagnostic ? ` Diagnostic: ${diagnostic}.` : ''}`
+      });
     } finally {
       setPaperClosing(false);
     }

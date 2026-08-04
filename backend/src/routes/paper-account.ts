@@ -60,10 +60,16 @@ export async function paperAccountRoutes(fastify: FastifyInstance) {
       if (Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500) {
         return reply.code(error.statusCode).send({ error: error.message, code: error.code || 'PAPER_CLOSE_REJECTED' });
       }
-      fastify.log.error({ error, positionId }, '[PaperAccount] Manual paper close failed');
+      const diagnostic = {
+        stage: typeof error.paperCloseStage === 'string' ? error.paperCloseStage : 'PREPARE_CLOSE',
+        databaseCode: typeof error.code === 'string' && /^\w{2,40}$/.test(error.code) ? error.code : null,
+        constraint: typeof error.constraint === 'string' && /^\w{2,80}$/.test(error.constraint) ? error.constraint : null
+      };
+      fastify.log.error({ err: error, positionId, diagnostic }, '[PaperAccount] Manual paper close failed');
       return reply.code(500).send({
         error: 'Paper close could not be verified. Refresh the paper account before retrying.',
-        code: 'PAPER_CLOSE_FAILED'
+        code: 'PAPER_CLOSE_FAILED',
+        diagnostic
       });
     }
   });

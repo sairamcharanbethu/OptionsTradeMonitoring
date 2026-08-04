@@ -1134,10 +1134,12 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     let priorRealizedPnl = Number(position.realized_pnl || 0);
     const setupId = this.paperLedgerSetupId(position);
     const ledgerPosition = { ...position, strategy_setup_id: setupId };
-    const analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {};
+    const analysis = this.paperAnalysis(position.analysis_data);
     const client = await (this.fastify as any).pg.connect();
+    let closeStage = 'BEGIN';
     try {
       await client.query('BEGIN');
+      closeStage = 'LOCK_POSITION';
       const lockedPosition = await client.query(
         `SELECT quantity, status, realized_pnl FROM positions
          WHERE id=$1 AND paper_account_id=$2 FOR UPDATE`,
@@ -1153,6 +1155,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       pnl = Number(((bid - Number(position.entry_price)) * closeQty * 100).toFixed(2));
       remaining = availableQuantity - closeQty;
       priorRealizedPnl = Number(lockedPosition.rows[0].realized_pnl || 0);
+      closeStage = 'INSERT_EXIT_ORDER';
       const inserted = await client.query(
         `INSERT INTO paper_orders (
            account_id, decision_id, position_id, setup_id, signal_id, intent, action, status,
@@ -1167,6 +1170,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         await client.query('ROLLBACK');
         return;
       }
+      closeStage = 'UPDATE_POSITION';
       await client.query(
         `UPDATE positions SET quantity=$1, status=$2, current_price=$3,
            realized_pnl=COALESCE(realized_pnl,0)+$4, exit_price=CASE WHEN $2='CLOSED' THEN $3 ELSE exit_price END,
@@ -1178,11 +1182,13 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           position.trailing_stop_loss_pct || null, JSON.stringify(position.analysis_data || {}),
           position.suggested_stop_loss || null, position.id]
       );
+      closeStage = 'UPDATE_ACCOUNT_CASH';
       await client.query(`UPDATE paper_accounts SET cash_balance=cash_balance+$1, updated_at=NOW() WHERE id=$2`, [proceeds, ACCOUNT_ID]);
       if (remaining === 0) {
         const originalQuantity = Math.max(1, Number(analysis.originalQuantity || position.contracts_requested || 1));
         const managedRealizedPnl = priorRealizedPnl + pnl;
         const baselinePnl = Number((managedRealizedPnl / originalQuantity).toFixed(2));
+        closeStage = 'UPDATE_BASELINE';
         await client.query(
           `UPDATE paper_baseline_trades SET status='CLOSED', current_price=$1, exit_price=$1,
              realized_pnl=$2, exit_reason=$3, closed_at=NOW(), updated_at=NOW()
@@ -1190,6 +1196,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           [bid, baselinePnl, intent, ACCOUNT_ID, position.paper_decision_id]
         );
       }
+      closeStage = 'INSERT_JOURNAL';
       await this.journal(
         intent,
         `${intent.replace(/_/g, ' ')} filled: ${closeQty} contract${closeQty === 1 ? '' : 's'} at $${bid.toFixed(2)} (${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}).`,
@@ -1199,11 +1206,19 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         { closeQuantity: closeQty, remaining, realizedPnl: pnl, ...exitMetadata },
         client
       );
+      closeStage = 'REFRESH_EQUITY';
       await this.refreshAccountEquity(client);
+      closeStage = 'CAPTURE_EQUITY';
       await this.captureEquity(client);
+      closeStage = 'COMMIT';
       await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
+    } catch (error: any) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError: any) {
+        this.fastify.log.error({ err: rollbackError, positionId: position.id }, '[PaperTrading] Paper close rollback failed');
+      }
+      if (error && typeof error === 'object') error.paperCloseStage = error.paperCloseStage || closeStage;
       throw error;
     } finally {
       client.release();
@@ -1507,6 +1522,17 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
     if (/^\d{8}$/.test(raw)) return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`;
     return null;
+  }
+
+  private paperAnalysis(value: any): Record<string, any> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+    if (typeof value !== 'string' || !value.trim()) return {};
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
   }
 
   private paperLedgerSetupId(position: any): string {

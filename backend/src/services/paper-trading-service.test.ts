@@ -517,7 +517,7 @@ async function run() {
     trailing_high_price: 1.5,
     trailing_stop_loss_pct: 15,
     suggested_stop_loss: 754.39,
-    analysis_data: { originalQuantity: 2, t1Reached: true }
+    analysis_data: 'legacy-unparseable-analysis'
   }, 1, 1.5, 'TARGET_1_TRIM', { requestedByUserId: 7, quoteAgeMs: 900 }).then(
     () => { throw new Error('The Redis verification failure should be surfaced after the durable exit commit'); },
     (error: Error) => assert.match(error.message, /Redis did not persist live paper state/)

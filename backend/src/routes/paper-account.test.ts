@@ -35,7 +35,13 @@ async function runTests() {
     paperTrading: {
       closeOpenPosition: async (positionId: number, userId: number | null, force: boolean) => {
         closeRequest = { positionId, userId, force };
-        if (failUnexpectedly) throw new Error('invalid input syntax for type uuid: "null"');
+        if (failUnexpectedly) {
+          const error: any = new Error('insert or update violates a foreign key');
+          error.code = '23503';
+          error.constraint = 'paper_orders_decision_id_fkey';
+          error.paperCloseStage = 'INSERT_EXIT_ORDER';
+          throw error;
+        }
         if (rejectFreshQuote && !force) {
           const error: any = new Error('Manual paper close requires a fresh quote');
           error.statusCode = 409;
@@ -88,6 +94,9 @@ async function runTests() {
   assert(failedReply.statusCode === 500, 'an unexpected ledger failure must remain a server error');
   assert(failedResult.code === 'PAPER_CLOSE_FAILED', 'an unexpected close failure must return an actionable application code');
   assert(/Refresh the paper account/.test(failedResult.error), 'an uncertain close must tell the user to refresh before retrying');
+  assert(failedResult.diagnostic.stage === 'INSERT_EXIT_ORDER', 'an unexpected close failure must disclose its safe transaction stage');
+  assert(failedResult.diagnostic.databaseCode === '23503', 'an unexpected close failure must disclose its PostgreSQL error class');
+  assert(failedResult.diagnostic.constraint === 'paper_orders_decision_id_fkey', 'an unexpected close failure must disclose its constraint without exposing SQL');
   console.log('All paper account route tests passed!');
 }
 
