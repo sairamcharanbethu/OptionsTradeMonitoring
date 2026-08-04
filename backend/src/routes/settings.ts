@@ -451,7 +451,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
 
         try {
             const embedMessage = {
-                content: `⚡ **Options Trade Monitoring — Discord Integration Test** ⚡\n\nThis is a test notification confirming that your Discord Webhook URL is configured correctly!\n\n🕒 **Timestamp**: ${new Date().toISOString()}`
+                content: `⚡ **StrikePilot — Guarded Options Intelligence** ⚡\n\nThis is a test notification confirming that your Discord Webhook URL is configured correctly!\n\n🕒 **Timestamp**: ${new Date().toISOString()}`
             };
             const axios = require('axios');
             await axios.post(webhookUrl, embedMessage, { timeout: 8000 });

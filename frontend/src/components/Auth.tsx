@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
-import { AlertCircle, ArrowRight, Loader2, Lock, User } from 'lucide-react';
+import { AlertCircle, ArrowRight, Loader2, ShieldCheck, User } from 'lucide-react';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 interface AuthProps {
@@ -47,16 +47,20 @@ export default function Auth({ onLogin }: AuthProps) {
                 <CardHeader className="space-y-1">
                     <div className="flex items-center justify-center mb-4">
                         <div className="bg-primary/10 p-3 rounded-2xl">
-                            <Lock className="h-6 w-6 text-primary" />
+                            <ShieldCheck className="h-6 w-6 text-primary" />
                         </div>
+                    </div>
+                    <div className="pb-3 text-center">
+                        <div className="text-lg font-extrabold tracking-tight">StrikePilot</div>
+                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Guarded Options Intelligence</div>
                     </div>
                     <CardTitle className="text-2xl text-center font-bold tracking-tight">
                         {isLogin ? 'Welcome Back' : 'Create Account'}
                     </CardTitle>
                     <CardDescription className="text-center">
                         {isLogin
-                            ? 'Enter your credentials to access your positions'
-                            : 'Start tracking your options trades today'}
+                            ? 'Enter your credentials to access your trading workspace'
+                            : 'Create your guarded options workspace'}
                     </CardDescription>
                 </CardHeader>
                 <form onSubmit={handleSubmit}>
@@ -85,7 +89,7 @@ export default function Auth({ onLogin }: AuthProps) {
                         <div className="space-y-2">
                             <Label htmlFor="password">Password</Label>
                             <div className="relative">
-                                <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                                <ShieldCheck className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                                 <Input
                                     id="password"
                                     type="password"

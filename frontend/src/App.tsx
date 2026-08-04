@@ -72,9 +72,12 @@ function App() {
             <div className="flex justify-between items-center w-full">
               <div className="flex items-center gap-2.5">
                 <div className="h-8 w-8 bg-gradient-to-tr from-emerald-500 to-indigo-600 rounded-full flex items-center justify-center">
-                  <span className="text-white font-extrabold italic text-xs tracking-tighter">SS</span>
+                  <span className="text-white font-extrabold italic text-xs tracking-tighter">SP</span>
                 </div>
-                <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-foreground/90">SS Trading Platform</h1>
+                <div className="min-w-0 leading-none">
+                  <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-foreground/90">StrikePilot</h1>
+                  <p className="mt-1 hidden text-[9px] font-semibold uppercase tracking-[0.16em] text-muted-foreground md:block">Guarded Options Intelligence</p>
+                </div>
               </div>
 
               <div className="flex items-center gap-2">

@@ -789,7 +789,7 @@ const start = async () => {
       openapi: {
         openapi: '3.0.0',
         info: {
-          title: 'Options Trade Monitoring API',
+          title: 'StrikePilot API',
           description: 'API for tracking and monitoring options trading positions with real-time price updates, alerts, and portfolio analytics.',
           version: '1.0.0'
         },
@@ -864,7 +864,7 @@ const start = async () => {
 
     // Root route
     fastify.get('/', async () => {
-      return { message: 'Options Monitoring API' };
+      return { message: 'StrikePilot — Guarded Options Intelligence API' };
     });
 
     const { IbkrMarketDataService } = await import('./services/ibkr-market-data-service');

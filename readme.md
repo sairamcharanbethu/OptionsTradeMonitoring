@@ -1,6 +1,6 @@
-# Options Trade Monitor
+# StrikePilot — Guarded Options Intelligence
 
-A robust, real-time dashboard for tracking options trades, monitoring premiums, calculating Greeks, and performing AI-driven trade analysis.
+A guarded options intelligence workspace for strategy monitoring, paper trading, risk management, and controlled execution.
 
 ## 🚀 Features
 
