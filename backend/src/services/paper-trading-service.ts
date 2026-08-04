@@ -230,7 +230,7 @@ export class PaperTradingService {
       `SELECT p.*, ptd.exit_profile, ptd.policy_version,
               ptd.trailing_stop_pct AS decision_trailing_stop_pct
        FROM positions p
-       JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
+       LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
        WHERE p.id=$1 AND p.paper_account_id=$2 AND p.status='OPEN'`,
       [positionId, ACCOUNT_ID]
     );
@@ -454,7 +454,7 @@ export class PaperTradingService {
       `SELECT p.*, ptd.exit_profile, ptd.policy_version,
               ptd.trailing_stop_pct AS decision_trailing_stop_pct
        FROM positions p
-       JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
+       LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
        WHERE p.paper_account_id=$1 AND p.status='OPEN'`,
       [ACCOUNT_ID]
     );
@@ -960,7 +960,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
   private async refreshOpenPositions(signal: Record<string, any>, setupId: string): Promise<void> {
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT p.*, ptd.exit_profile, ptd.policy_version, ptd.trailing_stop_pct AS decision_trailing_stop_pct FROM positions p
-       JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
+       LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
        WHERE p.paper_account_id=$1 AND p.status='OPEN'`, [ACCOUNT_ID]
     );
     for (const position of rows) {

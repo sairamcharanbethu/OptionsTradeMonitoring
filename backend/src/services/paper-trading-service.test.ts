@@ -594,11 +594,19 @@ async function run() {
   let manualFinalExitReason = 'MANUAL_EXIT';
   let manualFinalExitPrice = 0.85;
   let manualFinalRealizedPnl = -35;
+  let manualCloseUsedLegacyCompatibleJoin = false;
   const manualCloseService = new PaperTradingService({
     pg: {
-      query: async (sql: string) => sql.includes('SELECT status, exit_reason')
-        ? { rows: [{ status: 'CLOSED', exit_reason: manualFinalExitReason, exit_price: manualFinalExitPrice, realized_pnl: manualFinalRealizedPnl }] }
-        : { rows: [manualPosition] }
+      query: async (sql: string) => {
+        if (sql.includes('SELECT status, exit_reason')) {
+          return { rows: [{ status: 'CLOSED', exit_reason: manualFinalExitReason, exit_price: manualFinalExitPrice, realized_pnl: manualFinalRealizedPnl }] };
+        }
+        if (sql.includes('FROM positions p')) {
+          manualCloseUsedLegacyCompatibleJoin = sql.includes('LEFT JOIN paper_trade_decisions');
+          return { rows: manualCloseUsedLegacyCompatibleJoin ? [manualPosition] : [] };
+        }
+        return { rows: [] };
+      }
     },
     ibkrMarketData: {
       getOptionQuoteForOsi: async (_userId: number | null, ticker: string) => {
@@ -611,6 +619,7 @@ async function run() {
   manualCloseService.getLivePosition = async () => ({ currentPrice: 0.90, underlyingPrice: 752, analysis: {} });
   manualCloseService.closePaperQuantity = async (...args: any[]) => { manualCloseCall = args; };
   const manualCloseResult = await manualCloseService.closeOpenPosition(91, 7);
+  assert.equal(manualCloseUsedLegacyCompatibleJoin, true, 'manual close must include visible legacy paper positions whose decision row is unavailable');
   assert.equal(manualQuoteTicker, 'SPY260803C00753000', 'manual close must quote the exact paper OSI contract');
   assert.equal(manualCloseCall[2], 0.85, 'manual close must sell at the fresh IBKR bid');
   assert.equal(manualCloseCall[3], 'MANUAL_EXIT', 'manual close must use an auditable exit intent');
@@ -697,13 +706,19 @@ async function run() {
     policy_version: 'paper-exit-v2',
     analysis_data: {}
   };
+  let overdueRefreshUsedLegacyCompatibleJoin = false;
   const overdueService = new PaperTradingService({
     pg: {
-      query: async (sql: string) => sql.includes('JOIN paper_trade_decisions')
-        ? { rows: [overduePosition] }
-        : sql.includes('SELECT * FROM positions WHERE id=')
-          ? { rows: [{ ...overduePosition, status: 'OPEN' }] }
-          : { rows: [] }
+      query: async (sql: string) => {
+        if (sql.includes('JOIN paper_trade_decisions')) {
+          overdueRefreshUsedLegacyCompatibleJoin = sql.includes('LEFT JOIN paper_trade_decisions');
+          return { rows: overdueRefreshUsedLegacyCompatibleJoin ? [overduePosition] : [] };
+        }
+        if (sql.includes('SELECT * FROM positions WHERE id=')) {
+          return { rows: [{ ...overduePosition, status: 'OPEN' }] };
+        }
+        return { rows: [] };
+      }
     },
     ibkrMarketData: { getOptionQuoteForOsi: async () => null },
     log: { warn() {}, info() {}, error() {} }
@@ -721,6 +736,7 @@ async function run() {
     lifecycle: { status: 'ACTIVE' },
     call_setup: { option: {} }
   }, 'different-setup');
+  assert.equal(overdueRefreshUsedLegacyCompatibleJoin, true, 'paper recovery must include visible legacy positions whose decision row is unavailable');
   assert.equal(overdueExitIntent, 'END_OF_DAY_RECOVERY', 'an overdue 0DTE paper position must close without a fresh option bid');
   assert.equal(overdueExitBid, 1.24, 'overdue recovery should use the last Redis mark when IBKR has no bid');
 
