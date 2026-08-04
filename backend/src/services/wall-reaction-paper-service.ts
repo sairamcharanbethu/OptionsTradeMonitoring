@@ -30,6 +30,10 @@ export function wallReactionExitIntent(position: any, spot: number, now = new Da
   return null;
 }
 
+export function wallReactionSecondTarget(plan: { target2?: number | null }, quantity: number): number | null {
+  return quantity >= 2 && plan.target2 != null && Number.isFinite(Number(plan.target2)) ? Number(plan.target2) : null;
+}
+
 export class WallReactionPaperService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -262,7 +266,7 @@ export class WallReactionPaperService {
            'BUY_TO_OPEN','SELL_TO_CLOSE',$9,$10,$11,$12,$13,'ACTIVE',$14,TRUE,$8,$15,$16,$17) RETURNING *`,
         [evidence.symbol, order.option_type, Number(order.strike), order.expiration, fillPrice, Number(order.quantity),
           Number(evidence.contract?.underlyingPrice || 0) || null, WALL_REACTION_ACCOUNT_ID, plan.invalidation,
-          plan.target1, plan.target2, order.setup_id, WALL_REACTION_POLICY_VERSION, JSON.stringify(evidence),
+          plan.target1, wallReactionSecondTarget(plan, Number(order.quantity)), order.setup_id, WALL_REACTION_POLICY_VERSION, JSON.stringify(evidence),
           order.decision_id, JSON.stringify({ originalQuantity: Number(order.quantity), t1Reached: false, policyVersion: WALL_REACTION_POLICY_VERSION }),
           `[Wall Reaction paper entry from candidate ${order.setup_id}]`]
       )).rows[0];

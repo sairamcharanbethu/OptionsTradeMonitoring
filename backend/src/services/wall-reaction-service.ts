@@ -276,7 +276,7 @@ export class WallReactionService {
       `INSERT INTO wall_reaction_candidates (id, symbol, fingerprint, decision_code, status, context, plan, contract, generated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (symbol, fingerprint) DO UPDATE SET
-         decision_code=EXCLUDED.decision_code, status=CASE WHEN wall_reaction_candidates.status IN ('ARMED','ENTERED') THEN wall_reaction_candidates.status ELSE EXCLUDED.status END,
+         decision_code=EXCLUDED.decision_code, status=CASE WHEN wall_reaction_candidates.status IN ('ARMED','ENTERED','EXPIRED','INVALIDATED') THEN wall_reaction_candidates.status ELSE EXCLUDED.status END,
          context=EXCLUDED.context, plan=EXCLUDED.plan, contract=EXCLUDED.contract, generated_at=EXCLUDED.generated_at, updated_at=NOW()
        RETURNING id, status`,
       [candidate.id, candidate.symbol, candidate.fingerprint, candidate.decision.code, candidate.status,

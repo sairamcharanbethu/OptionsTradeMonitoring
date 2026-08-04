@@ -55,7 +55,7 @@ function CandidateCard({ candidate, canManage, busy, onArm }: { candidate?: Wall
             <div className="grid gap-3 rounded-lg border p-4 sm:grid-cols-2 lg:grid-cols-4">
               <Metric label="Invalidation" value={`$${value(candidate.plan.invalidation)}`} />
               <Metric label="Target 1" value={`$${value(candidate.plan.target1)}`} />
-              <Metric label="Target 2" value={candidate.plan.target2 === null ? 'Not available' : `$${value(candidate.plan.target2)}`} />
+              <Metric label="Target 2" value={candidate.contract.quantity < 2 ? 'Not used (1 contract)' : candidate.plan.target2 === null ? 'Not available' : `$${value(candidate.plan.target2)}`} />
               <Metric label="Debit budget" value={money.format(candidate.plan.debitBudget)} />
             </div>
             <div className="rounded-lg border bg-muted/15 p-4">
