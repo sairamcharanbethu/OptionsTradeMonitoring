@@ -71,9 +71,7 @@ function App() {
           <header className="sticky top-4 z-50 mx-auto max-w-[1600px] w-[95%] bg-background/70 dark:bg-zinc-950/70 backdrop-blur-md rounded-full border border-black/[0.03] dark:border-white/[0.06] shadow-sm px-6 py-3.5 flex justify-between items-center transition-premium">
             <div className="flex justify-between items-center w-full">
               <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 bg-gradient-to-tr from-emerald-500 to-indigo-600 rounded-full flex items-center justify-center">
-                  <span className="text-white font-extrabold italic text-xs tracking-tighter">SP</span>
-                </div>
+                <img src="/strikepilot.svg" alt="" className="h-8 w-8 rounded-[9px]" />
                 <div className="min-w-0 leading-none">
                   <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-foreground/90">StrikePilot</h1>
                   <p className="mt-1 hidden text-[9px] font-semibold uppercase tracking-[0.16em] text-muted-foreground md:block">Guarded Options Intelligence</p>

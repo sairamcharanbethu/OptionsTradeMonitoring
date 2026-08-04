@@ -46,9 +46,7 @@ export default function Auth({ onLogin }: AuthProps) {
             <Card className="w-full max-w-md z-10 border-muted-foreground/10 shadow-2xl bg-card/80 backdrop-blur-sm">
                 <CardHeader className="space-y-1">
                     <div className="flex items-center justify-center mb-4">
-                        <div className="bg-primary/10 p-3 rounded-2xl">
-                            <ShieldCheck className="h-6 w-6 text-primary" />
-                        </div>
+                        <img src="/strikepilot.svg" alt="StrikePilot" className="h-12 w-12 rounded-[14px]" />
                     </div>
                     <div className="pb-3 text-center">
                         <div className="text-lg font-extrabold tracking-tight">StrikePilot</div>
