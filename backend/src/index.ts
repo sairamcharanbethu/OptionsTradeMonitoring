@@ -19,6 +19,7 @@ import { backtestRoutes } from './routes/backtests';
 import { coveredCallRoutes } from './routes/covered-calls';
 import { manualEntryRoutes } from './routes/manual-entry';
 import { paperAccountRoutes } from './routes/paper-account';
+import { wallReactionRoutes } from './routes/wall-reaction';
 import { mcpRoutes } from './routes/mcp';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
@@ -862,6 +863,12 @@ const start = async () => {
     const ibkrMarketData = new IbkrMarketDataService(fastify);
     fastify.decorate('ibkrMarketData', ibkrMarketData);
 
+    const { WallReactionService } = await import('./services/wall-reaction-service');
+    const wallReaction = new WallReactionService(fastify);
+    fastify.decorate('wallReaction', wallReaction);
+    fastify.addHook('onClose', async () => wallReaction.stop());
+    fastify.register(wallReactionRoutes, { prefix: '/api/wall-reaction' });
+
     // Initialize poller BEFORE listen
     const { MarketPoller } = await import('./services/market-poller');
     const poller = new MarketPoller(fastify);
@@ -1335,6 +1342,7 @@ const start = async () => {
     const startBackgroundServices = async () => {
       fastify.log.info('[System] Starting background services...');
       poller.start();
+      wallReaction.start();
       if (strategyEngine.getMode() !== 'primary') {
         scanner.start();
       } else {
