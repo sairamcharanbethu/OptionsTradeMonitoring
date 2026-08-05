@@ -1,0 +1,19 @@
+{
+  "name": "StrikePilot — Guarded Options Intelligence",
+  "short_name": "StrikePilot",
+  "description": "Guarded options intelligence for strategy monitoring, paper trading, and controlled execution.",
+  "start_url": "/?source=installed",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/strikepilot.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

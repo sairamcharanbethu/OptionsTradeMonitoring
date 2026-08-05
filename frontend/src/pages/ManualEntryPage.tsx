@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, BadgeDollarSign, Gauge, RefreshCw, Radio, Save, Scissors, Send, XCircle } from 'lucide-react';
+import { BadgeDollarSign, Gauge, RefreshCw, Radio, Save, Scissors, Send, XCircle } from 'lucide-react';
 import { api, ManualEntryChain, ManualEntryQuote, ManualEntrySettings, Position } from '@/lib/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { Button } from '@/components/ui/button';
@@ -551,11 +551,6 @@ export default function ManualEntryPage() {
     <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-4">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-center gap-3">
-          <Button asChild variant="ghost" size="icon" className="rounded-full">
-            <Link to="/">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-semibold tracking-tight">Manual Entry</h2>

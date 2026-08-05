@@ -1,8 +1,6 @@
 import type { ReactNode } from 'react';
-import { Link } from 'react-router-dom';
-import { ArrowLeft, BadgeDollarSign, Clock3, Info, Layers, ShieldAlert, Target, Workflow } from 'lucide-react';
+import { BadgeDollarSign, Clock3, Info, Layers, ShieldAlert, Target, Workflow } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
-import { Button } from '../components/ui/button';
 
 function RuleCard({ title, detail, icon: Icon, children }: { title: string; detail: string; icon: any; children: ReactNode }) {
   return (
@@ -48,11 +46,6 @@ export default function StrategyGuidePage() {
     <div className="mx-auto w-full max-w-[1300px] px-3 py-4 sm:w-[95%] sm:px-0">
       <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3 sm:items-center">
-          <Button asChild variant="ghost" size="icon" className="shrink-0 rounded-full">
-            <Link to="/">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="break-words text-xl font-semibold tracking-tight">Strategy Guide</h2>

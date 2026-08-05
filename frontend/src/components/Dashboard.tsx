@@ -1,5 +1,6 @@
 
 import React, { Suspense, lazy, useEffect, useState, useMemo, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api, Position, User } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePositions, usePortfolioStats, useMarketStatus, useClosedPositions, QUERY_KEYS } from '@/hooks/useDashboardData';
@@ -80,7 +81,6 @@ import {
 import UserManagement from './UserManagement';
 import PositionForm from './PositionForm';
 
-import SettingsDialog from './SettingsDialog';
 import GoalTracker from './GoalTracker';
 import WealthsimplePortfolio from './WealthsimplePortfolio';
 import { StatsCard } from './StatsCard';
@@ -92,7 +92,6 @@ const WallReactionPage = lazy(() => import('@/pages/WallReactionPage'));
 
 interface DashboardProps {
   user: User;
-  onUserUpdate: (user: User) => void;
 }
 
 const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'wall-reaction', 'users'] as const;
@@ -108,7 +107,9 @@ const getInitialDashboardTab = () => {
   return 'overview';
 };
 
-export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
+export default function Dashboard({ user }: DashboardProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: positions = [], isLoading: loading, error: queryError, refetch: refetchPositions } = usePositions();
   const { data: stats } = usePortfolioStats();
@@ -141,7 +142,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
   const handleTabChange = (tab: string) => {
     if (tab === 'covered-calls' || tab === 'manual-entry') {
-      window.location.href = tab === 'manual-entry' ? '/manual-entry' : '/covered-calls';
+      navigate(tab === 'manual-entry' ? '/manual-entry' : '/covered-calls');
       return;
     }
 
@@ -149,10 +150,16 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
     setActiveTab(nextTab);
     window.localStorage.setItem(DASHBOARD_TAB_STORAGE_KEY, nextTab);
 
-    const url = new URL(window.location.href);
-    url.searchParams.set('tab', nextTab);
-    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    navigate(`/?tab=${nextTab}`, { replace: true });
   };
+
+  useEffect(() => {
+    const urlTab = new URLSearchParams(location.search).get('tab');
+    const nextTab = urlTab && DASHBOARD_TABS.includes(urlTab as any) && (urlTab !== 'users' || user.role === 'ADMIN')
+      ? urlTab
+      : 'overview';
+    if (nextTab !== activeTab) setActiveTab(nextTab);
+  }, [location.search, user.role, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'users' && user.role !== 'ADMIN') {
@@ -369,11 +376,11 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
   // Ideally we should fetch history for positions.
 
   return (
-    <div className="container mx-auto py-8 space-y-8">
-      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-8">
+    <div className="mx-auto w-full max-w-[1600px] space-y-5 px-3 py-4 sm:w-[95%] sm:px-0 sm:py-6 lg:space-y-8">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-5 lg:space-y-8">
 
         {/* Header Section */}
-        <div className="sticky top-3 z-20 rounded-lg border border-border/80 bg-background/90 p-2 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/75">
+        <div className="rounded-lg border border-border/80 bg-background/90 p-2 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/75 lg:sticky lg:top-[calc(4.25rem+env(safe-area-inset-top))] lg:z-20">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               {marketStatus && (
@@ -436,7 +443,6 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               </Select>
             </div>
             <div className="ml-auto flex items-center gap-1 rounded-md border border-border bg-card p-1 lg:ml-0">
-            <SettingsDialog user={user} onUpdate={onUserUpdate} />
             <Button variant="ghost" size="sm" className="hidden gap-1 text-xs lg:flex" onClick={handleForceSync} disabled={loading}>
               <Zap className={`h-3 w-3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
               Force Sync
@@ -478,7 +484,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
 
         <TabsContent value="overview" className="space-y-8 mt-0">
           {/* Stats Cards Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
             <StatsCard
               title="Active Positions"
               value={positions.filter(p => p.status !== 'CLOSED').length}
@@ -491,7 +497,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
               valueClassName={totalRealizedPnL >= 0 ? 'text-green-500' : 'text-red-500'}
             />
             {/* Performance Chart Card */}
-            <div className="md:col-span-2 double-bezel-shell hover-glow">
+            <div className="col-span-2 double-bezel-shell hover-glow">
               <div className="double-bezel-core flex flex-col justify-between h-full bg-zinc-50/50 dark:bg-zinc-950/40 border border-black/[0.02] dark:border-white/[0.02] p-6">
                 <div className="flex justify-between items-center pb-2">
                   <span className="text-[10px] uppercase tracking-[0.15em] font-bold text-muted-foreground/90">Performance (Cumulative PnL)</span>
@@ -654,8 +660,24 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
                 History & Analytics
               </CardTitle>
             </CardHeader>
-            <CardContent className="p-0 sm:p-6 overflow-x-auto">
-              <div className="overflow-x-auto">
+            <CardContent className="p-0 sm:p-6">
+              <div className="space-y-3 p-3 md:hidden">
+                {!closedHistory || closedHistory.positions.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-muted-foreground">No history available.</div>
+                ) : closedHistory.positions.map((pos) => (
+                  <article key={`mobile-${pos.id}`} className="rounded-xl border border-border/70 bg-background/60 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div><div className="font-bold">{pos.symbol}</div><div className="mt-1 text-xs text-muted-foreground">{pos.option_type} ${pos.strike_price}</div></div>
+                      <div className={`text-right font-mono font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>${Number(pos.realized_pnl).toFixed(2)}<div className="text-xs font-normal">{getRoi(pos).toFixed(2)}%</div></div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-3">
+                      <Badge variant="outline">Closed</Badge>
+                      <Button variant="outline" className="h-11 gap-2" onClick={() => api.reopenPosition(pos.id).then(() => { refetchPositions(); refetchClosedHistory(); })}><RefreshCw className="h-4 w-4" />Reopen</Button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto md:block">
                 <table className="w-full text-sm text-left">
                   <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
                     <tr>
@@ -783,7 +805,7 @@ export default function Dashboard({ user, onUserUpdate }: DashboardProps) {
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
             <StatsCard title="Win Rate" value={`${stats?.winRate ?? 0}%`} icon={Trophy} description={`${stats?.closedTrades ?? 0} closed trades`} />
             <StatsCard title="Profit Factor" value={stats?.profitFactor ?? 0} icon={Percent} description="Gross Profit / Gross Loss" />
             <StatsCard title="Total Realized PnL" value={`$${(stats?.totalRealizedPnl ?? 0).toLocaleString()}`} icon={TrendingUp} valueClassName={(stats?.totalRealizedPnl ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'} />

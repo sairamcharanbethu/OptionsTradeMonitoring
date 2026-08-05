@@ -1024,7 +1024,7 @@ export const api = {
     if (!res.ok) throw new Error('Failed to bulk delete positions');
   },
 
-  async getMarketStatus(): Promise<{ open: boolean; marketHours: string; timezone: string }> {
+  async getMarketStatus(): Promise<{ open: boolean; marketHours: string; timezone: string; connectionStatus?: string }> {
     const response = await authFetch(`${API_BASE}/market/status`);
     if (!response.ok) throw new Error('Failed to fetch market status');
     return response.json();

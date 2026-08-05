@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BadgeDollarSign, Clock, ExternalLink, RefreshCw, Search, ShieldCheck, XCircle } from 'lucide-react';
+import { BadgeDollarSign, Clock, ExternalLink, RefreshCw, Search, ShieldCheck, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api, ClosedTradesResponse, Position } from '../lib/api';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -169,9 +169,9 @@ const closedTradeDateRange = (range: ClosedTradeRange) => {
 
 function SummaryTile({ label, value, tone }: { label: string; value: string; tone?: 'green' | 'red' }) {
   return (
-    <div className="rounded-md border border-border/70 bg-card/80 px-4 py-3">
+    <div className="min-w-0 rounded-md border border-border/70 bg-card/80 px-2 py-3 sm:px-4">
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className={`mt-1 font-mono text-lg font-semibold ${tone === 'green' ? 'text-emerald-500' : tone === 'red' ? 'text-red-500' : ''}`}>
+      <div className={`mt-1 break-words font-mono text-base font-semibold sm:text-lg ${tone === 'green' ? 'text-emerald-500' : tone === 'red' ? 'text-red-500' : ''}`}>
         {value}
       </div>
     </div>
@@ -341,14 +341,9 @@ export default function TradesPage() {
   };
 
   return (
-    <div className="mx-auto w-[95%] max-w-[1600px] py-4">
+    <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
-          <Button asChild variant="ghost" size="icon" className="rounded-full">
-            <Link to="/">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-semibold tracking-tight">Wealthsimple Trades</h2>
@@ -360,7 +355,7 @@ export default function TradesPage() {
             <p className="text-sm text-muted-foreground">IBKR provides live option pricing and stream updates.</p>
           </div>
         </div>
-        <Button variant="outline" className="gap-2" onClick={() => { refreshOpen(); refreshClosed(); }}>
+        <Button variant="outline" className="h-11 w-full gap-2 md:h-10 md:w-auto" onClick={() => { refreshOpen(); refreshClosed(); }}>
           <RefreshCw className={`h-4 w-4 ${syncingOrders ? 'animate-spin' : ''}`} />
           {syncingOrders ? 'Syncing Orders' : 'Refresh'}
         </Button>
@@ -379,14 +374,14 @@ export default function TradesPage() {
         </TabsList>
 
         <TabsContent value="open" className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-3 gap-3">
             <SummaryTile label="Open Trades" value={String(openSummary.openCount)} />
             <SummaryTile label="Live P&L" value={currency(openSummary.totalPnl)} tone={openSummary.totalPnl >= 0 ? 'green' : 'red'} />
             <SummaryTile label="Working Orders" value={String(openSummary.workingOrders)} />
           </div>
 
           {brokerHealth && (
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <SummaryTile label="Broker Sync" value={brokerHealth.status || 'N/A'} tone={brokerHealth.status === 'UP' ? 'green' : brokerHealth.status === 'DOWN' ? 'red' : undefined} />
               <SummaryTile label="Last Broker Check" value={brokerHealth.lastRunAt ? compactDate(brokerHealth.lastRunAt) : '-'} />
               <SummaryTile label="Pending Checked" value={String(brokerHealth.lastResult?.checked ?? 0)} />
@@ -411,7 +406,37 @@ export default function TradesPage() {
                   Sync
                 </Button>
               </div>
-              <div className="overflow-x-auto">
+              <div className="space-y-3 p-3 md:hidden">
+                {workingOrders.map((trade) => (
+                  <article key={`working-mobile-${trade.id}`} className="rounded-xl border border-amber-500/20 bg-background/70 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-semibold">{contractLabel(trade)}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">{dteLabel(trade)} · {trade.quantity} contract{trade.quantity === 1 ? '' : 's'}</div>
+                      </div>
+                      <Badge variant={stateTone(trade)} className="shrink-0">{stateLabel(trade)}</Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 border-y border-border/60 py-3 text-sm">
+                      <div><div className="text-xs text-muted-foreground">Live premium</div><div className="font-mono font-medium">{currency(trade.current_price)}</div></div>
+                      <div><div className="text-xs text-muted-foreground">Broker check</div><div className="text-xs font-medium">{trade.last_broker_order_status || 'Pending'}</div></div>
+                      <div className="col-span-2"><div className="text-xs text-muted-foreground">Active order</div><div className="break-all font-mono text-xs">{activeOrderId(trade)}</div></div>
+                    </div>
+                    <ExecutionIssue message={trade.execution_error} />
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <Button variant="outline" className="h-11 gap-2" onClick={() => syncTradeStatus(trade.id)} disabled={syncingTradeId === trade.id || retryingTradeId === trade.id}>
+                        <RefreshCw className={`h-4 w-4 ${syncingTradeId === trade.id ? 'animate-spin' : ''}`} />Refresh
+                      </Button>
+                      <Button asChild variant="outline" className="h-11 gap-2"><Link to={`/trades/${trade.id}/command`}><ExternalLink className="h-4 w-4" />Command</Link></Button>
+                      {canRetryClose(trade) && (
+                        <Button variant="destructive" className="col-span-2 h-11" onClick={() => retryClose(trade)} disabled={syncingTradeId === trade.id || retryingTradeId === trade.id}>
+                          Retry close {Number(trade.exit_retry_count || 0)}/2
+                        </Button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto md:block">
                 <table className="w-full min-w-[980px] text-sm">
                   <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
                     <tr>
@@ -473,7 +498,43 @@ export default function TradesPage() {
           )}
 
           <div className="overflow-hidden rounded-md border border-border">
-            <div className="overflow-x-auto">
+            <div className="space-y-3 p-3 md:hidden">
+              {loadingOpen ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">Loading Wealthsimple trades...</div>
+              ) : activeOpenTrades.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">No active open Wealthsimple positions.</div>
+              ) : activeOpenTrades.map((trade) => {
+                const pnl = livePnl(trade);
+                const closeDisabled = trade.status !== 'OPEN'
+                  || ['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))
+                  || String(trade.execution_status || '').startsWith('EXIT_');
+                return (
+                  <article key={`open-mobile-${trade.id}`} className="rounded-xl border border-border/70 bg-card/70 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div><div className="font-semibold">{contractLabel(trade)}</div><div className="mt-1 text-xs text-muted-foreground">{dteLabel(trade)} · {trade.quantity} contract{trade.quantity === 1 ? '' : 's'}</div></div>
+                      <div className={`text-right font-mono text-lg font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-border/60 py-3 text-sm">
+                      <div><div className="text-xs text-muted-foreground">Entry</div><div className="font-mono">{currency(trade.entry_price)}</div></div>
+                      <div><div className="text-xs text-muted-foreground">Live</div><div className="font-mono">{currency(trade.current_price)}</div></div>
+                      <div><div className="text-xs text-muted-foreground">Stop loss</div><div className="font-mono text-red-500">{currency(trade.stop_loss_trigger)}</div></div>
+                      <div><div className="text-xs text-muted-foreground">Take profit</div><div className="font-mono text-emerald-500">{takeProfitLabel(trade)}</div></div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      <Badge variant={stateTone(trade)}>{stateLabel(trade)}</Badge>
+                      {trade.profit_trim_status === 'DONE' && <Badge variant="secondary">Trim done</Badge>}
+                      {isBreakevenStop(trade) && <Badge variant="outline">Breakeven stop</Badge>}
+                    </div>
+                    <ExecutionIssue message={trade.execution_error} />
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <Button asChild variant="outline" className="h-11 gap-2"><Link to={`/trades/${trade.id}/command`}><ExternalLink className="h-4 w-4" />Command</Link></Button>
+                      <Button variant="destructive" className="h-11" disabled={closeDisabled} onClick={() => setClosingTrade(trade)}>{actionLabel(trade)}</Button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[1220px] text-sm">
                 <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
                   <tr>
@@ -559,7 +620,7 @@ export default function TradesPage() {
         </TabsContent>
 
         <TabsContent value="closed" className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <div>
               <Label className="text-xs">Range</Label>
               <Select value={filters.range} onValueChange={(value: ClosedTradeRange) => setFilters({ ...filters, range: value })}>
@@ -602,7 +663,30 @@ export default function TradesPage() {
           </div>
 
           <div className="overflow-hidden rounded-md border border-border">
-            <div className="overflow-x-auto">
+            <div className="space-y-3 p-3 md:hidden">
+              {loadingClosed ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">Loading closed trades...</div>
+              ) : !closedData || closedData.trades.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">No closed Wealthsimple trades match the filters.</div>
+              ) : closedData.trades.map((trade) => (
+                <article key={`closed-mobile-${trade.id}`} className="rounded-xl border border-border/70 bg-card/70 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div><div className="font-semibold">{contractLabel(trade)}</div><div className="mt-1 text-xs text-muted-foreground">Closed {compactDate(trade.updated_at)}</div></div>
+                    <div className={`font-mono text-lg font-semibold ${(trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-3 border-y border-border/60 py-3 text-sm">
+                    <div><div className="text-xs text-muted-foreground">Entry</div><div className="font-mono">{currency(trade.entry_price)}</div></div>
+                    <div><div className="text-xs text-muted-foreground">Exit</div><div className="font-mono">{currency(trade.exit_price || trade.current_price)}</div></div>
+                    <div><div className="text-xs text-muted-foreground">Qty</div><div className="font-mono">{trade.quantity}</div></div>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <Badge variant="outline">{stateLabel(trade)}</Badge>
+                    <Button asChild variant="outline" className="h-11 gap-2"><Link to={`/trades/${trade.id}/command`}><ExternalLink className="h-4 w-4" />Command</Link></Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto md:block">
               <table className="w-full min-w-[1040px] text-sm">
                 <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
                   <tr>

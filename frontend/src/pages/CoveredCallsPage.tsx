@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BadgeDollarSign, ExternalLink, Loader2, RefreshCw, Search, ShieldCheck, Sparkles } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { BadgeDollarSign, ExternalLink, Loader2, RefreshCw, Search, ShieldCheck, Sparkles } from 'lucide-react';
 import { api, CoveredCallAnalysis, CoveredCallCandidate, CoveredCallSymbolResult } from '../lib/api';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -44,7 +43,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function CandidateMetrics({ candidate }: { candidate: CoveredCallCandidate }) {
   return (
-    <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
       <Metric label="Strike" value={currency(candidate.strike)} />
       <Metric label="Premium" value={currency(candidate.premiumPerContract)} />
       <Metric label="Yield" value={pct(candidate.premiumYieldPct)} />
@@ -65,7 +64,26 @@ function CandidateTable({ candidates }: { candidates: CoveredCallCandidate[] }) 
   }
 
   return (
-    <Table>
+    <>
+      <div className="space-y-3 md:hidden">
+        {candidates.map((candidate) => (
+          <article key={`mobile-${candidate.ticker}`} className={candidate.eligible ? 'rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4' : 'rounded-xl border border-border/70 p-4'}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0"><div className="break-all font-mono text-xs font-semibold">{candidate.ticker}</div><div className="mt-1 text-xs text-muted-foreground">{compactDate(candidate.expiration)} · {candidate.dte} DTE · {currency(candidate.strike)}C</div></div>
+              <Badge variant={candidate.eligible ? 'default' : 'outline'}>{candidate.eligible ? 'FIT' : 'WATCH'}</Badge>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 border-y border-border/60 py-3 text-sm">
+              <div><div className="text-xs text-muted-foreground">Bid / Ask</div><div className="font-mono">{currency(candidate.bid)} / {currency(candidate.ask)}</div></div>
+              <div><div className="text-xs text-muted-foreground">Yield</div><div className="font-mono">{pct(candidate.premiumYieldPct)}</div></div>
+              <div><div className="text-xs text-muted-foreground">OTM</div><div className="font-mono">{pct(candidate.otmPct)}</div></div>
+              <div><div className="text-xs text-muted-foreground">Score</div><div className="font-mono">{Number(candidate.score).toFixed(1)}</div></div>
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{candidate.reasons.slice(0, 3).join(' / ')}</p>
+          </article>
+        ))}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
+      <Table>
       <TableHeader>
         <TableRow>
           <TableHead>Contract</TableHead>
@@ -114,7 +132,9 @@ function CandidateTable({ candidates }: { candidates: CoveredCallCandidate[] }) 
           </TableRow>
         ))}
       </TableBody>
-    </Table>
+      </Table>
+      </div>
+    </>
   );
 }
 
@@ -180,14 +200,9 @@ export default function CoveredCallsPage() {
   };
 
   return (
-    <div className="mx-auto w-[95%] max-w-[1500px] space-y-5 py-6">
+    <div className="mx-auto w-full max-w-[1500px] space-y-5 px-3 py-4 sm:w-[95%] sm:px-0 sm:py-6">
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
-          <Link to="/">
-            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          </Link>
           <div>
             <div className="flex items-center gap-2">
               <BadgeDollarSign className="h-5 w-5 text-emerald-500" />
@@ -250,7 +265,7 @@ export default function CoveredCallsPage() {
                 </div>
               )}
             </div>
-            <Button onClick={runAnalysis} disabled={!canAnalyze} className="h-10 min-w-[140px]">
+            <Button onClick={runAnalysis} disabled={!canAnalyze} className="h-11 w-full sm:h-10 sm:min-w-[140px] sm:w-auto">
               {analyzing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Analyze
             </Button>

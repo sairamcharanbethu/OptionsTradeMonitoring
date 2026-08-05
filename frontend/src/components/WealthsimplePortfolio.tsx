@@ -287,7 +287,24 @@ export default function WealthsimplePortfolio() {
           <CardDescription>Your current equity and crypto positions from Wealthsimple.</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="overflow-x-auto">
+          <div className="space-y-3 p-3 md:hidden">
+            {positions.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">No positions found. Sync your broker to fetch data.</div>
+            ) : positions.map((pos: any) => (
+              <article key={`mobile-${pos.id}`} className="rounded-xl border border-border/70 bg-background/60 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div><div className="font-bold text-primary">{pos.symbol}</div><Badge variant="outline" className="mt-1 text-[10px]">{pos.asset_type}</Badge></div>
+                  <div className={`text-right font-mono text-lg font-bold ${Number(pos.open_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>${Number(pos.open_pnl).toFixed(2)}</div>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-3 border-t border-border/60 pt-3 text-sm">
+                  <div><div className="text-xs text-muted-foreground">Units</div><div className="font-mono">{Number(pos.units).toFixed(4)}</div></div>
+                  <div><div className="text-xs text-muted-foreground">Average</div><div className="font-mono">${Number(pos.average_purchase_price).toFixed(2)}</div></div>
+                  <div><div className="text-xs text-muted-foreground">Current</div><div className="font-mono">${Number(pos.price).toFixed(2)}</div></div>
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto md:block">
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-muted-foreground uppercase bg-muted/50 border-b">
                 <tr>

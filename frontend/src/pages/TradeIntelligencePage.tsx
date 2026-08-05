@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, BarChart3, Bell, RefreshCw, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react';
+import { AlertTriangle, BarChart3, Bell, RefreshCw, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react';
 import { api, TradeAlertsResponse, TradeReportResponse } from '../lib/api';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -44,9 +44,9 @@ const alertTone = (severity: string) => {
 function MetricTile({ label, value, detail, tone }: { label: string; value: string; detail?: string; tone?: 'green' | 'red' | 'amber' }) {
   const toneClass = tone === 'green' ? 'text-emerald-500' : tone === 'red' ? 'text-red-500' : tone === 'amber' ? 'text-amber-500' : '';
   return (
-    <div className="rounded-md border border-border bg-card p-4">
+    <div className="rounded-md border border-border bg-card p-3 sm:p-4">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className={`mt-1 font-mono text-xl font-semibold ${toneClass}`}>{value}</div>
+      <div className={`mt-1 break-words font-mono text-lg font-semibold sm:text-xl ${toneClass}`}>{value}</div>
       {detail && <div className="mt-2 text-xs text-muted-foreground">{detail}</div>}
     </div>
   );
@@ -54,7 +54,7 @@ function MetricTile({ label, value, detail, tone }: { label: string; value: stri
 
 function SectionHeader({ icon: Icon, title, detail }: { icon: any; title: string; detail?: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+    <div className="flex flex-col items-start gap-1.5 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
       <div className="flex items-center gap-2">
         <Icon className="h-4 w-4 text-muted-foreground" />
         <h3 className="text-sm font-semibold">{title}</h3>
@@ -97,14 +97,9 @@ export default function TradeIntelligencePage() {
   const topAlerts = useMemo(() => alerts?.alerts.slice(0, 8) || [], [alerts]);
 
   return (
-    <div className="mx-auto w-[95%] max-w-[1600px] py-4">
+    <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
-          <Button asChild variant="ghost" size="icon" className="rounded-full">
-            <Link to="/">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-semibold tracking-tight">Trade Intelligence</h2>
@@ -127,7 +122,7 @@ export default function TradeIntelligencePage() {
               ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" className="gap-2" onClick={load} disabled={loading}>
+          <Button variant="outline" className="h-11 gap-2 sm:h-10" onClick={load} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -140,7 +135,7 @@ export default function TradeIntelligencePage() {
         </div>
       )}
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <MetricTile label="Closed trades" value={String(summary?.total ?? 0)} detail={`${summary?.wins ?? 0} wins / ${summary?.losses ?? 0} losses`} />
         <MetricTile label="Net P&L" value={currency(summary?.totalPnl ?? 0)} tone={netTone} detail={`Avg ${currency(summary?.averagePnl ?? 0)}`} />
         <MetricTile label="Win rate" value={`${summary?.winRate ?? 0}%`} detail={`Profit factor ${summary?.profitFactor ?? '-'}`} />
@@ -151,7 +146,7 @@ export default function TradeIntelligencePage() {
         <div className="space-y-4">
           <div className="overflow-hidden rounded-md border border-border bg-card">
             <SectionHeader icon={BarChart3} title="Outcome Drivers" detail={report ? `Updated ${compactDate(report.generatedAt)}` : undefined} />
-            <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 p-3 sm:p-4 lg:grid-cols-4">
               <MetricTile label="Take profit exits" value={String(summary?.takeProfitExits ?? 0)} tone="green" />
               <MetricTile label="Stop-loss exits" value={String(summary?.stopLossExits ?? 0)} tone="red" />
               <MetricTile label="Superseded exits" value={String(summary?.supersededExits ?? 0)} />
@@ -161,7 +156,20 @@ export default function TradeIntelligencePage() {
 
           <div className="overflow-hidden rounded-md border border-border bg-card">
             <SectionHeader icon={TrendingUp} title="Symbol Performance" />
-            <div className="overflow-x-auto">
+            <div className="divide-y divide-border sm:hidden">
+              {(report?.bySymbol || []).length === 0 ? (
+                <div className="px-4 py-6 text-sm text-muted-foreground">No closed trades in this range.</div>
+              ) : report!.bySymbol.map((row) => (
+                <div key={`mobile-${row.symbol}`} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div><div className="font-semibold">{row.symbol}</div><div className="text-xs text-muted-foreground">{row.total} trades · {row.winRate}% win rate</div></div>
+                    <div className={`font-mono font-semibold ${row.totalPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(row.totalPnl)}</div>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">Average P&amp;L <span className={`font-mono ${row.averagePnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(row.averagePnl)}</span></div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
               <table className="w-full min-w-[700px] text-sm">
                 <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
                   <tr>
@@ -191,7 +199,24 @@ export default function TradeIntelligencePage() {
 
           <div className="overflow-hidden rounded-md border border-border bg-card">
             <SectionHeader icon={TrendingDown} title="Recent Closed Trade Review" />
-            <div className="overflow-x-auto">
+            <div className="divide-y divide-border sm:hidden">
+              {(report?.recentOutcomes || []).length === 0 ? (
+                <div className="px-4 py-6 text-sm text-muted-foreground">No closed trade outcomes to review.</div>
+              ) : report!.recentOutcomes.map((trade) => (
+                <article key={`mobile-${trade.id}`} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0"><Link to={`/trades/${trade.id}/command`} className="font-semibold">{contractLabel(trade)}</Link><div className="mt-1 text-xs text-muted-foreground">{trade.outcomeDriver}</div></div>
+                    <div className={`shrink-0 font-mono font-semibold ${(trade.realized_pnl ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 border-t border-border/60 pt-3 text-xs">
+                    <div><div className="text-muted-foreground">Entry</div><div className="font-mono">{currency(trade.entry_price)}</div></div>
+                    <div><div className="text-muted-foreground">Exit</div><div className="font-mono">{currency(trade.exit_price)}</div></div>
+                    <div><div className="text-muted-foreground">Closed</div><div>{compactDate(trade.updated_at)}</div></div>
+                  </div>
+                </article>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
               <table className="w-full min-w-[920px] text-sm">
                 <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
                   <tr>

@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft, Beaker, CheckCircle2, FlaskConical, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
+import { AlertTriangle, Beaker, CheckCircle2, FlaskConical, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { api, SignalReplayResponse, SignalReplayScenario } from '../lib/api';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -108,9 +107,6 @@ export default function ResearchPage() {
     <div className="mx-auto w-full max-w-[1500px] px-3 py-4 sm:w-[95%] sm:px-0">
       <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3 sm:items-center">
-          <Button asChild variant="ghost" size="icon" className="shrink-0 rounded-full">
-            <Link to="/"><ArrowLeft className="h-4 w-4" /></Link>
-          </Button>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-xl font-semibold tracking-tight">Strategy Research</h2>

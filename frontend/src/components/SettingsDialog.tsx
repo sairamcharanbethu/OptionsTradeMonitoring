@@ -666,7 +666,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     return (
         <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-9 w-9">
+                <Button variant="ghost" size="icon" className="h-11 w-11 rounded-lg sm:h-10 sm:w-10" aria-label="Open trading settings">
                     <Settings className="h-5 w-5 text-muted-foreground" />
                 </Button>
             </DialogTrigger>

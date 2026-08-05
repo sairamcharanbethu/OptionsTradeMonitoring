@@ -1,10 +1,8 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   Activity,
   AlertTriangle,
-  ArrowLeft,
   CheckCircle2,
   Clock,
   Database,
@@ -622,11 +620,6 @@ export default function SystemHealthPage() {
     <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3 sm:items-center">
-          <Button asChild variant="ghost" size="icon" className="shrink-0 rounded-full">
-            <Link to="/">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
-          </Button>
           <div className="min-w-0">
             <h2 className="text-xl font-semibold tracking-tight">System Health</h2>
             <p className="text-sm text-muted-foreground">Root cause, endpoint status, and runtime evidence for trading services.</p>

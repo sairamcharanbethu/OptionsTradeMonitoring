@@ -2,10 +2,10 @@ import { Suspense, lazy, useState, useEffect } from 'react';
 import Auth from './components/Auth';
 import { api, User } from './lib/api';
 import { ThemeProvider } from './components/ThemeProvider';
-import { ThemeToggle } from './components/ThemeToggle';
+import { BrowserRouter, Link, Routes, Route } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
+import AppShell from './components/AppShell';
 import { Button } from './components/ui/button';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Activity, BarChart3, FlaskConical, Info, ListChecks, LogOut, User as UserIcon, Loader2 } from 'lucide-react';
 
 const Dashboard = lazy(() => import('./components/Dashboard'));
 const PositionDetailsPage = lazy(() => import('./pages/PositionDetailsPage'));
@@ -23,6 +23,19 @@ function RouteLoader() {
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
+function NotFoundPage() {
+  return (
+    <div className="mx-auto flex min-h-[60vh] max-w-lg flex-col items-center justify-center px-6 text-center">
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">Page not found</div>
+      <h2 className="mt-2 text-2xl font-semibold tracking-tight">This route is not available.</h2>
+      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Use the navigation to continue, or return to your account overview.</p>
+      <Button asChild className="mt-5 h-11 px-5">
+        <Link to="/?tab=overview">Return to overview</Link>
+      </Button>
     </div>
   );
 }
@@ -50,7 +63,7 @@ function App() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
@@ -66,92 +79,11 @@ function App() {
 
   return (
     <ThemeProvider defaultTheme="system" storageKey="options-trade-ui-theme">
-      <div className="min-h-screen bg-background text-foreground transition-colors duration-300">
-        <div className="pt-4">
-          <header className="sticky top-4 z-50 mx-auto max-w-[1600px] w-[95%] bg-background/70 dark:bg-zinc-950/70 backdrop-blur-md rounded-full border border-black/[0.03] dark:border-white/[0.06] shadow-sm px-6 py-3.5 flex justify-between items-center transition-premium">
-            <div className="flex justify-between items-center w-full">
-              <div className="flex items-center gap-2.5">
-                <img src="/strikepilot.svg" alt="" className="h-8 w-8 rounded-[9px]" />
-                <div className="min-w-0 leading-none">
-                  <h1 className="text-sm sm:text-base font-extrabold tracking-tight text-foreground/90">StrikePilot</h1>
-                  <p className="mt-1 hidden text-[9px] font-semibold uppercase tracking-[0.16em] text-muted-foreground md:block">Guarded Options Intelligence</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {devTradeTestsEnabled && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
-                    onClick={() => { window.location.href = '/dev/live-exit-test'; }}
-                    title="Live Exit Test Console"
-                  >
-                    <FlaskConical className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
-                  onClick={() => { window.location.href = '/strategy-guide'; }}
-                  title="Strategy Guide"
-                >
-                  <Info className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
-                  onClick={() => { window.location.href = '/system-health'; }}
-                  title="System Health"
-                >
-                  <Activity className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
-                  onClick={() => { window.location.href = '/trade-intelligence'; }}
-                  title="Trade Intelligence"
-                >
-                  <BarChart3 className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
-                  onClick={() => { window.location.href = '/research'; }}
-                  title="Strategy Research"
-                >
-                  <FlaskConical className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5"
-                  onClick={() => { window.location.href = '/trades'; }}
-                  title="Wealthsimple Trades"
-                >
-                  <ListChecks className="h-3.5 w-3.5" />
-                </Button>
-                <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-black/5 dark:bg-white/5 border border-black/[0.02] dark:border-white/[0.04] rounded-full text-[10px] font-bold uppercase tracking-wider">
-                  <UserIcon className="h-2.5 w-2.5 text-muted-foreground" />
-                  <span className="text-foreground/90">{user.username}</span>
-                </div>
-                <Button variant="ghost" size="icon" className="rounded-full h-8 w-8 hover:bg-black/5 dark:hover:bg-white/5" onClick={() => api.logout()} title="Sign Out">
-                  <LogOut className="h-3.5 w-3.5" />
-                </Button>
-                <ThemeToggle />
-              </div>
-            </div>
-          </header>
-        </div>
-        <main className="pt-2">
-          <BrowserRouter>
+      <BrowserRouter>
+        <AppShell user={user} onUserUpdate={setUser}>
             <Suspense fallback={<RouteLoader />}>
               <Routes>
-                <Route path="/" element={<Dashboard user={user} onUserUpdate={setUser} />} />
+                <Route path="/" element={<Dashboard user={user} />} />
                 <Route path="/trades" element={<TradesPage />} />
                 <Route path="/manual-entry" element={<ManualEntryPage />} />
                 <Route path="/covered-calls" element={<CoveredCallsPage />} />
@@ -161,12 +93,12 @@ function App() {
                 <Route path="/system-health" element={<SystemHealthPage />} />
                 <Route path="/strategy-guide" element={<StrategyGuidePage />} />
                 <Route path="/positions/:id" element={<PositionDetailsPage />} />
-                <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />
+                {devTradeTestsEnabled && <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />}
+                <Route path="*" element={<NotFoundPage />} />
               </Routes>
             </Suspense>
-          </BrowserRouter>
-        </main>
-      </div>
+        </AppShell>
+      </BrowserRouter>
     </ThemeProvider>
   );
 }

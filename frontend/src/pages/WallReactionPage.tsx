@@ -239,9 +239,27 @@ export default function WallReactionPage({ user }: { user: User }) {
         <CardHeader><CardTitle className="text-base">Open Wall Reaction positions</CardTitle></CardHeader>
         <CardContent>
           {openPositions.length === 0 ? <div className="rounded-md border border-dashed py-8 text-center text-sm text-muted-foreground">No open positions in this paper account.</div> : (
-            <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Contract</TableHead><TableHead>Entry</TableHead><TableHead>Bid</TableHead><TableHead>Qty</TableHead><TableHead>Invalidation</TableHead><TableHead>T1 / T2</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader><TableBody>
-              {openPositions.map((position) => <TableRow key={position.id}><TableCell><div className="font-medium">{position.symbol} {position.option_type} {value(position.strike_price)}</div><div className="text-xs text-muted-foreground">{String(position.expiration_date).slice(0, 10)}</div></TableCell><TableCell>${value(position.entry_price)}</TableCell><TableCell>${value(position.current_price)}</TableCell><TableCell>{position.quantity}</TableCell><TableCell>${value(position.suggested_stop_loss)}</TableCell><TableCell>${value(position.suggested_take_profit_1)} / {position.suggested_take_profit_2 ? `$${value(position.suggested_take_profit_2)}` : '—'}</TableCell><TableCell className="text-right">{user.role === 'ADMIN' && <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => { if (window.confirm('Close this paper position at a fresh IBKR bid?')) void act(`close:${position.id}`, () => api.closeWallReactionPosition(position.id)); }}>Close paper</Button>}</TableCell></TableRow>)}
-            </TableBody></Table></div>
+            <>
+              <div className="space-y-3 md:hidden">
+                {openPositions.map((position) => (
+                  <article key={`mobile-${position.id}`} className="rounded-xl border border-border/70 bg-background/60 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div><div className="font-semibold">{position.symbol} {position.option_type} {value(position.strike_price)}</div><div className="mt-1 text-xs text-muted-foreground">{String(position.expiration_date).slice(0, 10)} · {position.quantity} contract{position.quantity === 1 ? '' : 's'}</div></div>
+                      <div className="font-mono font-semibold">${value(position.current_price)}</div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3 border-y border-border/60 py-3 text-sm">
+                      <div><div className="text-xs text-muted-foreground">Entry</div><div className="font-mono">${value(position.entry_price)}</div></div>
+                      <div><div className="text-xs text-muted-foreground">Invalidation</div><div className="font-mono">${value(position.suggested_stop_loss)}</div></div>
+                      <div className="col-span-2"><div className="text-xs text-muted-foreground">Targets</div><div className="font-mono">${value(position.suggested_take_profit_1)} / {position.suggested_take_profit_2 ? `$${value(position.suggested_take_profit_2)}` : '—'}</div></div>
+                    </div>
+                    {user.role === 'ADMIN' && <Button variant="outline" className="mt-3 h-11 w-full" disabled={busy !== null} onClick={() => { if (window.confirm('Close this paper position at a fresh IBKR bid?')) void act(`close:${position.id}`, () => api.closeWallReactionPosition(position.id)); }}>Close paper</Button>}
+                  </article>
+                ))}
+              </div>
+              <div className="hidden overflow-x-auto md:block"><Table><TableHeader><TableRow><TableHead>Contract</TableHead><TableHead>Entry</TableHead><TableHead>Bid</TableHead><TableHead>Qty</TableHead><TableHead>Invalidation</TableHead><TableHead>T1 / T2</TableHead><TableHead className="text-right">Action</TableHead></TableRow></TableHeader><TableBody>
+                {openPositions.map((position) => <TableRow key={position.id}><TableCell><div className="font-medium">{position.symbol} {position.option_type} {value(position.strike_price)}</div><div className="text-xs text-muted-foreground">{String(position.expiration_date).slice(0, 10)}</div></TableCell><TableCell>${value(position.entry_price)}</TableCell><TableCell>${value(position.current_price)}</TableCell><TableCell>{position.quantity}</TableCell><TableCell>${value(position.suggested_stop_loss)}</TableCell><TableCell>${value(position.suggested_take_profit_1)} / {position.suggested_take_profit_2 ? `$${value(position.suggested_take_profit_2)}` : '—'}</TableCell><TableCell className="text-right">{user.role === 'ADMIN' && <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => { if (window.confirm('Close this paper position at a fresh IBKR bid?')) void act(`close:${position.id}`, () => api.closeWallReactionPosition(position.id)); }}>Close paper</Button>}</TableCell></TableRow>)}
+              </TableBody></Table></div>
+            </>
           )}
         </CardContent>
       </Card>

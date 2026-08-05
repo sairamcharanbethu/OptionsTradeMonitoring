@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Activity, AlertTriangle, ArrowLeft, Loader2, RefreshCw, Send } from 'lucide-react';
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -180,9 +181,8 @@ export default function DevLiveExitTestPage() {
     <div className="mx-auto w-[95%] max-w-5xl py-6 space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <Button variant="ghost" size="sm" className="mb-3 gap-2" onClick={() => { window.location.href = '/'; }}>
-            <ArrowLeft className="h-4 w-4" />
-            Dashboard
+          <Button asChild variant="ghost" size="sm" className="mb-3 gap-2">
+            <Link to="/"><ArrowLeft className="h-4 w-4" />Dashboard</Link>
           </Button>
           <h1 className="text-2xl font-extrabold tracking-tight">Live exit test console</h1>
           <p className="text-sm text-muted-foreground mt-1">Inject one quote into the live-exit monitor for an already-open option position.</p>
