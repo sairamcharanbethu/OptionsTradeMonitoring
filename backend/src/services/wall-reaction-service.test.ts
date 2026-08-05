@@ -7,7 +7,7 @@ const context = {
   symbol: 'SPY', generatedAt: '2026-08-03T14:00:00Z', spot: 751.9, levelsAgeSeconds: 2,
   netGex: 1, gammaFlip: 748, callWall: 752, putWall: 745, maxPain: 750, msi: 30,
   gapPct: 0, gapBasis: 'opening_gap', trap: { breakout_buffer_pct: 0.05 }, rangeBreak: {}, marketPressure: {}, tradeBias: {},
-  basicSignals: {}, playbook: {}, zeroDte: {}, gammaVwap: {}, volatility: {}, warnings: []
+  basicSignals: {}, playbook: {}, zeroDte: {}, gammaVwap: {}, volatility: {}, entryDataBlockers: [], warnings: []
 } satisfies WallReactionContext;
 const decision = { code: 'CALL_WALL_FADE', setup: 'call_wall_fade', direction: 'bearish', confidence: 8, riskMultiplier: 0.5, action: '', reasons: [], warnings: [] } satisfies WallReactionDecision;
 const plan = buildWallReactionPlan(context, decision, 500);

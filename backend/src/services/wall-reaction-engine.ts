@@ -44,6 +44,7 @@ export type WallReactionContext = {
   zeroDte: Record<string, any>;
   gammaVwap: Record<string, any>;
   volatility: Record<string, any>;
+  entryDataBlockers: string[];
   warnings: string[];
 };
 
@@ -153,10 +154,10 @@ export function contextFromZeroGex(
   const raw = snapshot.raw;
   const warnings: string[] = [];
   const gex = freshPayload(raw.gex_summary, 'GEX summary', now, MAX_GEX_CONTEXT_AGE_SECONDS, true, warnings);
-  const composite = freshPayload(raw.composite, 'MSI composite', now, 180, true, warnings);
+  const composite = freshPayload(raw.composite, 'MSI composite', now, 180, false, warnings);
   const advanced = raw.advanced_signals || {};
-  const trap = freshPayload(advanced.trap_detection, 'trap detection', now, 180, true, warnings);
-  const rangeBreak = freshPayload(advanced.range_break_imminence, 'range-break', now, 180, true, warnings);
+  const trap = freshPayload(advanced.trap_detection, 'trap detection', now, 180, false, warnings);
+  const rangeBreak = freshPayload(advanced.range_break_imminence, 'range-break', now, 180, false, warnings);
   const marketPressure = freshPayload(advanced.market_pressure, 'market pressure', now, 180, false, warnings);
   const zeroDte = freshPayload(advanced.zero_dte_position_imbalance, '0DTE imbalance', now, 180, false, warnings);
   const gammaVwap = freshPayload(advanced.gamma_vwap_confluence, 'gamma/VWAP', now, 180, false, warnings);
@@ -165,6 +166,11 @@ export function contextFromZeroGex(
   const volatility = freshPayload(raw.market_volatility, 'volatility', now, 180, false, warnings);
   const basicSignals = freshBasicSignals(raw.basic_signals, now, warnings);
   const gap = computeWallReactionGap(bars, now);
+  const entryDataBlockers = [
+    ...(!hasPayload(composite) ? ['MSI composite is unavailable or stale'] : []),
+    ...(!hasPayload(trap) ? ['Trap detection is unavailable or stale'] : []),
+    ...(!hasPayload(rangeBreak) ? ['Range-break confirmation is unavailable or stale'] : [])
+  ];
   if (gap.pct === null) warnings.push('Opening-gap state is unavailable');
   return {
     symbol: snapshot.symbol,
@@ -176,7 +182,7 @@ export function contextFromZeroGex(
     callWall: requiredNumber(gex.call_wall, 'call_wall'),
     putWall: requiredNumber(gex.put_wall, 'put_wall'),
     maxPain: number(gex.max_pain),
-    msi: requiredNumber(composite.score, 'composite score'),
+    msi: number(composite.score) ?? 0,
     gapPct: gap.pct,
     gapBasis: gap.basis,
     trap,
@@ -188,6 +194,7 @@ export function contextFromZeroGex(
     zeroDte,
     gammaVwap,
     volatility,
+    entryDataBlockers,
     warnings
   };
 }
@@ -311,6 +318,10 @@ export function evaluateWallReaction(context: WallReactionContext): WallReaction
   if (context.levelsAgeSeconds < -5 || context.levelsAgeSeconds > MAX_GEX_ENTRY_AGE_SECONDS) return decision(context, {
     code: 'STAND_DOWN', setup: 'stale_data', direction: 'neutral', confidence: 0, riskMultiplier: 0,
     action: 'Levels are stale or future-dated.', reasons: [`Level age ${context.levelsAgeSeconds.toFixed(1)}s`]
+  });
+  if (context.entryDataBlockers.length > 0) return decision(context, {
+    code: 'STAND_DOWN', setup: 'signal_data_unavailable', direction: 'neutral', confidence: 0, riskMultiplier: 0,
+    action: 'Required confirmation data is unavailable or stale; no entry can qualify.', reasons: context.entryDataBlockers
   });
   if (context.trap.call_wall_migrated_up === true) return decision(context, {
     code: confirmedBreak(context, 'bullish') ? 'CALL_BREAKOUT_WATCH' : 'EXIT_PUTS', setup: 'call_wall_migration',

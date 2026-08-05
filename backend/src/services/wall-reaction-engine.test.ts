@@ -11,7 +11,7 @@ function base(overrides: Partial<WallReactionContext> = {}): WallReactionContext
     marketPressure: { triggered: false, loading: 20, direction: 'neutral' },
     tradeBias: { direction: 'bearish', confidence: 0.65 },
     basicSignals: { dealer_delta_pressure: { score: 0 } },
-    playbook: { state: 'candidate', direction: 'bearish', confidence: 0.68 }, zeroDte: {}, gammaVwap: {}, volatility: {}, warnings: [],
+    playbook: { state: 'candidate', direction: 'bearish', confidence: 0.68 }, zeroDte: {}, gammaVwap: {}, volatility: {}, entryDataBlockers: [], warnings: [],
     ...overrides
   };
 }
@@ -63,6 +63,20 @@ const staleButReadableContext = contextFromZeroGex({
 }, [], now);
 assert.equal(staleButReadableContext.levelsAgeSeconds, 78);
 assert.equal(evaluateWallReaction(staleButReadableContext).setup, 'stale_data');
+const staleRangeTimestamp = new Date(now.getTime() - 198_000).toISOString();
+const staleRangeContext = contextFromZeroGex({
+  symbol: 'SPY', fetchedAt: timestamp, raw: {
+    gex_summary: { timestamp, spot_price: 751.9, net_gex_at_spot: 9.33e9, gamma_flip: 748, call_wall: 752, put_wall: 745, max_pain: 750 },
+    composite: { timestamp, score: 30 },
+    advanced_signals: {
+      trap_detection: { timestamp, triggered: true, signal: 'bearish_fade', breakout_up: true },
+      range_break_imminence: { timestamp: staleRangeTimestamp, triggered: false, imminence: 30 }
+    }
+  }
+}, [], now);
+assert.deepEqual(staleRangeContext.entryDataBlockers, ['Range-break confirmation is unavailable or stale']);
+assert.equal(evaluateWallReaction(staleRangeContext).setup, 'signal_data_unavailable');
+assert.ok(staleRangeContext.warnings.some((warning) => warning.includes('range-break') && warning.includes('198s')));
 const expiredContextTimestamp = new Date(now.getTime() - 121_000).toISOString();
 assert.throws(() => contextFromZeroGex({
   symbol: 'SPY', fetchedAt: timestamp, raw: {
