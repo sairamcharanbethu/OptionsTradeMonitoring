@@ -322,6 +322,39 @@ class ZeroGEXClientTest(unittest.TestCase):
                     expected_index,
                 )
 
+    def test_deep_fetch_rejects_mismatched_volatility_index(self) -> None:
+        def request_json(path, params, **kwargs):
+            if path == "/api/market/volatility":
+                return {
+                    "timestamp": "2026-08-05T14:00:00Z",
+                    "index": "VIX",
+                    "level": 8,
+                    "momentum": 7,
+                }
+            return {}
+
+        snapshot = fetch_component_snapshot(
+            "QQQ",
+            lane="deep",
+            api_key="test-key",
+            request_json=request_json,
+            previous_snapshot={
+                "market_volatility": {
+                    "timestamp": "2026-08-05T13:59:00Z",
+                    "index": "VXN",
+                    "level": 4,
+                    "momentum": 3,
+                }
+            },
+        )
+
+        self.assertEqual(snapshot["market_volatility"]["index"], "VXN")
+        self.assertEqual(snapshot["market_volatility"]["level"], 4)
+        self.assertIn(
+            "returned volatility index VIX for QQQ; expected VXN",
+            snapshot["endpoint_errors"]["market_volatility"],
+        )
+
     def test_component_fetches_keep_polling_lanes_independent(self) -> None:
         calls = []
 

@@ -1118,6 +1118,17 @@ def _snapshot_from_payloads(
     payloads: dict[str, Any],
     endpoint_errors: dict[str, str],
 ) -> dict[str, Any]:
+    market_volatility = payloads.get("market_volatility")
+    if isinstance(market_volatility, dict) and market_volatility:
+        expected_index = "VXN" if symbol.upper() == "QQQ" else "VIX"
+        returned_index = str(market_volatility.get("index") or "").upper()
+        if returned_index != expected_index:
+            endpoint_errors["market_volatility"] = (
+                "ZeroGEX returned volatility index "
+                f"{returned_index or 'missing'} for {symbol.upper()}; "
+                f"expected {expected_index}"
+            )
+            payloads.pop("market_volatility", None)
     advanced_payloads = {
         name.removeprefix("advanced:"): payload
         for name, payload in payloads.items()
