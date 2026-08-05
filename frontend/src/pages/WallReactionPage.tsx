@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle2, Clock3, Info, Loader2, Pause, Play, RefreshCw, ShieldCheck, Target } from 'lucide-react';
 import { api, User, WallReactionCandidate, WallReactionPaperSummary, WallReactionState } from '@/lib/api';
-import { Badge } from '@/components/ui/badge';
+import { Badge, badgeVariants } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { cn } from '@/lib/utils';
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
 
@@ -94,6 +96,37 @@ function CalendarHealthPanel({ calendar }: { calendar: WallReactionState['calend
         )}
       </details>
     </section>
+  );
+}
+
+function RuntimeErrorBadge({ health }: { health: WallReactionState['health'] }) {
+  if (!health.lastError) return null;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(badgeVariants({ variant: 'outline' }), 'cursor-pointer gap-1 border-destructive/40 text-destructive hover:bg-destructive/10')}
+          aria-label="Show Wall Reaction runtime error"
+        >
+          <Info className="h-3 w-3" />
+          Error info
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[min(22rem,calc(100vw-2rem))] space-y-3">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+          <div>
+            <p className="text-sm font-semibold">Wall Reaction runtime error</p>
+            <p className="mt-1 text-xs text-muted-foreground">At least one SPY or QQQ evaluation did not complete.</p>
+          </div>
+        </div>
+        <p className="break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">{health.lastError}</p>
+        <p className="text-[11px] text-muted-foreground">
+          Last checked {health.lastRunAt ? eventTime(health.lastRunAt) : 'not yet recorded'}
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -215,6 +248,7 @@ export default function WallReactionPage({ user }: { user: User }) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={statusVariant(state?.health.status)}><Activity className="mr-1 h-3 w-3" />Runtime {state?.health.status || 'unknown'}</Badge>
+          {state?.health && <RuntimeErrorBadge health={state.health} />}
           <Badge variant="outline"><Clock3 className="mr-1 h-3 w-3" />Macro FYI {state?.calendar.status || 'unknown'}</Badge>
           <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
         </div>
