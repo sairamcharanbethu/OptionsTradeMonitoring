@@ -519,6 +519,8 @@ export interface ManualEntrySettings {
   orderType: 'MARKET' | 'LIMIT';
   takeProfitPct: number | null;
   stopLossPct: number | null;
+  syntheticTrailingEnabled: boolean;
+  syntheticTrailingPct: number;
 }
 
 export interface ManualEntryQuote {

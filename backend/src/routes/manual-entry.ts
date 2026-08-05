@@ -3,7 +3,7 @@ import YahooFinance from 'yahoo-finance2';
 import { z } from 'zod';
 import { getSettingsWithGlobalFallback, invalidateSettingsCache } from '../lib/settings-utils';
 import { IbkrMarketDataService } from '../services/ibkr-market-data-service';
-import { ManualOptionOrderService } from '../services/manual-option-order-service';
+import { ManualOptionOrderService, resolveManualSyntheticTrailingSettings } from '../services/manual-option-order-service';
 import { isAmbiguousSnapTradeOrderError, SnaptradeService } from '../services/snaptrade-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
@@ -15,7 +15,9 @@ const ManualEntrySettingsSchema = z.object({
   slippagePct: z.coerce.number().min(0).max(100).optional(),
   orderType: z.enum(['MARKET', 'LIMIT']).optional(),
   takeProfitPct: z.coerce.number().min(0).max(1000).optional().nullable(),
-  stopLossPct: z.coerce.number().min(0).max(100).optional().nullable()
+  stopLossPct: z.coerce.number().min(0).max(100).optional().nullable(),
+  syntheticTrailingEnabled: z.boolean().optional(),
+  syntheticTrailingPct: z.coerce.number().min(1).max(50).optional()
 });
 
 const ChainQuerySchema = z.object({
@@ -54,6 +56,8 @@ type ManualEntrySettings = {
   orderType: 'MARKET' | 'LIMIT';
   takeProfitPct: number | null;
   stopLossPct: number | null;
+  syntheticTrailingEnabled: boolean;
+  syntheticTrailingPct: number;
 };
 
 const SETTING_KEYS = {
@@ -63,7 +67,9 @@ const SETTING_KEYS = {
   slippagePct: 'manual_entry_slippage_pct',
   orderType: 'manual_entry_order_type',
   takeProfitPct: 'manual_entry_take_profit_pct',
-  stopLossPct: 'manual_entry_stop_loss_pct'
+  stopLossPct: 'manual_entry_stop_loss_pct',
+  syntheticTrailingEnabled: 'manual_entry_synthetic_trailing_stop_enabled',
+  syntheticTrailingPct: 'manual_entry_synthetic_trailing_stop_pct'
 };
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
@@ -75,6 +81,7 @@ function normalizeSettings(settings: Record<string, string>): ManualEntrySetting
   const takeProfitPct = Number(settings[SETTING_KEYS.takeProfitPct] || 0);
   const stopLossPct = Number(settings[SETTING_KEYS.stopLossPct] || 0);
   const orderType = settings[SETTING_KEYS.orderType] === 'MARKET' ? 'MARKET' : 'LIMIT';
+  const syntheticTrailing = resolveManualSyntheticTrailingSettings(settings);
 
   return {
     defaultTicker: String(settings[SETTING_KEYS.defaultTicker] || 'QQQ').trim().toUpperCase(),
@@ -83,7 +90,9 @@ function normalizeSettings(settings: Record<string, string>): ManualEntrySetting
     slippagePct: Number.isFinite(slippagePct) && slippagePct >= 0 ? slippagePct : 3,
     orderType,
     takeProfitPct: Number.isFinite(takeProfitPct) && takeProfitPct > 0 ? takeProfitPct : null,
-    stopLossPct: Number.isFinite(stopLossPct) && stopLossPct > 0 ? stopLossPct : null
+    stopLossPct: Number.isFinite(stopLossPct) && stopLossPct > 0 ? stopLossPct : null,
+    syntheticTrailingEnabled: syntheticTrailing.enabled,
+    syntheticTrailingPct: syntheticTrailing.pct
   };
 }
 
@@ -168,7 +177,9 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
       [SETTING_KEYS.slippagePct]: String(parsed.data.slippagePct ?? 3),
       [SETTING_KEYS.orderType]: parsed.data.orderType || 'LIMIT',
       [SETTING_KEYS.takeProfitPct]: parsed.data.takeProfitPct ? String(parsed.data.takeProfitPct) : '',
-      [SETTING_KEYS.stopLossPct]: parsed.data.stopLossPct ? String(parsed.data.stopLossPct) : ''
+      [SETTING_KEYS.stopLossPct]: parsed.data.stopLossPct ? String(parsed.data.stopLossPct) : '',
+      [SETTING_KEYS.syntheticTrailingEnabled]: parsed.data.syntheticTrailingEnabled ? 'true' : 'false',
+      [SETTING_KEYS.syntheticTrailingPct]: String(parsed.data.syntheticTrailingPct || 15)
     };
 
     try {

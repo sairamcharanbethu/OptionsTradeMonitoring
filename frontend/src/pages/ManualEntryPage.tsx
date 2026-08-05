@@ -17,7 +17,9 @@ const DEFAULT_SETTINGS: ManualEntrySettings = {
   slippagePct: 3,
   orderType: 'LIMIT',
   takeProfitPct: null,
-  stopLossPct: null
+  stopLossPct: null,
+  syntheticTrailingEnabled: false,
+  syntheticTrailingPct: 15
 };
 
 function currency(value?: number | null) {
@@ -632,6 +634,32 @@ export default function ManualEntryPage() {
                 <Label className="text-xs">Stop Loss %</Label>
                 <Input type="number" min={0} value={settingsDraft.stopLossPct ?? ''} onChange={(e) => setSettingsDraft({ ...settingsDraft, stopLossPct: e.target.value ? Number(e.target.value) : null })} />
               </div>
+            </div>
+            <div className="grid gap-3 rounded-md border border-border bg-muted/20 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="manualSyntheticTrail" className="text-xs">Synthetic trailing stop</Label>
+                <Switch
+                  id="manualSyntheticTrail"
+                  checked={settingsDraft.syntheticTrailingEnabled}
+                  onCheckedChange={(checked) => setSettingsDraft({ ...settingsDraft, syntheticTrailingEnabled: checked })}
+                />
+              </div>
+              <div>
+                <Label htmlFor="manualSyntheticTrailPct" className="text-xs">Trail from highest option bid (%)</Label>
+                <Input
+                  id="manualSyntheticTrailPct"
+                  type="number"
+                  min={1}
+                  max={50}
+                  step={0.5}
+                  disabled={!settingsDraft.syntheticTrailingEnabled}
+                  value={settingsDraft.syntheticTrailingPct}
+                  onChange={(e) => setSettingsDraft({ ...settingsDraft, syntheticTrailingPct: e.target.value ? Number(e.target.value) : 15 })}
+                />
+              </div>
+              <p className="text-[10px] leading-relaxed text-muted-foreground">
+                Applies only to new manual long entries. The app follows fresh IBKR bids from the confirmed fill; existing positions and autonomous strategy settings are unchanged.
+              </p>
             </div>
           </div>
         </section>

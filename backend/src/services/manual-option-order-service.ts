@@ -56,8 +56,8 @@ const SETTING_KEYS = {
   slippagePct: 'manual_entry_slippage_pct',
   takeProfitPct: 'manual_entry_take_profit_pct',
   stopLossPct: 'manual_entry_stop_loss_pct',
-  syntheticTrailingEnabled: 'synthetic_trailing_stop_enabled',
-  syntheticTrailingPct: 'synthetic_trailing_stop_pct'
+  syntheticTrailingEnabled: 'manual_entry_synthetic_trailing_stop_enabled',
+  syntheticTrailingPct: 'manual_entry_synthetic_trailing_stop_pct'
 };
 
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
@@ -65,20 +65,35 @@ const MAX_ENTRY_QUOTE_AGE_MS = 60_000;
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 const MCP_MARKET_PENDING_ENTRY_PRICE = 0.01;
 
+export function resolveManualSyntheticTrailingSettings(settings: Record<string, string>) {
+  const manualEnabled = String(settings[SETTING_KEYS.syntheticTrailingEnabled] || '').trim();
+  const configuredPct = Number(
+    settings[SETTING_KEYS.syntheticTrailingPct]
+    || settings.synthetic_trailing_stop_pct
+    || 15
+  );
+  return {
+    enabled: manualEnabled
+      ? manualEnabled === 'true'
+      : settings.synthetic_trailing_stop_enabled === 'true',
+    pct: Number.isFinite(configuredPct) && configuredPct >= 1 && configuredPct <= 50
+      ? configuredPct
+      : 15
+  };
+}
+
 function normalizeSettings(settings: Record<string, string>): ManualEntrySettings {
   const slippagePct = Number(settings[SETTING_KEYS.slippagePct] || 3);
   const takeProfitPct = Number(settings[SETTING_KEYS.takeProfitPct] || 0);
   const stopLossPct = Number(settings[SETTING_KEYS.stopLossPct] || 0);
-  const syntheticTrailingPct = Number(settings[SETTING_KEYS.syntheticTrailingPct] || 15);
+  const syntheticTrailing = resolveManualSyntheticTrailingSettings(settings);
 
   return {
     slippagePct: Number.isFinite(slippagePct) && slippagePct >= 0 ? slippagePct : 3,
     takeProfitPct: Number.isFinite(takeProfitPct) && takeProfitPct > 0 ? takeProfitPct : null,
     stopLossPct: Number.isFinite(stopLossPct) && stopLossPct > 0 ? stopLossPct : null,
-    syntheticTrailingEnabled: settings[SETTING_KEYS.syntheticTrailingEnabled] === 'true',
-    syntheticTrailingPct: Number.isFinite(syntheticTrailingPct) && syntheticTrailingPct >= 1 && syntheticTrailingPct <= 50
-      ? syntheticTrailingPct
-      : 15
+    syntheticTrailingEnabled: syntheticTrailing.enabled,
+    syntheticTrailingPct: syntheticTrailing.pct
   };
 }
 
