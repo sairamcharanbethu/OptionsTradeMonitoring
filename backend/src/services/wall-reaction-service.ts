@@ -8,7 +8,7 @@ import {
 } from './wall-reaction-engine';
 import { blockingEconomicEvent, WallReactionProviders, WallReactionSymbol } from './wall-reaction-providers';
 
-export const WALL_REACTION_POLICY_VERSION = 'wall-reaction-v1';
+export const WALL_REACTION_POLICY_VERSION = 'wall-reaction-v2';
 const SYMBOLS: WallReactionSymbol[] = ['SPY', 'QQQ'];
 const LOOP_MS = 20_000;
 const CALENDAR_REFRESH_MS = 6 * 60 * 60_000;
@@ -138,6 +138,17 @@ function standDown(reason: string): WallReactionDecision {
   return { code: 'STAND_DOWN', setup: 'runtime_gate', direction: 'neutral', confidence: 0, riskMultiplier: 0, action: reason, reasons: [reason], warnings: [] };
 }
 
+export function applyWallReactionMacroAdvisory(
+  decision: WallReactionDecision,
+  macro: ReturnType<typeof blockingEconomicEvent>
+): WallReactionDecision {
+  if (!macro.blocked || !macro.reason) return decision;
+  return {
+    ...decision,
+    warnings: [...decision.warnings, `Macro FYI only: ${macro.reason}. Wall Reaction eligibility is unchanged.`]
+  };
+}
+
 export class WallReactionService {
   private readonly providers = new WallReactionProviders();
   private readonly marketData: IbkrMarketDataService;
@@ -198,21 +209,9 @@ export class WallReactionService {
         this.health = { status: 'DISABLED', lastRunAt: now.toISOString(), lastError: null };
         return;
       }
-      const calendarRetryMs = this.lastCalendarRefresh ? CALENDAR_REFRESH_MS : CALENDAR_RETRY_MS;
-      if (now.getTime() - this.lastCalendarAttempt >= calendarRetryMs) {
-        this.lastCalendarAttempt = now.getTime();
-        try {
-          await this.providers.refreshCalendar(now);
-          if (this.providers.getCalendarHealth(now).status === 'READY') this.lastCalendarRefresh = now.getTime();
-        } catch (error: any) {
-          this.fastify.log.warn(`[WallReaction] Economic calendar refresh failed: ${error.message}`);
-        }
-      }
+      this.refreshCalendarIfDue(now);
       const results = await Promise.allSettled(SYMBOLS.map((symbol) => this.runSymbol(symbol, settings, now)));
       const errors = results.flatMap((result) => result.status === 'rejected' ? [String(result.reason?.message || result.reason)] : []);
-      const calendarHealth = this.providers.getCalendarHealth(now);
-      if (calendarHealth.status !== 'READY' && calendarHealth.lastError) errors.push(calendarHealth.lastError);
-      if (calendarHealth.status === 'COVERAGE_MISSING') errors.push(`Economic calendar coverage ends ${calendarHealth.coverageThrough}`);
       this.health = { status: errors.length ? 'DEGRADED' : 'UP', lastRunAt: now.toISOString(), lastError: [...new Set(errors)].join('; ') || null };
     } catch (error: any) {
       this.health = { status: 'ERROR', lastRunAt: now.toISOString(), lastError: error.message || String(error) };
@@ -220,6 +219,17 @@ export class WallReactionService {
     } finally {
       this.running = false;
     }
+  }
+
+  private refreshCalendarIfDue(now: Date): void {
+    const calendarRetryMs = this.lastCalendarRefresh ? CALENDAR_REFRESH_MS : CALENDAR_RETRY_MS;
+    if (now.getTime() - this.lastCalendarAttempt < calendarRetryMs) return;
+    this.lastCalendarAttempt = now.getTime();
+    void this.providers.refreshCalendar(now).then(() => {
+      if (this.providers.getCalendarHealth(now).status === 'READY') this.lastCalendarRefresh = now.getTime();
+    }).catch((error: any) => {
+      this.fastify.log.warn(`[WallReaction] Economic calendar FYI refresh failed: ${error.message}`);
+    });
   }
 
   private async storeGated(symbol: WallReactionSymbol, reason: string, now: Date): Promise<void> {
@@ -245,13 +255,12 @@ export class WallReactionService {
       context.spot = underlying.mark;
       const spotDifferencePct = Math.abs(providerSpot - underlying.mark) / underlying.mark * 100;
       if (spotDifferencePct > 0.25) context.warnings.push(`IBKR spot differs from the ZeroGEX snapshot by ${spotDifferencePct.toFixed(2)}%`);
-      let decision = evaluateWallReaction(context);
       const macro = blockingEconomicEvent(this.providers.getCalendar(), now);
+      let decision = applyWallReactionMacroAdvisory(evaluateWallReaction(context), macro);
       const market = getNewYorkMarketState(now);
       const closeMinutes = getUSMarketCloseMinutes(now);
       if (['CALL_WALL_FADE', 'PUT_WALL_BOUNCE'].includes(decision.code)) {
         if (!isFreshWallReactionQuote(underlying.timestamp, now)) decision = standDown('IBKR underlying quote is missing, stale, or future-dated');
-        else if (macro.blocked) decision = standDown(macro.reason);
         else if (!market.isOpen) decision = standDown(`Entry window closed: ${market.reason}`);
         else if (market.minutes >= closeMinutes - 40) decision = standDown('Entry window closes 40 minutes before the cash close');
       }

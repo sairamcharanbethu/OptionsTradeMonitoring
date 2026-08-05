@@ -33,7 +33,7 @@ function CalendarHealthPanel({ calendar }: { calendar: WallReactionState['calend
   const ready = calendar.status === 'READY';
   const upcomingEvents = calendar.upcomingEvents || (calendar.nextEvent ? [calendar.nextEvent] : []);
   const sources = calendar.sources || [];
-  const blockingEventCount = calendar.blockingEventCount ?? calendar.eventCount;
+  const highImpactEventCount = calendar.blockingEventCount ?? calendar.eventCount;
   const informationalEventCount = calendar.informationalEventCount ?? 0;
   return (
     <section aria-labelledby="wall-reaction-calendar-title" className={`rounded-lg border p-4 ${ready ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/10'}`}>
@@ -42,11 +42,11 @@ function CalendarHealthPanel({ calendar }: { calendar: WallReactionState['calend
           {ready ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />}
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h2 id="wall-reaction-calendar-title" className="font-medium">Official macro calendar</h2>
-              <Badge variant="outline">{blockingEventCount} blocking</Badge>
-              <Badge variant="secondary">{informationalEventCount} informational</Badge>
+              <h2 id="wall-reaction-calendar-title" className="font-medium">Macro calendar · FYI only</h2>
+              <Badge variant="outline">{highImpactEventCount} high impact</Badge>
+              <Badge variant="secondary">{informationalEventCount} other events</Badge>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">Verified coverage through {calendar.coverageThrough}. Only blocking events close the entry gate.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Calendar notices never block, invalidate, or delay Wall Reaction entries.</p>
           </div>
         </div>
         <div className="text-xs text-muted-foreground sm:text-right">
@@ -57,7 +57,7 @@ function CalendarHealthPanel({ calendar }: { calendar: WallReactionState['calend
 
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         <div className="rounded-md border bg-background/60 p-3">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Next blocking window</div>
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Next high-impact event</div>
           <div className="mt-1 font-medium">{calendar.nextBlockingEvent?.name || 'None in current coverage'}</div>
           <div className="mt-1 text-xs text-muted-foreground">
             {eventTime(calendar.nextBlockingEvent?.scheduledAt)}{calendar.nextBlockingEvent ? ` · ${calendar.nextBlockingEvent.source}` : ''}
@@ -75,7 +75,7 @@ function CalendarHealthPanel({ calendar }: { calendar: WallReactionState['calend
         </div>
       </div>
 
-      {calendar.lastError && <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">Live refresh degraded; verified fallback remains active. {calendar.lastError}</p>}
+      {calendar.lastError && <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">Calendar FYI refresh is degraded; Wall Reaction eligibility is unaffected. {calendar.lastError}</p>}
 
       <details className="mt-3 rounded-md border bg-background/40 px-3 py-2 text-xs">
         <summary className="cursor-pointer font-medium text-foreground">Next verified events ({upcomingEvents.length} shown)</summary>
@@ -85,7 +85,7 @@ function CalendarHealthPanel({ calendar }: { calendar: WallReactionState['calend
               <div key={`${event.source}-${event.name}-${event.scheduledAt}`} className="flex flex-col gap-1 py-2 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-start gap-2">
                   {event.impact === 'BLOCKING' ? <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" /> : <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
-                  <div className="min-w-0"><div className="font-medium text-foreground">{event.name}</div><div className="text-muted-foreground">{event.source} · {event.impact === 'BLOCKING' ? 'Entry gate closes 30 min before to 15 min after' : 'Information only'}</div></div>
+                  <div className="min-w-0"><div className="font-medium text-foreground">{event.name}</div><div className="text-muted-foreground">{event.source} · {event.impact === 'BLOCKING' ? 'High-impact window · FYI only' : 'Information only'}</div></div>
                 </div>
                 <time dateTime={event.scheduledAt} className="shrink-0 pl-5 tabular-nums text-muted-foreground sm:pl-0">{eventTime(event.scheduledAt)}</time>
               </div>
@@ -119,12 +119,12 @@ function CandidateCard({ candidate, canManage, busy, onArm }: { candidate?: Wall
           <Metric label="MSI" value={value(candidate.context?.msi, 1)} />
         </div>
 
-        <div className={`rounded-md border p-3 text-sm ${candidate.macro.blocked ? 'border-amber-500/40 bg-amber-500/10' : 'border-emerald-500/30 bg-emerald-500/5'}`}>
+        <div className={`rounded-md border p-3 text-sm ${candidate.macro.blocked ? 'border-sky-500/30 bg-sky-500/10' : 'border-border bg-muted/20'}`}>
           <div className="flex items-center gap-2 font-medium">
-            {candidate.macro.blocked ? <AlertTriangle className="h-4 w-4 text-amber-500" /> : <CheckCircle2 className="h-4 w-4 text-emerald-500" />}
-            Macro gate {candidate.macro.blocked ? 'closed' : 'clear'}
+            <Info className="h-4 w-4 text-sky-500" />
+            Macro FYI {candidate.macro.blocked ? '· high-impact window' : ''}
           </div>
-          {candidate.macro.reason && <p className="mt-1 text-xs text-muted-foreground">{candidate.macro.reason}</p>}
+          <p className="mt-1 text-xs text-muted-foreground">{candidate.macro.reason || 'No high-impact macro window is currently reported.'} This notice does not affect candidate eligibility.</p>
         </div>
 
         {candidate.plan && candidate.contract ? (
@@ -159,7 +159,7 @@ function CandidateCard({ candidate, canManage, busy, onArm }: { candidate?: Wall
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
-          <p className="max-w-xl text-xs text-muted-foreground">Manual arm expires after five minutes. Fill-time gates and the protected price are checked again. This feature cannot place a live broker order.</p>
+          <p className="max-w-xl text-xs text-muted-foreground">Manual arm expires after five minutes. Market, wall-return, contract, cash, and protected-price gates are checked again; macro notices remain FYI only. This feature cannot place a live broker order.</p>
           {canManage ? <Button disabled={!actionable || busy} onClick={() => onArm(candidate)}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Arm paper entry</Button> : <Badge variant="secondary">Admin approval required</Badge>}
         </div>
       </CardContent>
@@ -215,7 +215,7 @@ export default function WallReactionPage({ user }: { user: User }) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant={statusVariant(state?.health.status)}><Activity className="mr-1 h-3 w-3" />Runtime {state?.health.status || 'unknown'}</Badge>
-          <Badge variant={statusVariant(state?.calendar.status)}><Clock3 className="mr-1 h-3 w-3" />Calendar {state?.calendar.status || 'unknown'}</Badge>
+          <Badge variant="outline"><Clock3 className="mr-1 h-3 w-3" />Macro FYI {state?.calendar.status || 'unknown'}</Badge>
           <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
         </div>
       </div>
@@ -270,8 +270,9 @@ export default function WallReactionPage({ user }: { user: User }) {
       </Card>
 
       <Dialog open={Boolean(confirmCandidate)} onOpenChange={(open) => { if (!open) setConfirmCandidate(null); }}>
-        <DialogContent><DialogHeader><DialogTitle>Arm paper entry?</DialogTitle><DialogDescription>This authorizes only the displayed Wall Reaction paper candidate for five minutes. The backend will recheck freshness, macro, wall return, contract, cash, and protected price. No live broker order can be sent.</DialogDescription></DialogHeader>
+        <DialogContent><DialogHeader><DialogTitle>Arm paper entry?</DialogTitle><DialogDescription>This authorizes only the displayed Wall Reaction paper candidate for five minutes. The backend will recheck freshness, wall return, contract, cash, and protected price. Macro events are FYI only. No live broker order can be sent.</DialogDescription></DialogHeader>
           {confirmCandidate && <div className="rounded-md border bg-muted/20 p-3 text-sm"><div className="font-semibold">{confirmCandidate.symbol} · {confirmCandidate.contract?.ticker}</div><div className="mt-1 text-muted-foreground">Up to {confirmCandidate.contract?.quantity} contract(s) at ${value(confirmCandidate.contract?.protectedLimit)}</div></div>}
+          {confirmCandidate?.macro.blocked && <div className="rounded-md border border-sky-500/30 bg-sky-500/10 p-3 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Macro FYI:</span> {confirmCandidate.macro.reason}. This does not block the paper entry.</div>}
           <DialogFooter><Button variant="outline" onClick={() => setConfirmCandidate(null)}>Cancel</Button><Button onClick={() => { const candidate = confirmCandidate; if (!candidate) return; setConfirmCandidate(null); void act(`arm:${candidate.symbol}`, () => api.armWallReactionCandidate(candidate.id)); }}>Arm paper entry</Button></DialogFooter>
         </DialogContent>
       </Dialog>

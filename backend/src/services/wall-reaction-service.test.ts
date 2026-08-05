@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { buildWallReactionPlan, chooseWallReactionExpiration, isFreshWallReactionQuote, selectWallReactionContract } from './wall-reaction-service';
+import { applyWallReactionMacroAdvisory, buildWallReactionPlan, chooseWallReactionExpiration, isFreshWallReactionQuote, selectWallReactionContract } from './wall-reaction-service';
 import { WallReactionContext, WallReactionDecision } from './wall-reaction-engine';
 import { IbkrOptionChainQuote } from './ibkr-market-data-service';
 
@@ -21,6 +21,14 @@ assert.equal(chooseWallReactionExpiration(['2026-08-03', '2026-08-04'], new Date
 assert.equal(isFreshWallReactionQuote('2026-08-03T14:00:00Z', new Date('2026-08-03T14:00:15Z')), true);
 assert.equal(isFreshWallReactionQuote('2026-08-03T14:00:21Z', new Date('2026-08-03T14:00:15Z')), false);
 assert.equal(isFreshWallReactionQuote(null, new Date('2026-08-03T14:00:15Z')), false);
+const macroAdvisoryDecision = applyWallReactionMacroAdvisory(decision, {
+  blocked: true,
+  reason: 'Employment Situation macro window',
+  event: null
+});
+assert.equal(macroAdvisoryDecision.code, 'CALL_WALL_FADE');
+assert.equal(macroAdvisoryDecision.riskMultiplier, decision.riskMultiplier);
+assert.match(macroAdvisoryDecision.warnings.at(-1) || '', /Macro FYI only/);
 
 const quote = {
   source: 'ibkr_chain', ticker: 'SPY260803P00750000', symbol: 'SPY', expiration: '2026-08-03', right: 'put', strike: 750,

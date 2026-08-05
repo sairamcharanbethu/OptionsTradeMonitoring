@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
-import { isWallReturnConfirmed, wallReactionExitIntent, wallReactionSecondTarget } from './wall-reaction-paper-service';
+import { isWallReturnConfirmed, wallReactionEntryGateFailure, wallReactionExitIntent, wallReactionSecondTarget } from './wall-reaction-paper-service';
 
 const candidate: any = { context: { spot: 751.9 }, plan: { wall: 752 }, decision: { direction: 'bearish' } };
 assert.equal(isWallReturnConfirmed(candidate), true);
 assert.equal(isWallReturnConfirmed({ ...candidate, context: { spot: 752.1 } }), false);
+const macroWindowCandidate: any = {
+  ...candidate,
+  generatedAt: '2026-08-03T14:00:00Z',
+  macro: { blocked: true, reason: 'Economic release macro window', event: null }
+};
+assert.equal(wallReactionEntryGateFailure(macroWindowCandidate, new Date('2026-08-03T14:00:10Z')), null);
+assert.equal(wallReactionEntryGateFailure({ ...macroWindowCandidate, generatedAt: '2026-08-03T13:59:00Z' }, new Date('2026-08-03T14:00:10Z')), 'Candidate freshness gate failed');
 const position = { option_type: 'PUT', suggested_stop_loss: 752.4, suggested_take_profit_1: 750, suggested_take_profit_2: 748, expiration_date: '2026-08-03', analysis_data: {} };
 assert.equal(wallReactionExitIntent(position, 752.5, new Date('2026-08-03T14:00:00Z')), 'INVALIDATION');
 assert.equal(wallReactionExitIntent(position, 749.9, new Date('2026-08-03T14:00:00Z')), 'TARGET_1');

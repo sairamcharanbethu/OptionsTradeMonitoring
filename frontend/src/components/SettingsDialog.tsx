@@ -1331,9 +1331,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         <p className="text-[10px] leading-relaxed text-muted-foreground">The engine applies a 0.25x or 0.50x multiplier, then caps the paper entry at two contracts.</p>
                                     </div>
                                     <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-                                        <div className="font-semibold text-foreground">Official US macro calendar</div>
-                                        <p className="mt-1 leading-relaxed">No API key is required. Blocking BLS, BEA, Federal Reserve, and ISM events close the entry gate from 30 minutes before through 15 minutes after; selected Census releases are informational.</p>
-                                        <p className="mt-2 text-[10px] leading-relaxed">The dashboard distinguishes live, cached, and bundled sources. Entries fail closed when verified date coverage expires.</p>
+                                        <div className="font-semibold text-foreground">US macro calendar · FYI only</div>
+                                        <p className="mt-1 leading-relaxed">No API key is required. High-impact BLS, BEA, Federal Reserve, ISM, and selected Census events are displayed as context only.</p>
+                                        <p className="mt-2 text-[10px] leading-relaxed">Calendar availability, refresh failures, and high-impact windows do not block or invalidate Wall Reaction candidates or paper entries.</p>
                                     </div>
                                 </div>
                                 <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-muted-foreground">

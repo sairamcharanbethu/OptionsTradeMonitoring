@@ -1,4 +1,4 @@
-# Wall Reaction V1
+# Wall Reaction V2
 
 Wall Reaction is a paper-only SPY/QQQ feature. It translates the `NewStrategy` wall-fade decision policy into the existing Node/React application without changing the Day Trading scanner, signal lifecycle, or `strategy-system` paper account.
 
@@ -6,7 +6,7 @@ Wall Reaction is a paper-only SPY/QQQ feature. It translates the `NewStrategy` w
 
 - ZeroGEX prefetch: SPY keeps using `/strategy-data/trade/zerogex.json`. A separate QQQ prefetch container writes `/strategy-data/wall-reaction/QQQ-zerogex.json`.
 - Market data: the backend uses IBKR Gateway for underlying snapshots, one-minute bars, expirations, option chains, and exact-contract quotes.
-- Macro data: a keyless Wall Reaction calendar combines a bundled schedule verified from BLS, BEA, Census, Federal Reserve, and ISM sources with the official BLS iCalendar and BEA release feeds. Blocking events stop new entries from 30 minutes before through 15 minutes after; informational events remain visible without closing the gate. Last-known-good live schedules are persisted in the Wall Reaction data directory, and entries fail closed when verified calendar coverage expires.
+- Macro data: a keyless Wall Reaction calendar combines a bundled schedule verified from BLS, BEA, Census, Federal Reserve, and ISM sources with the official BLS iCalendar and BEA release feeds. High-impact windows, calendar outages, and expired coverage are FYI only: they are displayed and recorded with the candidate but never block, invalidate, delay, or cancel an entry. Calendar refresh runs independently from candidate evaluation.
 - Account: all decisions, orders, positions, and journal events use `wall-reaction-system`. Day Trading continues to use `strategy-system`.
 - Execution: there is no broker-order call in the Wall Reaction routes or services. Every fill is recorded as `wall_reaction_paper`.
 
@@ -20,7 +20,7 @@ An entry candidate requires all of the following:
 2. Positive GEX with spot above the gamma flip.
 3. A provider-confirmed failed-breakout trap at a wall; a wick alone is insufficient.
 4. No opposing loaded pressure, dealer-delta chase veto, confident opposing playbook, wall migration, or breakout mode.
-5. A clear macro calendar and an open cash session at least 40 minutes before the close.
+5. An open cash session at least 40 minutes before the close. Macro calendar context is advisory and does not participate in eligibility.
 6. A provider breakout buffer, an invalidation beyond the frozen wall, T1 at 1R or better, and optional T2 at 2R or better.
 7. The adaptive expiration: same-day before 13:00 ET when listed, otherwise the next listed expiration.
 8. A fresh IBKR option quote with spread at most 5%, nonzero volume/open interest/IV, and absolute delta from 0.15 through 0.65.
@@ -30,7 +30,7 @@ The engine caps size at two contracts. Two contracts trim one at T1 and close th
 
 ## Manual approval and lifecycle
 
-An administrator must arm the exact candidate from the Wall Reaction dashboard. An arm expires after five minutes. Before creating or filling the protected paper order, the backend rechecks candidate identity, provider age, macro status, the return through the frozen wall, contract identity, available cash, and the protected limit. The pending paper order expires after 60 seconds.
+An administrator must arm the exact candidate from the Wall Reaction dashboard. An arm expires after five minutes. Before creating or filling the protected paper order, the backend rechecks candidate identity, provider age, the return through the frozen wall, contract identity, available cash, and the protected limit. Macro context is retained as FYI evidence but is not rechecked as a gate. The pending paper order expires after 60 seconds.
 
 Open positions are repriced from the exact IBKR OSI contract. They close on invalidation, wall migration, their assigned structural target, a manual paper close, or ten minutes before the cash close. Quote failures leave the position open, mark feature health degraded, and retry; they do not fabricate a fill.
 
@@ -41,7 +41,7 @@ Open positions are repriced from the exact IBKR OSI contract. They close on inva
 - `STRIKEPILOT_CALENDAR_CONTACT`: monitored operator email included in the BLS calendar request User-Agent. Recommended for identifiable, policy-compliant automated retrieval.
 - Existing `IBKR_HOST`, `IBKR_PORT`, `IBKR_CLIENT_ID_MARKET_DATA`, and `IBKR_MARKET_DATA_TYPE` settings remain the market-data path.
 
-The bundled calendar is reviewed through the `coverageThrough` date reported on the Wall Reaction dashboard. Extend `wall-reaction-economic-calendar.ts` from official schedules before that date. A temporary BLS or BEA outage degrades calendar health but continues using cached and bundled schedules; it does not turn a covered empty day into an unavailable calendar.
+The bundled calendar is reviewed through the `coverageThrough` date reported on the Wall Reaction dashboard. Extend `wall-reaction-economic-calendar.ts` from official schedules before that date to preserve useful FYI coverage. A temporary BLS or BEA outage can degrade the separate calendar status, but it does not degrade the strategy runtime or affect candidate and paper-order eligibility.
 
 Settings are available under **Settings > Wall Reaction**. The dashboard workspace is a separate top-level **Wall Reaction** tab and is labeled **Paper only**.
 

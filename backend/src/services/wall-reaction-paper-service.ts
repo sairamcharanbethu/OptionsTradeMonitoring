@@ -14,6 +14,17 @@ export function isWallReturnConfirmed(candidate: WallReactionCandidate): boolean
     : candidate.decision.direction === 'bullish' && candidate.context.spot >= candidate.plan.wall;
 }
 
+export function wallReactionEntryGateFailure(
+  candidate: WallReactionCandidate,
+  now = new Date(),
+  maxAgeSeconds = 20
+): string | null {
+  const ageSeconds = (now.getTime() - Date.parse(candidate.generatedAt)) / 1000;
+  if (!Number.isFinite(ageSeconds) || ageSeconds < -5 || ageSeconds > maxAgeSeconds) return 'Candidate freshness gate failed';
+  if (!isWallReturnConfirmed(candidate)) return 'Wall-return gate failed';
+  return null;
+}
+
 export function wallReactionExitIntent(position: any, spot: number, now = new Date()): string | null {
   const analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data || {};
   const isCall = String(position.option_type).toUpperCase() === 'CALL';
@@ -62,9 +73,9 @@ export class WallReactionPaperService {
     if (!candidate || candidate.status !== 'CANDIDATE' || !candidate.contract || !candidate.plan || !candidate.context) {
       const error: any = new Error('Candidate is no longer entry-ready'); error.statusCode = 409; throw error;
     }
-    const ageSeconds = (Date.now() - Date.parse(candidate.generatedAt)) / 1000;
-    if (!Number.isFinite(ageSeconds) || ageSeconds < -5 || ageSeconds > 20 || candidate.macro.blocked || !isWallReturnConfirmed(candidate)) {
-      const error: any = new Error('Candidate freshness, macro, or wall-return gate failed'); error.statusCode = 409; throw error;
+    const gateFailure = wallReactionEntryGateFailure(candidate);
+    if (gateFailure) {
+      const error: any = new Error(gateFailure); error.statusCode = 409; throw error;
     }
     const account = await this.account();
     if (account.automation_status !== 'ACTIVE') {
@@ -77,7 +88,7 @@ export class WallReactionPaperService {
     );
     if (!rows[0]) { const error: any = new Error('Candidate was already handled'); error.statusCode = 409; throw error; }
     candidate.status = 'ARMED';
-    await this.journal('CANDIDATE_ARMED', `Manual paper entry armed for five minutes by user ${requestedByUserId || 'unknown'}.`, candidate.id, null, null, null, { symbol: candidate.symbol, fingerprint: candidate.fingerprint });
+    await this.journal('CANDIDATE_ARMED', `Manual paper entry armed for five minutes by user ${requestedByUserId || 'unknown'}.`, candidate.id, null, null, null, { symbol: candidate.symbol, fingerprint: candidate.fingerprint, macroAdvisory: candidate.macro });
     return { candidateId, status: 'ARMED', armedUntil, paperOnly: true };
   }
 
@@ -161,10 +172,8 @@ export class WallReactionPaperService {
     );
     for (const armed of rows) {
       const current = (this.fastify as any).wallReaction.getCandidate(armed.symbol) as WallReactionCandidate | null;
-      const candidateAgeSeconds = current ? (now.getTime() - Date.parse(current.generatedAt)) / 1000 : NaN;
       if (!current || current.id !== armed.id || current.fingerprint !== armed.fingerprint || !current.contract || !current.plan
-        || !Number.isFinite(candidateAgeSeconds) || candidateAgeSeconds < -5 || candidateAgeSeconds > 25
-        || current.macro.blocked || !isWallReturnConfirmed(current)) {
+        || wallReactionEntryGateFailure(current, now, 25)) {
         await (this.fastify as any).pg.query(`UPDATE wall_reaction_candidates SET status='INVALIDATED', invalidated_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ARMED'`, [armed.id]);
         await this.journal('ARM_INVALIDATED', 'Candidate changed or a required entry gate no longer passes.', armed.id, null, null, null, { symbol: armed.symbol });
         continue;
@@ -196,8 +205,8 @@ export class WallReactionPaperService {
          ON CONFLICT (account_id,setup_id) DO NOTHING RETURNING *`,
         [WALL_REACTION_ACCOUNT_ID, candidate.id, candidate.decision.riskMultiplier === 0.5 ? 'STANDARD' : 'CAUTIOUS',
           contract.quantity === 2 ? 'STRUCTURAL_T2' : 'STRUCTURAL_T1', contract.quantity, plan.debitBudget,
-          contract.protectedLimit, WALL_REACTION_POLICY_VERSION, 'Manual arm passed all deterministic Wall Reaction gates.',
-          JSON.stringify({ candidateFingerprint: candidate.fingerprint, symbol: candidate.symbol, plan, contract })]
+          contract.protectedLimit, WALL_REACTION_POLICY_VERSION, 'Manual arm passed all deterministic Wall Reaction gates. Macro calendar data was recorded as FYI only.',
+          JSON.stringify({ candidateFingerprint: candidate.fingerprint, symbol: candidate.symbol, plan, contract, macroAdvisory: candidate.macro })]
       );
       const decisionRow = decision.rows[0];
       if (!decisionRow) { await client.query('ROLLBACK'); return; }
@@ -228,10 +237,8 @@ export class WallReactionPaperService {
     for (const order of rows) {
       if (new Date(order.expires_at).getTime() <= now.getTime()) { await this.cancelOrder(order, 'Protected paper order expired after 60 seconds'); continue; }
       const current = (this.fastify as any).wallReaction.getCandidate(String((typeof order.evidence === 'string' ? JSON.parse(order.evidence) : order.evidence)?.symbol || '').toUpperCase()) as WallReactionCandidate | null;
-      const candidateAgeSeconds = current ? (now.getTime() - Date.parse(current.generatedAt)) / 1000 : NaN;
       if (!current || current.id !== String(order.setup_id) || !current.contract || !current.plan
-        || !Number.isFinite(candidateAgeSeconds) || candidateAgeSeconds < -5 || candidateAgeSeconds > 25
-        || current.macro.blocked || !isWallReturnConfirmed(current) || current.contract.ticker !== order.osi_ticker) {
+        || wallReactionEntryGateFailure(current, now, 25) || current.contract.ticker !== order.osi_ticker) {
         await this.cancelOrder(order, 'Candidate changed or an entry gate failed before fill');
         continue;
       }
