@@ -3,7 +3,7 @@ import React, { Suspense, lazy, useEffect, useState, useMemo, useRef } from 'rea
 import { useLocation, useNavigate } from 'react-router-dom';
 import { api, Position, User } from '@/lib/api';
 import { useQueryClient } from '@tanstack/react-query';
-import { usePositions, usePortfolioStats, useMarketStatus, useClosedPositions, QUERY_KEYS } from '@/hooks/useDashboardData';
+import { usePositions, usePortfolioStats, useClosedPositions, QUERY_KEYS } from '@/hooks/useDashboardData';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import {
   Card,
@@ -31,8 +31,6 @@ import {
 import {
   Tabs,
   TabsContent,
-  TabsList,
-  TabsTrigger,
 } from '@/components/ui/tabs';
 import {
   DropdownMenu,
@@ -113,7 +111,6 @@ export default function Dashboard({ user }: DashboardProps) {
   const queryClient = useQueryClient();
   const { data: positions = [], isLoading: loading, error: queryError, refetch: refetchPositions } = usePositions();
   const { data: stats } = usePortfolioStats();
-  const { data: marketStatus } = useMarketStatus();
 
   // Local state for UI
   const [activeTab, setActiveTab] = useState(getInitialDashboardTab);
@@ -379,110 +376,50 @@ export default function Dashboard({ user }: DashboardProps) {
     <div className="mx-auto w-full max-w-[1600px] space-y-5 px-3 py-4 sm:w-[95%] sm:px-0 sm:py-6 lg:space-y-8">
       <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-5 lg:space-y-8">
 
-        {/* Header Section */}
-        <div className="rounded-lg border border-border/80 bg-background/90 p-2 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/75 lg:sticky lg:top-[calc(4.25rem+env(safe-area-inset-top))] lg:z-20">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              {marketStatus && (
-                <div className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5">
-                  <div className={`h-2 w-2 rounded-full ${marketStatus.open ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500'}`} />
-                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${marketStatus.open ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                    Market {marketStatus.open ? 'Open' : 'Closed'}
-                  </span>
-                </div>
-              )}
-              {marketStatus && (
-                <div className="flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1.5" title="IBKR Market Data Connection">
-                  <div className={`h-2 w-2 rounded-full ${(marketStatus as any).connectionStatus === 'CONNECTED' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-red-500 animate-pulse'}`} />
-                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${(marketStatus as any).connectionStatus === 'CONNECTED' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                    Data {(marketStatus as any).connectionStatus === 'CONNECTED' ? 'Live' : 'Offline'}
-                  </span>
-                </div>
-              )}
-              {queryError && (
-                <div className="flex items-center gap-2 rounded-full border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-red-500">
-                  <AlertTriangle className="h-3.5 w-3.5" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wide">Data offline</span>
-                </div>
-              )}
-            </div>
-
-            <TabsList className="hidden h-9 shrink-0 rounded-md bg-muted/60 p-1 xl:flex">
-              <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="portfolio">Portfolio</TabsTrigger>
-              <TabsTrigger value="wealthsimple">Wealthsimple</TabsTrigger>
-              <TabsTrigger value="goals">Goals</TabsTrigger>
-              <TabsTrigger value="day-trading">Day Trading</TabsTrigger>
-              <TabsTrigger value="wall-reaction">Wall Reaction</TabsTrigger>
-              <TabsTrigger value="manual-entry">Manual Entry</TabsTrigger>
-              <TabsTrigger value="covered-calls">Covered Calls</TabsTrigger>
-              {user.role === 'ADMIN' && (
-                <TabsTrigger value="users">Users</TabsTrigger>
-              )}
-            </TabsList>
-
-            <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto lg:justify-end">
-            <div className="xl:hidden">
-              <Select value={activeTab} onValueChange={handleTabChange}>
-                <SelectTrigger className="h-9 w-[170px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="overview">Overview</SelectItem>
-                  <SelectItem value="portfolio">Portfolio</SelectItem>
-                  <SelectItem value="wealthsimple">Wealthsimple</SelectItem>
-                  <SelectItem value="goals">Goals</SelectItem>
-                  <SelectItem value="day-trading">Day Trading</SelectItem>
-                  <SelectItem value="wall-reaction">Wall Reaction</SelectItem>
-                  <SelectItem value="manual-entry">Manual Entry</SelectItem>
-                  <SelectItem value="covered-calls">Covered Calls</SelectItem>
-                  {user.role === 'ADMIN' && (
-                    <SelectItem value="users">Users</SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="ml-auto flex items-center gap-1 rounded-md border border-border bg-card p-1 lg:ml-0">
-            <Button variant="ghost" size="sm" className="hidden gap-1 text-xs lg:flex" onClick={handleForceSync} disabled={loading}>
-              <Zap className={`h-3 w-3 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
-              Force Sync
-            </Button>
-            <Button variant="ghost" size="icon" className="lg:hidden" onClick={handleForceSync} disabled={loading}>
-              <Zap className={`h-4 w-4 ${loading ? 'text-yellow-500 animate-pulse' : 'text-yellow-500'}`} />
-            </Button>
-
-            <Button variant="ghost" size="icon" onClick={() => refetchPositions()}>
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            </Button>
-            </div>
-
-            <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) setEditingPosition(null); }}>
-              <DialogTrigger asChild>
-                <Button className="h-9 rounded-full px-3 text-xs sm:rounded-md sm:px-4 sm:text-sm">
-                  <Plus className="h-4 w-4 md:mr-2" />
-                  <span className="hidden md:inline">Track Position</span>
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[600px]">
-                <DialogHeader>
-                  <DialogTitle>{editingPosition ? 'Edit Position' : 'Track New Position'}</DialogTitle>
-                </DialogHeader>
-                <PositionForm
-                  position={editingPosition || undefined}
-                  onSuccess={() => {
-                    refetchPositions();
-                    setIsDialogOpen(false);
-                  }}
-                />
-              </DialogContent>
-            </Dialog>
-        </div>
-        </div>
-        </div>
-
-        {/* Details Modal removed - now using separate page */}
-
         <TabsContent value="overview" className="space-y-8 mt-0">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight">Account overview</h1>
+              <p className="mt-1 text-sm text-muted-foreground">Positions, performance, and portfolio activity.</p>
+            </div>
+            <div className="grid w-full grid-cols-[1fr_auto] items-center gap-2 sm:flex sm:w-auto">
+              <Button variant="outline" className="h-11 gap-2 sm:h-10" onClick={handleForceSync} disabled={loading}>
+                <Zap className={`h-4 w-4 ${loading ? 'animate-pulse text-yellow-500' : 'text-yellow-500'}`} />
+                Force Sync
+              </Button>
+              <Button variant="outline" size="icon" className="h-11 w-11 shrink-0 sm:h-10 sm:w-10" onClick={() => refetchPositions()} aria-label="Refresh positions" title="Refresh positions">
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              </Button>
+              <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) setEditingPosition(null); }}>
+                <DialogTrigger asChild>
+                  <Button className="col-span-2 h-11 w-full gap-2 sm:h-10 sm:w-auto">
+                    <Plus className="h-4 w-4" />
+                    Track Position
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-[600px]">
+                  <DialogHeader>
+                    <DialogTitle>{editingPosition ? 'Edit Position' : 'Track New Position'}</DialogTitle>
+                  </DialogHeader>
+                  <PositionForm
+                    position={editingPosition || undefined}
+                    onSuccess={() => {
+                      refetchPositions();
+                      setIsDialogOpen(false);
+                    }}
+                  />
+                </DialogContent>
+              </Dialog>
+            </div>
+          </div>
+
+          {queryError && (
+            <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{queryError instanceof Error ? queryError.message : 'Positions could not be loaded.'}</span>
+            </div>
+          )}
+
           {/* Stats Cards Row */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
             <StatsCard
