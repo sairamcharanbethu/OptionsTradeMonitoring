@@ -1022,7 +1022,7 @@ def _deep_context_request_specs(
             ),
             "market_volatility": (
                 "/api/market/volatility",
-                {"symbol": symbol},
+                {"ticker": "VXN" if symbol.upper() == "QQQ" else "VIX"},
             ),
             "strike_profile": (
                 "/api/gex/strike-profile-timeseries",

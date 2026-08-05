@@ -290,6 +290,38 @@ class ZeroGEXClientTest(unittest.TestCase):
         self.assertIn("/api/technicals/dealer-hedging", calls)
         self.assertIn("/api/forced-flow/levels", calls)
 
+    def test_deep_fetch_maps_underlying_to_volatility_index(self) -> None:
+        for symbol, expected_index in (("SPY", "VIX"), ("QQQ", "VXN")):
+            with self.subTest(symbol=symbol):
+                volatility_params = []
+
+                def request_json(path, params, **kwargs):
+                    if path == "/api/market/volatility":
+                        volatility_params.append(params)
+                        return {
+                            "timestamp": "2026-08-05T14:00:00Z",
+                            "index": expected_index,
+                            "level": 4,
+                            "momentum": 3,
+                        }
+                    return {}
+
+                snapshot = fetch_component_snapshot(
+                    symbol,
+                    lane="deep",
+                    api_key="test-key",
+                    request_json=request_json,
+                )
+
+                self.assertEqual(
+                    volatility_params,
+                    [{"ticker": expected_index}],
+                )
+                self.assertEqual(
+                    snapshot["market_volatility"]["index"],
+                    expected_index,
+                )
+
     def test_component_fetches_keep_polling_lanes_independent(self) -> None:
         calls = []
 
