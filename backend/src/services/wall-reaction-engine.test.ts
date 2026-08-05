@@ -50,6 +50,27 @@ const context = contextFromZeroGex({
 assert.deepEqual(context.marketPressure, {});
 assert.ok(context.warnings.some((warning) => warning.includes('market pressure')));
 assert.equal(context.basicSignals.dealer_delta_pressure.score, 0);
+const staleButReadableTimestamp = new Date(now.getTime() - 78_000).toISOString();
+const staleButReadableContext = contextFromZeroGex({
+  symbol: 'SPY', fetchedAt: timestamp, raw: {
+    gex_summary: { timestamp: staleButReadableTimestamp, spot_price: 751.9, net_gex_at_spot: 9.33e9, gamma_flip: 748, call_wall: 752, put_wall: 745, max_pain: 750 },
+    composite: { timestamp, score: 30 },
+    advanced_signals: {
+      trap_detection: { timestamp, triggered: true, signal: 'bearish_fade', breakout_up: true },
+      range_break_imminence: { timestamp, triggered: false, imminence: 30 }
+    }
+  }
+}, [], now);
+assert.equal(staleButReadableContext.levelsAgeSeconds, 78);
+assert.equal(evaluateWallReaction(staleButReadableContext).setup, 'stale_data');
+const expiredContextTimestamp = new Date(now.getTime() - 121_000).toISOString();
+assert.throws(() => contextFromZeroGex({
+  symbol: 'SPY', fetchedAt: timestamp, raw: {
+    gex_summary: { timestamp: expiredContextTimestamp, spot_price: 751.9, net_gex_at_spot: 9.33e9, gamma_flip: 748, call_wall: 752, put_wall: 745 },
+    composite: { timestamp, score: 30 },
+    advanced_signals: { trap_detection: { timestamp }, range_break_imminence: { timestamp } }
+  }
+}, [], now), /stale \(121s\)/);
 assert.throws(() => contextFromZeroGex({
   symbol: 'SPY', fetchedAt: timestamp, raw: {
     gex_summary: { timestamp: '2026-08-03T13:37:10Z', spot_price: 751.9, net_gex_at_spot: 1, gamma_flip: 748, call_wall: 752, put_wall: 745 },

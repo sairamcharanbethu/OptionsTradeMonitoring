@@ -2,6 +2,9 @@ import { createHash, randomUUID } from 'crypto';
 import { IbkrHistoricalBar } from './ibkr-market-data-service';
 import { providerAgeSeconds, WallReactionSymbol, ZeroGexWallSnapshot } from './wall-reaction-providers';
 
+const MAX_GEX_CONTEXT_AGE_SECONDS = 120;
+const MAX_GEX_ENTRY_AGE_SECONDS = 60;
+
 export type WallReactionCode =
   | 'CALL_WALL_FADE' | 'PUT_WALL_BOUNCE'
   | 'CALL_BREAKOUT_WATCH' | 'PUT_BREAKOUT_WATCH'
@@ -149,7 +152,7 @@ export function contextFromZeroGex(
 ): WallReactionContext {
   const raw = snapshot.raw;
   const warnings: string[] = [];
-  const gex = freshPayload(raw.gex_summary, 'GEX summary', now, 60, true, warnings);
+  const gex = freshPayload(raw.gex_summary, 'GEX summary', now, MAX_GEX_CONTEXT_AGE_SECONDS, true, warnings);
   const composite = freshPayload(raw.composite, 'MSI composite', now, 180, true, warnings);
   const advanced = raw.advanced_signals || {};
   const trap = freshPayload(advanced.trap_detection, 'trap detection', now, 180, true, warnings);
@@ -305,7 +308,7 @@ function wallReaction(context: WallReactionContext, kind: 'call' | 'put'): WallR
 }
 
 export function evaluateWallReaction(context: WallReactionContext): WallReactionDecision {
-  if (context.levelsAgeSeconds < -5 || context.levelsAgeSeconds > 60) return decision(context, {
+  if (context.levelsAgeSeconds < -5 || context.levelsAgeSeconds > MAX_GEX_ENTRY_AGE_SECONDS) return decision(context, {
     code: 'STAND_DOWN', setup: 'stale_data', direction: 'neutral', confidence: 0, riskMultiplier: 0,
     action: 'Levels are stale or future-dated.', reasons: [`Level age ${context.levelsAgeSeconds.toFixed(1)}s`]
   });
