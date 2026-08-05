@@ -77,6 +77,24 @@ const staleRangeContext = contextFromZeroGex({
 assert.deepEqual(staleRangeContext.entryDataBlockers, ['Range-break confirmation is unavailable or stale']);
 assert.equal(evaluateWallReaction(staleRangeContext).setup, 'signal_data_unavailable');
 assert.ok(staleRangeContext.warnings.some((warning) => warning.includes('range-break') && warning.includes('198s')));
+const missingStructuralGexContext = contextFromZeroGex({
+  symbol: 'SPY', fetchedAt: timestamp, raw: {
+    gex_summary: { timestamp, spot_price: 751.9, net_gex_at_spot: null, gamma_flip: null, gamma_flip_raw: 748, call_wall: null, put_wall: null, max_pain: 750 },
+    composite: { timestamp, score: 30 },
+    advanced_signals: {
+      trap_detection: { timestamp, triggered: true, signal: 'bearish_fade', breakout_up: true },
+      range_break_imminence: { timestamp, triggered: false, imminence: 30 }
+    }
+  }
+}, [], now);
+assert.equal(missingStructuralGexContext.gammaFlip, 0);
+assert.deepEqual(missingStructuralGexContext.entryDataBlockers, [
+  'ZeroGEX net GEX at spot is unavailable',
+  'ZeroGEX gamma flip is unavailable',
+  'ZeroGEX call wall is unavailable',
+  'ZeroGEX put wall is unavailable'
+]);
+assert.equal(evaluateWallReaction(missingStructuralGexContext).setup, 'signal_data_unavailable');
 const expiredContextTimestamp = new Date(now.getTime() - 121_000).toISOString();
 assert.throws(() => contextFromZeroGex({
   symbol: 'SPY', fetchedAt: timestamp, raw: {

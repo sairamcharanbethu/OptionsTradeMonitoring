@@ -166,7 +166,15 @@ export function contextFromZeroGex(
   const volatility = freshPayload(raw.market_volatility, 'volatility', now, 180, false, warnings);
   const basicSignals = freshBasicSignals(raw.basic_signals, now, warnings);
   const gap = computeWallReactionGap(bars, now);
+  const netGex = number(gex.net_gex_at_spot ?? gex.net_gex);
+  const gammaFlip = number(gex.gamma_flip);
+  const callWall = number(gex.call_wall);
+  const putWall = number(gex.put_wall);
   const entryDataBlockers = [
+    ...(netGex === null ? ['ZeroGEX net GEX at spot is unavailable'] : []),
+    ...(gammaFlip === null ? ['ZeroGEX gamma flip is unavailable'] : []),
+    ...(callWall === null ? ['ZeroGEX call wall is unavailable'] : []),
+    ...(putWall === null ? ['ZeroGEX put wall is unavailable'] : []),
     ...(!hasPayload(composite) ? ['MSI composite is unavailable or stale'] : []),
     ...(!hasPayload(trap) ? ['Trap detection is unavailable or stale'] : []),
     ...(!hasPayload(rangeBreak) ? ['Range-break confirmation is unavailable or stale'] : [])
@@ -177,10 +185,10 @@ export function contextFromZeroGex(
     generatedAt: now.toISOString(),
     spot: requiredNumber(gex.spot_price, 'spot_price'),
     levelsAgeSeconds: providerAgeSeconds(gex.timestamp, now) ?? 0,
-    netGex: requiredNumber(gex.net_gex_at_spot ?? gex.net_gex, 'net_gex_at_spot'),
-    gammaFlip: requiredNumber(gex.gamma_flip, 'gamma_flip'),
-    callWall: requiredNumber(gex.call_wall, 'call_wall'),
-    putWall: requiredNumber(gex.put_wall, 'put_wall'),
+    netGex: netGex ?? 0,
+    gammaFlip: gammaFlip ?? 0,
+    callWall: callWall ?? 0,
+    putWall: putWall ?? 0,
     maxPain: number(gex.max_pain),
     msi: number(composite.score) ?? 0,
     gapPct: gap.pct,
