@@ -125,6 +125,12 @@ type ReplayTradeDecision = {
   pricingWarnings: string[];
   warningTypes: string[];
   blockers: string[];
+  planRewardRisk?: number | null;
+  planQualityBucket?: string;
+  gexContextBucket?: string;
+  rvol?: number | null;
+  rvolBucket?: string;
+  armDistanceCandidate?: string;
 };
 
 type ReplayFillRealismAction = 'UNCHANGED' | 'PENALIZED' | 'SKIPPED';
@@ -291,6 +297,10 @@ type ReplayCalibrationReport = {
     regime: ReplayCalibrationBucket[];
     timeWindow: ReplayCalibrationBucket[];
     quoteQuality: ReplayCalibrationBucket[];
+    planRewardRisk: ReplayCalibrationBucket[];
+    gexContext: ReplayCalibrationBucket[];
+    relativeVolume: ReplayCalibrationBucket[];
+    armDistanceCandidate: ReplayCalibrationBucket[];
   };
 };
 
@@ -1162,28 +1172,54 @@ export class SignalReplayBacktester {
   }
 
   private toReplayTradeDecision(signal: ReplaySignal, decision: SignalDecision | null): ReplayTradeDecision | null {
-    if (!decision) return null;
-    const spreadPct = this.finiteNumber(decision.quote?.spreadPct);
-    const volume = this.finiteNumber(decision.quote?.volume);
-    const openInterest = this.finiteNumber(decision.quote?.openInterest);
-    const delta = this.getDecisionDelta(signal, decision);
-    const pricingWarnings = Array.isArray(decision.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [];
-    const blockers = Array.isArray(decision.grade?.blockers) ? decision.grade.blockers : [];
-    const warnings = Array.isArray(decision.grade?.warnings) ? decision.grade.warnings : [];
+    const telemetry = signal.option_details?.decision_telemetry;
+    const sideKey = signal.signal_type === 'PUT' ? 'puts' : 'calls';
+    const setupTelemetry = telemetry?.setups?.[sideKey] || {};
+    const telemetryOption = setupTelemetry.option || {};
+    if (!decision && (!telemetry || typeof telemetry !== 'object')) return null;
+    const spreadPct = this.finiteNumber(decision?.quote?.spreadPct ?? telemetryOption.spread_pct);
+    const volume = this.finiteNumber(decision?.quote?.volume ?? telemetryOption.volume);
+    const openInterest = this.finiteNumber(decision?.quote?.openInterest ?? telemetryOption.open_interest);
+    const delta = decision
+      ? this.getDecisionDelta(signal, decision)
+      : this.finiteNumber(telemetryOption.delta);
+    const pricingWarnings = Array.isArray(decision?.grade?.pricingWarnings) ? decision.grade.pricingWarnings : [];
+    const blockers = Array.isArray(decision?.grade?.blockers)
+      ? decision.grade.blockers
+      : this.normalizeStringList(telemetry?.blockers);
+    const warnings = Array.isArray(decision?.grade?.warnings)
+      ? decision.grade.warnings
+      : this.normalizeStringList(telemetry?.warnings);
+    const planRewardRisk = this.finiteNumber(setupTelemetry?.plan_quality?.reward_risk);
+    const gexWarnings = this.normalizeStringList(setupTelemetry?.zerogex?.warnings);
+    const gexConfirmations = this.normalizeStringList(setupTelemetry?.zerogex?.confirmations);
+    const rvol = this.finiteNumber(telemetry?.market?.rvol_1m);
     return {
-      gradeKey: decision.grade?.gradeKey || null,
-      executable: typeof decision.grade?.executable === 'boolean' ? decision.grade.executable : null,
-      usingTheoreticalPricing: Boolean(decision.quote?.usingTheoreticalPricing),
+      gradeKey: decision?.grade?.gradeKey || signal.setup_grade || null,
+      executable: typeof decision?.grade?.executable === 'boolean'
+        ? decision.grade.executable
+        : telemetry?.state === 'ACTIVE',
+      usingTheoreticalPricing: Boolean(decision?.quote?.usingTheoreticalPricing),
       spreadPct,
       spreadBucket: this.getSpreadBucket(spreadPct),
       volume,
       openInterest,
       delta,
       deltaBucket: this.getDeltaBucket(delta),
-      quoteQuality: this.getQuoteQualityBucket(decision),
+      quoteQuality: decision
+        ? this.getQuoteQualityBucket(decision)
+        : this.getTelemetryQuoteQualityBucket(telemetryOption, spreadPct),
       pricingWarnings,
       warningTypes: this.getWarningTypes(pricingWarnings, warnings, blockers),
-      blockers
+      blockers,
+      planRewardRisk,
+      planQualityBucket: this.getPlanRewardRiskBucket(planRewardRisk),
+      gexContextBucket: gexWarnings.length > 0
+        ? 'gex_warning'
+        : gexConfirmations.length > 0 ? 'gex_confirmed' : 'gex_neutral',
+      rvol,
+      rvolBucket: this.getRvolBucket(rvol),
+      armDistanceCandidate: this.getArmDistanceCandidateBucket(telemetry?.thresholds)
     };
   }
 
@@ -1195,7 +1231,11 @@ export class SignalReplayBacktester {
         symbol: this.buildCalibrationBuckets(trades, (trade) => trade.symbol),
         regime: this.buildCalibrationBuckets(trades, (trade) => this.getCalibrationRegimeKey(trade)),
         timeWindow: this.buildCalibrationBuckets(trades, (trade) => this.getTimeWindowKey(trade.entryTime)),
-        quoteQuality: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.quoteQuality || 'missing_quote')
+        quoteQuality: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.quoteQuality || 'missing_quote'),
+        planRewardRisk: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.planQualityBucket || 'plan_rr_unknown'),
+        gexContext: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.gexContextBucket || 'gex_unknown'),
+        relativeVolume: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.rvolBucket || 'rvol_unknown'),
+        armDistanceCandidate: this.buildCalibrationBuckets(trades, (trade) => trade.signalDecision?.armDistanceCandidate || 'atr_candidate_unknown')
       }
     };
   }
@@ -1413,6 +1453,44 @@ export class SignalReplayBacktester {
     if ((spreadPct !== null && spreadPct > 15) || pricingWarnings.length > 0) return 'wide_spread';
     if (spreadPct !== null && spreadPct > 8) return 'acceptable_spread';
     return 'clean';
+  }
+
+  private getTelemetryQuoteQualityBucket(option: any, spreadPct: number | null): ReplayQuoteQualityBucket {
+    const mark = this.finiteNumber(option?.planned_limit_price);
+    if (mark === null || mark <= 0) return 'missing_quote';
+    if (spreadPct !== null && spreadPct > 15) return 'wide_spread';
+    if (spreadPct !== null && spreadPct > 8) return 'acceptable_spread';
+    return 'clean';
+  }
+
+  private getPlanRewardRiskBucket(rewardRisk: number | null): string {
+    if (rewardRisk === null) return 'plan_rr_unknown';
+    if (rewardRisk < 1.5) return 'plan_rr_below_1_5';
+    if (rewardRisk < 2) return 'plan_rr_1_5_2';
+    if (rewardRisk < 3) return 'plan_rr_2_3';
+    return 'plan_rr_gte_3';
+  }
+
+  private getRvolBucket(rvol: number | null): string {
+    if (rvol === null) return 'rvol_unknown';
+    if (rvol < 1) return 'rvol_below_1';
+    if (rvol < 1.2) return 'rvol_1_1_2';
+    if (rvol < 1.5) return 'rvol_1_2_1_5';
+    return 'rvol_gte_1_5';
+  }
+
+  private getArmDistanceCandidateBucket(thresholds: any): string {
+    const currentEnter = this.finiteNumber(thresholds?.arm_enter_dollars_current);
+    const candidateEnter = this.finiteNumber(thresholds?.arm_enter_dollars_atr_candidate);
+    const currentExit = this.finiteNumber(thresholds?.arm_exit_dollars_current);
+    const candidateExit = this.finiteNumber(thresholds?.arm_exit_dollars_atr_candidate);
+    if ([currentEnter, candidateEnter, currentExit, candidateExit].some(value => value === null)) {
+      return 'atr_candidate_unknown';
+    }
+    const currentTotal = Number(currentEnter) + Number(currentExit);
+    const candidateTotal = Number(candidateEnter) + Number(candidateExit);
+    if (Math.abs(candidateTotal - currentTotal) < 0.01) return 'atr_candidate_similar';
+    return candidateTotal > currentTotal ? 'atr_candidate_wider' : 'atr_candidate_tighter';
   }
 
   private getGradeKey(trade: ReplayTrade): string {

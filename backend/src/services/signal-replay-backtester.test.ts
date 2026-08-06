@@ -197,7 +197,13 @@ function createReplayTrade(overrides: Record<string, any> = {}) {
       quoteQuality: 'clean',
       pricingWarnings: [],
       warningTypes: ['no_warning'],
-      blockers: []
+      blockers: [],
+      planRewardRisk: 2.5,
+      planQualityBucket: 'plan_rr_2_3',
+      gexContextBucket: 'gex_confirmed',
+      rvol: 1.4,
+      rvolBucket: 'rvol_1_2_1_5',
+      armDistanceCandidate: 'atr_candidate_wider'
     },
     fillRealism: {
       action: 'UNCHANGED',
@@ -700,6 +706,8 @@ async function testCalibrationReportGroupsReplayOutcomes() {
   const openWindow = report.dimensions.timeWindow.find((bucket: any) => bucket.key === 'open_0930_1030');
   const middayWindow = report.dimensions.timeWindow.find((bucket: any) => bucket.key === 'midday_1200_1400');
   const theoretical = report.dimensions.quoteQuality.find((bucket: any) => bucket.key === 'theoretical_pricing');
+  const planQuality = report.dimensions.planRewardRisk.find((bucket: any) => bucket.key === 'plan_rr_2_3');
+  const atrCandidate = report.dimensions.armDistanceCandidate.find((bucket: any) => bucket.key === 'atr_candidate_wider');
 
   assert(report.totalTrades === 3, `Expected 3 calibration trades, got ${report.totalTrades}`);
   assert(qqq?.trades === 2, `Expected 2 QQQ trades, got ${qqq?.trades}`);
@@ -709,8 +717,44 @@ async function testCalibrationReportGroupsReplayOutcomes() {
   assert(openWindow?.trades === 1, `Expected 1 open window trade, got ${openWindow?.trades}`);
   assert(middayWindow?.trades === 1, `Expected 1 midday trade, got ${middayWindow?.trades}`);
   assert(theoretical?.trades === 1, `Expected 1 theoretical pricing trade, got ${theoretical?.trades}`);
+  assert(planQuality?.trades === 1, `Expected plan reward/risk calibration, got ${planQuality?.trades}`);
+  assert(atrCandidate?.trades === 1, `Expected fixed-versus-ATR calibration, got ${atrCandidate?.trades}`);
   assert(theoretical?.thresholds.find((threshold: any) => threshold.minConfidence === 80)?.trades === 0, 'Expected theoretical trade below 80 threshold');
   assert(qqq?.thresholds.find((threshold: any) => threshold.minConfidence === 85)?.trades === 2, 'Expected both QQQ trades at confidence >= 85');
+}
+
+async function testStrategyTelemetryFeedsReplayCalibration() {
+  const backtester = createBacktester();
+  const signal = createSignal({
+    option_details: {
+      ticker: 'QQQ260622C00741000',
+      decision_telemetry: {
+        state: 'ACTIVE',
+        market: { rvol_1m: 1.35 },
+        thresholds: {
+          arm_enter_dollars_current: 0.08,
+          arm_exit_dollars_current: 0.18,
+          arm_enter_dollars_atr_candidate: 0.12,
+          arm_exit_dollars_atr_candidate: 0.28
+        },
+        setups: {
+          calls: {
+            plan_quality: { reward_risk: 2.25 },
+            option: { planned_limit_price: 1, spread_pct: 6, volume: 800, open_interest: 1400, delta: 0.42 },
+            zerogex: { confirmations: ['positive gamma structure'], warnings: [] }
+          }
+        },
+        blockers: [],
+        warnings: []
+      }
+    }
+  });
+
+  const decision = backtester.toReplayTradeDecision(signal, null);
+  assert(decision?.planQualityBucket === 'plan_rr_2_3', 'Strategy telemetry must retain frozen plan reward/risk');
+  assert(decision?.rvolBucket === 'rvol_1_2_1_5', 'Strategy telemetry must retain relative-volume context');
+  assert(decision?.gexContextBucket === 'gex_confirmed', 'Strategy telemetry must retain advisory GEX context');
+  assert(decision?.armDistanceCandidate === 'atr_candidate_wider', 'Replay must compare current fixed arming thresholds with the ATR candidate');
 }
 
 async function testReplayDecisionAddsAttributionBuckets() {
@@ -957,6 +1001,7 @@ async function runTests() {
   await testSnapshotDriftReportFlagsChangedThresholdAndContract();
   await testSnapshotDriftReportFallsBackForLegacySignals();
   await testCalibrationReportGroupsReplayOutcomes();
+  await testStrategyTelemetryFeedsReplayCalibration();
   await testReplayDecisionAddsAttributionBuckets();
   await testFillRealismSkipsTheoreticalReplayFill();
   await testFillRealismSummaryComparesRawAndAdjustedPnl();
