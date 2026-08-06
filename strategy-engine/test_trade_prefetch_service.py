@@ -454,6 +454,18 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             prefetcher._signal_fingerprint = Mock(return_value="test")
             signal = {
                 "state": "WAIT",
+                "trendline_context": {
+                    "version": "trendline-structure-v1",
+                    "available": True,
+                    "mode": "shadow",
+                    "upper_line": 741.25,
+                    "raw_bar_history": [{"close": 741.25}] * 100,
+                    "break": {
+                        "side": "bullish",
+                        "confirmed": True,
+                        "event_id": "stable-event",
+                    },
+                },
                 "zerogex_shadow": {
                     "fresh": True,
                     "advanced_signals": {"raw": "x" * 20_000},
@@ -475,6 +487,11 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             "flow_context",
             record["zerogex_decision"],
         )
+        self.assertEqual(
+            record["trendline_context"]["break"]["event_id"],
+            "stable-event",
+        )
+        self.assertNotIn("raw_bar_history", record["trendline_context"])
         self.assertIn("advanced_signals", signal["zerogex_shadow"])
 
     def test_runtime_ibkr_policy_reconnects_on_admin_config_change(self) -> None:

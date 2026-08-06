@@ -40,6 +40,14 @@ AUTONOMOUS_ENTRY_CUTOFF_MINUTES_BEFORE_CLOSE = 60
 MANDATORY_FLATTEN_MINUTES_BEFORE_CLOSE = 40
 REGULAR_CLOSE_MINUTE_ET = 16 * 60
 REGULAR_OPEN_MINUTE_ET = 9 * 60 + 30
+DEFAULT_TRENDLINE_STRUCTURE_CONFIG = {
+    "enabled": True,
+    "mode": "shadow",
+    "length": 14,
+    "slope_method": "ATR",
+    "slope_multiplier": 1.0,
+    "retest_window_bars": 5,
+}
 
 
 def _session_policy(
@@ -298,13 +306,52 @@ def _compact_zerogex_context(
     return compact
 
 
+def _compact_trendline_context(payload: Any) -> dict[str, Any]:
+    compact = _journal_fields(
+        payload,
+        (
+            "version",
+            "available",
+            "reason",
+            "enabled",
+            "mode",
+            "length",
+            "slope_method",
+            "slope_multiplier",
+            "retest_window_bars",
+            "upper_line",
+            "lower_line",
+            "upper_slope",
+            "lower_slope",
+            "pivot_high",
+            "pivot_low",
+            "upper_age_bars",
+            "lower_age_bars",
+            "upper_touch_count",
+            "lower_touch_count",
+            "break",
+            "retest",
+            "observation",
+        ),
+    )
+    return compact
+
+
 def compact_signal_for_journal(signal: dict[str, Any]) -> dict[str, Any]:
     """Keep replay fields while removing repeated ZeroGEX endpoint payloads."""
     compact = {
         key: copy.deepcopy(value)
         for key, value in signal.items()
-        if key not in {"zerogex_shadow", "zerogex_decision"}
+        if key not in {
+            "trendline_context",
+            "zerogex_shadow",
+            "zerogex_decision",
+        }
     }
+    if "trendline_context" in signal:
+        compact["trendline_context"] = _compact_trendline_context(
+            signal.get("trendline_context")
+        )
     if "zerogex_shadow" in signal:
         compact["zerogex_shadow"] = _compact_zerogex_context(
             signal.get("zerogex_shadow"),
@@ -391,6 +438,429 @@ def _atr(bars: list[dict[str, Any]], period: int = 14) -> float | None:
         )
     window = ranges[-period:]
     return round(sum(window) / len(window), 4) if window else None
+
+
+def validate_trendline_structure_config(
+    config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if config is not None and not isinstance(config, dict):
+        raise ValueError("trendline_structure must be an object")
+    resolved = {
+        **DEFAULT_TRENDLINE_STRUCTURE_CONFIG,
+        **(config or {}),
+    }
+    if not isinstance(resolved["enabled"], bool):
+        raise ValueError("trendline_structure enabled must be true or false")
+    if resolved["mode"] != "shadow":
+        raise ValueError("trendline_structure mode must be shadow")
+    if (
+        isinstance(resolved["length"], bool)
+        or not isinstance(resolved["length"], int)
+        or not 1 <= resolved["length"] <= 250
+    ):
+        raise ValueError("trendline_structure length must be between 1 and 250")
+    if str(resolved["slope_method"]).upper() != "ATR":
+        raise ValueError("trendline_structure slope_method must be ATR")
+    if (
+        isinstance(resolved["slope_multiplier"], bool)
+        or not _number(resolved["slope_multiplier"])
+        or resolved["slope_multiplier"] <= 0
+    ):
+        raise ValueError("trendline_structure slope_multiplier must be greater than zero")
+    if (
+        isinstance(resolved["retest_window_bars"], bool)
+        or not isinstance(resolved["retest_window_bars"], int)
+        or not 0 <= resolved["retest_window_bars"] <= 100
+    ):
+        raise ValueError(
+            "trendline_structure retest_window_bars must be between 0 and 100"
+        )
+    resolved["slope_method"] = "ATR"
+    resolved["slope_multiplier"] = float(resolved["slope_multiplier"])
+    return resolved
+
+
+def _empty_trendline_context(
+    *,
+    length: int,
+    slope_method: str,
+    slope_multiplier: float,
+    retest_window_bars: int,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "version": "trendline-structure-v1",
+        "available": False,
+        "reason": reason,
+        "enabled": reason != "disabled_by_runtime_config",
+        "mode": "shadow",
+        "length": length,
+        "slope_method": slope_method,
+        "slope_multiplier": slope_multiplier,
+        "retest_window_bars": retest_window_bars,
+        "upper_line": None,
+        "lower_line": None,
+        "upper_slope": None,
+        "lower_slope": None,
+        "pivot_high": None,
+        "pivot_low": None,
+        "upper_age_bars": None,
+        "lower_age_bars": None,
+        "upper_touch_count": 0,
+        "lower_touch_count": 0,
+        "break": {
+            "side": None,
+            "confirmed": False,
+            "confirmed_at": None,
+            "line_value": None,
+            "close": None,
+            "distance_atr": None,
+            "event_id": None,
+        },
+        "retest": {
+            "status": "none",
+            "bars_since_break": None,
+            "line_value": None,
+            "extreme": None,
+        },
+        "observation": "SHADOW: trendline structure is unavailable",
+    }
+
+
+def _trendline_bars(completed_bars: list[dict[str, Any]]) -> list[dict[str, float]]:
+    normalized: dict[float, dict[str, float]] = {}
+    for bar in completed_bars:
+        if not isinstance(bar, dict) or any(
+            bar.get(flag) is False
+            for flag in ("complete", "completed", "is_complete")
+            if flag in bar
+        ):
+            continue
+        values = {
+            key: bar.get(key)
+            for key in ("time", "open", "high", "low", "close", "volume")
+        }
+        if not all(_number(values[key]) for key in ("time", "open", "high", "low", "close")):
+            continue
+        high = float(values["high"])
+        low = float(values["low"])
+        if high < low:
+            continue
+        stamp = float(values["time"])
+        normalized[stamp] = {
+            "time": stamp,
+            "open": float(values["open"]),
+            "high": high,
+            "low": low,
+            "close": float(values["close"]),
+            "volume": float(values["volume"] or 0) if _number(values["volume"]) else 0.0,
+        }
+    return [normalized[stamp] for stamp in sorted(normalized)]
+
+
+def _rma_atr_values(
+    bars: list[dict[str, float]],
+    length: int,
+) -> list[float | None]:
+    true_ranges = []
+    for index, bar in enumerate(bars):
+        previous_close = bars[index - 1]["close"] if index else None
+        true_ranges.append(
+            max(
+                bar["high"] - bar["low"],
+                abs(bar["high"] - previous_close) if previous_close is not None else 0,
+                abs(bar["low"] - previous_close) if previous_close is not None else 0,
+            )
+        )
+    values: list[float | None] = [None] * len(bars)
+    if len(true_ranges) < length:
+        return values
+    current = sum(true_ranges[:length]) / length
+    values[length - 1] = current
+    for index in range(length, len(true_ranges)):
+        current = ((current * (length - 1)) + true_ranges[index]) / length
+        values[index] = current
+    return values
+
+
+def _trendline_event_id(side: str, pivot_time: float, confirmed_at: float) -> str:
+    def stable(value: float) -> str:
+        return str(int(value)) if value.is_integer() else format(value, ".9g")
+
+    return (
+        f"trendline-break-v1:{side}:{stable(pivot_time)}:"
+        f"{stable(confirmed_at)}"
+    )
+
+
+def calculate_trendline_context(
+    completed_bars: list[dict[str, Any]],
+    *,
+    length: int = 14,
+    slope_multiplier: float = 1.0,
+    slope_method: str = "ATR",
+    previous_context: dict[str, Any] | None = None,
+    retest_window_bars: int = 5,
+) -> dict[str, Any]:
+    """Calculate confirmed pivot trendlines without lookahead or backpainting."""
+    config = validate_trendline_structure_config({
+        "enabled": True,
+        "mode": "shadow",
+        "length": length,
+        "slope_method": slope_method,
+        "slope_multiplier": slope_multiplier,
+        "retest_window_bars": retest_window_bars,
+    })
+    incoming_bars = _trendline_bars(completed_bars)
+    previous_state = (previous_context or {}).get("_calculation_state") or {}
+    state_config = {
+        "length": length,
+        "slope_method": config["slope_method"],
+        "slope_multiplier": config["slope_multiplier"],
+        "retest_window_bars": retest_window_bars,
+    }
+    previous_bars = _trendline_bars(
+        previous_state.get("completed_bars") or []
+    ) if previous_state.get("config") == state_config else []
+    bars = (
+        _trendline_bars([*previous_bars, *incoming_bars])
+        if previous_bars and len(incoming_bars) <= 1
+        else incoming_bars
+    )
+
+    def with_state(context: dict[str, Any]) -> dict[str, Any]:
+        context["_calculation_state"] = {
+            "config": state_config,
+            "completed_bars": bars,
+        }
+        return context
+
+    if len(bars) < 2 * length + 1:
+        return with_state(_empty_trendline_context(
+            length=length,
+            slope_method=config["slope_method"],
+            slope_multiplier=config["slope_multiplier"],
+            retest_window_bars=retest_window_bars,
+            reason="insufficient_completed_bars",
+        ))
+    atr_values = _rma_atr_values(bars, length)
+    if not any(_number(value) and float(value) > 0 for value in atr_values):
+        return with_state(_empty_trendline_context(
+            length=length,
+            slope_method=config["slope_method"],
+            slope_multiplier=config["slope_multiplier"],
+            retest_window_bars=retest_window_bars,
+            reason="missing_atr",
+        ))
+
+    upper_line = lower_line = None
+    upper_previous_line = lower_previous_line = None
+    upper_slope = lower_slope = None
+    pivot_high = pivot_low = None
+    upper_age = lower_age = None
+    upper_touches = lower_touches = 0
+    upper_broken_pivots: set[float] = set()
+    lower_broken_pivots: set[float] = set()
+    latest_break = _empty_trendline_context(
+        length=length,
+        slope_method=config["slope_method"],
+        slope_multiplier=config["slope_multiplier"],
+        retest_window_bars=retest_window_bars,
+        reason="initializing",
+    )["break"]
+    retest = {
+        "status": "none",
+        "bars_since_break": None,
+        "line_value": None,
+        "extreme": None,
+    }
+    active_break: dict[str, Any] | None = None
+
+    for index, bar in enumerate(bars):
+        upper_replaced = lower_replaced = False
+        upper_previous_line = upper_line
+        lower_previous_line = lower_line
+        if upper_line is not None:
+            upper_line -= float(upper_slope)
+            upper_age = int(upper_age or 0) + 1
+        if lower_line is not None:
+            lower_line += float(lower_slope)
+            lower_age = int(lower_age or 0) + 1
+
+        pivot_index = index - length
+        if pivot_index >= length:
+            candidate = bars[pivot_index]
+            left = bars[pivot_index - length:pivot_index]
+            right = bars[pivot_index + 1:index + 1]
+            atr = atr_values[index]
+            if _number(atr) and float(atr) > 0 and all(
+                candidate["high"] > other["high"]
+                for other in (*left, *right)
+            ):
+                pivot_high = {
+                    "price": candidate["high"],
+                    "bar_time": candidate["time"],
+                    "confirmed_at": bar["time"],
+                }
+                upper_line = candidate["high"]
+                upper_slope = float(atr) / length * config["slope_multiplier"]
+                upper_age = 0
+                upper_touches = 0
+                upper_replaced = True
+            if _number(atr) and float(atr) > 0 and all(
+                candidate["low"] < other["low"]
+                for other in (*left, *right)
+            ):
+                pivot_low = {
+                    "price": candidate["low"],
+                    "bar_time": candidate["time"],
+                    "confirmed_at": bar["time"],
+                }
+                lower_line = candidate["low"]
+                lower_slope = float(atr) / length * config["slope_multiplier"]
+                lower_age = 0
+                lower_touches = 0
+                lower_replaced = True
+
+        previous_close = bars[index - 1]["close"] if index else None
+        bullish_break = bool(
+            not upper_replaced
+            and upper_line is not None
+            and upper_previous_line is not None
+            and previous_close is not None
+            and previous_close <= upper_previous_line
+            and bar["close"] > upper_line
+            and pivot_high is not None
+            and pivot_high["bar_time"] not in upper_broken_pivots
+        )
+        bearish_break = bool(
+            not lower_replaced
+            and lower_line is not None
+            and lower_previous_line is not None
+            and previous_close is not None
+            and previous_close >= lower_previous_line
+            and bar["close"] < lower_line
+            and pivot_low is not None
+            and pivot_low["bar_time"] not in lower_broken_pivots
+        )
+        break_side = "bullish" if bullish_break else "bearish" if bearish_break else None
+        if break_side is not None:
+            is_bullish = break_side == "bullish"
+            origin = pivot_high if is_bullish else pivot_low
+            line_value = float(upper_line if is_bullish else lower_line)
+            slope = float(upper_slope if is_bullish else lower_slope)
+            if is_bullish:
+                upper_broken_pivots.add(float(origin["bar_time"]))
+                distance = bar["close"] - line_value
+            else:
+                lower_broken_pivots.add(float(origin["bar_time"]))
+                distance = line_value - bar["close"]
+            atr = atr_values[index]
+            latest_break = {
+                "side": break_side,
+                "confirmed": True,
+                "confirmed_at": bar["time"],
+                "line_value": round(line_value, 6),
+                "close": bar["close"],
+                "distance_atr": (
+                    round(distance / float(atr), 6)
+                    if _number(atr) and float(atr) > 0
+                    else None
+                ),
+                "event_id": _trendline_event_id(
+                    break_side,
+                    float(origin["bar_time"]),
+                    bar["time"],
+                ),
+            }
+            active_break = {
+                "side": break_side,
+                "index": index,
+                "line_value": line_value,
+                "slope": slope,
+            }
+            retest = {
+                "status": "awaiting",
+                "bars_since_break": 0,
+                "line_value": round(line_value, 6),
+                "extreme": None,
+            }
+        elif active_break is not None and retest["status"] == "awaiting":
+            bars_since = index - int(active_break["index"])
+            direction = -1 if active_break["side"] == "bullish" else 1
+            line_value = (
+                float(active_break["line_value"])
+                + direction * float(active_break["slope"]) * bars_since
+            )
+            extreme = bar["low"] if active_break["side"] == "bullish" else bar["high"]
+            held = (
+                bar["low"] <= line_value and bar["close"] >= line_value
+                if active_break["side"] == "bullish"
+                else bar["high"] >= line_value and bar["close"] <= line_value
+            )
+            status = (
+                "confirmed"
+                if held
+                else "expired"
+                if bars_since > retest_window_bars
+                else "awaiting"
+            )
+            retest = {
+                "status": status,
+                "bars_since_break": bars_since,
+                "line_value": round(line_value, 6),
+                "extreme": extreme,
+            }
+
+        if (
+            not bullish_break
+            and not upper_replaced
+            and upper_line is not None
+            and bar["high"] >= upper_line
+            and bar["close"] <= upper_line
+        ):
+            upper_touches += 1
+        if (
+            not bearish_break
+            and not lower_replaced
+            and lower_line is not None
+            and bar["low"] <= lower_line
+            and bar["close"] >= lower_line
+        ):
+            lower_touches += 1
+
+    if latest_break["confirmed"]:
+        observation = f"SHADOW: {latest_break['side']} trendline break confirmed"
+        if retest["status"] == "awaiting":
+            observation += "; awaiting retest"
+    elif upper_line is not None and lower_line is not None:
+        observation = "SHADOW: price remains between active trendlines"
+    else:
+        observation = "SHADOW: waiting for confirmed pivot trendlines"
+    return with_state({
+        "version": "trendline-structure-v1",
+        "available": True,
+        "reason": None,
+        "enabled": True,
+        "mode": "shadow",
+        "length": length,
+        "slope_method": config["slope_method"],
+        "slope_multiplier": config["slope_multiplier"],
+        "retest_window_bars": retest_window_bars,
+        "upper_line": round(upper_line, 6) if upper_line is not None else None,
+        "lower_line": round(lower_line, 6) if lower_line is not None else None,
+        "upper_slope": round(upper_slope, 6) if upper_slope is not None else None,
+        "lower_slope": round(lower_slope, 6) if lower_slope is not None else None,
+        "pivot_high": pivot_high,
+        "pivot_low": pivot_low,
+        "upper_age_bars": upper_age,
+        "lower_age_bars": lower_age,
+        "upper_touch_count": upper_touches,
+        "lower_touch_count": lower_touches,
+        "break": latest_break,
+        "retest": retest,
+        "observation": observation,
+    })
 
 
 def _median_volume(completed: list[dict[str, Any]], window: int = 20) -> float | None:
@@ -2291,6 +2761,9 @@ def _dedupe_messages(result: dict[str, Any]) -> dict[str, Any]:
         "blockers": copy.deepcopy(result["blockers"]),
         "warnings": copy.deepcopy(result["warnings"]),
         "session": copy.deepcopy(result.get("session_policy")),
+        "trendline_context": _compact_trendline_context(
+            result.get("trendline_context")
+        ),
     }
     return result
 
@@ -2813,7 +3286,11 @@ def build_signal(
     option_min_abs_delta: float = 0.15,
     option_max_spread_pct: float = MAX_OPTION_SPREAD_PCT,
     session_policy: dict[str, Any] | None = None,
+    trendline_structure: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    trendline_config = validate_trendline_structure_config(
+        trendline_structure
+    )
     if (
         isinstance(paper_exit_target, bool)
         or not isinstance(paper_exit_target, int)
@@ -2895,6 +3372,24 @@ def build_signal(
     use_qqq = "QQQ" in (market.get("symbols") or {})
     spy_bars = spy_market.get("bars") or []
     completed = _completed_bars(_session_bars(spy_bars, now=now))
+    if trendline_config["enabled"]:
+        trendline_context = calculate_trendline_context(
+            completed,
+            length=trendline_config["length"],
+            slope_multiplier=trendline_config["slope_multiplier"],
+            slope_method=trendline_config["slope_method"],
+            previous_context=previous_signal.get("trendline_context"),
+            retest_window_bars=trendline_config["retest_window_bars"],
+        )
+        trendline_context.pop("_calculation_state", None)
+    else:
+        trendline_context = _empty_trendline_context(
+            length=trendline_config["length"],
+            slope_method=trendline_config["slope_method"],
+            slope_multiplier=trendline_config["slope_multiplier"],
+            retest_window_bars=trendline_config["retest_window_bars"],
+            reason="disabled_by_runtime_config",
+        )
     spy = indicators.get("SPY") or {}
     qqq = indicators.get("QQQ") or {}
     spot = spy_market.get("spot")
@@ -2963,6 +3458,7 @@ def build_signal(
         "blockers": [],
         "warnings": [],
         "confirmations": [],
+        "trendline_context": trendline_context,
         "gex": gex_ctx,
         "zerogex_shadow": zerogex_ctx,
         "zerogex_decision": zerogex_decision,
@@ -2989,7 +3485,8 @@ def build_signal(
             blocker=blocker,
         )
         if preserved is not None:
-            return preserved
+            preserved["trendline_context"] = trendline_context
+            return _dedupe_messages(preserved)
         result["blockers"].append(blocker)
         return _dedupe_messages(result)
     if len(completed) < 22 or not _number(spy.get("vwap")):
@@ -3001,7 +3498,8 @@ def build_signal(
             blocker=blocker,
         )
         if preserved is not None:
-            return preserved
+            preserved["trendline_context"] = trendline_context
+            return _dedupe_messages(preserved)
         result["blockers"].append(blocker)
         return _dedupe_messages(result)
 
@@ -3019,6 +3517,7 @@ def build_signal(
             spot=spot,
             gex=gex_ctx,
             zerogex_shadow=zerogex_ctx,
+            trendline_context=trendline_context,
             execution_enabled=False,
             engine_version=ENGINE_VERSION,
         )

@@ -890,6 +890,11 @@ class TradePrefetcher:
                 if isinstance(policy.get("session"), dict)
                 else None
             ),
+            trendline_structure=(
+                policy.get("trendline_structure")
+                if isinstance(policy.get("trendline_structure"), dict)
+                else None
+            ),
         )
         provider_roles = {
             "primary": primary_source,
@@ -1067,6 +1072,9 @@ class TradePrefetcher:
         zero = signal.get("zerogex_decision") or {}
         zero_playbook = zero.get("playbook") or {}
         zero_composite = zero.get("composite") or {}
+        trendline = signal.get("trendline_context") or {}
+        trendline_break = trendline.get("break") or {}
+        trendline_retest = trendline.get("retest") or {}
         return (
             signal.get("state"),
             signal.get("favoring"),
@@ -1092,6 +1100,8 @@ class TradePrefetcher:
             zero_playbook.get("pattern"),
             zero_playbook.get("side"),
             zero_composite.get("posture"),
+            trendline_break.get("event_id"),
+            trendline_retest.get("status"),
             tuple(
                 (
                     item.get("name"),

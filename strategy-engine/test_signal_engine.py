@@ -21,6 +21,7 @@ from signal_engine import (
     _zerogex_decision_context,
     build_signal,
     calculate_indicators,
+    calculate_trendline_context,
     render_signal,
 )
 
@@ -68,6 +69,231 @@ def liquid_contract(
         "liquidity": "ok",
         "quote_age_seconds": 1.0,
     }
+
+
+def trendline_bar(
+    index: int,
+    *,
+    high: float,
+    low: float,
+    close: float,
+) -> dict:
+    return {
+        "time": 1_000.0 + index * 60,
+        "open": close,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": 1_000.0,
+    }
+
+
+class TrendlineStructureTest(unittest.TestCase):
+    def high_pivot_bars(self) -> list[dict]:
+        return [
+            trendline_bar(0, high=10, low=8, close=9),
+            trendline_bar(1, high=11, low=9, close=10),
+            trendline_bar(2, high=12, low=10, close=11),
+            trendline_bar(3, high=11, low=9, close=10),
+            trendline_bar(4, high=10, low=8, close=9),
+        ]
+
+    def low_pivot_bars(self) -> list[dict]:
+        return [
+            trendline_bar(0, high=12, low=10, close=11),
+            trendline_bar(1, high=11, low=9, close=10),
+            trendline_bar(2, high=10, low=8, close=9),
+            trendline_bar(3, high=11, low=9, close=10),
+            trendline_bar(4, high=12, low=10, close=11),
+        ]
+
+    def calculate(self, bars: list[dict], previous: dict | None = None) -> dict:
+        return calculate_trendline_context(
+            bars,
+            length=2,
+            slope_multiplier=1.0,
+            slope_method="ATR",
+            previous_context=previous,
+            retest_window_bars=3,
+        )
+
+    def test_confirmed_pivot_high_records_origin_and_confirmation(self) -> None:
+        bars = self.high_pivot_bars()
+        context = self.calculate(bars)
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["pivot_high"], {
+            "price": 12.0,
+            "bar_time": bars[2]["time"],
+            "confirmed_at": bars[4]["time"],
+        })
+        self.assertEqual(context["upper_line"], 12.0)
+
+    def test_default_length_confirms_only_after_fourteen_right_bars(self) -> None:
+        bars = []
+        for index in range(29):
+            distance = abs(index - 14)
+            high = 30 - distance
+            bars.append(
+                trendline_bar(index, high=high, low=high - 2, close=high - 1)
+            )
+        before = calculate_trendline_context(bars[:-1])
+        confirmed = calculate_trendline_context(bars)
+
+        self.assertFalse(before["available"])
+        self.assertEqual(confirmed["length"], 14)
+        self.assertEqual(confirmed["pivot_high"]["bar_time"], bars[14]["time"])
+        self.assertEqual(
+            confirmed["pivot_high"]["confirmed_at"],
+            bars[28]["time"],
+        )
+
+    def test_confirmed_pivot_low_records_origin_and_confirmation(self) -> None:
+        bars = self.low_pivot_bars()
+        context = self.calculate(bars)
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["pivot_low"], {
+            "price": 8.0,
+            "bar_time": bars[2]["time"],
+            "confirmed_at": bars[4]["time"],
+        })
+        self.assertEqual(context["lower_line"], 8.0)
+
+    def test_pivot_is_not_visible_before_right_side_window_completes(self) -> None:
+        bars = self.high_pivot_bars()
+        before_confirmation = self.calculate(bars[:-1])
+        confirmed = self.calculate(bars)
+
+        self.assertFalse(before_confirmation["available"])
+        self.assertIsNone(before_confirmation["pivot_high"])
+        self.assertIsNone(before_confirmation["upper_line"])
+        self.assertEqual(confirmed["pivot_high"]["bar_time"], bars[2]["time"])
+        self.assertEqual(confirmed["pivot_high"]["confirmed_at"], bars[4]["time"])
+        self.assertEqual(confirmed["upper_age_bars"], 0)
+
+    def test_atr_slope_uses_confirmation_bar_without_future_data(self) -> None:
+        context = self.calculate(self.high_pivot_bars())
+
+        self.assertEqual(context["upper_slope"], 1.0)
+
+    def test_bullish_completed_close_breaks_descending_resistance(self) -> None:
+        bars = self.high_pivot_bars()
+        bars.append(trendline_bar(5, high=12, low=10, close=11.5))
+        context = self.calculate(bars)
+
+        self.assertEqual(context["upper_line"], 11.0)
+        self.assertEqual(context["break"]["side"], "bullish")
+        self.assertTrue(context["break"]["confirmed"])
+        self.assertEqual(context["break"]["confirmed_at"], bars[-1]["time"])
+        self.assertEqual(context["break"]["line_value"], 11.0)
+        self.assertEqual(context["retest"]["status"], "awaiting")
+
+    def test_bearish_completed_close_breaks_ascending_support(self) -> None:
+        bars = self.low_pivot_bars()
+        bars.append(trendline_bar(5, high=10, low=8, close=8.5))
+        context = self.calculate(bars)
+
+        self.assertEqual(context["lower_line"], 9.0)
+        self.assertEqual(context["break"]["side"], "bearish")
+        self.assertTrue(context["break"]["confirmed"])
+        self.assertEqual(context["break"]["confirmed_at"], bars[-1]["time"])
+
+    def test_retest_is_tracked_without_becoming_a_gate(self) -> None:
+        bars = self.high_pivot_bars()
+        bars.extend([
+            trendline_bar(5, high=12, low=10, close=11.5),
+            trendline_bar(6, high=11, low=9.75, close=10.25),
+        ])
+        context = self.calculate(bars)
+
+        self.assertEqual(context["retest"], {
+            "status": "confirmed",
+            "bars_since_break": 1,
+            "line_value": 10.0,
+            "extreme": 9.75,
+        })
+
+    def test_wick_crossing_does_not_confirm_break(self) -> None:
+        bars = self.high_pivot_bars()
+        bars.append(trendline_bar(5, high=12, low=9, close=10.5))
+        context = self.calculate(bars)
+
+        self.assertIsNone(context["break"]["side"])
+        self.assertFalse(context["break"]["confirmed"])
+        self.assertEqual(context["upper_touch_count"], 1)
+
+    def test_duplicate_processing_preserves_one_stable_break_event(self) -> None:
+        bars = self.high_pivot_bars()
+        bars.append(trendline_bar(5, high=12, low=10, close=11.5))
+        first = self.calculate(bars)
+        duplicate = self.calculate(bars + [dict(bars[-1])], previous=first)
+
+        self.assertEqual(duplicate, first)
+        self.assertEqual(duplicate["break"]["event_id"], first["break"]["event_id"])
+
+    def test_same_pivot_recross_keeps_original_break_event(self) -> None:
+        bars = self.high_pivot_bars()
+        bars.extend([
+            trendline_bar(5, high=12, low=10, close=11.5),
+            trendline_bar(6, high=10.5, low=8.5, close=9),
+            trendline_bar(7, high=10.5, low=8.5, close=10),
+        ])
+        context = self.calculate(bars)
+
+        self.assertEqual(context["break"]["confirmed_at"], bars[5]["time"])
+        self.assertTrue(context["break"]["event_id"].endswith(":1300"))
+
+    def test_incomplete_bar_is_ignored(self) -> None:
+        bars = self.high_pivot_bars()
+        baseline = self.calculate(bars)
+        incomplete = trendline_bar(5, high=20, low=5, close=20)
+        incomplete["complete"] = False
+
+        self.assertEqual(self.calculate([*bars, incomplete]), baseline)
+
+    def test_new_pivot_high_replaces_active_resistance(self) -> None:
+        bars = self.high_pivot_bars() + [
+            trendline_bar(5, high=11, low=9, close=10),
+            trendline_bar(6, high=13, low=11, close=12),
+            trendline_bar(7, high=12, low=10, close=11),
+            trendline_bar(8, high=11, low=9, close=10),
+        ]
+        context = self.calculate(bars)
+
+        self.assertEqual(context["pivot_high"]["price"], 13.0)
+        self.assertEqual(context["pivot_high"]["bar_time"], bars[6]["time"])
+        self.assertEqual(context["pivot_high"]["confirmed_at"], bars[8]["time"])
+        self.assertEqual(context["upper_age_bars"], 0)
+
+    def test_batch_and_incremental_prefix_calculations_match(self) -> None:
+        bars = self.high_pivot_bars() + [
+            trendline_bar(5, high=12, low=10, close=11.5),
+            trendline_bar(6, high=12, low=10.5, close=11.25),
+        ]
+        incremental = None
+        for bar in bars:
+            incremental = self.calculate([bar], previous=incremental)
+
+        self.assertEqual(incremental, self.calculate(bars))
+
+    def test_insufficient_or_invalid_atr_data_is_unavailable(self) -> None:
+        insufficient = self.calculate(self.high_pivot_bars()[:-1])
+        invalid = self.high_pivot_bars()
+        invalid[1]["close"] = None
+        missing_atr = self.calculate(invalid)
+        flat = [
+            trendline_bar(index, high=10, low=10, close=10)
+            for index in range(5)
+        ]
+        zero_atr = self.calculate(flat)
+
+        self.assertFalse(insufficient["available"])
+        self.assertEqual(insufficient["reason"], "insufficient_completed_bars")
+        self.assertFalse(missing_atr["available"])
+        self.assertEqual(missing_atr["reason"], "insufficient_completed_bars")
+        self.assertFalse(zero_atr["available"])
+        self.assertEqual(zero_atr["reason"], "missing_atr")
 
 
 class ZeroGEXShadowContextTest(unittest.TestCase):
@@ -1608,6 +1834,61 @@ class ContinuationStateTest(unittest.TestCase):
         self.assertGreaterEqual(signal["confidence_score"], 90)
         self.assertEqual(signal["continuation_quality"]["calls"]["grade"], "A+")
         self.assertIn("gex_trend_context", signal["continuation_quality"]["calls"]["components"])
+
+    def test_unavailable_shadow_trendlines_do_not_block_valid_signal(self) -> None:
+        signal = self.build(trendline_structure={
+            "enabled": True,
+            "mode": "shadow",
+            "length": 100,
+            "slope_method": "ATR",
+            "slope_multiplier": 1.0,
+            "retest_window_bars": 5,
+        })
+
+        self.assertFalse(signal["trendline_context"]["available"])
+        self.assertEqual(signal["state"], "ACTIVE")
+        self.assertTrue(signal["lifecycle"]["entry_allowed"])
+        self.assertNotIn(
+            "trendline",
+            " ".join(signal.get("blockers") or []).lower(),
+        )
+
+    def test_shadow_trendline_context_does_not_change_signal_authority(self) -> None:
+        disabled = self.build(trendline_structure={
+            "enabled": False,
+            "mode": "shadow",
+            "length": 14,
+            "slope_method": "ATR",
+            "slope_multiplier": 1.0,
+            "retest_window_bars": 5,
+        })
+        enabled = self.build(trendline_structure={
+            "enabled": True,
+            "mode": "shadow",
+            "length": 14,
+            "slope_method": "ATR",
+            "slope_multiplier": 1.0,
+            "retest_window_bars": 5,
+        })
+
+        authority = lambda signal: {
+            "state": signal.get("state"),
+            "signal_phase": signal.get("signal_phase"),
+            "favoring": signal.get("favoring"),
+            "call_trigger": (signal.get("call_setup") or {}).get("trigger"),
+            "put_trigger": (signal.get("put_setup") or {}).get("trigger"),
+            "call_invalidation": (signal.get("call_setup") or {}).get("invalidation"),
+            "put_invalidation": (signal.get("put_setup") or {}).get("invalidation"),
+            "call_targets": (signal.get("call_setup") or {}).get("targets"),
+            "put_targets": (signal.get("put_setup") or {}).get("targets"),
+            "entry_allowed": (signal.get("lifecycle") or {}).get("entry_allowed"),
+        }
+        self.assertEqual(authority(enabled), authority(disabled))
+        self.assertEqual(enabled["trendline_context"]["mode"], "shadow")
+        self.assertIn(
+            "trendline_context",
+            enabled["decision_telemetry"],
+        )
 
     def test_zerogex_stand_down_does_not_block_confirmed_continuation(self) -> None:
         now = time.time()
