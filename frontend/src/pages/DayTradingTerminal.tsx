@@ -224,10 +224,9 @@ const stateCopy = (state: string, side: string | null, autonomousEntry = false) 
   }
 };
 
-const optionSide = (signal: Signal | null, strategySignal: Record<string, any> | null) => {
+const optionSide = (strategySignal: Record<string, any> | null) => {
   if (strategySignal?.favoring === 'calls') return 'CALL';
   if (strategySignal?.favoring === 'puts') return 'PUT';
-  if (signal?.signal_type === 'CALL' || signal?.signal_type === 'PUT') return signal.signal_type;
   return null;
 };
 
@@ -598,10 +597,9 @@ export default function DayTradingTerminal() {
   const lifecycle = String(
     strategySignal?.state
       || strategySignal?.signal_phase
-      || currentSignal?.lifecycle_status
       || 'WAIT'
   ).toUpperCase();
-  const side = optionSide(currentSignal, strategySignal);
+  const side = optionSide(strategySignal);
   const directionConfirmed = [
     'ARMED', 'ACTIVE', 'MANAGE', 'EXTENDED', 'COMPLETED', 'INVALIDATED', 'TRACKING_ABORTED', 'FAILED'
   ].includes(lifecycle);
@@ -610,23 +608,14 @@ export default function DayTradingTerminal() {
     : side === 'CALL'
       ? strategySignal?.call_setup
       : null;
-  const option = currentSignal?.option_details || setup?.option || {};
+  const option = setup?.option || {};
   const baseQuoteAge = setup?.option?.quote_age_seconds == null ? Number.NaN : Number(setup.option.quote_age_seconds);
-  const lifecycleData = strategySignal?.lifecycle || currentSignal?.strategy_snapshot?.lifecycle || {};
-  const targets = Array.isArray(option.targets)
-    ? option.targets
-    : Array.isArray(setup?.targets)
-      ? setup.targets
-      : [currentSignal?.target_price].filter(value => value != null);
+  const lifecycleData = strategySignal?.lifecycle || {};
+  const targets = Array.isArray(setup?.targets) ? setup.targets : [];
   const confirmations = Array.isArray(strategySignal?.confirmations)
     ? strategySignal.confirmations
-    : Array.isArray(currentSignal?.strategy_snapshot?.confirmations)
-      ? currentSignal?.strategy_snapshot?.confirmations
-      : [];
-  const strategyBlockers = Array.from(new Set([
-    ...(strategySignal?.blockers || []),
-    ...(currentSignal?.no_trade_reasons || [])
-  ].filter(Boolean))) as string[];
+    : [];
+  const strategyBlockers = Array.from(new Set((strategySignal?.blockers || []).filter(Boolean))) as string[];
   const executionMode = getExecutionMode(settings);
   const dayTradingEnabled = settings.day_trading_enabled !== 'false';
   const configuredMaxContracts = executionMode.autonomous ? 1 : Math.max(1, Number(settings.contracts_per_trade || 1));
@@ -664,8 +653,8 @@ export default function DayTradingTerminal() {
         settings.live_trading_acknowledged === 'true' ? null : 'Acknowledge live trading'
       ].filter(Boolean) as string[]
     : [];
-  const primaryGex = strategySignal?.gex || currentSignal?.gex || strategySignal?.zerogex_shadow || {};
-  const gexAge = gexAgeSeconds(strategySignal || currentSignal?.strategy_snapshot || null);
+  const primaryGex = strategySignal?.gex || strategySignal?.zerogex_shadow || {};
+  const gexAge = gexAgeSeconds(strategySignal);
   const gexFresh = Number.isFinite(gexAge)
     && gexAge >= 0
     && gexAge <= MAX_GEX_PROVIDER_AGE_SECONDS
@@ -700,13 +689,14 @@ export default function DayTradingTerminal() {
   const displayLifecycle = dismissedActionableSetup ? 'DISMISSED' : lifecycle;
   const lifecycleView = stateCopy(displayLifecycle, side, executionMode.autonomous);
   const currentTone = dismissedActionableSetup ? 'blocked' : lifecycleTone(lifecycle);
-  const currentStrategyCode = strategySignal?.strategy || currentSignal?.strategy_name || null;
+  const currentStrategyCode = strategySignal?.strategy || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
-  const spot = Number(strategySignal?.spot || currentSignal?.current_price);
-  const trigger = Number(setup?.trigger || currentSignal?.entry_trigger);
-  const invalidation = Number(setup?.invalidation || currentSignal?.stop_loss);
+  const spot = Number(strategySignal?.spot);
+  const trigger = Number(setup?.trigger);
+  const invalidation = Number(setup?.invalidation);
+  const exitTargetNumber = Math.max(1, Number(strategySignal?.paper_policy?.exit_after_target || 2));
   const targetOne = Number(targets[0]);
-  const targetTwo = Number(currentSignal?.target_price || targets[1] || targets[0]);
+  const targetTwo = Number(targets[Math.min(exitTargetNumber, targets.length) - 1]);
   const riskDistance = side === 'PUT' ? invalidation - spot : spot - invalidation;
   const rewardDistance = side === 'PUT' ? spot - targetTwo : targetTwo - spot;
   const rewardRisk = riskDistance > 0 && rewardDistance > 0 ? rewardDistance / riskDistance : Number.NaN;
@@ -1235,11 +1225,11 @@ export default function DayTradingTerminal() {
               <LevelRail
                 potential={!directionConfirmed}
                 levels={[
-                  { label: 'Stop', value: setup?.invalidation || currentSignal?.stop_loss, tone: directionConfirmed ? 'text-rose-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-rose-400' : 'bg-zinc-500' },
-                  { label: 'Spot', value: strategySignal?.spot || currentSignal?.current_price, tone: 'text-zinc-100', dot: 'bg-zinc-200' },
-                  { label: 'Trigger', value: setup?.trigger || currentSignal?.entry_trigger, tone: directionConfirmed ? 'text-emerald-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-emerald-400' : 'bg-zinc-500' },
+                  { label: 'Stop', value: setup?.invalidation, tone: directionConfirmed ? 'text-rose-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-rose-400' : 'bg-zinc-500' },
+                  { label: 'Spot', value: strategySignal?.spot, tone: 'text-zinc-100', dot: 'bg-zinc-200' },
+                  { label: 'Trigger', value: setup?.trigger, tone: directionConfirmed ? 'text-emerald-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-emerald-400' : 'bg-zinc-500' },
                   { label: 'T1', value: targetOne, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-400' : 'bg-zinc-500' },
-                  { label: `T${option.exit_target_number || 2}`, value: targetTwo, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-300' : 'bg-zinc-500' }
+                  { label: `T${exitTargetNumber}`, value: targetTwo, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-300' : 'bg-zinc-500' }
                 ]}
               />
 
@@ -1610,9 +1600,9 @@ export default function DayTradingTerminal() {
           position={linkedPosition}
           option={option}
           side={side}
-          spot={strategySignal?.spot || currentSignal?.current_price || linkedPosition.underlying_price}
-          invalidation={setup?.invalidation || currentSignal?.stop_loss || linkedPosition.underlying_stop_price}
-          target={currentSignal?.target_price || targets[1] || targets[0]}
+          spot={strategySignal?.spot || linkedPosition.underlying_price}
+          invalidation={setup?.invalidation || linkedPosition.underlying_stop_price}
+          target={targetTwo}
         />
       )}
 
@@ -1623,7 +1613,7 @@ export default function DayTradingTerminal() {
             <CompactRiskMetric label="Premium risk" value={orderDebit > 0 ? money(orderDebit) : '—'} tone="text-amber-200" />
             <CompactRiskMetric label="Debit ceiling" value={strategyDebitLimit > 0 ? money(strategyDebitLimit) : '—'} />
             <CompactRiskMetric label="Quantity" value={`${orderQuantity} · plan ${plannedContracts || '—'}`} />
-            <CompactRiskMetric label="Invalidation" value={money(setup?.invalidation || currentSignal?.stop_loss)} tone="text-rose-200" />
+            <CompactRiskMetric label="Invalidation" value={money(setup?.invalidation)} tone="text-rose-200" />
             <CompactRiskMetric label="Strategy age" value={relativeAge(snapshotAge)} tone={freshSnapshot ? 'text-emerald-300' : 'text-rose-300'} />
             <CompactRiskMetric label="GEX age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} tone={Number.isFinite(gexAge) && !gexFresh ? 'text-rose-300' : 'text-zinc-100'} />
           </div>
@@ -1757,7 +1747,7 @@ export default function DayTradingTerminal() {
               </h3>
             </div>
             <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300">
-              {option.expiry || currentSignal?.option_expiration_date || '—'}
+              {option.expiry || '—'}
             </Badge>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-x-5 border-y border-zinc-800 py-2 sm:grid-cols-4">
