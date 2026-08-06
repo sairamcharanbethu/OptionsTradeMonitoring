@@ -5,7 +5,7 @@ import { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
 import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
-import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
+import { getNewYorkDateParts, getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { DiscordAlertService } from './discord-alert-service';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
@@ -15,6 +15,7 @@ type StrategySnapshot = Record<string, any>;
 const ACTIVE_STATES = new Set(['ARMED', 'ACTIVE', 'MANAGE', 'EXTENDED']);
 const TERMINAL_STATES = new Set(['COMPLETED', 'INVALIDATED', 'TRACKING_ABORTED', 'FAILED']);
 const MAX_GEX_PROVIDER_AGE_SECONDS = 120;
+const MIN_PLAN_REWARD_RISK = 1.5;
 
 export class StrategyEngineAdapter {
   private readonly mode: StrategyEngineMode = 'primary';
@@ -201,6 +202,27 @@ export class StrategyEngineAdapter {
     const lifecycle = live.lifecycle || {};
     if (String(live.state) !== 'ACTIVE' || lifecycle.entry_allowed !== true) {
       throw this.conflict('The strategy is no longer accepting a new entry');
+    }
+    const setup = live.favoring === 'puts' ? live.put_setup || {} : live.call_setup || {};
+    const planQuality = setup.plan_quality || live.plan_quality || {};
+    const rewardRisk = Number(planQuality.reward_risk);
+    if (planQuality.meets_minimum !== true || !Number.isFinite(rewardRisk) || rewardRisk < MIN_PLAN_REWARD_RISK) {
+      throw this.conflict(`The strategy plan does not meet the ${MIN_PLAN_REWARD_RISK.toFixed(2)}:1 minimum reward/risk`);
+    }
+    const session = live.session_policy || {};
+    const now = new Date();
+    const sessionParts = getNewYorkDateParts(now);
+    const sessionMinute = sessionParts.hour * 60 + sessionParts.minute;
+    if (
+      session.valid !== true
+      || session.market_date !== sessionParts.dateKey
+      || session.is_trading_day !== true
+      || !Number.isFinite(Number(session.open_minute_et))
+      || !Number.isFinite(Number(session.entry_cutoff_minute_et))
+      || sessionMinute < Number(session.open_minute_et)
+      || sessionMinute >= Number(session.entry_cutoff_minute_et)
+    ) {
+      throw this.conflict('The strategy entry session is closed or its calendar policy is stale');
     }
     const signalAge = Date.now() / 1000 - Number(live.generated_at || 0);
     if (!Number.isFinite(signalAge) || signalAge < 0 || signalAge > 20) {
@@ -677,6 +699,9 @@ export class StrategyEngineAdapter {
           strategy_max_total_debit_dollars: signal.strategy_policy?.strategy_max_total_debit_dollars || null,
           targets,
           exit_target_number: exitTargetNumber,
+          plan_quality: setup.plan_quality || signal.plan_quality || null,
+          estimated_stop_risk: option.estimated_stop_risk || null,
+          decision_telemetry: signal.decision_telemetry || null,
           setupId: this.currentSetupId,
           lifecycle
         }),
@@ -823,6 +848,10 @@ export class StrategyEngineAdapter {
       3: 'delayed',
       4: 'delayed-frozen'
     };
+    const now = new Date();
+    const sessionParts = getNewYorkDateParts(now);
+    const sessionMarket = getNewYorkMarketState(now);
+    const sessionCloseMinutes = getUSMarketCloseMinutes(now);
     const policy = {
       strategy_max_total_debit_dollars: this.numberInRange(
         settings.strategy_max_total_debit_dollars || process.env.STRATEGY_MAX_TOTAL_DEBIT_DOLLARS,
@@ -844,7 +873,16 @@ export class StrategyEngineAdapter {
       ),
       ibkr_host: ibkr.host,
       ibkr_port: ibkr.port,
-      ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live'
+      ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live',
+      session: {
+        market_date: sessionParts.dateKey,
+        is_trading_day: !sessionMarket.isWeekend && !sessionMarket.isHoliday,
+        open_minute_et: 9 * 60 + 30,
+        close_minute_et: sessionCloseMinutes,
+        entry_cutoff_minute_et: sessionCloseMinutes - 60,
+        flatten_minute_et: sessionCloseMinutes - 40,
+        source: 'backend-market-calendar-v1'
+      }
     };
     policy.strategy_preferred_contracts = Math.min(
       policy.strategy_preferred_contracts,

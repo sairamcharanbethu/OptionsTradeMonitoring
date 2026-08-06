@@ -23,6 +23,8 @@ MAX_ZEROGEX_DATA_AGE_SECONDS = 120
 MAX_ZEROGEX_EXTENDED_AGE_SECONDS = 180
 ZEROGEX_MINUTE_BUCKET_GRACE_SECONDS = 60
 MAX_OPTION_SPREAD_PCT = 15.0
+MIN_PLAN_REWARD_RISK = 1.5
+MIN_CONTINUATION_CONFIDENCE = 70
 FROZEN_SETUP_STRATEGIES = {"MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION"}
 CONTINUATION_OPEN_STATES = {"ACTIVE", "MANAGE", "EXTENDED"}
 WATCH_STATES = {"WATCH", "ARMED"}
@@ -34,26 +36,112 @@ MAX_ACTIVE_TRACKING_GAP_SECONDS = 30
 SAME_SIDE_FAILURE_LIMIT = 2
 SAME_SIDE_FAILURE_WINDOW_SECONDS = 60 * 60
 TERMINAL_SIGNAL_LATCH_SECONDS = 15
-MANDATORY_FLATTEN_MINUTE_ET = 15 * 60 + 55
+AUTONOMOUS_ENTRY_CUTOFF_MINUTES_BEFORE_CLOSE = 60
+MANDATORY_FLATTEN_MINUTES_BEFORE_CLOSE = 40
 REGULAR_CLOSE_MINUTE_ET = 16 * 60
+REGULAR_OPEN_MINUTE_ET = 9 * 60 + 30
 
 
-def _regular_session_open(now: float | None = None) -> bool:
+def _session_policy(
+    now: float | None = None,
+    policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
+    date_key = stamp.strftime("%Y-%m-%d")
+    default_close = REGULAR_CLOSE_MINUTE_ET
+    fallback = {
+        "market_date": date_key,
+        "is_trading_day": stamp.weekday() < 5,
+        "open_minute_et": REGULAR_OPEN_MINUTE_ET,
+        "close_minute_et": default_close,
+        "entry_cutoff_minute_et": (
+            default_close - AUTONOMOUS_ENTRY_CUTOFF_MINUTES_BEFORE_CLOSE
+        ),
+        "flatten_minute_et": (
+            default_close - MANDATORY_FLATTEN_MINUTES_BEFORE_CLOSE
+        ),
+        "source": "signal-engine-default",
+        "valid": policy is None,
+        "reason": None if policy is None else "session policy is stale or invalid",
+    }
+    if not isinstance(policy, dict):
+        return fallback
+    if policy.get("valid") is False:
+        return fallback
+    try:
+        open_minute = int(policy.get("open_minute_et"))
+        close_minute = int(policy.get("close_minute_et"))
+        entry_cutoff = int(policy.get("entry_cutoff_minute_et"))
+        flatten_minute = int(policy.get("flatten_minute_et"))
+    except (TypeError, ValueError):
+        return fallback
+    valid = bool(
+        policy.get("market_date") == date_key
+        and isinstance(policy.get("is_trading_day"), bool)
+        and 0 <= open_minute < entry_cutoff <= flatten_minute < close_minute <= 24 * 60
+    )
+    if not valid:
+        return fallback
+    return {
+        "market_date": date_key,
+        "is_trading_day": policy["is_trading_day"],
+        "open_minute_et": open_minute,
+        "close_minute_et": close_minute,
+        "entry_cutoff_minute_et": entry_cutoff,
+        "flatten_minute_et": flatten_minute,
+        "source": str(policy.get("source") or "backend-market-calendar"),
+        "valid": True,
+        "reason": None,
+    }
+
+
+def _format_et_minute(minutes: int) -> str:
+    hour = minutes // 60
+    suffix = "PM" if hour >= 12 else "AM"
+    display_hour = hour % 12 or 12
+    return f"{display_hour}:{minutes % 60:02d} {suffix} ET"
+
+
+def _regular_session_open(
+    now: float | None = None,
+    session_policy: dict[str, Any] | None = None,
+) -> bool:
     stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
     minutes = stamp.hour * 60 + stamp.minute
-    return stamp.weekday() < 5 and 9 * 60 + 30 <= minutes < 16 * 60
+    session = _session_policy(now, session_policy)
+    return bool(
+        session["valid"]
+        and session["is_trading_day"]
+        and session["open_minute_et"] <= minutes < session["close_minute_et"]
+    )
 
 
-def _new_entry_window_open(now: float | None = None) -> bool:
+def _new_entry_window_open(
+    now: float | None = None,
+    session_policy: dict[str, Any] | None = None,
+) -> bool:
     stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
     minutes = stamp.hour * 60 + stamp.minute
-    return stamp.weekday() < 5 and 9 * 60 + 30 <= minutes < MANDATORY_FLATTEN_MINUTE_ET
+    session = _session_policy(now, session_policy)
+    return bool(
+        session["valid"]
+        and session["is_trading_day"]
+        and session["open_minute_et"] <= minutes < session["entry_cutoff_minute_et"]
+    )
 
 
-def _mandatory_flatten_due(now: float | None = None) -> bool:
+def _mandatory_flatten_due(
+    now: float | None = None,
+    session_policy: dict[str, Any] | None = None,
+) -> bool:
     stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
     minutes = stamp.hour * 60 + stamp.minute
-    return stamp.weekday() < 5 and minutes >= MANDATORY_FLATTEN_MINUTE_ET
+    session = _session_policy(now, session_policy)
+    return bool(
+        session["valid"]
+        and session["is_trading_day"]
+        and minutes >= session["flatten_minute_et"]
+    )
 
 
 def _number(value: Any) -> bool:
@@ -1886,6 +1974,115 @@ def _entry_not_extended(side: str, spot: float, trigger: Any, risk_dollars: Any)
     return move <= float(risk_dollars) * 0.75
 
 
+def _plan_quality(
+    entry: Any,
+    stop: Any,
+    targets: list[Any],
+    side: str,
+    exit_target_number: int,
+) -> dict[str, Any]:
+    valid_targets = [float(target) for target in targets if _number(target)]
+    if not (_number(entry) and _number(stop)) or not valid_targets:
+        return {
+            "available": False,
+            "reward_risk": None,
+            "minimum_reward_risk": MIN_PLAN_REWARD_RISK,
+            "meets_minimum": False,
+        }
+    selected_index = min(max(1, int(exit_target_number)), len(valid_targets)) - 1
+    entry_value = float(entry)
+    stop_value = float(stop)
+    selected_target = valid_targets[selected_index]
+    risk = (
+        stop_value - entry_value
+        if side == "puts"
+        else entry_value - stop_value
+    )
+    reward = (
+        entry_value - selected_target
+        if side == "puts"
+        else selected_target - entry_value
+    )
+    reward_risk = reward / risk if risk > 0 and reward > 0 else None
+    return {
+        "available": reward_risk is not None,
+        "entry": round(entry_value, 2),
+        "stop": round(stop_value, 2),
+        "target": round(selected_target, 2),
+        "target_number": selected_index + 1,
+        "risk_points": round(risk, 3) if risk > 0 else None,
+        "reward_points": round(reward, 3) if reward > 0 else None,
+        "reward_risk": round(reward_risk, 3) if reward_risk is not None else None,
+        "minimum_reward_risk": MIN_PLAN_REWARD_RISK,
+        "meets_minimum": bool(
+            reward_risk is not None and reward_risk >= MIN_PLAN_REWARD_RISK
+        ),
+    }
+
+
+def _estimated_option_stop_risk(
+    option: dict[str, Any] | None,
+    underlying_risk: Any,
+) -> dict[str, Any] | None:
+    option = option or {}
+    premium = option.get("planned_limit_price") or option.get("ask") or option.get("mid")
+    quantity = option.get("planned_contracts")
+    if not (_number(premium) and float(premium) > 0 and _number(quantity) and int(quantity) > 0):
+        return None
+    debit_per_contract = float(premium) * 100
+    delta = abs(float(option["delta"])) if _number(option.get("delta")) else None
+    gamma = abs(float(option["gamma"])) if _number(option.get("gamma")) else 0.0
+    if delta is not None and _number(underlying_risk) and float(underlying_risk) > 0:
+        move = float(underlying_risk)
+        modeled_premium_loss = delta * move + 0.5 * gamma * move * move
+        buffered_premium_loss = modeled_premium_loss + float(premium) * 0.10
+        loss_per_contract = min(debit_per_contract, buffered_premium_loss * 100)
+        method = "delta_gamma_plus_10pct_premium_buffer"
+    else:
+        loss_per_contract = debit_per_contract * 0.40
+        method = "40pct_debit_fallback"
+    contracts = int(quantity)
+    return {
+        "method": method,
+        "per_contract_dollars": round(loss_per_contract, 2),
+        "total_dollars": round(loss_per_contract * contracts, 2),
+        "contracts": contracts,
+        "max_debit_dollars": round(debit_per_contract * contracts, 2),
+    }
+
+
+def _enrich_setup_quality(
+    setup: dict[str, Any],
+    side: str,
+    exit_target_number: int,
+) -> None:
+    setup["plan_quality"] = _plan_quality(
+        setup.get("trigger"),
+        setup.get("invalidation"),
+        list(setup.get("targets") or []),
+        side,
+        exit_target_number,
+    )
+    option = setup.get("option")
+    if isinstance(option, dict):
+        option["estimated_stop_risk"] = _estimated_option_stop_risk(
+            option,
+            setup.get("risk_dollars"),
+        )
+
+
+def _plan_quality_blocker(setup: dict[str, Any], side: str) -> str | None:
+    quality = setup.get("plan_quality") or {}
+    if quality.get("available") is not True:
+        return f"{side} plan reward/risk is unavailable"
+    if quality.get("meets_minimum") is not True:
+        return (
+            f"{side} plan reward/risk {float(quality.get('reward_risk') or 0):.2f}:1 "
+            f"is below {MIN_PLAN_REWARD_RISK:.2f}:1"
+        )
+    return None
+
+
 def _premium_lifecycle(
     previous: dict[str, Any] | None,
     option: dict[str, Any] | None,
@@ -2028,6 +2225,73 @@ def _dedupe_messages(result: dict[str, Any]) -> dict[str, Any]:
     else:
         phase = "WAIT"
     result["signal_phase"] = phase
+    favored_setup = (
+        result.get("call_setup")
+        if result.get("favoring") == "calls"
+        else result.get("put_setup")
+        if result.get("favoring") == "puts"
+        else None
+    ) or {}
+    result["plan_quality"] = copy.deepcopy(favored_setup.get("plan_quality"))
+    zero_gates = ((result.get("zerogex_decision") or {}).get("gates") or {})
+    market_context = result.get("market_context") or {}
+    atr_5m = market_context.get("atr_5m")
+    candidate_arm_enter = (
+        round(max(0.05, min(0.15, float(atr_5m) * 0.25)), 3)
+        if _number(atr_5m)
+        else None
+    )
+    candidate_arm_exit = (
+        round(max(0.12, min(0.30, float(atr_5m) * 0.75)), 3)
+        if _number(atr_5m)
+        else None
+    )
+    result["decision_telemetry"] = {
+        "version": "strategy-decision-v1",
+        "state": state,
+        "phase": phase,
+        "favoring": result.get("favoring"),
+        "confidence_score": result.get("confidence_score"),
+        "market": {
+            "spot": result.get("spot"),
+            "vwap": market_context.get("vwap"),
+            "rvol_1m": market_context.get("rvol_1m"),
+            "atr_5m": atr_5m,
+        },
+        "thresholds": {
+            "minimum_plan_reward_risk": MIN_PLAN_REWARD_RISK,
+            "minimum_continuation_confidence": MIN_CONTINUATION_CONFIDENCE,
+            "rvol_minimum": 1.2,
+            "max_trigger_extension_r": 0.75,
+            "arm_enter_dollars_current": ARM_ENTER_DISTANCE,
+            "arm_exit_dollars_current": ARM_EXIT_DISTANCE,
+            "arm_enter_dollars_atr_candidate": candidate_arm_enter,
+            "arm_exit_dollars_atr_candidate": candidate_arm_exit,
+        },
+        "setups": {
+            side: {
+                "plan_quality": copy.deepcopy((result.get(f"{side[:-1]}_setup") or {}).get("plan_quality")),
+                "continuation_quality": copy.deepcopy((result.get("continuation_quality") or {}).get(side)),
+                "option": _journal_fields(
+                    (result.get(f"{side[:-1]}_setup") or {}).get("option"),
+                    (
+                        "local_symbol", "delta", "gamma", "spread_pct",
+                        "volume", "open_interest", "planned_contracts",
+                        "planned_limit_price", "planned_total_debit",
+                        "selection_score", "estimated_stop_risk",
+                    ),
+                ),
+                "zerogex": {
+                    "warnings": copy.deepcopy((zero_gates.get(side) or {}).get("warnings") or []),
+                    "confirmations": copy.deepcopy((zero_gates.get(side) or {}).get("confirmations") or []),
+                },
+            }
+            for side in ("calls", "puts")
+        },
+        "blockers": copy.deepcopy(result["blockers"]),
+        "warnings": copy.deepcopy(result["warnings"]),
+        "session": copy.deepcopy(result.get("session_policy")),
+    }
     return result
 
 
@@ -2548,6 +2812,7 @@ def build_signal(
     option_max_otm_steps: int = 3,
     option_min_abs_delta: float = 0.15,
     option_max_spread_pct: float = MAX_OPTION_SPREAD_PCT,
+    session_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if (
         isinstance(paper_exit_target, bool)
@@ -2623,6 +2888,7 @@ def build_signal(
     ):
         raise ValueError("option limit price offset must be between 0 and 1")
     now = time.time()
+    session = _session_policy(now, session_policy)
     previous_signal = previous_signal or {}
     spy_market = (market.get("symbols") or {}).get("SPY") or {}
     qqq_market = (market.get("symbols") or {}).get("QQQ") or {}
@@ -2688,6 +2954,7 @@ def build_signal(
             "t1_premium_lock_arm_pct": t1_premium_lock_arm_pct,
             "t1_premium_lock_floor_pct": t1_premium_lock_floor_pct,
         },
+        "session_policy": session,
         "confirmation_mode": "SPY_QQQ" if use_qqq else "SPY_ONLY",
         "state": "WAIT",
         "signal_phase": "NO_TRADE",
@@ -2758,13 +3025,18 @@ def build_signal(
         return _dedupe_messages(latched_terminal)
 
     hard_data_block = False
-    regular_session_open = _regular_session_open(now)
+    regular_session_open = _regular_session_open(now, session)
     if not regular_session_open:
-        result["blockers"].append("US equities regular session is closed")
-        hard_data_block = True
-    elif not _new_entry_window_open(now):
         result["blockers"].append(
-            "end-of-day signal cutoff reached (3:55 PM ET); new activations are prohibited"
+            session["reason"]
+            or "US equities regular session is closed"
+        )
+        hard_data_block = True
+    elif not _new_entry_window_open(now, session):
+        result["blockers"].append(
+            "end-of-day signal cutoff reached "
+            f"({_format_et_minute(session['entry_cutoff_minute_et'])}); "
+            "new activations are prohibited"
         )
         hard_data_block = True
     if use_qqq and (
@@ -3028,6 +3300,8 @@ def build_signal(
             previous_put_option,
         ),
     }
+    _enrich_setup_quality(result["call_setup"], "calls", paper_exit_target)
+    _enrich_setup_quality(result["put_setup"], "puts", paper_exit_target)
 
     previous_reversal = previous_signal.get("reversal_setup") or {}
     previous_plan = previous_reversal.get("risk_plan") or {}
@@ -3183,7 +3457,7 @@ def build_signal(
             f"{max_tracking_gap_seconds:g}s; stale lifecycle closed"
         ]
         return _dedupe_messages(result)
-    if prior_position_open and _mandatory_flatten_due(now):
+    if prior_position_open and _mandatory_flatten_due(now, session):
         timed_exit_setup = result["call_setup"] if previous_side == "calls" else result["put_setup"]
         timed_exit_setup.update(
             status="time_exit",
@@ -3211,7 +3485,9 @@ def build_signal(
             },
         )
         result["blockers"] = [
-            "signal tracking ended at the mandatory 3:55 PM ET cutoff; no overnight signal"
+            "signal tracking ended at the mandatory "
+            f"{_format_et_minute(session['flatten_minute_et'])} cutoff; "
+            "no overnight signal"
         ]
         return _dedupe_messages(result)
     t1_protection_active = bool(prior_position_open and targets_hit >= 1)
@@ -3685,6 +3961,17 @@ def build_signal(
         if not _number(plan_risk) and _number(plan.get("stop")):
             plan_risk = abs(float(plan["entry"]) - float(plan["stop"]))
         entry_not_extended = _entry_not_extended(side, float(spot), plan["entry"], plan_risk)
+        reversal_plan_quality = _plan_quality(
+            plan.get("entry"),
+            plan.get("stop"),
+            list(plan.get("targets") or []),
+            side,
+            paper_exit_target,
+        )
+        if triggered_raw and reversal_plan_quality.get("meets_minimum") is not True:
+            result["blockers"].append(
+                f"{side} plan reward/risk is below {MIN_PLAN_REWARD_RISK:.2f}:1"
+            )
         if triggered_raw and not entry_not_extended:
             result["blockers"].append("trigger move is already extended beyond 0.75R; wait for a new setup")
         activation_ready = (
@@ -3728,7 +4015,9 @@ def build_signal(
             targets=plan["targets"],
             risk_method=plan["method"],
             risk_dollars=round(abs(float(plan["entry"]) - float(plan["stop"])), 2),
+            plan_quality=reversal_plan_quality,
         )
+        _enrich_setup_quality(target_setup, side, paper_exit_target)
         if activation_ready:
             target_setup["option"]["locked_at_activation"] = True
             target_setup["option"]["locked_at"] = now
@@ -3754,6 +4043,7 @@ def build_signal(
             risk_method=previous_watch_setup.get("risk_method"),
             risk_dollars=previous_watch_setup.get("risk_dollars"),
         )
+        _enrich_setup_quality(target_setup, side, paper_exit_target)
         frozen_trigger = float(previous_watch_setup["trigger"])
         confirmed = (
             side == "calls" and latest_close > frozen_trigger and spy_up and spy_up_15m and qqq_up and above_vwap and volume_ok
@@ -3773,6 +4063,14 @@ def build_signal(
             result["blockers"].append(_option_blocker(current_option, "call" if side == "calls" else "put"))
         if confirmed and not entry_not_extended:
             result["blockers"].append("trigger move is already extended beyond 0.75R; wait for a new setup")
+        plan_blocker = _plan_quality_blocker(target_setup, side)
+        if plan_blocker:
+            result["blockers"].append(plan_blocker)
+        continuation_quality = call_continuation_quality if side == "calls" else put_continuation_quality
+        if confirmed and int(continuation_quality["score"]) < MIN_CONTINUATION_CONFIDENCE:
+            result["blockers"].append(
+                f"continuation confidence {continuation_quality['score']} is below {MIN_CONTINUATION_CONFIDENCE}"
+            )
         activation_ready = (
             confirmed and option_ready and entry_not_extended
             and not result["blockers"] and not same_side_cooldown
@@ -3782,7 +4080,6 @@ def build_signal(
             current_option["locked_at"] = now
             target_setup["option"] = current_option
             target_setup["status"] = "active_latched"
-            continuation_quality = call_continuation_quality if side == "calls" else put_continuation_quality
             result.update(
                 state="ACTIVE",
                 favoring=side,
@@ -3812,6 +4109,13 @@ def build_signal(
             )
     elif call_confirmed and not (continuation_reentry_blocked and continuation_reset_side == "calls"):
         apply_zerogex_context("calls")
+        plan_blocker = _plan_quality_blocker(result["call_setup"], "calls")
+        if plan_blocker:
+            result["blockers"].append(plan_blocker)
+        if int(call_continuation_quality["score"]) < MIN_CONTINUATION_CONFIDENCE:
+            result["blockers"].append(
+                f"continuation confidence {call_continuation_quality['score']} is below {MIN_CONTINUATION_CONFIDENCE}"
+            )
         if not _entry_not_extended("calls", float(spot), call_trigger, call_risk["risk_dollars"]):
             result["blockers"].append("trigger move is already extended beyond 0.75R; wait for a new setup")
         if _option_eligible(call_option) and not result["blockers"]:
@@ -3844,6 +4148,13 @@ def build_signal(
             result["confirmations"].insert(2, "QQQ up")
     elif put_confirmed and not (continuation_reentry_blocked and continuation_reset_side == "puts"):
         apply_zerogex_context("puts")
+        plan_blocker = _plan_quality_blocker(result["put_setup"], "puts")
+        if plan_blocker:
+            result["blockers"].append(plan_blocker)
+        if int(put_continuation_quality["score"]) < MIN_CONTINUATION_CONFIDENCE:
+            result["blockers"].append(
+                f"continuation confidence {put_continuation_quality['score']} is below {MIN_CONTINUATION_CONFIDENCE}"
+            )
         if not _entry_not_extended("puts", float(spot), put_trigger, put_risk["risk_dollars"]):
             result["blockers"].append("trigger move is already extended beyond 0.75R; wait for a new setup")
         if _option_eligible(put_option) and not result["blockers"]:
@@ -3881,6 +4192,9 @@ def build_signal(
         and spy_up and spy_up_15m and qqq_up and above_vwap
     ):
         apply_zerogex_context("calls")
+        plan_blocker = _plan_quality_blocker(result["call_setup"], "calls")
+        if plan_blocker:
+            result["blockers"].append(plan_blocker)
         option_ready = _option_eligible(call_option)
         if not option_ready:
             result["blockers"].append(_option_blocker(call_option, "call"))
@@ -3902,6 +4216,9 @@ def build_signal(
         and spy_down and spy_down_15m and qqq_down and below_vwap
     ):
         apply_zerogex_context("puts")
+        plan_blocker = _plan_quality_blocker(result["put_setup"], "puts")
+        if plan_blocker:
+            result["blockers"].append(plan_blocker)
         option_ready = _option_eligible(put_option)
         if not option_ready:
             result["blockers"].append(_option_blocker(put_option, "put"))

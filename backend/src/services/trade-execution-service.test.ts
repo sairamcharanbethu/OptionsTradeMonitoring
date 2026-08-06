@@ -767,6 +767,18 @@ async function testFreshQuotePlannedLossRespectsRemainingDailyBudget() {
   assert(failureMessage.includes('remaining daily loss budget'), 'The skipped execution must record the planned-loss reason');
 }
 
+async function testStrategyStopRiskReplacesFlatDebitAssumption() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const modeled = service.plannedLossForSignal({
+    planned_limit_price: 2,
+    estimated_stop_risk: { per_contract_dollars: 55 }
+  }, 420, 2);
+  const fallback = service.plannedLossForSignal({}, 420, 2);
+
+  assert(modeled === 115.5, `Expected the strategy stop model to scale with the current debit, got ${modeled}`);
+  assert(fallback === 168, `Expected legacy signals to retain the 40% debit fallback, got ${fallback}`);
+}
+
 async function runTests() {
   console.log('Running TradeExecutionService broker lifecycle tests...');
   await testIBKRQuoteAllowsProtectedLimit();
@@ -789,6 +801,7 @@ async function runTests() {
   await testLiveEntryUsesCorrelatedExposureLockAndFailsClosed();
   await testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim();
   await testFreshQuotePlannedLossRespectsRemainingDailyBudget();
+  await testStrategyStopRiskReplacesFlatDebitAssumption();
   console.log('All TradeExecutionService broker lifecycle tests passed!');
 }
 

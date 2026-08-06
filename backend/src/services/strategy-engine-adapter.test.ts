@@ -15,6 +15,11 @@ function createAdapter() {
 }
 
 function signal(overrides: Record<string, any> = {}) {
+  const now = new Date();
+  const dateParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(now);
+  const part = (type: string) => dateParts.find(item => item.type === type)?.value || '';
   return {
     generated_at: 1_786_000_000,
     engine_version: 'signal-only-v2',
@@ -27,11 +32,19 @@ function signal(overrides: Record<string, any> = {}) {
       trigger: 550,
       invalidation: 548,
       targets: [552, 554],
+      plan_quality: { reward_risk: 2, meets_minimum: true },
       option: { local_symbol: 'SPY  260730C00551000', strike: 551, expiry: '20260730' }
     },
     put_setup: {},
     blockers: [],
     lifecycle: { entry_allowed: false, targets_hit: 0 },
+    session_policy: {
+      valid: true,
+      market_date: `${part('year')}-${part('month')}-${part('day')}`,
+      is_trading_day: true,
+      open_minute_et: 0,
+      entry_cutoff_minute_et: 24 * 60
+    },
     ...overrides
   };
 }
@@ -203,6 +216,18 @@ async function runTests() {
   reviewAdapter.currentSignal.lifecycle = { entry_allowed: true };
   reviewAdapter.currentSignal.gex.provider_age_seconds = 40.1;
   await reviewAdapter.assertSignalExecutable(7);
+  reviewAdapter.currentSignal.call_setup.plan_quality = { reward_risk: 1.2, meets_minimum: false };
+  await reviewAdapter.assertSignalExecutable(7).then(
+    () => { throw new Error('A subminimum frozen plan must block execution'); },
+    (error: Error) => assert(error.message.includes('reward/risk'), 'Plan-quality rejection must name reward/risk')
+  );
+  reviewAdapter.currentSignal.call_setup.plan_quality = { reward_risk: 2, meets_minimum: true };
+  reviewAdapter.currentSignal.session_policy.valid = false;
+  await reviewAdapter.assertSignalExecutable(7).then(
+    () => { throw new Error('An invalid session policy must block execution'); },
+    (error: Error) => assert(error.message.includes('session'), 'Session rejection must name the stale or closed policy')
+  );
+  reviewAdapter.currentSignal.session_policy.valid = true;
   reviewAdapter.currentSignal.gex.provider_age_seconds = 120.1;
   await reviewAdapter.assertSignalExecutable(7).then(
     () => { throw new Error('GEX older than the provider contract must block execution'); },
@@ -239,9 +264,11 @@ async function runTests() {
         ...signal().call_setup.option,
         planned_contracts: 2,
         planned_limit_price: 1.25,
-        planned_total_debit: 250
+        planned_total_debit: 250,
+        estimated_stop_risk: { per_contract_dollars: 55, total_dollars: 110 }
       }
-    }
+    },
+    decision_telemetry: { version: 'strategy-decision-v1' }
   }));
   const signalInsert = queries.find((query) => query.sql.includes('INSERT INTO signals'));
   const positionUpdate = queries.find((query) => query.sql.includes('UPDATE positions'));
@@ -254,6 +281,9 @@ async function runTests() {
   assert(signalInsert?.values[21] === 'A+', 'A strong executable primary signal must store its scored A+ grade');
   const persistedOption = JSON.parse(signalInsert?.values[13]);
   assert(persistedOption.planned_contracts === 2, 'Persisted signal must retain planned contract quantity');
+  assert(persistedOption.plan_quality.reward_risk === 2, 'Persisted signal must retain authoritative plan quality');
+  assert(persistedOption.estimated_stop_risk.per_contract_dollars === 55, 'Persisted signal must retain modeled stop risk');
+  assert(persistedOption.decision_telemetry.version === 'strategy-decision-v1', 'Persisted signal must retain replay telemetry');
   assert(positionUpdate?.values[2] === 552, 'Open strategy positions must retain the first target as TP1');
   assert(positionUpdate?.values[3] === 554, 'Open strategy positions must retain the configured final target as TP2');
   queries.length = 0;

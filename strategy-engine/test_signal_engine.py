@@ -13,6 +13,8 @@ from signal_engine import (
     _frozen_reversal,
     _mandatory_flatten_due,
     _mtf_reversal_candidate,
+    _estimated_option_stop_risk,
+    _plan_quality,
     _select_otm_option,
     _new_entry_window_open,
     _zerogex_context,
@@ -1426,15 +1428,71 @@ class RelativeVolumeTest(unittest.TestCase):
 
 
 class SessionCutoffTest(unittest.TestCase):
-    def test_new_entry_cutoff_is_exactly_355_et(self) -> None:
-        self.assertTrue(_new_entry_window_open(et_timestamp(15, 54, 59)))
-        self.assertFalse(_new_entry_window_open(et_timestamp(15, 55, 0)))
+    def test_new_entry_cutoff_is_one_hour_before_regular_close(self) -> None:
+        self.assertTrue(_new_entry_window_open(et_timestamp(14, 59, 59)))
+        self.assertFalse(_new_entry_window_open(et_timestamp(15, 0, 0)))
         self.assertFalse(_new_entry_window_open(et_timestamp(16, 0, 0)))
 
-    def test_mandatory_flatten_begins_at_355_et(self) -> None:
-        self.assertFalse(_mandatory_flatten_due(et_timestamp(15, 54, 59)))
-        self.assertTrue(_mandatory_flatten_due(et_timestamp(15, 55, 0)))
+    def test_mandatory_flatten_begins_forty_minutes_before_regular_close(self) -> None:
+        self.assertFalse(_mandatory_flatten_due(et_timestamp(15, 19, 59)))
+        self.assertTrue(_mandatory_flatten_due(et_timestamp(15, 20, 0)))
         self.assertTrue(_mandatory_flatten_due(et_timestamp(16, 0, 0)))
+
+    def test_backend_policy_supports_early_close(self) -> None:
+        policy = {
+            "market_date": "2026-11-27",
+            "is_trading_day": True,
+            "open_minute_et": 9 * 60 + 30,
+            "close_minute_et": 13 * 60,
+            "entry_cutoff_minute_et": 12 * 60,
+            "flatten_minute_et": 12 * 60 + 20,
+            "source": "backend-market-calendar-v1",
+        }
+        before_cutoff = datetime(2026, 11, 27, 11, 59, 59, tzinfo=ET).timestamp()
+        at_cutoff = datetime(2026, 11, 27, 12, 0, 0, tzinfo=ET).timestamp()
+        at_flatten = datetime(2026, 11, 27, 12, 20, 0, tzinfo=ET).timestamp()
+        self.assertTrue(_new_entry_window_open(before_cutoff, policy))
+        self.assertFalse(_new_entry_window_open(at_cutoff, policy))
+        self.assertFalse(_mandatory_flatten_due(at_cutoff, policy))
+        self.assertTrue(_mandatory_flatten_due(at_flatten, policy))
+
+    def test_stale_backend_policy_fails_closed(self) -> None:
+        stale = {
+            "market_date": "2026-11-26",
+            "is_trading_day": True,
+            "open_minute_et": 9 * 60 + 30,
+            "close_minute_et": 13 * 60,
+            "entry_cutoff_minute_et": 12 * 60,
+            "flatten_minute_et": 12 * 60 + 20,
+        }
+        now = datetime(2026, 11, 27, 10, 0, 0, tzinfo=ET).timestamp()
+        self.assertFalse(_new_entry_window_open(now, stale))
+
+
+class StrategyQualityTest(unittest.TestCase):
+    def test_plan_quality_uses_frozen_trigger_stop_and_configured_target(self) -> None:
+        quality = _plan_quality(550, 548, [552, 555], "calls", 2)
+
+        self.assertEqual(quality["reward_risk"], 2.5)
+        self.assertTrue(quality["meets_minimum"])
+
+    def test_plan_quality_rejects_subminimum_setup(self) -> None:
+        quality = _plan_quality(550, 548, [551, 552], "calls", 2)
+
+        self.assertEqual(quality["reward_risk"], 1.0)
+        self.assertFalse(quality["meets_minimum"])
+
+    def test_option_stop_risk_uses_delta_gamma_and_buffer(self) -> None:
+        risk = _estimated_option_stop_risk({
+            "planned_limit_price": 2,
+            "planned_contracts": 2,
+            "delta": 0.4,
+            "gamma": 0.05,
+        }, 1.5)
+
+        self.assertEqual(risk["method"], "delta_gamma_plus_10pct_premium_buffer")
+        self.assertEqual(risk["per_contract_dollars"], 85.63)
+        self.assertEqual(risk["total_dollars"], 171.25)
 
 
 class ContinuationStateTest(unittest.TestCase):
@@ -1755,7 +1813,7 @@ class ContinuationStateTest(unittest.TestCase):
             "disabled_by_runtime_config",
         )
 
-    def test_355_cutoff_hard_blocks_new_entry(self) -> None:
+    def test_session_cutoff_hard_blocks_new_entry(self) -> None:
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=False
         ), patch("signal_engine._mandatory_flatten_due", return_value=False), patch(
@@ -1764,9 +1822,9 @@ class ContinuationStateTest(unittest.TestCase):
             blocked = build_signal(self.market, self.indicators, self.options, self.gex)
         self.assertEqual(blocked["state"], "WAIT")
         self.assertEqual(blocked["favoring"], "no-trade")
-        self.assertTrue(any("3:55 PM ET" in item for item in blocked["blockers"]))
+        self.assertTrue(any("3:00 PM ET" in item for item in blocked["blockers"]))
 
-    def test_355_cutoff_forces_open_position_to_time_exit(self) -> None:
+    def test_session_flatten_forces_open_position_to_time_exit(self) -> None:
         active = self.build()
         self.market["generated_at"] = time.time()
         self.gex["fetched_at"] = time.time()

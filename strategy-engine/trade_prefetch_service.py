@@ -885,6 +885,11 @@ class TradePrefetcher:
             option_max_otm_steps=self.args.option_max_otm_steps,
             option_min_abs_delta=self.args.option_min_abs_delta,
             option_max_spread_pct=self.args.option_max_spread_pct,
+            session_policy=(
+                policy.get("session")
+                if isinstance(policy.get("session"), dict)
+                else None
+            ),
         )
         provider_roles = {
             "primary": primary_source,
@@ -932,6 +937,7 @@ class TradePrefetcher:
             "strategy_max_total_debit_dollars": max_total_debit,
             "strategy_preferred_contracts": preferred_contracts,
             "strategy_max_contracts": max_contracts,
+            "session": signal.get("session_policy"),
         }
         signal["policy_fingerprint"] = _policy_fingerprint(
             signal["strategy_policy"]
@@ -942,7 +948,10 @@ class TradePrefetcher:
         _atomic_json(self.args.output_dir / "signal.json", signal)
         _atomic_text(self.args.output_dir / "signal.txt", render_signal(signal))
         self._journal_signal(signal)
-        regular_session_open = _regular_session_open(generated_at)
+        regular_session_open = _regular_session_open(
+            generated_at,
+            signal.get("session_policy"),
+        )
         _atomic_json(
             self.args.output_dir / "health.json",
             {
@@ -957,6 +966,7 @@ class TradePrefetcher:
                 "readonly": True,
                 "execution_enabled": False,
                 "paper_exit_target": self.args.paper_exit_target,
+                "session_policy": signal.get("session_policy"),
                 "paper_lifecycle_status": (
                     signal.get("lifecycle") or {}
                 ).get("status") or "FLAT",

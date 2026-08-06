@@ -234,7 +234,11 @@ export class TradeExecutionService {
       cooldownUntil: riskState.cooldownUntil,
       premiumRisk: Math.max(0, Number(input.mark || 0) * quantity * 100),
       maxPremiumRisk: riskState.maxPremiumRisk,
-      plannedLoss: Math.max(0, Number(input.mark || 0) * quantity * 100 * this.PLANNED_LOSS_FRACTION),
+      plannedLoss: this.plannedLossForSignal(
+        signalContract.optionDetails,
+        Math.max(0, Number(input.mark || 0) * quantity * 100),
+        quantity
+      ),
       remainingDailyLossBudget: riskState.remainingDailyLossBudget
     });
     if (!accountRisk.approved) {
@@ -724,6 +728,23 @@ export class TradeExecutionService {
     return { engineVersion: rows[0]?.engine_version || null, optionDetails: raw };
   }
 
+  private plannedLossForSignal(optionDetails: any, premiumRisk: number, quantity: number): number {
+    const fallback = Math.max(0, premiumRisk) * this.PLANNED_LOSS_FRACTION;
+    const estimatedPerContract = Number(optionDetails?.estimated_stop_risk?.per_contract_dollars);
+    if (!Number.isFinite(estimatedPerContract) || estimatedPerContract <= 0 || quantity <= 0) {
+      return fallback;
+    }
+    const plannedPremium = Number(optionDetails?.planned_limit_price || optionDetails?.mark || 0);
+    const currentPerContractDebit = Math.max(0, premiumRisk) / quantity;
+    const scale = plannedPremium > 0
+      ? currentPerContractDebit / (plannedPremium * 100)
+      : 1;
+    return Math.min(
+      Math.max(0, premiumRisk),
+      estimatedPerContract * Math.max(0, scale) * quantity
+    );
+  }
+
   private async fetchIbkrOptionQuote(userId: number, osiTicker: string): Promise<EntryQuoteSnapshot | null> {
     const marketData = new IbkrMarketDataService(this.fastify);
     const quote = await marketData.getOptionQuoteForOsi(userId, osiTicker);
@@ -868,7 +889,7 @@ export class TradeExecutionService {
         }
         const riskState = await this.getRiskState(input.userId, settings, 'wealthsimple_snaptrade');
         const premiumRisk = validatedQuote.protectedLimit * quantity * 100;
-        const plannedLoss = premiumRisk * this.PLANNED_LOSS_FRACTION;
+        const plannedLoss = this.plannedLossForSignal(optionDetails, premiumRisk, quantity);
         const premiumRiskAssessment = RiskDecisionService.evaluatePreSubmit({
           signalId: input.signalId,
           broker: 'wealthsimple_snaptrade',

@@ -67,6 +67,15 @@ const number = (value: unknown, decimals = 2) => {
   return Number.isFinite(parsed) ? parsed.toFixed(decimals) : '—';
 };
 
+const etMinute = (value: unknown) => {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes < 0 || minutes >= 24 * 60) return '—';
+  const hour = Math.floor(minutes / 60);
+  const minute = Math.floor(minutes % 60);
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${suffix}`;
+};
+
 const time = (value?: string | number | null) => {
   if (!value) return '—';
   const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
@@ -660,9 +669,14 @@ export default function DayTradingTerminal() {
     && gexAge <= MAX_GEX_PROVIDER_AGE_SECONDS
     && !primaryGex.error
     && strategySignal?.zerogex_shadow?.fresh !== false;
+  const planQuality = setup?.plan_quality || strategySignal?.plan_quality || {};
+  const planRewardRisk = Number(planQuality.reward_risk);
+  const sessionPolicy = strategySignal?.session_policy || {};
   const executionBlockers = [
     !dayTradingEnabled ? 'Day trading is disabled' : null,
-    services?.scanner?.marketOpen !== true ? 'Entry window is outside configured trading hours' : null,
+    sessionPolicy.valid !== true || sessionPolicy.is_trading_day !== true
+      ? 'Strategy session policy is unavailable or the market is closed'
+      : null,
     signalDismissed
       ? 'This setup is cancelled for your account'
       : currentSignal && currentSignal.status !== 'PENDING'
@@ -673,6 +687,9 @@ export default function DayTradingTerminal() {
     !freshSnapshot ? 'Strategy snapshot is stale' : null,
     !Number.isFinite(quoteAge) || quoteAge < 0 || quoteAge > 15 ? 'Selected option quote is stale or missing' : null,
     !gexFresh ? 'Authoritative GEX snapshot is stale or missing' : null,
+    planQuality.meets_minimum !== true || !Number.isFinite(planRewardRisk) || planRewardRisk < 1.5
+      ? 'Strategy plan does not meet the 1.50:1 minimum reward/risk'
+      : null,
     usageRemaining <= 0 ? 'Daily trade limit reached' : null,
     plannedContracts <= 0 ? 'Strategy has no executable contract quantity' : null,
     ...liveMissing,
@@ -697,9 +714,7 @@ export default function DayTradingTerminal() {
   const exitTargetNumber = Math.max(1, Number(strategySignal?.paper_policy?.exit_after_target || 2));
   const targetOne = Number(targets[0]);
   const targetTwo = Number(targets[Math.min(exitTargetNumber, targets.length) - 1]);
-  const riskDistance = side === 'PUT' ? invalidation - spot : spot - invalidation;
-  const rewardDistance = side === 'PUT' ? spot - targetTwo : targetTwo - spot;
-  const rewardRisk = riskDistance > 0 && rewardDistance > 0 ? rewardDistance / riskDistance : Number.NaN;
+  const rewardRisk = planRewardRisk;
   const spreadPct = optionSpreadPct(option);
   const spotVsTrigger = Number.isFinite(spot) && Number.isFinite(trigger)
     ? `${money(Math.abs(spot - trigger))} ${spot >= trigger ? 'above' : 'below'} trigger`
@@ -742,12 +757,11 @@ export default function DayTradingTerminal() {
   const approvalBlocker = !approvalStillCurrent
     ? 'The strategy published a different setup while this review was open.'
     : executionBlockers[0] || (approvalSecondsRemaining <= 0 ? 'The approval data expired.' : null);
-  const scannerWindow = services?.scanner?.window;
-  const marketSessionLabel = services?.scanner?.marketOpen
-    ? `Regular session · entry cutoff ${scannerWindow?.cutoff || 'configured'} ET`
-    : services?.scanner?.enabled === false
-      ? 'Day trading disabled'
-      : `Market closed · next window ${scannerWindow?.start || 'configured'} ET`;
+  const marketSessionLabel = sessionPolicy.valid !== true
+    ? 'Strategy session policy unavailable'
+    : sessionPolicy.is_trading_day === false
+      ? 'Market closed · non-trading day'
+      : `Strategy session · entry cutoff ${etMinute(sessionPolicy.entry_cutoff_minute_et)} ET · flatten ${etMinute(sessionPolicy.flatten_minute_et)} ET`;
   const staleReviewReason = !freshSnapshot
     ? 'Strategy snapshot is stale'
     : !Number.isFinite(gexAge)
@@ -1178,7 +1192,7 @@ export default function DayTradingTerminal() {
           <Metric
             label="Market"
             value={services?.scanner?.marketOpen ? 'Open' : 'Closed'}
-            detail={services?.scanner?.marketOpen ? `cutoff ${scannerWindow?.cutoff || '—'} ET` : scannerWindow?.now ? `${scannerWindow.now} ET` : time(services?.generatedAt)}
+            detail={marketSessionLabel}
             tone={services?.scanner?.marketOpen ? 'text-emerald-300' : 'text-zinc-400'}
           />
         </div>
