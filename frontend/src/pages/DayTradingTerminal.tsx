@@ -67,6 +67,11 @@ const number = (value: unknown, decimals = 2) => {
   return Number.isFinite(parsed) ? parsed.toFixed(decimals) : '—';
 };
 
+const integer = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed).toLocaleString('en-US') : '—';
+};
+
 const etMinute = (value: unknown) => {
   const minutes = Number(value);
   if (!Number.isFinite(minutes) || minutes < 0 || minutes >= 24 * 60) return '—';
@@ -134,16 +139,26 @@ const contractName = (option: OptionDetailsJSON | Record<string, any>, side: str
   option.ticker || option.local_symbol || (side ? `SPY ${side}` : 'No contract selected')
 );
 
-const humanContractName = (option: OptionDetailsJSON | Record<string, any>, side: string | null) => {
-  const expiry = String(option.expiry || '').trim();
-  const expiryDate = expiry ? new Date(`${expiry}T12:00:00`) : null;
+const optionExpiryLabel = (expiryValue: unknown) => {
+  const expiry = String(expiryValue || '').trim();
+  const normalizedExpiry = /^\d{8}$/.test(expiry)
+    ? `${expiry.slice(0, 4)}-${expiry.slice(4, 6)}-${expiry.slice(6, 8)}`
+    : /^\d{6}$/.test(expiry)
+      ? `20${expiry.slice(0, 2)}-${expiry.slice(2, 4)}-${expiry.slice(4, 6)}`
+      : expiry.slice(0, 10);
+  const expiryDate = normalizedExpiry ? new Date(`${normalizedExpiry}T12:00:00`) : null;
   const expiryLabel = expiryDate && Number.isFinite(expiryDate.getTime())
     ? expiryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : 'expiry unavailable';
+  return expiryLabel;
+};
+
+const humanContractName = (option: OptionDetailsJSON | Record<string, any>, side: string | null) => {
+  const expiryLabel = optionExpiryLabel(option.expiry);
   const strike = Number(option.strike);
   const strikeLabel = Number.isFinite(strike) ? `$${strike.toFixed(2).replace(/\.00$/, '')}` : 'strike unavailable';
   const sideLabel = side ? `${side[0]}${side.slice(1).toLowerCase()}` : 'option';
-  return `SPY ${expiryLabel} ${strikeLabel} ${sideLabel}`;
+  return `SPY ${strikeLabel} ${sideLabel} · ${expiryLabel}`;
 };
 
 const optionSpreadPct = (option: OptionDetailsJSON | Record<string, any>) => {
@@ -183,6 +198,36 @@ const toneClasses: Record<LifecycleTone, string> = {
 
 const stateCopy = (state: string, side: string | null, autonomousEntry = false) => {
   switch (state) {
+    case 'ORDER_SUBMITTING':
+      return {
+        eyebrow: 'Order submission',
+        title: 'Submitting protected order',
+        description: 'StrikePilot is sending this entry to the broker. Do not retry or place a manual duplicate while submission is in progress.'
+      };
+    case 'ORDER_SUBMITTED':
+      return {
+        eyebrow: 'Broker reconciliation',
+        title: 'Order submitted',
+        description: 'The entry request has left StrikePilot. Wait for broker confirmation before treating it as filled or placing another order.'
+      };
+    case 'POSITION_OPEN':
+      return {
+        eyebrow: 'Position active',
+        title: `${side || 'Directional'} position is open`,
+        description: 'The broker position is linked. Monitor its protected exit state and do not place a duplicate entry.'
+      };
+    case 'EXECUTION_REVIEW':
+      return {
+        eyebrow: 'Broker review required',
+        title: 'Execution needs review',
+        description: 'StrikePilot cannot confirm a clean broker state. Verify the order before retrying or placing another entry.'
+      };
+    case 'ENTRY_SKIPPED':
+      return {
+        eyebrow: 'Entry not submitted',
+        title: 'No broker order was placed',
+        description: 'The autonomous evaluation stopped before submission. Review the recorded reason and wait for the next eligible setup.'
+      };
     case 'ARMED':
       return {
         eyebrow: 'Setup forming',
@@ -282,14 +327,16 @@ const Metric = ({
   label,
   value,
   detail,
+  tooltip,
   tone = 'text-zinc-100'
 }: {
   label: string;
   value: string;
   detail?: string;
+  tooltip?: string;
   tone?: string;
 }) => (
-  <div className="min-w-0 py-2">
+  <div className="min-w-0 py-2" title={tooltip}>
     <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-zinc-500">{label}</div>
     <div className={`mt-1 truncate font-mono text-sm font-semibold tabular-nums ${tone}`} title={value}>{value}</div>
     {detail && <div className="mt-0.5 truncate text-[10px] text-zinc-500" title={detail}>{detail}</div>}
@@ -315,7 +362,7 @@ const LevelRail = ({
       <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">
         {potential ? 'Potential level plan' : 'Active level plan'}
       </span>
-      <span className="text-[10px] text-zinc-500">Stop → Spot → Trigger → T1 → T2</span>
+      <span className="hidden text-[10px] text-zinc-500 sm:block">Stop → Spot → Trigger → T1 → T2</span>
     </div>
     <div className="relative grid grid-cols-5 gap-1 before:absolute before:left-[10%] before:right-[10%] before:top-[1.55rem] before:h-px before:bg-zinc-700">
       {levels.map(level => (
@@ -354,7 +401,7 @@ const PlannedEntryTicket = ({
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Planned entry ticket</div>
           <div className="mt-1 text-sm font-semibold text-zinc-100">{humanContractName(option, side)}</div>
-          <div className="mt-1 break-all font-mono text-[10px] text-zinc-500">{contractName(option, side)}</div>
+          <div className="mt-1 select-all break-all font-mono text-[10px] text-zinc-500" title="Contract symbol">{contractName(option, side)}</div>
         </div>
         <span className={`shrink-0 rounded-md border px-2 py-1 text-[10px] font-semibold ${
           quoteFresh
@@ -401,6 +448,14 @@ const PositionSummary = ({
   const openPnl = premiumMappedToSpot ? null : (current - entry) * Number(position.quantity || 0) * 100;
   const exactContract = option.ticker || option.local_symbol || `${position.symbol} ${position.option_type} ${money(position.strike_price)}`;
   const simulated = position.is_simulated === true || position.execution_broker === 'simulated';
+  const positionContract = humanContractName({
+    ...option,
+    strike: position.strike_price || option.strike,
+    expiry: position.expiration_date || option.expiry
+  }, position.option_type || side);
+  const positionBroker = position.execution_broker === 'wealthsimple_snaptrade'
+    ? 'Wealthsimple / SnapTrade'
+    : position.execution_broker || 'broker unavailable';
   return (
     <section className="rounded-xl border border-sky-500/25 bg-sky-950/10 p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -408,9 +463,10 @@ const PositionSummary = ({
           <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">
             {simulated ? 'Shadow strategy position' : 'Linked autonomous position'}
           </div>
-          <div className="mt-1 break-all font-mono text-sm font-semibold text-zinc-100">{exactContract}</div>
+          <div className="mt-1 text-sm font-semibold text-zinc-100">{positionContract}</div>
+          <div className="mt-1 select-all break-all font-mono text-[10px] text-zinc-500" title="Contract symbol">{exactContract}</div>
           <div className="mt-1 text-xs text-zinc-500">
-            {position.expiration_date || option.expiry || 'expiry unavailable'} · {position.quantity} contract{Number(position.quantity) === 1 ? '' : 's'} · {simulated ? 'simulation only' : position.execution_broker || 'broker unavailable'}
+            {position.quantity} contract{Number(position.quantity) === 1 ? '' : 's'} · {simulated ? 'simulation only' : positionBroker}
           </div>
         </div>
         <div className="text-left sm:text-right">
@@ -584,6 +640,10 @@ export default function DayTradingTerminal() {
   const [paperClosing, setPaperClosing] = useState(false);
   const [paperForceCloseAvailable, setPaperForceCloseAvailable] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
+  const [paperExpanded, setPaperExpanded] = useState(false);
+  const [aiReviewExpanded, setAiReviewExpanded] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false);
   const riskRequestRef = useRef(0);
   const lastAlertStateRef = useRef<string | null>(null);
 
@@ -655,7 +715,6 @@ export default function DayTradingTerminal() {
     && lifecycleData.entry_allowed !== false;
   const signalDismissed = currentSignal?.status === 'CANCELLED';
   const dismissedActionableSetup = signalDismissed && ['ARMED', 'ACTIVE'].includes(lifecycle);
-  const entryReviewAvailable = ['ARMED', 'ACTIVE'].includes(lifecycle) && !signalDismissed;
   const liveMissing = executionMode.live
     ? [
         settings.snaptrade_trading_account_id ? null : 'Select a Wealthsimple account',
@@ -682,6 +741,7 @@ export default function DayTradingTerminal() {
       : currentSignal && currentSignal.status !== 'PENDING'
         ? `Signal is ${currentSignal.status.toLowerCase()}`
         : null,
+    currentSignal?.execution_status ? `Execution is ${String(currentSignal.execution_status).toLowerCase().replace(/_/g, ' ')}` : null,
     lifecycle !== 'ACTIVE' ? `Lifecycle is ${lifecycle}` : null,
     !entryAllowed ? 'Entry window is not open' : null,
     !freshSnapshot ? 'Strategy snapshot is stale' : null,
@@ -703,9 +763,53 @@ export default function DayTradingTerminal() {
       || (strategySetupId && strategyPosition.strategy_setup_id === strategySetupId)
     );
   }) || null, [positions, currentSignal?.id, strategySetupId]);
-  const displayLifecycle = dismissedActionableSetup ? 'DISMISSED' : lifecycle;
+  const executionStatus = String(
+    linkedPosition?.execution_status
+    || linkedPosition?.last_broker_order_status
+    || currentSignal?.execution_status
+    || ''
+  ).toUpperCase();
+  const signalExecuted = currentSignal?.status === 'EXECUTED';
+  const executionSubmitting = executionStatus === 'SUBMITTING';
+  const executionStarted = signalExecuted
+    || executionSubmitting
+    || Boolean(currentSignal?.broker_order_id || currentSignal?.broker_trade_id)
+    || ['PENDING_RECONCILE', 'ACCEPTED', 'PENDING_ORDER', 'PARTIALLY_FILLED', 'FILLED'].includes(executionStatus);
+  const executionSkipped = executionStatus === 'SKIPPED';
+  const brokerPositionOpen = linkedPosition?.status === 'OPEN';
+  const executionNeedsReview = Boolean(
+    linkedPosition?.execution_error
+    || (!brokerPositionOpen && currentSignal?.execution_error)
+    || (executionStatus && (
+      ['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'STALE'].some(status => executionStatus.includes(status))
+      || executionStatus.includes('RECONCILE_REQUIRED')
+    ))
+  );
+  const entryReviewAvailable = ['ARMED', 'ACTIVE'].includes(lifecycle)
+    && (!currentSignal || (currentSignal.status === 'PENDING' && !currentSignal.execution_status));
+  const displayLifecycle = executionSkipped
+      ? 'ENTRY_SKIPPED'
+      : executionNeedsReview
+        ? 'EXECUTION_REVIEW'
+        : brokerPositionOpen
+          ? 'POSITION_OPEN'
+          : executionSubmitting
+            ? 'ORDER_SUBMITTING'
+            : executionStarted
+              ? 'ORDER_SUBMITTED'
+            : dismissedActionableSetup
+              ? 'DISMISSED'
+              : lifecycle;
   const lifecycleView = stateCopy(displayLifecycle, side, executionMode.autonomous);
-  const currentTone = dismissedActionableSetup ? 'blocked' : lifecycleTone(lifecycle);
+  const currentTone = executionNeedsReview
+    ? 'blocked'
+    : executionSkipped
+      ? 'idle'
+      : brokerPositionOpen
+        ? 'manage'
+        : executionStarted
+          ? 'armed'
+          : dismissedActionableSetup ? 'blocked' : lifecycleTone(lifecycle);
   const currentStrategyCode = strategySignal?.strategy || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
   const spot = Number(strategySignal?.spot);
@@ -716,33 +820,65 @@ export default function DayTradingTerminal() {
   const targetTwo = Number(targets[Math.min(exitTargetNumber, targets.length) - 1]);
   const rewardRisk = planRewardRisk;
   const spreadPct = optionSpreadPct(option);
+  const rawBrokerName = String(linkedPosition?.execution_broker || currentSignal?.execution_broker || '');
+  const brokerName = rawBrokerName === 'wealthsimple_snaptrade'
+    ? 'Wealthsimple / SnapTrade'
+    : rawBrokerName || (executionMode.live ? 'Wealthsimple / SnapTrade' : 'Simulation');
+  const brokerOrderId = linkedPosition?.broker_order_id || currentSignal?.broker_order_id || null;
+  const brokerSyncAt = linkedPosition?.last_broker_sync_at || linkedPosition?.updated_at || currentSignal?.created_at || null;
+  const autonomousResult = String(strategyState?.autonomousEntry?.lastResult || '').replace(/^User\s+\d+:\s*/i, '');
+  const autonomousLastAttemptAt = strategyState?.autonomousEntry?.lastAttemptAt || null;
+  const executionMessage = linkedPosition?.execution_error
+    || currentSignal?.execution_error
+    || autonomousResult
+    || null;
   const spotVsTrigger = Number.isFinite(spot) && Number.isFinite(trigger)
     ? `${money(Math.abs(spot - trigger))} ${spot >= trigger ? 'above' : 'below'} trigger`
     : 'trigger distance unavailable';
-  const heartbeatSummary = dismissedActionableSetup
-    ? `The strategy engine remains ${lifecycle}, but this setup is closed for your account.`
-    : lifecycle === 'ACTIVE'
-      ? `${canExecute ? '' : `${executionBlockers[0]}. `}SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
-      : lifecycle === 'ARMED'
-        ? `The setup is forming. SPY is ${spotVsTrigger}; entry remains locked until every confirmation passes.`
-      : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
-          ? linkedPosition
-            ? 'A linked autonomous position is in management. Entry is closed while invalidation and target progression are monitored.'
-            : 'The setup moved into management without an autonomous position linked to your account. Matching manual positions remain manually managed.'
-          : side
-            ? `The strategy currently favors ${side === 'CALL' ? 'calls' : 'puts'}, but no qualified entry exists.${strategyBlockers[0] ? ` Waiting on: ${strategyBlockers[0]}.` : ''} SPY is ${spotVsTrigger}.`
-            : 'The strategy is monitoring SPY and has not opened a new entry window.';
-  const heartbeatLabel = dismissedActionableSetup
-    ? 'Closed for your account'
-    : canExecute
-      ? 'Entry conditions live'
-      : lifecycle === 'ACTIVE'
-        ? 'Entry blocked'
-        : lifecycle === 'ARMED'
-          ? 'Setup forming'
-        : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
-            ? linkedPosition ? 'Position management' : 'Setup management'
-            : 'Watching SPY';
+  const heartbeatSummary = executionSkipped
+    ? executionMessage || 'The autonomous evaluation ended without submitting a broker order.'
+    : executionNeedsReview
+      ? executionMessage || `Broker status ${executionStatus || 'unknown'} requires verification before another entry.`
+      : brokerPositionOpen
+        ? `The linked ${side || 'directional'} position is open. Entry is closed while broker and strategy management remain active.`
+        : executionSubmitting
+          ? 'StrikePilot is submitting the protected order. Wait for the broker response and do not retry.'
+          : executionStarted
+            ? `The order was submitted${executionStatus ? ` with broker status ${executionStatus}` : ''}. Wait for broker fill confirmation before taking another action.`
+            : dismissedActionableSetup
+              ? `The strategy engine remains ${lifecycle}, but this setup is closed for your account.`
+              : lifecycle === 'ACTIVE'
+                ? `${canExecute ? '' : `${executionBlockers[0] || 'Entry conditions are incomplete'}. `}SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
+                : lifecycle === 'ARMED'
+                  ? `The setup is forming. SPY is ${spotVsTrigger}; entry remains locked until every confirmation passes.`
+                  : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
+                    ? linkedPosition
+                      ? 'A linked autonomous position is in management. Entry is closed while invalidation and target progression are monitored.'
+                      : 'The setup moved into management without an autonomous position linked to your account. Matching manual positions remain manually managed.'
+                    : side
+                      ? `The strategy currently favors ${side === 'CALL' ? 'calls' : 'puts'}, but no qualified entry exists.${strategyBlockers[0] ? ` Waiting on: ${strategyBlockers[0]}.` : ''} SPY is ${spotVsTrigger}.`
+                      : 'The strategy is monitoring SPY and has not opened a new entry window.';
+  const heartbeatLabel = executionSkipped
+    ? 'Entry skipped'
+    : executionNeedsReview
+      ? 'Broker review required'
+      : brokerPositionOpen
+        ? 'Position open'
+        : executionSubmitting
+          ? 'Submitting order'
+          : executionStarted
+            ? 'Order submitted'
+            : dismissedActionableSetup
+              ? 'Closed for your account'
+              : canExecute
+                ? 'Entry conditions live'
+                : lifecycle === 'ACTIVE'
+                  ? 'Entry blocked'
+                  : lifecycle === 'ARMED'
+                    ? 'Setup forming'
+                    : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
+                      ? linkedPosition ? 'Position management' : 'Setup management'
+                      : 'Watching SPY';
   const approvalStillCurrent = !executeSignal || executeSignal.id === currentSignal?.id;
   const dismissStillCurrent = !dismissSignal || dismissSignal.id === currentSignal?.id;
   const approvalWindows = [
@@ -804,10 +940,12 @@ export default function DayTradingTerminal() {
     setRiskAssessment(null);
     setRiskError(null);
     setRiskLoading(false);
+    setAiReviewExpanded(false);
   }, [currentSignal?.id, currentSignal?.lifecycle_status]);
 
   const runAdHocRiskReview = async () => {
     if (!currentSignal?.id || settings.day_trading_ai_enabled === 'false' || !reviewDataFresh) return;
+    setAiReviewExpanded(true);
     const requestId = ++riskRequestRef.current;
     const signalId = currentSignal.id;
     setRiskLoading(true);
@@ -1115,50 +1253,66 @@ export default function DayTradingTerminal() {
   return (
     <main className="day-trading-terminal mx-auto w-full max-w-[1440px] space-y-3 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4 sm:px-0 sm:pb-0">
       <section className="overflow-hidden rounded-2xl border border-zinc-800/90 bg-[#0d0f12] shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
-        <header className="flex flex-col gap-4 border-b border-zinc-800 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+        <header className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-3 sm:px-6">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Day trading</span>
               <Badge variant="outline" className="border-zinc-700 bg-zinc-900 text-[10px] text-zinc-300">SPY · signal-only-v2</Badge>
             </div>
-            <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-zinc-50 sm:text-3xl">One signal. One decision.</h1>
-            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-zinc-500">
+            <h1 className="mt-1 hidden text-2xl font-semibold tracking-[-0.03em] text-zinc-50 sm:block">One signal. One decision.</h1>
+            <p className="mt-0.5 hidden max-w-2xl text-xs leading-relaxed text-zinc-500 sm:block">
               Follow the strategy lifecycle from setup formation through guarded execution and position management.
             </p>
           </div>
-          <div className="grid w-full grid-cols-3 gap-2 lg:w-auto">
+          <div className="grid shrink-0 grid-cols-3 gap-1.5 sm:gap-2">
             <Link
               to="/system-health"
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100 active:translate-y-px"
+              className="inline-flex h-9 w-9 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
+              title="System health"
+              aria-label="Open system health"
             >
               {systemReady ? <CircleCheck className="h-3.5 w-3.5 text-emerald-400" /> : <CircleAlert className="h-3.5 w-3.5 text-amber-400" />}
-              System health
-              <ArrowUpRight className="h-3 w-3" />
+              <span className="hidden sm:inline">System health</span>
+              <ArrowUpRight className="hidden h-3 w-3 sm:block" />
             </Link>
             <Button
               variant="outline"
               size="sm"
               onClick={toggleBrowserAlerts}
-              className="h-10 w-full border-zinc-800 bg-zinc-950 px-2 text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px"
+              className="h-9 w-9 border-zinc-800 bg-zinc-950 px-0 text-[11px] text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
               title="Notify this browser when a setup becomes ARMED or ACTIVE"
+              aria-label={browserAlertsEnabled ? 'Disable setup alerts' : 'Enable setup alerts'}
             >
-              {browserAlertsEnabled ? <Bell className="mr-1.5 h-3.5 w-3.5 text-emerald-400" /> : <BellOff className="mr-1.5 h-3.5 w-3.5" />}
-              Alerts
+              {browserAlertsEnabled ? <Bell className="h-3.5 w-3.5 text-emerald-400 sm:mr-1.5" /> : <BellOff className="h-3.5 w-3.5 sm:mr-1.5" />}
+              <span className="hidden sm:inline">Alerts</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={refreshAll}
               disabled={refreshing}
-              className="h-10 w-full border-zinc-800 bg-zinc-950 text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px"
+              className="h-9 w-9 border-zinc-800 bg-zinc-950 px-0 text-[11px] text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
+              title="Refresh Day Trading data"
+              aria-label="Refresh Day Trading data"
             >
-              <RefreshCw className={`mr-2 h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              Refresh
+              <RefreshCw className={`h-3.5 w-3.5 sm:mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
             </Button>
           </div>
         </header>
 
-        <div className="grid grid-cols-2 gap-x-4 border-b border-zinc-800 px-4 sm:grid-cols-3 sm:px-6 lg:grid-cols-6">
+        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2 text-[10px] sm:hidden">
+          <span className={freshSnapshot ? 'text-emerald-300' : 'text-amber-300'}>
+            <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" />
+            Strategy {strategyHealth?.status || (freshSnapshot ? 'LIVE' : 'STARTING')}
+          </span>
+          <span className="font-mono text-zinc-400">Capacity {tradeUsage?.used ?? 0}/{tradeUsage?.max ?? settings.max_trades_per_day ?? 2}</span>
+          <span className={services?.scanner?.marketOpen ? 'text-emerald-300' : 'text-zinc-500'}>
+            Market {services?.scanner?.marketOpen ? 'open' : 'closed'}
+          </span>
+        </div>
+
+        <div className="hidden gap-x-4 border-b border-zinc-800 px-6 sm:grid sm:grid-cols-3 lg:grid-cols-6">
           <Metric
             label="Strategy"
             value={strategyHealth?.status || (freshSnapshot ? 'LIVE' : 'STARTING')}
@@ -1202,8 +1356,8 @@ export default function DayTradingTerminal() {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-70">{lifecycleView.eyebrow}</span>
-                <span className="rounded-md border border-current/20 bg-black/15 px-2 py-1 font-mono text-[10px] font-semibold">{displayLifecycle}</span>
-                {dismissedActionableSetup && lifecycle === 'ACTIVE' && (
+                <span className="rounded-md border border-current/20 bg-black/15 px-2 py-1 font-mono text-[10px] font-semibold">{displayLifecycle.replace(/_/g, ' ')}</span>
+                {displayLifecycle === 'DISMISSED' && lifecycle === 'ACTIVE' && (
                   <span className="text-[10px] font-medium text-zinc-500">Strategy engine ACTIVE</span>
                 )}
                 {side && (
@@ -1226,6 +1380,32 @@ export default function DayTradingTerminal() {
               </div>
               <h2 className="mt-3 text-2xl font-semibold tracking-[-0.025em] text-zinc-50 sm:text-3xl">{lifecycleView.title}</h2>
               <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">{lifecycleView.description}</p>
+              {(executionStarted || brokerPositionOpen) && (
+                <div className={`mt-3 grid gap-2 rounded-lg border px-3 py-2.5 text-xs sm:grid-cols-[1fr_auto] sm:items-center ${
+                  executionNeedsReview
+                    ? 'border-rose-500/25 bg-rose-950/15'
+                    : brokerPositionOpen
+                      ? 'border-sky-500/20 bg-sky-950/15'
+                      : 'border-amber-500/20 bg-amber-950/10'
+                }`}>
+                  <div className="min-w-0">
+                    <div className="font-semibold text-zinc-200">
+                      {brokerPositionOpen
+                        ? 'Broker position linked'
+                        : executionSkipped
+                          ? 'Entry evaluation complete'
+                          : executionSubmitting ? 'Order submission in progress' : 'Broker confirmation pending'}
+                    </div>
+                    <div className="mt-1 break-words text-zinc-400">
+                      {brokerName} · {executionStatus || (executionStarted ? 'SUBMITTED' : linkedPosition?.status || 'UNKNOWN')}
+                      {brokerOrderId ? ` · Order ${brokerOrderId}` : ''}
+                    </div>
+                  </div>
+                  <div className="font-mono text-[10px] text-zinc-500 sm:text-right">
+                    Status updated {dateTime(brokerSyncAt)}
+                  </div>
+                </div>
+              )}
               {currentStrategyCode && (
                 <div className="mt-3 max-w-2xl rounded-lg border border-current/10 bg-black/10 px-3 py-2 text-xs leading-relaxed text-zinc-300">
                   <span className="font-semibold">
@@ -1251,9 +1431,29 @@ export default function DayTradingTerminal() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${dismissedActionableSetup ? 'bg-zinc-500' : lifecycle === 'ACTIVE' && canExecute ? 'animate-pulse bg-emerald-400' : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'}`} />
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${
+                        displayLifecycle === 'DISMISSED' || executionSkipped
+                          ? 'bg-zinc-500'
+                          : executionNeedsReview
+                            ? 'bg-rose-400'
+                            : brokerPositionOpen
+                              ? 'bg-sky-400'
+                              : executionStarted
+                                ? 'bg-amber-400'
+                                : lifecycle === 'ACTIVE' && canExecute
+                                  ? 'animate-pulse bg-emerald-400'
+                                  : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'
+                      }`} />
                       <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Setup heartbeat</span>
-                      <span className={`text-[10px] font-semibold ${dismissedActionableSetup || !canExecute ? 'text-amber-300' : 'text-emerald-300'}`}>{heartbeatLabel}</span>
+                      <span className={`text-[10px] font-semibold ${
+                        executionNeedsReview
+                          ? 'text-rose-300'
+                          : brokerPositionOpen
+                            ? 'text-sky-300'
+                            : dismissedActionableSetup || executionStarted || !canExecute
+                              ? 'text-amber-300'
+                              : 'text-emerald-300'
+                      }`}>{heartbeatLabel}</span>
                     </div>
                     <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-zinc-300">{heartbeatSummary}</p>
                   </div>
@@ -1311,7 +1511,7 @@ export default function DayTradingTerminal() {
 
             <aside className="rounded-xl border border-zinc-800/90 bg-black/20 p-3.5 sm:p-4">
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Next action</div>
-              {dismissedActionableSetup ? (
+              {dismissedActionableSetup && !brokerPositionOpen ? (
                 <>
                   <div className="mt-2 text-lg font-semibold text-zinc-50">No action available</div>
                   <p className="mt-1 text-xs leading-relaxed text-zinc-500">
@@ -1320,6 +1520,55 @@ export default function DayTradingTerminal() {
                   <div className="mt-5 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
                     <Clock3 className="h-4 w-4" />
                     Wait for the next qualified setup
+                  </div>
+                </>
+              ) : executionSkipped ? (
+                <>
+                  <div className="mt-2 text-lg font-semibold text-zinc-50">Wait for the next setup</div>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                    No broker order was placed. The current setup cannot be submitted again.
+                  </p>
+                  {executionMessage && (
+                    <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/55 px-3 py-2 text-xs leading-relaxed text-zinc-300">
+                      {executionMessage}
+                    </div>
+                  )}
+                </>
+              ) : executionNeedsReview ? (
+                <>
+                  <div className="mt-2 text-lg font-semibold text-zinc-50">Verify the broker order</div>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                    Do not retry this entry until Wealthsimple or SnapTrade confirms whether the order exists.
+                  </p>
+                  <div className="mt-4 rounded-lg border border-rose-500/20 bg-rose-950/15 px-3 py-2 text-xs leading-relaxed text-rose-200">
+                    {executionMessage || `Broker status: ${executionStatus || 'unknown'}`}
+                  </div>
+                </>
+              ) : brokerPositionOpen ? (
+                <>
+                  <div className="mt-2 text-lg font-semibold text-zinc-50">Monitor the open position</div>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                    The linked position is active. Entry controls remain closed while its exit policy manages risk.
+                  </p>
+                  <Link
+                    to={`/positions/${linkedPosition.id}`}
+                    className="mt-5 inline-flex h-10 w-full items-center justify-center rounded-lg border border-sky-500/20 bg-sky-950/15 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-950/30"
+                  >
+                    Open position details →
+                  </Link>
+                </>
+              ) : executionStarted ? (
+                <>
+                  <div className="mt-2 text-lg font-semibold text-zinc-50">
+                    {executionSubmitting ? 'Order submission in progress' : 'Wait for broker confirmation'}
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                    {executionSubmitting
+                      ? 'StrikePilot is sending the order. Do not retry or place a duplicate manual order.'
+                      : 'The order was submitted. Do not place a duplicate manual order while reconciliation is pending.'}
+                  </p>
+                  <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-950/10 px-3 py-2 text-xs text-amber-200">
+                    {brokerName} · {executionStatus || 'SUBMITTED'}
                   </div>
                 </>
               ) : lifecycle === 'ACTIVE' ? (
@@ -1342,11 +1591,11 @@ export default function DayTradingTerminal() {
                   />
                   {executionMode.autonomous ? (
                     <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-950/15 px-3 py-2.5 text-xs leading-relaxed text-amber-200">
-                      <div>Autonomous mode is armed. Monitor the broker reconciliation state below; do not place a duplicate manual order.</div>
-                      {strategyState?.autonomousEntry?.lastResult && (
+                      <div>Autonomous entry is evaluating the live risk gates. No manual order is needed.</div>
+                      {autonomousResult && (
                         <div className="mt-1 text-amber-100">
-                          Last evaluation: {strategyState.autonomousEntry.lastResult}
-                          {strategyState.autonomousEntry.lastAttemptAt ? ` · ${dateTime(strategyState.autonomousEntry.lastAttemptAt)}` : ''}
+                          Last evaluation: {autonomousResult}
+                          {autonomousLastAttemptAt ? ` · ${dateTime(autonomousLastAttemptAt)}` : ''}
                         </div>
                       )}
                     </div>
@@ -1425,11 +1674,11 @@ export default function DayTradingTerminal() {
       </section>
 
       {paperAccount && (
-        <section className="rounded-xl border border-violet-500/20 bg-[#101216] p-4 sm:p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <section className="overflow-hidden rounded-xl border border-zinc-800 bg-[#101216]">
+          <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5 sm:pb-4">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-violet-300">System paper portfolio</span>
+                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">System paper portfolio</span>
                 <Badge variant="outline" className={`text-[10px] ${
                   paperAccount.account.automation_status === 'ACTIVE'
                     ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-300'
@@ -1441,24 +1690,37 @@ export default function DayTradingTerminal() {
               </div>
               <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
-                Every distinct qualified setup can open concurrently at a protected market quote. Available cash, reservation accounting and per-setup deduplication preserve ledger integrity; Wealthsimple entries follow the configured manual or one-contract autonomous mode, while configured exits can submit automatically.
+                Independent simulation portfolio. It records and manages paper entries without enabling, disabling, or changing Wealthsimple orders.
               </p>
             </div>
-            {paperAccount.canManage && (
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                className="h-9 border-zinc-700 bg-zinc-950 text-xs text-zinc-300 hover:bg-zinc-900"
-                onClick={togglePaperAutomation}
-                disabled={paperUpdating}
+                className="h-9 flex-1 border-zinc-700 bg-zinc-950 text-xs text-zinc-300 hover:bg-zinc-900 sm:hidden"
+                onClick={() => setPaperExpanded(value => !value)}
+                aria-expanded={paperExpanded}
               >
-                {paperUpdating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-                {paperAccount.account.automation_status === 'ACTIVE' ? 'Pause new entries' : 'Resume entries'}
+                {paperExpanded ? 'Hide paper details' : 'Show paper details'}
+                <ChevronDown className={`ml-1.5 h-3.5 w-3.5 transition-transform ${paperExpanded ? 'rotate-180' : ''}`} />
               </Button>
-            )}
+              {paperAccount.canManage && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 flex-1 border-zinc-700 bg-zinc-950 text-xs text-zinc-300 hover:bg-zinc-900 sm:flex-none"
+                  onClick={togglePaperAutomation}
+                  disabled={paperUpdating}
+                >
+                  {paperUpdating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+                  {paperAccount.account.automation_status === 'ACTIVE' ? 'Pause paper entries' : 'Resume paper entries'}
+                </Button>
+              )}
+            </div>
           </div>
 
-          <div className="mt-4 grid grid-cols-2 gap-x-4 border-y border-zinc-800 sm:grid-cols-5">
+          <div className={`${paperExpanded ? 'block' : 'hidden'} border-t border-zinc-800 px-4 pb-4 sm:block sm:px-5 sm:pb-5`}>
+          <div className="grid grid-cols-2 gap-x-4 border-b border-zinc-800 sm:grid-cols-5">
             <Metric label="Equity" value={money(paperAccount.account.equity)} detail={`started ${money(paperAccount.account.initial_equity)}`} />
             <Metric label="Cash" value={money(paperAccount.account.cash_balance)} detail={`${money(paperAccount.account.reserved_cash)} reserved`} />
             <Metric
@@ -1467,30 +1729,56 @@ export default function DayTradingTerminal() {
               detail={`${number(paperAccount.session.pnlPct)}%`}
               tone={paperAccount.session.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
             />
-            <Metric label="Trades today" value={`${paperAccount.session.entries} · unlimited`} detail="distinct qualified setups" />
+            <Metric label="Paper entries today" value={`${paperAccount.session.entries} · unlimited`} detail="distinct qualified setups" />
             <Metric label="Open positions" value={String(paperAccount.openPositions.length)} detail={paperAccount.health.lastProcessedAt ? `checked ${dateTime(paperAccount.health.lastProcessedAt)}` : 'waiting for snapshot'} />
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-950/35 px-3 py-2 text-[11px] text-zinc-400">
-            <span>AI today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyCalls}/{paperAccount.aiUsage.dailyCallLimit}</span></span>
-            <span>Tokens today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyTokens.toLocaleString()}</span></span>
-            <span>Tokens this month <span className="font-mono text-zinc-200">{paperAccount.aiUsage.monthlyTokens.toLocaleString()}</span></span>
-            <span>Exit policy <span className="font-mono text-zinc-200">{paperAccount.limits.policyVersion} · {paperAccount.limits.trailingStopPct}%</span></span>
-            <span className="text-zinc-500">Clear setups use rules; AI is reserved for ambiguity.</span>
-          </div>
+          <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
+            <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-xs font-medium text-zinc-400">
+              Automation policy and performance comparison
+              <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+            </summary>
+            <div className="border-t border-zinc-800 p-3">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-400">
+                <span>AI today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyCalls}/{paperAccount.aiUsage.dailyCallLimit}</span></span>
+                <span>Tokens today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyTokens.toLocaleString()}</span></span>
+                <span>Tokens this month <span className="font-mono text-zinc-200">{paperAccount.aiUsage.monthlyTokens.toLocaleString()}</span></span>
+                <span>Exit policy <span className="font-mono text-zinc-200">{paperAccount.limits.policyVersion} · {paperAccount.limits.trailingStopPct}%</span></span>
+                <span className="text-zinc-500">Clear setups use rules; AI is reserved for ambiguity.</span>
+              </div>
 
-          <div className="mt-3 grid grid-cols-3 divide-x divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/35 py-2 text-center">
-            <Metric label="Managed realized P&L" value={money(paperAccount.baseline.managedRealizedPnl)} detail="AI/rules exits" tone={paperAccount.baseline.managedRealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
-            <Metric label="1-contract baseline" value={money(paperAccount.baseline.realizedPnl)} detail={`${paperAccount.baseline.closedTrades} closed`} tone={paperAccount.baseline.realizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
-            <Metric label="Sizing value" value={`${paperAccount.baseline.valueAdded >= 0 ? '+' : ''}${money(paperAccount.baseline.valueAdded)}`} detail="managed − baseline" tone={paperAccount.baseline.valueAdded >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
-          </div>
+              <div className="mt-3 grid grid-cols-3 divide-x divide-zinc-800 rounded-lg border border-zinc-800 bg-zinc-950/35 py-2 text-center">
+                <Metric
+                  label="Managed realized P&L"
+                  value={money(paperAccount.baseline.managedRealizedPnl)}
+                  detail="AI/rules exits"
+                  tooltip="Realized paper P&L produced by the configured strategy sizing and exit policy."
+                  tone={paperAccount.baseline.managedRealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+                />
+                <Metric
+                  label="1-contract baseline"
+                  value={money(paperAccount.baseline.realizedPnl)}
+                  detail={`${paperAccount.baseline.closedTrades} closed`}
+                  tooltip="Comparison result if each recorded paper setup used one contract."
+                  tone={paperAccount.baseline.realizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+                />
+                <Metric
+                  label="Sizing value"
+                  value={`${paperAccount.baseline.valueAdded >= 0 ? '+' : ''}${money(paperAccount.baseline.valueAdded)}`}
+                  detail="managed − baseline"
+                  tooltip="Difference between managed paper P&L and the one-contract comparison baseline."
+                  tone={paperAccount.baseline.valueAdded >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+                />
+              </div>
+            </div>
+          </details>
 
           {paperAccount.openPositions.length > 0 ? (
             <div className="mt-4 space-y-2">
               {paperAccount.openPositions.map(position => {
                 const unrealizedPnl = (Number(position.current_price) - Number(position.entry_price)) * Number(position.quantity) * 100;
                 return (
-                  <div key={position.id} className="grid gap-3 rounded-lg border border-violet-500/15 bg-violet-950/10 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                  <div key={position.id} className="grid gap-3 rounded-lg border border-zinc-800 bg-zinc-950/35 p-3 sm:grid-cols-[1fr_auto] sm:items-center">
                     <div className="min-w-0">
                       <div className="break-all font-mono text-sm font-semibold text-zinc-100">
                         {position.symbol} {position.option_type} {money(position.strike_price)}
@@ -1534,7 +1822,7 @@ export default function DayTradingTerminal() {
             </div>
           ) : paperAccount.recentDecisions[0] ? (
             <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-3 text-xs leading-relaxed text-zinc-300">
-              <span className="font-semibold text-violet-300">Latest decision:</span>{' '}
+              <span className="font-semibold text-zinc-200">Latest decision:</span>{' '}
               {paperAccount.recentDecisions[0].decision} · {paperAccount.recentDecisions[0].source} · {paperAccount.recentDecisions[0].rationale || 'No rationale recorded'}
             </div>
           ) : (
@@ -1579,20 +1867,19 @@ export default function DayTradingTerminal() {
               </div>
             </details>
           )}
+          </div>
         </section>
       )}
 
-      {lifecycle === 'ACTIVE' && !signalDismissed && (
+      {lifecycle === 'ACTIVE' && !signalDismissed && !executionMode.autonomous && canExecute && (
         <div className="sticky bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-20 rounded-xl border border-zinc-700/90 bg-zinc-950/95 p-2 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur md:hidden">
           <Button
             className="h-11 w-full bg-emerald-500 font-semibold text-zinc-950 hover:bg-emerald-400 disabled:bg-zinc-800 disabled:text-zinc-500"
             onClick={requestExecution}
-            disabled={!canExecute}
           >
             <Play className="mr-2 h-4 w-4" />
-            {canExecute ? `Review ${side || ''} order` : 'Entry blocked'}
+            Review {side || ''} order
           </Button>
-          {!canExecute && <div className="mt-1.5 truncate px-1 text-center text-[10px] text-amber-300">{executionBlockers[0]}</div>}
         </div>
       )}
 
@@ -1623,18 +1910,16 @@ export default function DayTradingTerminal() {
       {entryReviewAvailable && <section className="rounded-lg border border-zinc-800 bg-[#101216] px-2.5 py-2 sm:px-3">
         <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
           <div className="shrink-0 px-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Hard risk</div>
-          <div className="grid min-w-0 flex-1 grid-cols-3 gap-1 sm:grid-cols-6 sm:gap-0 sm:divide-x sm:divide-zinc-800">
+          <div className="grid min-w-0 flex-1 grid-cols-2 gap-1 sm:grid-cols-4 sm:gap-0 sm:divide-x sm:divide-zinc-800">
             <CompactRiskMetric label="Premium risk" value={orderDebit > 0 ? money(orderDebit) : '—'} tone="text-amber-200" />
             <CompactRiskMetric label="Debit ceiling" value={strategyDebitLimit > 0 ? money(strategyDebitLimit) : '—'} />
             <CompactRiskMetric label="Quantity" value={`${orderQuantity} · plan ${plannedContracts || '—'}`} />
             <CompactRiskMetric label="Invalidation" value={money(setup?.invalidation)} tone="text-rose-200" />
-            <CompactRiskMetric label="Strategy age" value={relativeAge(snapshotAge)} tone={freshSnapshot ? 'text-emerald-300' : 'text-rose-300'} />
-            <CompactRiskMetric label="GEX age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} tone={Number.isFinite(gexAge) && !gexFresh ? 'text-rose-300' : 'text-zinc-100'} />
           </div>
         </div>
       </section>}
 
-      <section className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
+      <section className="rounded-xl border border-zinc-800 bg-[#101216] p-3 sm:p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">
@@ -1669,9 +1954,21 @@ export default function DayTradingTerminal() {
               {riskLoading ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
               {entryReviewAvailable ? 'Review setup with AI' : 'Review bias with AI'}
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-10 px-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200 sm:h-8"
+              onClick={() => setAiReviewExpanded(value => !value)}
+              aria-expanded={aiReviewExpanded}
+              title={aiReviewExpanded ? 'Hide AI review details' : 'Show AI review details'}
+            >
+              <span className="sr-only">{aiReviewExpanded ? 'Hide AI review details' : 'Show AI review details'}</span>
+              <ChevronDown className={`h-4 w-4 transition-transform ${aiReviewExpanded ? 'rotate-180' : ''}`} />
+            </Button>
           </div>
         </div>
 
+        <div className={aiReviewExpanded ? 'block' : 'hidden'}>
         {(!Number.isFinite(quoteAge) || quoteAge > 15) && (
           <div className="mt-4 rounded-lg border border-amber-500/20 bg-amber-950/10 px-3 py-3 text-xs text-amber-200">
             Option quote is stale or missing. AI can explain the directional setup, but its verdict remains WAIT and execution stays blocked.
@@ -1749,6 +2046,7 @@ export default function DayTradingTerminal() {
             {riskError || (currentSignal ? 'No AI review has been requested for this setup.' : 'A persisted strategy setup is required for AI review.')}
           </div>
         )}
+        </div>
       </section>
 
       <section className={entryReviewAvailable ? 'grid gap-4 lg:grid-cols-[1.1fr_0.9fr]' : ''}>
@@ -1756,38 +2054,23 @@ export default function DayTradingTerminal() {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Contract quality</div>
-              <h3 className="mt-1 break-all text-base font-semibold text-zinc-100">
-                {option.ticker || option.local_symbol || (side ? `SPY ${side}` : 'No contract selected')}
-              </h3>
+              <h3 className="mt-1 text-base font-semibold text-zinc-100">{humanContractName(option, side)}</h3>
+              <div className="mt-1 select-all break-all font-mono text-[10px] text-zinc-500" title="Contract symbol">{contractName(option, side)}</div>
             </div>
             <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300">
-              {option.expiry || '—'}
+              {optionExpiryLabel(option.expiry)}
             </Badge>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-x-5 border-y border-zinc-800 py-2 sm:grid-cols-4">
             <Metric label="Mark" value={money(option.mark)} />
-            <Metric label="Volume" value={option.volume != null ? number(option.volume, 0) : '—'} />
-            <Metric label="Open interest" value={option.openInterest != null ? number(option.openInterest, 0) : '—'} />
+            <Metric label="Volume" value={integer(option.volume)} />
+            <Metric label="Open interest" value={integer(option.openInterest ?? option.open_interest)} />
             <Metric label="Spread" value={Number.isFinite(spreadPct) ? `${number(spreadPct)}%` : '—'} />
           </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <div className="rounded-lg bg-zinc-950/70 p-3">
-              <div className="text-[10px] text-zinc-500">Quote freshness</div>
-              <div className={`mt-1 font-mono text-lg font-semibold ${Number.isFinite(quoteAge) && quoteAge <= 15 ? 'text-emerald-300' : 'text-rose-300'}`}>
-                {Number.isFinite(quoteAge) ? `${number(quoteAge, 1)}s` : '—'}
-              </div>
-            </div>
-            <div className="rounded-lg bg-zinc-950/70 p-3">
-              <div className="text-[10px] text-zinc-500">Planned limit</div>
-              <div className="mt-1 font-mono text-lg font-semibold text-zinc-100">{money(plannedLimit)}</div>
-            </div>
-            <div className="rounded-lg bg-zinc-950/70 p-3">
-              <div className="text-[10px] text-zinc-500">Order debit</div>
-              <div className="mt-1 font-mono text-lg font-semibold text-zinc-100">{orderDebit > 0 ? money(orderDebit) : '—'}</div>
-            </div>
-          </div>
           <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
-            Entry remains blocked when the quote is older than 15 seconds or the spread fails the strategy quality gate.
+            {option.mark != null && Number.isFinite(Number(option.mark))
+              ? 'Entry remains blocked when the quote is older than 15 seconds or the spread fails the strategy quality gate.'
+              : 'IBKR did not provide a mark. Bid and ask can still support a protected planned limit, but entry remains blocked unless the complete quote passes freshness and spread checks.'}
           </p>
         </article>}
 
@@ -1816,20 +2099,33 @@ export default function DayTradingTerminal() {
             <Metric label="Gamma flip" value={money(primaryGex.flip || primaryGex.gamma_flip)} />
             <Metric label="Provider age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} />
           </div>
+          <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+            Fresh authoritative GEX is an entry gate. Regime and gamma levels are context unless a confirmation or blocker names them explicitly.
+          </p>
         </article>
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
-        <details id="setup-history" className="responsive-details group min-w-0 scroll-mt-4 rounded-xl border border-zinc-800 bg-[#101216]">
-          <summary className="flex cursor-pointer list-none items-start justify-between gap-3 p-4 sm:cursor-default sm:p-5">
+        <section id="setup-history" className="min-w-0 scroll-mt-4 rounded-xl border border-zinc-800 bg-[#101216]">
+          <div className="hidden p-5 sm:block">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
+            <h3 className="mt-1 text-base font-semibold text-zinc-100">Plans, execution and outcome</h3>
+          </div>
+          <button
+            type="button"
+            className="flex w-full cursor-pointer items-start justify-between gap-3 p-4 text-left sm:hidden"
+            onClick={() => setHistoryExpanded(value => !value)}
+            aria-expanded={historyExpanded}
+            aria-controls="setup-history-content"
+          >
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
               <h3 className="mt-1 text-base font-semibold text-zinc-100">Plans, execution and outcome</h3>
               <p className="mt-1 text-xs text-zinc-500">Collapsed on mobile · expand for complete lifecycle records.</p>
             </div>
-            <ChevronDown className="mt-1 h-4 w-4 shrink-0 text-zinc-500 transition-transform group-open:rotate-180 sm:hidden" />
-          </summary>
-          <div className="responsive-details-content border-t border-zinc-800 px-4 pb-4 sm:border-t-0 sm:px-5 sm:pb-5">
+            <ChevronDown className={`mt-1 h-4 w-4 shrink-0 text-zinc-500 transition-transform ${historyExpanded ? 'rotate-180' : ''}`} />
+          </button>
+          <div id="setup-history-content" className={`${historyExpanded ? 'block' : 'hidden'} border-t border-zinc-800 px-4 pb-4 sm:block sm:border-t-0 sm:px-5 sm:pb-5`}>
             <div className="flex justify-end pt-2 sm:pt-0">
               <Button variant="ghost" size="sm" className="h-8 justify-start px-2 text-[10px] text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => refetchHistory()}>
               <RefreshCw className="mr-1.5 h-3 w-3" /> Refresh history
@@ -1853,18 +2149,28 @@ export default function DayTradingTerminal() {
             )}
           </div>
           </div>
-        </details>
+        </section>
 
-        <details className="responsive-details group rounded-xl border border-zinc-800 bg-[#101216]">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 p-4 sm:cursor-default sm:p-5">
+        <section className="rounded-xl border border-zinc-800 bg-[#101216]">
+          <div className="hidden p-5 sm:block">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
+            <h3 className="mt-1 text-base font-semibold text-zinc-100">Entry-critical services</h3>
+          </div>
+          <button
+            type="button"
+            className="flex w-full cursor-pointer items-center justify-between gap-3 p-4 text-left sm:hidden"
+            onClick={() => setDiagnosticsExpanded(value => !value)}
+            aria-expanded={diagnosticsExpanded}
+            aria-controls="live-diagnostics-content"
+          >
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
               <h3 className="mt-1 text-base font-semibold text-zinc-100">Entry-critical services</h3>
               <p className="mt-1 text-xs text-zinc-500">Collapsed on mobile · provider-timestamp ages</p>
             </div>
-            <ChevronDown className="h-4 w-4 shrink-0 text-zinc-500 transition-transform group-open:rotate-180 sm:hidden" />
-          </summary>
-          <div className="responsive-details-content border-t border-zinc-800 px-4 pb-4 sm:border-t-0 sm:px-5 sm:pb-5">
+            <ChevronDown className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform ${diagnosticsExpanded ? 'rotate-180' : ''}`} />
+          </button>
+          <div id="live-diagnostics-content" className={`${diagnosticsExpanded ? 'block' : 'hidden'} border-t border-zinc-800 px-4 pb-4 sm:block sm:border-t-0 sm:px-5 sm:pb-5`}>
             <div className="mt-3 flex justify-end">
               <Link to="/system-health" className="text-[10px] font-semibold text-sky-300 hover:text-sky-200">Full health →</Link>
             </div>
@@ -1877,7 +2183,7 @@ export default function DayTradingTerminal() {
               </div>
             )}
           </div>
-        </details>
+        </section>
       </section>
 
       {signalsLoading && !currentSignal && (

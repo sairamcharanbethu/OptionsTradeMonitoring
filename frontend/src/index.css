@@ -330,9 +330,3 @@ a,
     line-height: 1rem;
   }
 }
-
-@media (min-width: 640px) {
-  .day-trading-terminal .responsive-details-content {
-    display: block;
-  }
-}

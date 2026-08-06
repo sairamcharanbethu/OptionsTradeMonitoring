@@ -246,6 +246,13 @@ export default function AppShell({ user, onUserUpdate, children }: {
       : !dataConnected
         ? 'Data offline'
         : marketStatus?.open ? 'Market open' : 'Market closed';
+  const shortStatusLabel = marketStatusLoading
+    ? 'Checking'
+    : marketStatusUnavailable
+      ? 'Unavailable'
+      : !dataConnected
+        ? 'Offline'
+        : marketStatus?.open ? 'Open' : 'Closed';
 
   return (
     <div className="min-h-[100dvh] bg-background text-foreground">
@@ -276,6 +283,7 @@ export default function AppShell({ user, onUserUpdate, children }: {
                 'h-2 w-2 rounded-full',
                 marketStatusLoading ? 'animate-pulse bg-zinc-400' : marketStatusUnavailable ? 'bg-amber-500' : dataConnected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500'
               )} aria-hidden="true" />
+              <span className="text-[10px] sm:text-xs md:hidden">{shortStatusLabel}</span>
               <span className="hidden md:inline">{statusLabel}</span>
             </Link>
             <SettingsDialog user={user} onUpdate={onUserUpdate} />
