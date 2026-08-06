@@ -103,6 +103,9 @@ async function run() {
   const pg = {
     query: async (sql: string, values: any[] = []) => {
       if (sql.includes('FROM positions p') && sql.includes("p.status='OPEN'")) return { rows: [openPosition] };
+      if (sql.includes('FROM positions p') && sql.includes('ORDER BY p.updated_at DESC')) {
+        return { rows: [{ ...openPosition, decision_rationale: 'Rules aligned', baseline_realized_pnl: 0 }] };
+      }
       if (sql.includes('SELECT * FROM paper_accounts')) return { rows: [{
         id: 'strategy-system',
         cash_balance: 99_903,
@@ -169,6 +172,8 @@ async function run() {
   assert.equal(equityRefreshes, 0, 'live paper repricing must not update PostgreSQL equity');
   const summary = await service.getAccountSummary();
   assert.equal(summary.openPositions[0].current_price, 1.31, 'paper summary must overlay the Redis option mark');
+  assert.equal(summary.recentPositions[0].current_price, 1.31, 'recent paper trade intelligence must overlay the Redis option mark for open positions');
+  assert.equal(summary.recentPositions[0].decision_rationale, 'Rules aligned', 'recent paper trades must retain decision evidence');
   assert.equal(summary.account.equity, 100_034, 'paper summary must calculate live equity from cash and the Redis mark');
   assert.equal(summary.session.pnl, 34, 'paper summary must calculate live session P&L without a PostgreSQL write');
   assert.equal(summary.limits.maxOpenPositions, null, 'paper trading must not expose a concurrent-position ceiling');

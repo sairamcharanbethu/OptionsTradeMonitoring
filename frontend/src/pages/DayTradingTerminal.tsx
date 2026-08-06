@@ -641,6 +641,7 @@ export default function DayTradingTerminal() {
   const [paperForceCloseAvailable, setPaperForceCloseAvailable] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
   const [paperExpanded, setPaperExpanded] = useState(false);
+  const [paperTransactionsExpanded, setPaperTransactionsExpanded] = useState(true);
   const [aiReviewExpanded, setAiReviewExpanded] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false);
@@ -999,6 +1000,20 @@ export default function DayTradingTerminal() {
           };
         });
         if (!matched) return current;
+        const recentPositions = current.recentPositions.map(position => (
+          Number(position.id) === Number(lastMessage.data.positionId)
+            ? {
+                ...position,
+                current_price: Number(lastMessage.data.currentPrice),
+                underlying_price: lastMessage.data.underlyingPrice == null ? position.underlying_price : Number(lastMessage.data.underlyingPrice),
+                trailing_high_price: Number(lastMessage.data.trailingHighPrice),
+                trailing_stop_loss_pct: Number(lastMessage.data.trailingStopPct),
+                suggested_stop_loss: lastMessage.data.suggestedStopLoss == null ? position.suggested_stop_loss : Number(lastMessage.data.suggestedStopLoss),
+                analysis_data: lastMessage.data.analysis,
+                updated_at: lastMessage.data.updatedAt
+              }
+            : position
+        ));
         const equity = Number((Number(current.account.cash_balance) + openPositions.reduce(
           (total, position) => total + Number(position.current_price || 0) * Number(position.quantity || 0) * 100,
           0
@@ -1013,6 +1028,7 @@ export default function DayTradingTerminal() {
             updated_at: lastMessage.data.updatedAt
           },
           openPositions,
+          recentPositions,
           session: {
             ...current.session,
             pnl: Number((equity - startOfDayEquity).toFixed(2)),
@@ -1830,6 +1846,281 @@ export default function DayTradingTerminal() {
               No paper decision yet. The account will evaluate the next fresh ACTIVE setup automatically.
             </div>
           )}
+
+          <section className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
+            <button
+              type="button"
+              className="flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-left"
+              onClick={() => setPaperTransactionsExpanded(value => !value)}
+              aria-expanded={paperTransactionsExpanded}
+              aria-controls="paper-transactions-content"
+            >
+              <div>
+                <div className="text-xs font-semibold text-zinc-300">Paper transactions</div>
+                <div className="mt-0.5 text-[10px] text-zinc-500">Filled, pending, expired, and rejected paper orders</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-zinc-500">{paperAccount.recentOrders.length}</span>
+                <ChevronDown className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${paperTransactionsExpanded ? 'rotate-180' : ''}`} />
+              </div>
+            </button>
+            <div id="paper-transactions-content" className={`${paperTransactionsExpanded ? 'block' : 'hidden'} border-t border-zinc-800`}>
+              {paperAccount.recentOrders.length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs text-zinc-500">No paper transactions have been recorded.</div>
+              ) : (
+                <>
+                  <div className="divide-y divide-zinc-800 sm:hidden">
+                    {paperAccount.recentOrders.slice(0, 20).map(order => {
+                      const fillPrice = Number(order.fill_price);
+                      const limitPrice = Number(order.limit_price);
+                      const quantity = Number(order.quantity || 0);
+                      const status = String(order.status || 'UNKNOWN').toUpperCase();
+                      const transactionValue = Number.isFinite(fillPrice) && fillPrice > 0
+                        ? fillPrice * quantity * 100
+                        : status === 'PENDING' ? Number(order.reserved_debit || 0) : 0;
+                      return (
+                        <article key={order.id} className="px-3 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-zinc-200">
+                                {humanContractName({ strike: order.strike, expiry: order.expiration }, order.option_type)}
+                              </div>
+                              <div className="mt-1 text-[10px] text-zinc-500">
+                                {order.intent.replace(/_/g, ' ')} · {order.action.replace(/_/g, ' ')} · {quantity} contract{quantity === 1 ? '' : 's'}
+                              </div>
+                            </div>
+                            <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] ${
+                              status === 'FILLED'
+                                ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-300'
+                                : status === 'PENDING'
+                                  ? 'border-amber-500/25 bg-amber-950/20 text-amber-300'
+                                  : 'border-zinc-700 bg-zinc-900 text-zinc-400'
+                            }`}>{status}</span>
+                          </div>
+                          <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px] text-zinc-400">
+                            <div><span className="block text-zinc-600">Limit</span>{Number.isFinite(limitPrice) && limitPrice > 0 ? money(limitPrice) : '—'}</div>
+                            <div><span className="block text-zinc-600">Fill</span>{Number.isFinite(fillPrice) && fillPrice > 0 ? money(fillPrice) : '—'}</div>
+                            <div><span className="block text-zinc-600">{status === 'PENDING' ? 'Reserved' : order.intent === 'ENTRY' ? 'Debit' : 'Credit'}</span>{transactionValue > 0 ? money(transactionValue) : '—'}</div>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-zinc-600">
+                            <span>{dateTime(order.filled_at || order.updated_at || order.created_at)}</span>
+                            <span className="select-all truncate font-mono" title={order.osi_ticker}>{order.osi_ticker}</span>
+                          </div>
+                          {order.failure_reason && <div className="mt-2 text-[10px] leading-relaxed text-rose-300">{order.failure_reason}</div>}
+                        </article>
+                      );
+                    })}
+                  </div>
+                  <div className="hidden overflow-x-auto sm:block">
+                    <table className="w-full min-w-[860px] text-xs">
+                      <thead className="bg-zinc-900/45 text-[10px] uppercase tracking-[0.08em] text-zinc-500">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Time</th>
+                          <th className="px-3 py-2 text-left">Transaction</th>
+                          <th className="px-3 py-2 text-left">Contract</th>
+                          <th className="px-3 py-2 text-right">Qty</th>
+                          <th className="px-3 py-2 text-right">Limit</th>
+                          <th className="px-3 py-2 text-right">Fill</th>
+                          <th className="px-3 py-2 text-right">Amount</th>
+                          <th className="px-3 py-2 text-right">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-800">
+                        {paperAccount.recentOrders.slice(0, 50).map(order => {
+                          const fillPrice = Number(order.fill_price);
+                          const limitPrice = Number(order.limit_price);
+                          const quantity = Number(order.quantity || 0);
+                          const status = String(order.status || 'UNKNOWN').toUpperCase();
+                          const transactionValue = Number.isFinite(fillPrice) && fillPrice > 0
+                            ? fillPrice * quantity * 100
+                            : status === 'PENDING' ? Number(order.reserved_debit || 0) : 0;
+                          return (
+                            <tr key={order.id} className="transition-colors hover:bg-zinc-900/35">
+                              <td className="whitespace-nowrap px-3 py-2.5 text-[10px] text-zinc-500">{dateTime(order.filled_at || order.updated_at || order.created_at)}</td>
+                              <td className="px-3 py-2.5">
+                                <div className="font-semibold text-zinc-300">{order.intent.replace(/_/g, ' ')}</div>
+                                <div className="mt-0.5 text-[10px] text-zinc-600">{order.action.replace(/_/g, ' ')}</div>
+                              </td>
+                              <td className="px-3 py-2.5">
+                                <div className="font-medium text-zinc-300">{humanContractName({ strike: order.strike, expiry: order.expiration }, order.option_type)}</div>
+                                <div className="mt-0.5 max-w-48 select-all truncate font-mono text-[9px] text-zinc-600" title={order.osi_ticker}>{order.osi_ticker}</div>
+                              </td>
+                              <td className="px-3 py-2.5 text-right font-mono text-zinc-400">{quantity}</td>
+                              <td className="px-3 py-2.5 text-right font-mono text-zinc-400">{Number.isFinite(limitPrice) && limitPrice > 0 ? money(limitPrice) : '—'}</td>
+                              <td className="px-3 py-2.5 text-right font-mono text-zinc-300">{Number.isFinite(fillPrice) && fillPrice > 0 ? money(fillPrice) : '—'}</td>
+                              <td className="px-3 py-2.5 text-right font-mono text-zinc-300">{transactionValue > 0 ? money(transactionValue) : '—'}</td>
+                              <td className={`px-3 py-2.5 text-right font-mono text-[10px] ${status === 'FILLED' ? 'text-emerald-300' : status === 'PENDING' ? 'text-amber-300' : 'text-zinc-500'}`}>{status}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+
+          <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
+              <div>
+                <div className="text-xs font-semibold text-zinc-300">Paper trade intelligence</div>
+                <div className="mt-0.5 text-[10px] text-zinc-500">Paper-only decision, execution, outcome, baseline, and lifecycle evidence</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[10px] text-zinc-500">{paperAccount.recentPositions.length} trades</span>
+                <ChevronDown className="h-3.5 w-3.5 text-zinc-500 transition-transform group-open:rotate-180" />
+              </div>
+            </summary>
+            <div className="border-t border-zinc-800 p-2 sm:p-3">
+              {paperAccount.recentPositions.length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs text-zinc-500">No filled paper trades are available for analysis.</div>
+              ) : (
+                <div className="space-y-2">
+                  {paperAccount.recentPositions.slice(0, 25).map(position => {
+                    const setupId = String(position.strategy_setup_id || '');
+                    const decisionId = Number(position.paper_decision_id || 0);
+                    const relatedOrders = paperAccount.recentOrders.filter(order => (
+                      Number(order.position_id || 0) === Number(position.id)
+                      || (setupId && order.setup_id === setupId)
+                      || (decisionId > 0 && Number(order.decision_id || 0) === decisionId)
+                    ));
+                    const relatedJournal = paperAccount.journal.filter(item => (
+                      Number(item.position_id || 0) === Number(position.id)
+                      || (setupId && item.setup_id === setupId)
+                      || (decisionId > 0 && Number(item.decision_id || 0) === decisionId)
+                    ));
+                    const initialQuantity = Math.max(1, Number(position.contracts_requested || position.quantity || 1));
+                    const entryPrice = Number(position.entry_price || 0);
+                    const currentPrice = Number(position.current_price || entryPrice);
+                    const isClosed = position.status === 'CLOSED';
+                    const tradePnl = isClosed
+                      ? Number(position.realized_pnl || 0)
+                      : Number(position.realized_pnl || 0) + (currentPrice - entryPrice) * Number(position.quantity || 0) * 100;
+                    const baselinePnl = Number(position.baseline_realized_pnl);
+                    const hasBaseline = position.baseline_realized_pnl != null && Number.isFinite(baselinePnl);
+                    const riskFlags = Array.isArray(position.decision_risk_flags) ? position.decision_risk_flags : [];
+                    const evidence = position.decision_evidence && typeof position.decision_evidence === 'object'
+                      ? position.decision_evidence
+                      : {};
+                    const analysis = position.analysis_data && typeof position.analysis_data === 'object'
+                      ? position.analysis_data
+                      : {};
+                    return (
+                      <details key={position.id} className="group/trade rounded-lg border border-zinc-800 bg-[#0d0f12]">
+                        <summary className="grid cursor-pointer list-none gap-3 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold text-zinc-200">
+                                {humanContractName({ strike: position.strike_price, expiry: position.expiration_date }, position.option_type)}
+                              </span>
+                              <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${
+                                isClosed
+                                  ? 'border-zinc-700 bg-zinc-900 text-zinc-400'
+                                  : 'border-sky-500/25 bg-sky-950/20 text-sky-300'
+                              }`}>{position.status}</span>
+                            </div>
+                            <div className="mt-1 text-[10px] text-zinc-500">
+                              {position.decision_source || 'Rules'} · {position.risk_tier || 'bounded'} risk · {String(position.exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
+                            </div>
+                          </div>
+                          <div className="sm:text-right">
+                            <div className={`font-mono text-sm font-semibold ${tradePnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                              {tradePnl >= 0 ? '+' : ''}{money(tradePnl)}
+                            </div>
+                            <div className="text-[9px] text-zinc-600">{isClosed ? 'realized' : 'unrealized'}</div>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 sm:justify-end">
+                            <span className="font-mono text-[10px] text-zinc-600">{dateTime(position.updated_at || position.created_at)}</span>
+                            <ChevronDown className="h-3.5 w-3.5 text-zinc-500 transition-transform group-open/trade:rotate-180" />
+                          </div>
+                        </summary>
+                        <div className="border-t border-zinc-800 p-3">
+                          <div className="grid gap-3 lg:grid-cols-3">
+                            <div className="rounded-lg bg-zinc-950/65 p-3">
+                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Execution and outcome</div>
+                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] text-zinc-500">
+                                <div>Entry <span className="block font-mono text-xs text-zinc-200">{money(entryPrice)}</span></div>
+                                <div>{isClosed ? 'Exit' : 'Current'} <span className="block font-mono text-xs text-zinc-200">{money(isClosed ? position.exit_price : currentPrice)}</span></div>
+                                <div>Original size <span className="block font-mono text-xs text-zinc-200">{initialQuantity}</span></div>
+                                <div>Duration <span className="block font-mono text-xs text-zinc-200">{duration(position.created_at, isClosed ? position.updated_at : null)}</span></div>
+                              </div>
+                              <div className="mt-2 border-t border-zinc-800 pt-2 text-[10px] text-zinc-500">
+                                Exit reason <span className="text-zinc-300">{String(position.exit_reason || 'Position remains open').replace(/_/g, ' ')}</span>
+                              </div>
+                            </div>
+
+                            <div className="rounded-lg bg-zinc-950/65 p-3">
+                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Decision intelligence</div>
+                              <div className="mt-2 text-xs leading-relaxed text-zinc-300">
+                                {position.decision_rationale || 'No decision rationale was recorded.'}
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400">{position.decision_source || 'RULES'}</span>
+                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400">{position.ai_requested ? 'AI reviewed' : 'Rules only'}</span>
+                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400">{String(evidence.strategyState || 'state unavailable')}</span>
+                              </div>
+                              {riskFlags.length > 0 && (
+                                <div className="mt-2 space-y-1 text-[10px] leading-relaxed text-amber-300">
+                                  {riskFlags.map((flag, index) => <div key={`${flag}-${index}`}>• {flag}</div>)}
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="rounded-lg bg-zinc-950/65 p-3">
+                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Risk policy and baseline</div>
+                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] text-zinc-500">
+                                <div>Policy <span className="block font-mono text-xs text-zinc-200">{position.policy_version || 'paper-exit-v2'}</span></div>
+                                <div>Premium trail <span className="block font-mono text-xs text-zinc-200">{Number(position.decision_trailing_stop_pct || position.trailing_stop_loss_pct || 0) > 0 ? `${number(position.decision_trailing_stop_pct || position.trailing_stop_loss_pct)}%` : '—'}</span></div>
+                                <div>Underlying stop <span className="block font-mono text-xs text-rose-200">{money(position.underlying_stop_price || position.suggested_stop_loss)}</span></div>
+                                <div>Target 2 <span className="block font-mono text-xs text-sky-200">{money(position.suggested_take_profit_2)}</span></div>
+                              </div>
+                              <div className="mt-2 border-t border-zinc-800 pt-2 text-[10px] text-zinc-500">
+                                1-contract baseline <span className="font-mono text-zinc-300">{hasBaseline ? money(baselinePnl) : '—'}</span>
+                                {isClosed && hasBaseline && (
+                                  <span className={`ml-2 font-mono ${tradePnl - baselinePnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                                    {tradePnl - baselinePnl >= 0 ? '+' : ''}{money(tradePnl - baselinePnl)} sizing value
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 grid gap-3 lg:grid-cols-[0.75fr_1.25fr]">
+                            <div className="rounded-lg border border-zinc-800 bg-zinc-950/35 p-3">
+                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Entry evidence</div>
+                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] text-zinc-500">
+                                <div>Bid <span className="block font-mono text-zinc-300">{money(evidence.bid)}</span></div>
+                                <div>Ask <span className="block font-mono text-zinc-300">{money(evidence.ask)}</span></div>
+                                <div>Quote age <span className="block font-mono text-zinc-300">{Number.isFinite(Number(evidence.quoteAgeSeconds)) ? `${number(evidence.quoteAgeSeconds, 1)}s` : '—'}</span></div>
+                                <div>Best premium <span className="block font-mono text-zinc-300">{money(analysis.trailingHighPremium || position.trailing_high_price)}</span></div>
+                              </div>
+                            </div>
+                            <div className="rounded-lg border border-zinc-800 bg-zinc-950/35 p-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Trade timeline</div>
+                                <div className="font-mono text-[9px] text-zinc-600">{relatedOrders.length} orders · {relatedJournal.length} events</div>
+                              </div>
+                              <div className="mt-2 max-h-48 space-y-2 overflow-y-auto pr-1">
+                                {relatedJournal.length > 0 ? [...relatedJournal].reverse().slice(-12).map(item => (
+                                  <div key={item.id} className="grid grid-cols-[4.5rem_1fr] gap-2 text-[10px]">
+                                    <span className="font-mono text-zinc-600">{time(item.created_at)}</span>
+                                    <span className="leading-relaxed text-zinc-400"><span className="font-semibold text-zinc-300">{item.event_type.replace(/_/g, ' ')}</span> · {item.message}</span>
+                                  </div>
+                                )) : (
+                                  <div className="text-[10px] text-zinc-600">No matching lifecycle events were recorded.</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </details>
 
           {paperAccount.journal.length > 0 && (
             <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">

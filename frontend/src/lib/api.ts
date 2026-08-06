@@ -243,10 +243,59 @@ export interface PaperAccountSummary {
     policy_version?: string;
     decision_trailing_stop_pct?: number | string;
   }>;
+  recentPositions: Array<Position & {
+    paper_decision_id?: number | string;
+    paper_decision?: 'TRADE' | 'SKIP';
+    risk_tier?: string;
+    exit_profile?: string;
+    decision_source?: string;
+    policy_version?: string;
+    decision_trailing_stop_pct?: number | string;
+    decision_rationale?: string | null;
+    decision_risk_flags?: string[] | null;
+    decision_evidence?: Record<string, any> | null;
+    ai_requested?: boolean;
+    baseline_realized_pnl?: number | string | null;
+    baseline_exit_reason?: string | null;
+  }>;
   recentDecisions: Array<Record<string, any>>;
-  recentOrders: Array<Record<string, any>>;
+  recentOrders: Array<{
+    id: number;
+    decision_id?: number | string | null;
+    position_id?: number | string | null;
+    setup_id?: string | null;
+    intent: string;
+    action: string;
+    status: string;
+    osi_ticker: string;
+    option_type: string;
+    strike: number | string;
+    expiration: string;
+    quantity: number | string;
+    limit_price?: number | string | null;
+    fill_price?: number | string | null;
+    reserved_debit?: number | string | null;
+    quote_snapshot?: Record<string, any> | null;
+    failure_reason?: string | null;
+    filled_at?: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
   monthlyReports: Array<{ month: string; report: Record<string, any>; generated_at: string }>;
-  journal: Array<{ id: number; event_type: string; message: string; policy_version: string; premium?: number | string | null; created_at: string }>;
+  journal: Array<{
+    id: number;
+    setup_id?: string | null;
+    decision_id?: number | string | null;
+    position_id?: number | string | null;
+    event_type: string;
+    message: string;
+    policy_version: string;
+    premium?: number | string | null;
+    underlying_price?: number | string | null;
+    quantity?: number | string | null;
+    metadata?: Record<string, any> | null;
+    created_at: string;
+  }>;
   session: { entries: number; entriesRemaining: number | null; pnl: number; pnlPct: number };
   limits: { maxDebitPct: number | null; dailyLossPct: number | null; maxTradesPerDay: number | null; maxOpenPositions: number | null; maxContracts: number | null; trailingStopPct: number; policyVersion: string };
   aiUsage: { dailyCalls: number; dailyCallLimit: number; dailyCallsRemaining: number; dailyTokens: number; monthlyCalls: number; monthlyTokens: number };
@@ -1463,7 +1512,12 @@ export const api = {
   async getPaperAccount(): Promise<PaperAccountSummary> {
     const res = await authFetch(`${API_BASE}/paper-account`);
     if (!res.ok) throw new Error('Failed to fetch the system paper account');
-    return res.json();
+    const data = await res.json();
+    return {
+      ...data,
+      openPositions: (data.openPositions || []).map(normalizePosition),
+      recentPositions: (data.recentPositions || []).map(normalizePosition)
+    };
   },
 
   async getWallReaction(): Promise<WallReactionState> {

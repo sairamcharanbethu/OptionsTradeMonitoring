@@ -82,7 +82,7 @@ export class PaperTradingService {
   public async getAccountSummary(): Promise<Record<string, any>> {
     const account = await this.account();
     const settings = await getGlobalSettings((this.fastify as any).pg);
-    const [positions, decisions, orders, reports, today, aiUsage, journal, baseline] = await Promise.all([
+    const [positions, recentPositions, decisions, orders, reports, today, aiUsage, journal, baseline] = await Promise.all([
       (this.fastify as any).pg.query(
         `SELECT p.*, ptd.risk_tier, ptd.exit_profile, ptd.source AS decision_source,
                 ptd.policy_version, ptd.trailing_stop_pct AS decision_trailing_stop_pct
@@ -92,10 +92,27 @@ export class PaperTradingService {
          ORDER BY p.created_at DESC`, [ACCOUNT_ID]
       ),
       (this.fastify as any).pg.query(
+        `SELECT p.*,
+                ptd.decision AS paper_decision, ptd.risk_tier, ptd.exit_profile,
+                ptd.source AS decision_source, ptd.policy_version,
+                ptd.trailing_stop_pct AS decision_trailing_stop_pct,
+                ptd.rationale AS decision_rationale, ptd.risk_flags AS decision_risk_flags,
+                ptd.evidence AS decision_evidence, ptd.ai_requested,
+                pbt.realized_pnl AS baseline_realized_pnl,
+                pbt.exit_reason AS baseline_exit_reason
+         FROM positions p
+         LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
+         LEFT JOIN paper_baseline_trades pbt
+           ON pbt.account_id=$1 AND pbt.position_id=p.id
+         WHERE p.paper_account_id=$1
+         ORDER BY p.updated_at DESC, p.id DESC
+         LIMIT 50`, [ACCOUNT_ID]
+      ),
+      (this.fastify as any).pg.query(
         `SELECT * FROM paper_trade_decisions WHERE account_id=$1 ORDER BY created_at DESC LIMIT 10`, [ACCOUNT_ID]
       ),
       (this.fastify as any).pg.query(
-        `SELECT * FROM paper_orders WHERE account_id=$1 ORDER BY created_at DESC LIMIT 15`, [ACCOUNT_ID]
+        `SELECT * FROM paper_orders WHERE account_id=$1 ORDER BY created_at DESC LIMIT 50`, [ACCOUNT_ID]
       ),
       (this.fastify as any).pg.query(
         `SELECT * FROM paper_monthly_reports WHERE account_id=$1 ORDER BY month DESC LIMIT 12`, [ACCOUNT_ID]
@@ -131,6 +148,11 @@ export class PaperTradingService {
       )
     ]);
     const openPositions = await this.applyLivePositions(positions.rows);
+    const openById = new Map(openPositions.map((position: any) => [Number(position.id), position]));
+    const recentTradePositions = recentPositions.rows.map((position: any) => ({
+      ...position,
+      ...(openById.get(Number(position.id)) || {})
+    }));
     const equity = this.calculateEquity(account, openPositions);
     const startOfDayEquity = Number(account.start_of_day_equity);
     return {
@@ -140,6 +162,7 @@ export class PaperTradingService {
         high_water_mark: Math.max(Number(account.high_water_mark || 0), equity)
       },
       openPositions,
+      recentPositions: recentTradePositions,
       recentDecisions: decisions.rows,
       recentOrders: orders.rows,
       monthlyReports: reports.rows,
