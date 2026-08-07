@@ -814,11 +814,37 @@ export default function DayTradingTerminal() {
   const currentStrategyCode = strategySignal?.strategy || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
   const spot = Number(strategySignal?.spot);
+  const marketContext = strategySignal?.market_context || {};
+  const vwap = marketContext.vwap == null ? Number.NaN : Number(marketContext.vwap);
+  const ema9FiveMinute = marketContext.ema9_5m == null ? Number.NaN : Number(marketContext.ema9_5m);
+  const ema21FiveMinute = marketContext.ema21_5m == null ? Number.NaN : Number(marketContext.ema21_5m);
+  const fiveMinuteStructure = Number.isFinite(ema9FiveMinute) && Number.isFinite(ema21FiveMinute)
+    ? ema9FiveMinute > ema21FiveMinute
+      ? 'Bullish'
+      : ema9FiveMinute < ema21FiveMinute
+        ? 'Bearish'
+        : 'Flat'
+    : 'Unavailable';
+  const spotVsVwap = Number.isFinite(spot) && Number.isFinite(vwap)
+    ? `${money(Math.abs(spot - vwap))} ${spot >= vwap ? 'above' : 'below'}`
+    : 'Unavailable';
   const trigger = Number(setup?.trigger);
   const invalidation = Number(setup?.invalidation);
   const exitTargetNumber = Math.max(1, Number(strategySignal?.paper_policy?.exit_after_target || 2));
   const targetOne = Number(targets[0]);
   const targetTwo = Number(targets[Math.min(exitTargetNumber, targets.length) - 1]);
+  const hasLevelPlan = Boolean(setup) && [
+    setup?.trigger,
+    setup?.invalidation,
+    targets[0],
+    targets[Math.min(exitTargetNumber, targets.length) - 1]
+  ].some(value => value != null && Number.isFinite(Number(value)));
+  const optionSelected = Boolean(
+    option.local_symbol
+    || option.ticker
+    || option.target_strike != null
+    || option.strike != null
+  );
   const rewardRisk = planRewardRisk;
   const spreadPct = optionSpreadPct(option);
   const rawBrokerName = String(linkedPosition?.execution_broker || currentSignal?.execution_broker || '');
@@ -858,7 +884,9 @@ export default function DayTradingTerminal() {
                       : 'The setup moved into management without an autonomous position linked to your account. Matching manual positions remain manually managed.'
                     : side
                       ? `The strategy currently favors ${side === 'CALL' ? 'calls' : 'puts'}, but no qualified entry exists.${strategyBlockers[0] ? ` Waiting on: ${strategyBlockers[0]}.` : ''} SPY is ${spotVsTrigger}.`
-                      : 'The strategy is monitoring SPY and has not opened a new entry window.';
+                      : strategyBlockers.includes('SPY 5m structure and VWAP are not aligned')
+                        ? `Entry session is open; waiting for 5-minute structure and VWAP alignment. Current view: ${fiveMinuteStructure.toLowerCase()} 5-minute structure, SPY ${spotVsVwap} VWAP.`
+                        : 'The strategy is monitoring SPY and has not produced a qualified setup.';
   const heartbeatLabel = executionSkipped
     ? 'Entry skipped'
     : executionNeedsReview
@@ -1432,16 +1460,30 @@ export default function DayTradingTerminal() {
                 </div>
               )}
 
-              <LevelRail
-                potential={!directionConfirmed}
-                levels={[
-                  { label: 'Stop', value: setup?.invalidation, tone: directionConfirmed ? 'text-rose-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-rose-400' : 'bg-zinc-500' },
-                  { label: 'Spot', value: strategySignal?.spot, tone: 'text-zinc-100', dot: 'bg-zinc-200' },
-                  { label: 'Trigger', value: setup?.trigger, tone: directionConfirmed ? 'text-emerald-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-emerald-400' : 'bg-zinc-500' },
-                  { label: 'T1', value: targetOne, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-400' : 'bg-zinc-500' },
-                  { label: `T${exitTargetNumber}`, value: targetTwo, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-300' : 'bg-zinc-500' }
-                ]}
-              />
+              {hasLevelPlan ? (
+                <LevelRail
+                  potential={!directionConfirmed}
+                  levels={[
+                    { label: 'Stop', value: setup?.invalidation, tone: directionConfirmed ? 'text-rose-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-rose-400' : 'bg-zinc-500' },
+                    { label: 'Spot', value: strategySignal?.spot, tone: 'text-zinc-100', dot: 'bg-zinc-200' },
+                    { label: 'Trigger', value: setup?.trigger, tone: directionConfirmed ? 'text-emerald-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-emerald-400' : 'bg-zinc-500' },
+                    { label: 'T1', value: targetOne, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-400' : 'bg-zinc-500' },
+                    { label: `T${exitTargetNumber}`, value: targetTwo, tone: directionConfirmed ? 'text-sky-200' : 'text-zinc-300', dot: directionConfirmed ? 'bg-sky-300' : 'bg-zinc-500' }
+                  ]}
+                />
+              ) : (
+                <div className="mt-5 rounded-lg border border-zinc-800/80 bg-black/15 px-3 py-3 sm:mt-6 sm:px-4">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">No level plan yet</div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-zinc-300">
+                    {strategyBlockers[0] || 'The strategy is waiting for a qualified directional setup.'}
+                  </p>
+                  <div className="mt-3 grid grid-cols-3 gap-2 border-t border-zinc-800/70 pt-3 font-mono text-[10px] tabular-nums text-zinc-500">
+                    <span>5m structure<br /><span className="text-zinc-300">{fiveMinuteStructure}</span></span>
+                    <span>VWAP<br /><span className="text-zinc-300">{Number.isFinite(vwap) ? money(vwap) : 'Unavailable'}</span></span>
+                    <span>SPY vs VWAP<br /><span className="text-zinc-300">{spotVsVwap}</span></span>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-4 rounded-lg border border-zinc-800/80 bg-zinc-950/45 p-3">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1475,7 +1517,7 @@ export default function DayTradingTerminal() {
                   </div>
                   <div className="grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-zinc-500 sm:text-right">
                     <span>Strategy {relativeAge(snapshotAge)}</span>
-                    <span>Quote {Number.isFinite(quoteAge) ? `${number(quoteAge, 1)}s` : '—'}</span>
+                    <span>Option quote {Number.isFinite(quoteAge) ? `${number(quoteAge, 1)}s` : optionSelected ? 'Unavailable' : 'Not selected'}</span>
                     <span>GEX {Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'}</span>
                     <span>{directionConfirmed ? 'R/R' : 'Plan R/R'} {Number.isFinite(rewardRisk) ? `${number(rewardRisk)}:1` : '—'}</span>
                   </div>
