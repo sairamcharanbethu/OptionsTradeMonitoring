@@ -4,6 +4,7 @@ import {
   BarChart3,
   BookOpen,
   BriefcaseBusiness,
+  Calculator,
   Check,
   ChevronDown,
   CircleUserRound,
@@ -78,6 +79,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Trade',
     targets: [
       { label: 'Manual Entry', description: 'Controlled SnapTrade entry', to: '/manual-entry', icon: Zap },
+      { label: 'Calculator', description: 'Plan option risk and exits', to: '/options-calculator', icon: Calculator },
       { label: 'Positions', description: 'Live and working orders', to: '/trades', icon: ListChecks }
     ]
   },
@@ -232,12 +234,16 @@ export default function AppShell({ user, onUserUpdate, children }: {
   const { theme, setTheme } = useTheme();
   const title = currentPageTitle(location.pathname, location.search);
   const strategyTargets = NAV_GROUPS.find(group => group.label === 'Strategies')!.targets;
-  const moreTargets = NAV_GROUPS
-    .filter(group => ['Monitor', 'Insights', 'System'].includes(group.label))
-    .flatMap(group => group.targets)
-    .filter(target => target.to !== '/?tab=overview' && (!target.adminOnly || user.role === 'ADMIN'));
+  const calculatorTarget = NAV_GROUPS.find(group => group.label === 'Trade')!.targets.find(target => target.to === '/options-calculator')!;
+  const moreTargets = [
+    ...NAV_GROUPS
+      .filter(group => ['Monitor', 'Insights', 'System'].includes(group.label))
+      .flatMap(group => group.targets)
+      .filter(target => target.to !== '/?tab=overview' && (!target.adminOnly || user.role === 'ADMIN')),
+    calculatorTarget
+  ];
   const homeTarget = NAV_GROUPS[0].targets[0];
-  const positionsTarget = NAV_GROUPS[2].targets[1];
+  const positionsTarget = NAV_GROUPS[2].targets.find(target => target.to === '/trades')!;
   const dataConnected = marketStatus?.connectionStatus === 'CONNECTED';
   const statusLabel = marketStatusLoading
     ? 'Checking status'
