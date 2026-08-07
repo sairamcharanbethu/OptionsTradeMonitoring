@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
-import { isAmbiguousSnapTradeOrderError, SnaptradeService } from './snaptrade-service';
+import { isAmbiguousSnapTradeOrderError, isBrokerSyncInProgressError, SnaptradeService } from './snaptrade-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { TradeRedisService } from './trade-redis-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
@@ -80,6 +80,7 @@ export class TradeExecutionService {
   private readonly ENTRY_LIMIT_MID_TO_ASK_OFFSET_PCT = 20;
   private readonly PLANNED_LOSS_FRACTION = 0.40;
   private readonly BROKER_SYNC_RETRY_BACKOFF_BASE_MS = 500;
+  private readonly BROKER_SYNC_ENTRY_MAX_ATTEMPTS = 13;
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
@@ -182,8 +183,19 @@ export class TradeExecutionService {
     try {
     if (broker === 'wealthsimple_snaptrade') {
       try {
-        const snaptradeService = new SnaptradeService(this.fastify);
-        await snaptradeService.syncPendingBrokerOrders(input.userId);
+        const brokerOrdersVerified = await this.reconcileBrokerOrdersBeforeEntry(input.userId);
+        if (!brokerOrdersVerified) {
+          const message = 'Entry remains eligible, but Wealthsimple order verification did not finish within the guarded retry window. No broker order was submitted.';
+          this.fastify.log.info(`[TradeExecutionService] ${message}`);
+          return {
+            success: false,
+            deferred: true,
+            retryable: true,
+            broker,
+            message,
+            riskCode: 'BROKER_SYNC_DEFERRED'
+          };
+        }
       } catch (err: any) {
         const message = `Could not verify Wealthsimple orders before entry: ${err.message || String(err)}`;
         await this.markSignalExecutionFailure(input.userId, input.signalId, message);
@@ -705,6 +717,22 @@ export class TradeExecutionService {
 
   private wait(ms: number) {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async reconcileBrokerOrdersBeforeEntry(userId: number): Promise<boolean> {
+    const snaptradeService = new SnaptradeService(this.fastify);
+    for (let attempt = 0; attempt < this.BROKER_SYNC_ENTRY_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        await snaptradeService.syncPendingBrokerOrders(userId);
+        return true;
+      } catch (err) {
+        if (!isBrokerSyncInProgressError(err)) throw err;
+        if (attempt === this.BROKER_SYNC_ENTRY_MAX_ATTEMPTS - 1) return false;
+        const delayMs = Math.min(this.BROKER_SYNC_RETRY_BACKOFF_BASE_MS * (2 ** attempt), 2_000);
+        await this.wait(delayMs);
+      }
+    }
+    return false;
   }
 
   private async getSignalOptionDetails(signalId: number): Promise<any> {

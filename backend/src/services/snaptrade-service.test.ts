@@ -1,5 +1,10 @@
 import '@fastify/postgres';
-import { SnaptradeService, SnapTradeOrderSubmissionError, SnapTradeRateLimitError } from './snaptrade-service';
+import {
+  BrokerSyncInProgressError,
+  SnaptradeService,
+  SnapTradeOrderSubmissionError,
+  SnapTradeRateLimitError
+} from './snaptrade-service';
 import { TradeRedisService } from './trade-redis-service';
 
 function assert(condition: boolean, message: string) {
@@ -577,6 +582,50 @@ async function testBrokerSyncSurvivesCacheRefreshFailure() {
   }
 }
 
+async function testConcurrentBrokerSyncsShareOneReconciliation() {
+  const firstService = new SnaptradeService(createFastifyMock()) as any;
+  const secondService = new SnaptradeService(createFastifyMock()) as any;
+  const summary = { success: true, checked: 0, opened: 0, closed: 0, trimmed: 0, stillPending: 0, unmatched: 0, errors: [] };
+  const syncControl: { release?: (value: any) => void } = {};
+  let syncRuns = 0;
+
+  firstService.runPendingBrokerOrderSync = async () => {
+    syncRuns += 1;
+    return new Promise(resolve => { syncControl.release = resolve; });
+  };
+  secondService.runPendingBrokerOrderSync = async () => {
+    syncRuns += 1;
+    return summary;
+  };
+
+  const first = firstService.syncPendingBrokerOrders(701);
+  const second = secondService.syncPendingBrokerOrders(701);
+  assert(syncRuns === 1, `Concurrent syncs for one user must share one run, got ${syncRuns}`);
+  assert(Boolean(syncControl.release), 'The first reconciliation should remain controllable for the test');
+  syncControl.release!(summary);
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert(firstResult === summary && secondResult === summary, 'Both callers must receive the shared reconciliation result');
+
+  await secondService.syncPendingBrokerOrders(701);
+  assert(syncRuns === 2, 'A completed reconciliation must be removed from the single-flight map');
+}
+
+async function testBrokerSyncLockContentionHasTypedRetryableError() {
+  const originalAcquireLock = TradeRedisService.acquireLock;
+  const service = new SnaptradeService(createFastifyMock());
+  let caught: unknown = null;
+  try {
+    (TradeRedisService as any).acquireLock = async () => ({ acquired: false, key: 'test-lock' });
+    await service.syncPendingBrokerOrders(702);
+  } catch (err) {
+    caught = err;
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+  }
+
+  assert(caught instanceof BrokerSyncInProgressError, 'Broker sync lock contention must be distinguishable from a genuine reconciliation failure');
+}
+
 async function testAllUserBrokerSyncRunsInParallelAndIsolatesFailures() {
   const service = new SnaptradeService(createFastifyMockWithQueries(async (sql: string) => {
     if (sql.includes('SELECT DISTINCT user_id')) return { rows: [{ user_id: 7 }, { user_id: 8 }, { user_id: 9 }] };
@@ -613,6 +662,8 @@ async function runTests() {
   await testSyntheticManualFillKeepsTakeProfitInsideApp();
   await testSyntheticStrategyFillKeepsFixedTakeProfitDisabled();
   await testBrokerSyncSurvivesCacheRefreshFailure();
+  await testConcurrentBrokerSyncsShareOneReconciliation();
+  await testBrokerSyncLockContentionHasTypedRetryableError();
   await testAllUserBrokerSyncRunsInParallelAndIsolatesFailures();
   console.log('All SnaptradeService order payload tests passed!');
 }

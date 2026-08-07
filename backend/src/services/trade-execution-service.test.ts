@@ -3,6 +3,7 @@ import { redis } from '../lib/redis';
 import { TradeExecutionService } from './trade-execution-service';
 import { TradeRedisService } from './trade-redis-service';
 import { RiskDecisionService } from './risk-decision-service';
+import { BrokerSyncInProgressError, SnaptradeService } from './snaptrade-service';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -716,6 +717,114 @@ async function testLiveEntryUsesCorrelatedExposureLockAndFailsClosed() {
   }
 }
 
+async function testEntryWaitsForOverlappingBrokerSync() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const originalSync = SnaptradeService.prototype.syncPendingBrokerOrders;
+  let attempts = 0;
+  let waits = 0;
+  try {
+    SnaptradeService.prototype.syncPendingBrokerOrders = async () => {
+      attempts += 1;
+      if (attempts === 1) throw new BrokerSyncInProgressError();
+      return { success: true } as any;
+    };
+    service.wait = async () => { waits += 1; };
+
+    const verified = await service.reconcileBrokerOrdersBeforeEntry(7);
+    assert(verified === true, 'Entry should continue after the overlapping broker sync finishes');
+    assert(attempts === 2 && waits === 1, `Expected one bounded wait and retry, got ${attempts} attempts and ${waits} waits`);
+  } finally {
+    SnaptradeService.prototype.syncPendingBrokerOrders = originalSync;
+  }
+}
+
+async function testEntryWaitsThroughBrokerSyncLockLifetime() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const originalSync = SnaptradeService.prototype.syncPendingBrokerOrders;
+  let attempts = 0;
+  let waitedMs = 0;
+  try {
+    SnaptradeService.prototype.syncPendingBrokerOrders = async () => {
+      attempts += 1;
+      throw new BrokerSyncInProgressError();
+    };
+    service.wait = async (delayMs: number) => { waitedMs += delayMs; };
+
+    const verified = await service.reconcileBrokerOrdersBeforeEntry(7);
+    assert(verified === false, 'Entry should remain deferred when another process retains reconciliation ownership');
+    assert(attempts === 13, `Expected 13 guarded reconciliation attempts, got ${attempts}`);
+    assert(waitedMs === 21_500, `Retry window must cover the 20-second broker lock lifetime, got ${waitedMs}ms`);
+  } finally {
+    SnaptradeService.prototype.syncPendingBrokerOrders = originalSync;
+  }
+}
+
+async function testBusyBrokerSyncDefersWithoutConsumingSignal() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const originalAcquireLock = TradeRedisService.acquireLock;
+  const originalReleaseLock = TradeRedisService.releaseLock;
+  let failureMarked = false;
+  let lockReleased = false;
+  try {
+    (TradeRedisService as any).acquireLock = async () => ({ acquired: true, key: 'entry-lock', token: 'token' });
+    (TradeRedisService as any).releaseLock = async () => { lockReleased = true; };
+    service.getSignalExecutionContract = async () => ({ engineVersion: 'signal-only-v2', optionDetails: { planned_contracts: 1 } });
+    service.getRiskState = async () => ({ maxCorrelatedPositions: 1 });
+    service.getExistingSignalExecution = async () => null;
+    service.getSignalSetupGrade = async () => 'A+';
+    service.reconcileBrokerOrdersBeforeEntry = async () => false;
+    service.markSignalExecutionFailure = async () => { failureMarked = true; };
+
+    const result = await service.executeSignal(createSignalInput({ symbol: 'SPY' }), {
+      execution_broker: 'wealthsimple_snaptrade',
+      snaptrade_auto_trade: 'true',
+      live_trading_acknowledged: 'true',
+      snaptrade_trading_account_id: '7:account',
+      contracts_per_trade: '1'
+    });
+
+    assert(result.retryable === true && result.riskCode === 'BROKER_SYNC_DEFERRED', 'Lock contention should leave the active setup eligible for a later retry');
+    assert(failureMarked === false, 'A busy reconciliation must not write FAILED or CANCELLED execution state');
+    assert(lockReleased, 'The entry exposure lock must be released after deferring');
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+    (TradeRedisService as any).releaseLock = originalReleaseLock;
+  }
+}
+
+async function testGenuineBrokerSyncFailureStillRequiresReview() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const originalAcquireLock = TradeRedisService.acquireLock;
+  const originalReleaseLock = TradeRedisService.releaseLock;
+  const failure: { recorded?: { message: string; skipped: boolean } } = {};
+  try {
+    (TradeRedisService as any).acquireLock = async () => ({ acquired: true, key: 'entry-lock', token: 'token' });
+    (TradeRedisService as any).releaseLock = async () => {};
+    service.getSignalExecutionContract = async () => ({ engineVersion: 'signal-only-v2', optionDetails: { planned_contracts: 1 } });
+    service.getRiskState = async () => ({ maxCorrelatedPositions: 1 });
+    service.getExistingSignalExecution = async () => null;
+    service.getSignalSetupGrade = async () => 'A+';
+    service.reconcileBrokerOrdersBeforeEntry = async () => { throw new Error('SnapTrade credentials are invalid'); };
+    service.markSignalExecutionFailure = async (_userId: number, _signalId: number, message: string, skipped: boolean) => {
+      failure.recorded = { message, skipped: Boolean(skipped) };
+    };
+
+    const result = await service.executeSignal(createSignalInput({ symbol: 'SPY' }), {
+      execution_broker: 'wealthsimple_snaptrade',
+      snaptrade_auto_trade: 'true',
+      live_trading_acknowledged: 'true',
+      snaptrade_trading_account_id: '7:account',
+      contracts_per_trade: '1'
+    });
+
+    assert(result.success === false && result.retryable !== true, 'A genuine reconciliation failure must not be treated as transient contention');
+    assert(failure.recorded?.skipped === false && failure.recorded.message.includes('credentials are invalid'), 'A genuine reconciliation failure must retain broker-review state');
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+    (TradeRedisService as any).releaseLock = originalReleaseLock;
+  }
+}
+
 async function testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim() {
   let revalidated = false;
   let claimCalled = false;
@@ -799,6 +908,10 @@ async function runTests() {
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   await testStrategyManagedSyntheticTrailUsesStrategyTargets();
   await testLiveEntryUsesCorrelatedExposureLockAndFailsClosed();
+  await testEntryWaitsForOverlappingBrokerSync();
+  await testEntryWaitsThroughBrokerSyncLockLifetime();
+  await testBusyBrokerSyncDefersWithoutConsumingSignal();
+  await testGenuineBrokerSyncFailureStillRequiresReview();
   await testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim();
   await testFreshQuotePlannedLossRespectsRemainingDailyBudget();
   await testStrategyStopRiskReplacesFlatDebitAssumption();

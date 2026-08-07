@@ -36,11 +36,26 @@ export class SnapTradeOrderSubmissionError extends Error {
     }
 }
 
+export class BrokerSyncInProgressError extends Error {
+    readonly code = 'BROKER_SYNC_IN_PROGRESS';
+
+    constructor() {
+        super('Broker order reconciliation is already running for this user.');
+        this.name = 'BrokerSyncInProgressError';
+    }
+}
+
+export function isBrokerSyncInProgressError(error: unknown): boolean {
+    return error instanceof BrokerSyncInProgressError
+        || (typeof error === 'object' && error !== null && (error as { code?: string }).code === 'BROKER_SYNC_IN_PROGRESS');
+}
+
 export function isAmbiguousSnapTradeOrderError(error: unknown): boolean {
     return error instanceof SnapTradeOrderSubmissionError && error.ambiguous;
 }
 
 export class SnaptradeService {
+    private static pendingBrokerOrderSyncs = new Map<number, Promise<any>>();
     private fastify: FastifyInstance;
 
     constructor(fastify: FastifyInstance) {
@@ -769,9 +784,24 @@ export class SnaptradeService {
     }
 
     async syncPendingBrokerOrders(userId: number) {
+        const existingSync = SnaptradeService.pendingBrokerOrderSyncs.get(userId);
+        if (existingSync) return existingSync;
+
+        const pendingSync = this.runPendingBrokerOrderSync(userId);
+        SnaptradeService.pendingBrokerOrderSyncs.set(userId, pendingSync);
+        try {
+            return await pendingSync;
+        } finally {
+            if (SnaptradeService.pendingBrokerOrderSyncs.get(userId) === pendingSync) {
+                SnaptradeService.pendingBrokerOrderSyncs.delete(userId);
+            }
+        }
+    }
+
+    private async runPendingBrokerOrderSync(userId: number) {
         const brokerSyncLock = await TradeRedisService.acquireLock(TradeRedisService.keys.brokerSyncLock(userId), 20);
         if (!brokerSyncLock.acquired) {
-            throw new Error('Broker order reconciliation is already running for this user.');
+            throw new BrokerSyncInProgressError();
         }
 
         try {
