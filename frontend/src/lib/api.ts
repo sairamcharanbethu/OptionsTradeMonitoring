@@ -129,7 +129,7 @@ export interface Position {
   loss_avoided?: number;
   current_price?: number;
   underlying_stop_price?: number;
-  status: 'PENDING_ORDER' | 'OPEN' | 'CLOSED' | 'STOP_TRIGGERED' | 'PROFIT_TRIGGERED';
+  status: 'PENDING_ORDER' | 'OPEN' | 'CLOSED' | 'VOIDED' | 'STOP_TRIGGERED' | 'PROFIT_TRIGGERED';
   created_at: string;
   updated_at: string;
   delta?: number;
@@ -911,6 +911,18 @@ export const api = {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to retry Wealthsimple close order');
+    }
+    return normalizePosition(await res.json());
+  },
+
+  async voidExpiredWealthsimpleTrade(id: number, confirmation: string): Promise<Position> {
+    const res = await authFetch(`${API_BASE}/trades/${id}/void-expired`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmation }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to void expired local position');
     }
     return normalizePosition(await res.json());
   },

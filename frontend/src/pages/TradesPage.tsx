@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BadgeDollarSign, Clock, ExternalLink, RefreshCw, Search, ShieldCheck, XCircle } from 'lucide-react';
+import { BadgeDollarSign, Clock, ExternalLink, RefreshCw, Search, ShieldAlert, ShieldCheck, XCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { api, ClosedTradesResponse, Position } from '../lib/api';
+import { api, ClosedTradesResponse, Position, User } from '../lib/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -68,6 +68,22 @@ const dteLabel = (trade: Position) => {
   return `${days}DTE`;
 };
 
+const newYorkDateKey = () => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value || '';
+  return `${value('year')}-${value('month')}-${value('day')}`;
+};
+
+const isExpiredTrade = (trade: Position) => {
+  const expiry = String(trade.expiration_date || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(expiry) && expiry < newYorkDateKey();
+};
+
 const isWorkingOrder = (trade: Position) => {
   const status = String(trade.execution_status || '');
   return ['PENDING_EXIT', 'PENDING_TRIM'].includes(status) || status.startsWith('EXIT_');
@@ -95,6 +111,8 @@ const stateLabel = (trade: Position) => {
     EXIT_RETRYABLE: 'Exit retry available',
     EXIT_REJECTED: 'Exit rejected',
     EXIT_FAILED: 'Exit failed',
+    VOIDED: 'Voided',
+    MANUAL_VOID: 'Manually voided',
     STOP_LOSS: 'Stop loss',
     TRAILING_STOP: 'Synthetic trailing stop',
     SYNTHETIC_TRAILING_STOP: 'Synthetic trailing stop',
@@ -129,7 +147,15 @@ const activeOrderId = (trade: Position) =>
 const canRetryClose = (trade: Position) =>
   ['EXIT_RETRYABLE', 'EXIT_REJECTED', 'EXIT_FAILED', 'EXIT_CANCELED', 'EXIT_CANCELLED', 'EXIT_EXPIRED', 'EXIT_STALE'].includes(String(trade.execution_status || ''))
   && trade.status === 'OPEN'
-  && (trade.execution_status === 'EXIT_RETRYABLE' || !!trade.broker_exit_order_id);
+  && (trade.execution_status === 'EXIT_RETRYABLE' || !!trade.broker_exit_order_id)
+  && !isExpiredTrade(trade);
+
+const canVoidExpiredTrade = (trade: Position) => {
+  const executionStatus = String(trade.execution_status || '');
+  return trade.status === 'OPEN'
+    && isExpiredTrade(trade)
+    && (executionStatus === 'PENDING_EXIT' || executionStatus.startsWith('EXIT_'));
+};
 
 type ClosedTradeRange = 'today' | 'past-day' | 'past-week' | 'past-month' | 'past-6-months' | 'past-year' | 'ytd';
 
@@ -192,7 +218,7 @@ function ExecutionIssue({ message }: { message?: string | null }) {
   );
 }
 
-export default function TradesPage() {
+export default function TradesPage({ user }: { user: User }) {
   const { lastMessage } = useWebSocket();
   const [openTrades, setOpenTrades] = useState<Position[]>([]);
   const [closedData, setClosedData] = useState<ClosedTradesResponse | null>(null);
@@ -203,6 +229,9 @@ export default function TradesPage() {
   const [syncingOrders, setSyncingOrders] = useState(false);
   const [syncingTradeId, setSyncingTradeId] = useState<number | null>(null);
   const [retryingTradeId, setRetryingTradeId] = useState<number | null>(null);
+  const [voidingTrade, setVoidingTrade] = useState<Position | null>(null);
+  const [voidConfirmation, setVoidConfirmation] = useState('');
+  const [submittingVoid, setSubmittingVoid] = useState(false);
   const [brokerHealth, setBrokerHealth] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState({
@@ -340,6 +369,29 @@ export default function TradesPage() {
     }
   };
 
+  const openVoidDialog = (trade: Position) => {
+    setVoidConfirmation('');
+    setVoidingTrade(trade);
+  };
+
+  const submitVoid = async () => {
+    if (!voidingTrade) return;
+    setSubmittingVoid(true);
+    setError(null);
+    try {
+      await api.voidExpiredWealthsimpleTrade(voidingTrade.id, voidConfirmation);
+      setOpenTrades((trades) => trades.filter((trade) => trade.id !== voidingTrade.id));
+      setVoidingTrade(null);
+      setVoidConfirmation('');
+      await refreshClosed();
+      await loadBrokerHealth();
+    } catch (err: any) {
+      setError(err.message || 'Failed to void expired local position');
+    } finally {
+      setSubmittingVoid(false);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -370,7 +422,7 @@ export default function TradesPage() {
       <Tabs defaultValue="open" className="space-y-4">
         <TabsList>
           <TabsTrigger value="open">Open</TabsTrigger>
-          <TabsTrigger value="closed">Closed</TabsTrigger>
+          <TabsTrigger value="closed">History</TabsTrigger>
         </TabsList>
 
         <TabsContent value="open" className="space-y-4">
@@ -432,6 +484,11 @@ export default function TradesPage() {
                           Retry close {Number(trade.exit_retry_count || 0)}/2
                         </Button>
                       )}
+                      {user.role === 'ADMIN' && canVoidExpiredTrade(trade) && (
+                        <Button variant="destructive" className="col-span-2 h-11" onClick={() => openVoidDialog(trade)}>
+                          Void expired local record
+                        </Button>
+                      )}
                     </div>
                   </article>
                 ))}
@@ -487,6 +544,12 @@ export default function TradesPage() {
                                 Retry {Number(trade.exit_retry_count || 0)}/2
                               </Button>
                             )}
+                            {user.role === 'ADMIN' && canVoidExpiredTrade(trade) && (
+                              <Button variant="destructive" size="sm" className="h-7 gap-2" onClick={() => openVoidDialog(trade)}>
+                                <ShieldAlert className="h-3.5 w-3.5" />
+                                Void local
+                              </Button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -506,6 +569,7 @@ export default function TradesPage() {
               ) : activeOpenTrades.map((trade) => {
                 const pnl = livePnl(trade);
                 const closeDisabled = trade.status !== 'OPEN'
+                  || isExpiredTrade(trade)
                   || ['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))
                   || String(trade.execution_status || '').startsWith('EXIT_');
                 return (
@@ -562,6 +626,7 @@ export default function TradesPage() {
                     const pnl = livePnl(trade);
                     const realizedTrimPnl = trimPnl(trade);
                     const closeDisabled = trade.status !== 'OPEN'
+                      || isExpiredTrade(trade)
                       || ['PENDING_EXIT', 'PENDING_TRIM'].includes(String(trade.execution_status || ''))
                       || String(trade.execution_status || '').startsWith('EXIT_');
                     return (
@@ -667,16 +732,18 @@ export default function TradesPage() {
               {loadingClosed ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">Loading closed trades...</div>
               ) : !closedData || closedData.trades.length === 0 ? (
-                <div className="py-8 text-center text-sm text-muted-foreground">No closed Wealthsimple trades match the filters.</div>
+                <div className="py-8 text-center text-sm text-muted-foreground">No Wealthsimple trade history matches the filters.</div>
               ) : closedData.trades.map((trade) => (
                 <article key={`closed-mobile-${trade.id}`} className="rounded-xl border border-border/70 bg-card/70 p-4">
                   <div className="flex items-start justify-between gap-3">
-                    <div><div className="font-semibold">{contractLabel(trade)}</div><div className="mt-1 text-xs text-muted-foreground">Closed {compactDate(trade.updated_at)}</div></div>
-                    <div className={`font-mono text-lg font-semibold ${(trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</div>
+                    <div><div className="font-semibold">{contractLabel(trade)}</div><div className="mt-1 text-xs text-muted-foreground">{trade.status === 'VOIDED' ? 'Voided' : 'Closed'} {compactDate(trade.updated_at)}</div></div>
+                    {trade.status === 'VOIDED'
+                      ? <div className="text-right text-xs font-medium text-muted-foreground">Not counted</div>
+                      : <div className={`font-mono text-lg font-semibold ${(trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</div>}
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-3 border-y border-border/60 py-3 text-sm">
                     <div><div className="text-xs text-muted-foreground">Entry</div><div className="font-mono">{currency(trade.entry_price)}</div></div>
-                    <div><div className="text-xs text-muted-foreground">Exit</div><div className="font-mono">{currency(trade.exit_price || trade.current_price)}</div></div>
+                    <div><div className="text-xs text-muted-foreground">Exit</div><div className="font-mono">{trade.status === 'VOIDED' ? '-' : currency(trade.exit_price || trade.current_price)}</div></div>
                     <div><div className="text-xs text-muted-foreground">Qty</div><div className="font-mono">{trade.quantity}</div></div>
                   </div>
                   <div className="mt-3 flex items-center justify-between gap-3">
@@ -690,7 +757,7 @@ export default function TradesPage() {
               <table className="w-full min-w-[1040px] text-sm">
                 <thead className="bg-muted/50 text-xs uppercase text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-3 text-left">Closed</th>
+                    <th className="px-3 py-3 text-left">Updated</th>
                     <th className="px-3 py-3 text-left">Contract</th>
                     <th className="px-3 py-3 text-center">DTE</th>
                     <th className="px-3 py-3 text-right">Qty</th>
@@ -705,7 +772,7 @@ export default function TradesPage() {
                   {loadingClosed ? (
                     <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">Loading closed trades...</td></tr>
                   ) : !closedData || closedData.trades.length === 0 ? (
-                    <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No closed Wealthsimple trades match the filters.</td></tr>
+                    <tr><td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">No Wealthsimple trade history matches the filters.</td></tr>
                   ) : closedData.trades.map((trade) => {
                     const realizedTrimPnl = trimPnl(trade);
                     return (
@@ -715,10 +782,10 @@ export default function TradesPage() {
                         <td className="px-3 py-3 text-center"><Badge variant="outline">{dteLabel(trade)}</Badge></td>
                         <td className="px-3 py-3 text-right font-mono">{trade.quantity}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.entry_price)}</td>
-                        <td className="px-3 py-3 text-right font-mono">{currency(trade.exit_price || trade.current_price)}</td>
-                        <td className={`px-3 py-3 text-right font-mono font-semibold ${(trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                          <div>{currency(trade.realized_pnl)}</div>
-                          {realizedTrimPnl !== 0 && <div className="text-[11px] font-normal text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>}
+                        <td className="px-3 py-3 text-right font-mono">{trade.status === 'VOIDED' ? '-' : currency(trade.exit_price || trade.current_price)}</td>
+                        <td className={`px-3 py-3 text-right font-mono font-semibold ${trade.status === 'VOIDED' ? 'text-muted-foreground' : (trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                          <div>{trade.status === 'VOIDED' ? 'Not counted' : currency(trade.realized_pnl)}</div>
+                          {trade.status !== 'VOIDED' && realizedTrimPnl !== 0 && <div className="text-[11px] font-normal text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex flex-wrap gap-1">
@@ -783,6 +850,65 @@ export default function TradesPage() {
             <Button variant="destructive" className="gap-2" onClick={submitClose} disabled={submittingClose}>
               {submittingClose ? <RefreshCw className="h-4 w-4 animate-spin" /> : <BadgeDollarSign className="h-4 w-4" />}
               Submit Live Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!voidingTrade} onOpenChange={(open) => {
+        if (!open && !submittingVoid) {
+          setVoidingTrade(null);
+          setVoidConfirmation('');
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-amber-500" />
+              Void expired local record
+            </DialogTitle>
+            <DialogDescription>
+              Use this only after confirming the contract is no longer open in Wealthsimple. This removes the stale local exposure and records an audit event. It does not submit, cancel, or modify any broker order, and it does not record realized P&amp;L.
+            </DialogDescription>
+          </DialogHeader>
+          {voidingTrade && (
+            <div className="space-y-4">
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Contract</span>
+                  <span className="text-right font-medium">{contractLabel(voidingTrade)}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Preserved broker order</span>
+                  <span className="break-all text-right font-mono text-xs">{activeOrderId(voidingTrade)}</span>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Last broker status</span>
+                  <span className="font-medium">{voidingTrade.last_broker_order_status || 'Unknown'}</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="void-confirmation">Type <span className="font-mono font-semibold">VOID {voidingTrade.id}</span> to confirm</Label>
+                <Input
+                  id="void-confirmation"
+                  value={voidConfirmation}
+                  onChange={(event) => setVoidConfirmation(event.target.value)}
+                  autoComplete="off"
+                  autoFocus
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVoidingTrade(null)} disabled={submittingVoid}>Keep position</Button>
+            <Button
+              variant="destructive"
+              className="gap-2"
+              onClick={submitVoid}
+              disabled={!voidingTrade || voidConfirmation.trim() !== `VOID ${voidingTrade.id}` || submittingVoid}
+            >
+              {submittingVoid ? <RefreshCw className="h-4 w-4 animate-spin" /> : <ShieldAlert className="h-4 w-4" />}
+              Void local record
             </Button>
           </DialogFooter>
         </DialogContent>

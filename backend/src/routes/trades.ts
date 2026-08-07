@@ -5,6 +5,12 @@ import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
 import { DiscordAlertService } from '../services/discord-alert-service';
 import { buildCommandReplayEventsQuery } from '../lib/trade-command-events';
+import {
+  getTradeVoidEligibility,
+  isTradeExpired,
+  isTradeVoidConfirmationValid,
+  tradeVoidSignalErrorPattern
+} from '../lib/trade-void';
 
 const tradeResponseSchema = {
   type: 'object',
@@ -63,6 +69,7 @@ function getTradeNextAction(trade: any) {
   const status = String(trade?.status || '');
   const executionStatus = String(trade?.execution_status || '');
 
+  if (status === 'VOIDED') return { label: 'Voided', detail: 'This expired local record was manually voided without submitting a broker order.' };
   if (status === 'CLOSED') return { label: 'Closed', detail: 'No further action is expected for this trade.' };
   if (status === 'PENDING_ORDER') return { label: 'Waiting for entry fill', detail: 'Broker reconciliation is watching the entry order.' };
   if (executionStatus === 'PENDING_TRIM') return { label: 'Trim pending', detail: 'Waiting for broker confirmation of the partial profit-taking order.' };
@@ -632,7 +639,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     const where = [
       'user_id = $1',
       "execution_broker = 'wealthsimple_snaptrade'",
-      "status = 'CLOSED'"
+      "status IN ('CLOSED', 'VOIDED')"
     ];
     const values: any[] = [userId];
 
@@ -649,18 +656,19 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       where.push(`symbol = $${values.length}`);
     }
     if (query.result === 'win') {
-      where.push('realized_pnl > 0');
+      where.push("status = 'CLOSED' AND realized_pnl > 0");
     } else if (query.result === 'loss') {
-      where.push('realized_pnl < 0');
+      where.push("status = 'CLOSED' AND realized_pnl < 0");
     }
 
     const whereSql = where.join(' AND ');
     const { rows: countRows } = await fastify.pg.query(
-      `SELECT COUNT(*)::int AS total,
-              COALESCE(SUM(realized_pnl), 0)::float AS total_pnl,
-              COUNT(*) FILTER (WHERE realized_pnl > 0)::int AS wins,
-              COUNT(*) FILTER (WHERE realized_pnl < 0)::int AS losses,
-              COALESCE(AVG(realized_pnl), 0)::float AS average_pnl
+      `SELECT COUNT(*) FILTER (WHERE status = 'CLOSED')::int AS total,
+              COUNT(*)::int AS record_count,
+              COALESCE(SUM(realized_pnl) FILTER (WHERE status = 'CLOSED'), 0)::float AS total_pnl,
+              COUNT(*) FILTER (WHERE status = 'CLOSED' AND realized_pnl > 0)::int AS wins,
+              COUNT(*) FILTER (WHERE status = 'CLOSED' AND realized_pnl < 0)::int AS losses,
+              COALESCE(AVG(realized_pnl) FILTER (WHERE status = 'CLOSED'), 0)::float AS average_pnl
        FROM positions
        WHERE ${whereSql}`,
       values
@@ -676,7 +684,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       listValues
     );
 
-    const summary = countRows[0] || { total: 0, total_pnl: 0, wins: 0, losses: 0, average_pnl: 0 };
+    const summary = countRows[0] || { total: 0, record_count: 0, total_pnl: 0, wins: 0, losses: 0, average_pnl: 0 };
     return {
       trades: rows,
       summary: {
@@ -689,8 +697,155 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       },
       page,
       limit,
-      totalPages: Math.ceil(Number(summary.total || 0) / limit)
+      totalPages: Math.ceil(Number(summary.record_count || 0) / limit)
     };
+  });
+
+  fastify.post('/:id/void-expired', {
+    schema: {
+      tags: ['Trades'],
+      summary: 'Void an expired local Wealthsimple position without submitting a broker order',
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['confirmation'],
+        properties: {
+          confirmation: { type: 'string', minLength: 1, maxLength: 80 }
+        },
+        additionalProperties: false
+      },
+      response: {
+        200: tradeResponseSchema,
+        400: { type: 'object', properties: { error: { type: 'string' } } },
+        403: { type: 'object', properties: { error: { type: 'string' } } },
+        404: { type: 'object', properties: { error: { type: 'string' } } },
+        409: { type: 'object', properties: { error: { type: 'string' } } }
+      }
+    }
+  }, async (request, reply) => {
+    const actor = (request as any).user;
+    if (String(actor?.role || '').toUpperCase() !== 'ADMIN') {
+      return reply.code(403).send({ error: 'Admin access required' });
+    }
+
+    const positionId = Number((request.params as { id: string }).id);
+    if (!Number.isInteger(positionId) || positionId <= 0) {
+      return reply.code(400).send({ error: 'Invalid position id' });
+    }
+    const { confirmation } = request.body as { confirmation: string };
+    if (!isTradeVoidConfirmationValid(positionId, confirmation)) {
+      return reply.code(400).send({ error: `Type VOID ${positionId} to confirm the local void` });
+    }
+
+    const exitLock = await TradeRedisService.acquireLock(TradeRedisService.keys.exitLock(positionId));
+    if (!exitLock.acquired) {
+      return reply.code(409).send({ error: 'An exit action is already in progress for this position' });
+    }
+    const brokerSyncLock = await TradeRedisService.acquireLock(TradeRedisService.keys.brokerSyncLock(actor.id), 30);
+    if (!brokerSyncLock.acquired || exitLock.degraded || brokerSyncLock.degraded) {
+      await TradeRedisService.releaseLock(brokerSyncLock);
+      await TradeRedisService.releaseLock(exitLock);
+      return reply.code(409).send({
+        error: exitLock.degraded || brokerSyncLock.degraded
+          ? 'Runtime coordination is unavailable; restore Redis before voiding this position'
+          : 'Broker order reconciliation is running; retry the local void after it finishes'
+      });
+    }
+
+    let client: any = null;
+    let transactionOpen = false;
+    try {
+      client = await fastify.pg.connect();
+      await client.query('BEGIN');
+      transactionOpen = true;
+      const { rows } = await client.query(
+        `SELECT *
+         FROM positions
+         WHERE id = $1
+           AND user_id = $2
+           AND execution_broker = 'wealthsimple_snaptrade'
+           AND COALESCE(is_simulated, FALSE) = FALSE
+         FOR UPDATE`,
+        [positionId, actor.id]
+      );
+      const trade = rows[0];
+      if (!trade) {
+        await client.query('ROLLBACK');
+        transactionOpen = false;
+        return reply.code(404).send({ error: 'Live Wealthsimple position not found' });
+      }
+
+      const eligibility = getTradeVoidEligibility(trade);
+      if (!eligibility.allowed) {
+        await client.query('ROLLBACK');
+        transactionOpen = false;
+        return reply.code(409).send({ error: eligibility.reason || 'Position cannot be voided' });
+      }
+
+      const { rows: updatedRows } = await client.query(
+        `UPDATE positions
+         SET status = 'VOIDED',
+             execution_status = 'VOIDED',
+             execution_error = NULL,
+             exit_reason = 'MANUAL_VOID',
+             strategy_lifecycle_status = CASE WHEN strategy_managed THEN 'VOIDED' ELSE strategy_lifecycle_status END,
+             strategy_exit_reason = CASE WHEN strategy_managed THEN 'MANUAL_VOID' ELSE strategy_exit_reason END,
+             notes = COALESCE(notes, '') || $1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2
+         RETURNING *`,
+        [` [Expired local record manually voided by admin user #${actor.id}; no broker order submitted]`, positionId]
+      );
+
+      const { rows: resolvedExecutions } = await client.query(
+        `UPDATE signal_user_executions
+         SET status = 'CANCELLED',
+             execution_status = 'VOIDED_BLOCKER_RESOLVED',
+             execution_error = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = $1
+           AND status <> 'EXECUTED'
+           AND broker_order_id IS NULL
+           AND broker_trade_id IS NULL
+           AND execution_error LIKE $2
+         RETURNING signal_id`,
+        [actor.id, tradeVoidSignalErrorPattern(positionId)]
+      );
+
+      await TradeRedisService.recordEvent(client, {
+        userId: actor.id,
+        signalId: trade.signal_id || null,
+        positionId,
+        eventType: 'POSITION_VOIDED',
+        message: 'Expired local Wealthsimple position manually voided; no broker order was submitted',
+        metadata: {
+          actorUserId: actor.id,
+          priorStatus: trade.status,
+          priorExecutionStatus: trade.execution_status || null,
+          priorExecutionError: trade.execution_error || null,
+          priorExitReason: trade.exit_reason || null,
+          expirationDate: trade.expiration_date,
+          brokerOrderId: trade.broker_order_id || null,
+          brokerExitOrderId: trade.broker_exit_order_id || null,
+          lastBrokerOrderStatus: trade.last_broker_order_status || null,
+          lastBrokerSyncAt: trade.last_broker_sync_at || null,
+          priorRealizedPnl: trade.realized_pnl ?? null,
+          resolvedSignalIds: resolvedExecutions.map((row: any) => Number(row.signal_id))
+        }
+      });
+      await client.query('COMMIT');
+      transactionOpen = false;
+
+      await TradeRedisService.rebuildOpenTradesBestEffort(fastify.pg, actor.id, fastify, 'manual expired-position void');
+      return updatedRows[0];
+    } catch (err) {
+      if (transactionOpen) await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client?.release();
+      await TradeRedisService.releaseLock(brokerSyncLock);
+      await TradeRedisService.releaseLock(exitLock);
+    }
   });
 
   fastify.post('/:id/close', {
@@ -722,6 +877,19 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
     }
 
     try {
+      const owned = await fastify.pg.query(
+        `SELECT expiration_date
+         FROM positions
+         WHERE id = $1
+           AND user_id = $2
+           AND execution_broker = 'wealthsimple_snaptrade'`,
+        [id, userId]
+      );
+      if (!owned.rows[0]) return reply.code(404).send({ error: 'Wealthsimple trade not found' });
+      if (isTradeExpired(owned.rows[0])) {
+        return reply.code(409).send({ error: 'This option contract is expired; a live close order cannot be submitted' });
+      }
+
       try {
         await snaptradeService.syncPendingBrokerOrders(userId);
       } catch (err: any) {
@@ -749,6 +917,10 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
         }
 
         const trade = rows[0];
+        if (isTradeExpired(trade)) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'This option contract is expired; a live close order cannot be submitted' });
+        }
         let acceptedOrder: any = null;
         try {
           TradeLifecycleService.assertCanRequestExit(trade);
@@ -931,7 +1103,7 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
 
     try {
     const owned = await fastify.pg.query(
-      `SELECT id
+      `SELECT id, expiration_date
        FROM positions
        WHERE id = $1
          AND user_id = $2
@@ -939,6 +1111,9 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       [id, userId]
     );
     if (!owned.rows[0]) return reply.code(404).send({ error: 'Wealthsimple trade not found' });
+    if (isTradeExpired(owned.rows[0])) {
+      return reply.code(409).send({ error: 'This option contract is expired; a live close retry cannot be submitted' });
+    }
 
     let sync: any;
     try {
@@ -974,6 +1149,10 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
         if (trade.status === 'CLOSED') {
           await client.query('ROLLBACK');
           return reply.code(409).send({ error: 'Broker sync already closed this trade; retry was not submitted.' });
+        }
+        if (isTradeExpired(trade)) {
+          await client.query('ROLLBACK');
+          return reply.code(409).send({ error: 'This option contract is expired; a live close retry cannot be submitted' });
         }
 
         const retryDecision = TradeLifecycleService.canRetryExit(trade);

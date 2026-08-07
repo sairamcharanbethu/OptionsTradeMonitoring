@@ -85,7 +85,7 @@ function App() {
             <Suspense fallback={<RouteLoader />}>
               <Routes>
                 <Route path="/" element={<Dashboard user={user} />} />
-                <Route path="/trades" element={<TradesPage />} />
+                <Route path="/trades" element={<TradesPage user={user} />} />
                 <Route path="/manual-entry" element={<ManualEntryPage />} />
                 <Route path="/options-calculator" element={<OptionsCalculatorPage />} />
                 <Route path="/covered-calls" element={<CoveredCallsPage />} />
