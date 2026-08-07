@@ -4,6 +4,7 @@ import { TradeExecutionService } from './trade-execution-service';
 import { TradeRedisService } from './trade-redis-service';
 import { RiskDecisionService } from './risk-decision-service';
 import { BrokerSyncInProgressError, SnaptradeService } from './snaptrade-service';
+import { TradeLifecycleService } from './trade-lifecycle-service';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -396,6 +397,8 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(existing.allowed === false && existing.code === 'EXISTING_SIGNAL_EXECUTION', 'Should block existing signal execution');
   assert(submitting.allowed === false, 'A durable pre-broker submission claim must block duplicate execution');
   assert(pendingReconcile.allowed === false, 'A broker-accepted order awaiting reconciliation must block duplicate execution');
+  assert(RiskDecisionService.forExistingSignalExecution(42, { status: 'PENDING', execution_status: 'DEFERRED_ENTRY' }).allowed,
+    'A deferred reversal without a broker order must remain eligible for guarded retry');
   assert(grade.allowed === false && grade.code === 'SETUP_GRADE_NOT_EXECUTABLE', 'Should block non-executable setup grade');
   assert(duplicate.allowed === false && duplicate.metadata?.duplicatePositionId === 679, 'Should block duplicate open entry with metadata');
   assert(duplicate.message.includes('manual position #679') && duplicate.message.includes('not linked'), 'A matching manual position should stay separate from the autonomous setup');
@@ -478,7 +481,30 @@ async function testDurableSubmissionClaim() {
   assert(claimed === true, 'A new live submission should acquire its durable database claim');
   assert(claimSql.includes("'SUBMITTING'"), 'The durable claim must be written before the external broker call');
   assert(claimSql.includes('broker_order_id IS NULL'), 'A claim retry must never overwrite a broker-identified order');
+  assert(claimSql.includes("'DEFERRED_ENTRY'"), 'A broker-confirmed reversal retry must be able to transition from deferred state to submission claim');
   assert(JSON.stringify(claimParams) === JSON.stringify([42, 7, 1]), `Unexpected submission claim parameters: ${JSON.stringify(claimParams)}`);
+}
+
+async function testDeferredExecutionStateClearsStaleBrokerReview() {
+  let sql = '';
+  let params: any[] = [];
+  const service = new TradeExecutionService({
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (query: string, values: any[] = []) => {
+        sql = query;
+        params = values;
+        return { rows: [], rowCount: 1 };
+      }
+    }
+  } as any) as any;
+  service.recordTradeEventBestEffort = async () => {};
+
+  await service.markSignalExecutionDeferred(7, 42, 'wealthsimple_snaptrade', 'Waiting for broker-confirmed close');
+  assert(sql.includes("execution_status = 'DEFERRED_ENTRY'"), 'Deferred reversal should have a non-terminal execution status');
+  assert(sql.includes('execution_error = NULL'), 'Deferred reversal should clear the stale broker-review error');
+  assert(sql.includes('broker_order_id IS NULL') && sql.includes('broker_trade_id IS NULL'), 'Deferred state must never overwrite a broker-identified entry');
+  assert(JSON.stringify(params) === JSON.stringify([42, 7, 'wealthsimple_snaptrade']), `Unexpected deferred execution params: ${JSON.stringify(params)}`);
 }
 
 async function testStrategyPlanCapsConfiguredQuantity() {
@@ -717,6 +743,36 @@ async function testLiveEntryUsesCorrelatedExposureLockAndFailsClosed() {
   }
 }
 
+async function testDeferredEntryLockCollisionReschedulesWithoutConsumingSignal() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const originalAcquireLock = TradeRedisService.acquireLock;
+  let retryQueued = false;
+  let failureMarked = false;
+  try {
+    (TradeRedisService as any).acquireLock = async () => ({ acquired: false, key: 'entry-lock', token: 'token' });
+    service.getSignalExecutionContract = async () => ({ engineVersion: 'signal-only-v2', optionDetails: { planned_contracts: 1 } });
+    service.getRiskState = async () => ({ maxCorrelatedPositions: 1 });
+    service.getExistingSignalExecution = async () => ({ status: 'PENDING', execution_status: 'DEFERRED_ENTRY' });
+    service.getSignalSetupGrade = async () => 'A+';
+    service.scheduleDeferredSignalRetry = () => { retryQueued = true; };
+    service.markSignalExecutionFailure = async () => { failureMarked = true; };
+
+    const result = await service.executeSignal(createSignalInput({ symbol: 'SPY' }), {
+      execution_broker: 'wealthsimple_snaptrade',
+      snaptrade_auto_trade: 'true',
+      live_trading_acknowledged: 'true',
+      snaptrade_trading_account_id: '7:account',
+      contracts_per_trade: '1'
+    });
+
+    assert(result.retryable === true && result.riskCode === 'ENTRY_LOCK_BUSY', 'A deferred retry should wait through its prior entry-lock release');
+    assert(retryQueued, 'A deferred entry-lock collision should schedule another guarded evaluation');
+    assert(failureMarked === false, 'A queued retry must not be consumed as a duplicate skipped entry');
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+  }
+}
+
 async function testEntryWaitsForOverlappingBrokerSync() {
   const service = new TradeExecutionService(createFastifyMock()) as any;
   const originalSync = SnaptradeService.prototype.syncPendingBrokerOrders;
@@ -825,6 +881,243 @@ async function testGenuineBrokerSyncFailureStillRequiresReview() {
   }
 }
 
+async function testSupersededRejectedExitRetriesOnlyAfterBrokerConfirmation() {
+  const position = {
+    id: 732,
+    user_id: 7,
+    symbol: 'SPY',
+    option_type: 'CALL',
+    status: 'OPEN',
+    execution_status: 'EXIT_REJECTED',
+    broker_exit_order_id: 'exit-order-732',
+    last_broker_order_status: 'REJECTED',
+    last_broker_sync_at: new Date().toISOString(),
+    exit_retry_count: 0,
+    execution_broker: 'wealthsimple_snaptrade',
+    is_simulated: false
+  };
+  const service = new TradeExecutionService({
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [position] }) }
+  } as any) as any;
+  let retryRequested = false;
+  service.submitSupersededExit = async (_position: any, _settings: any, _broker: any, _signalId: number, retry: boolean) => {
+    retryRequested = retry;
+    return true;
+  };
+  service.waitForSupersededExitResolution = async () => ({ state: 'closed', position: { ...position, status: 'CLOSED' } });
+  service.invalidateUserCaches = async () => {};
+
+  const summary = await service.closeSupersededPositions(
+    createSignalInput({ symbol: 'SPY', winningSide: 'PUT' }),
+    {},
+    'wealthsimple_snaptrade'
+  );
+
+  assert(retryRequested, 'A freshly broker-confirmed rejected close should use the bounded retry path');
+  assert(summary.closed === 1 && summary.blocked === false && summary.deferred === false, 'Opposite entry cleanup should finish only after broker-confirmed closure');
+}
+
+async function testSupersededPendingExitDefersOppositeEntryUntilClosed() {
+  const position = {
+    id: 733,
+    user_id: 7,
+    symbol: 'SPY',
+    option_type: 'CALL',
+    status: 'OPEN',
+    execution_status: 'PENDING_EXIT',
+    execution_broker: 'wealthsimple_snaptrade',
+    is_simulated: false
+  };
+  const service = new TradeExecutionService({
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [position] }) }
+  } as any) as any;
+  let exitSubmitted = false;
+  service.submitSupersededExit = async () => { exitSubmitted = true; return true; };
+  service.waitForSupersededExitResolution = async () => ({ state: 'pending', position });
+
+  const summary = await service.closeSupersededPositions(
+    createSignalInput({ symbol: 'SPY', winningSide: 'PUT' }),
+    {},
+    'wealthsimple_snaptrade'
+  );
+
+  assert(exitSubmitted === false, 'An already-pending close must not submit a duplicate exit');
+  assert(summary.deferred === true && summary.blocked === false, 'The opposite entry must remain deferred while the broker close is pending');
+}
+
+async function testSupersededRejectedExitWithoutBrokerEvidenceStaysBlocked() {
+  const position = {
+    id: 734,
+    user_id: 7,
+    symbol: 'SPY',
+    option_type: 'CALL',
+    status: 'OPEN',
+    execution_status: 'EXIT_REJECTED',
+    broker_exit_order_id: 'exit-order-734',
+    last_broker_order_status: 'UNKNOWN',
+    last_broker_sync_at: new Date().toISOString(),
+    exit_retry_count: 0,
+    execution_broker: 'wealthsimple_snaptrade',
+    is_simulated: false
+  };
+  const service = new TradeExecutionService({
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [position] }) }
+  } as any) as any;
+  let exitSubmitted = false;
+  service.submitSupersededExit = async () => { exitSubmitted = true; return true; };
+
+  const summary = await service.closeSupersededPositions(
+    createSignalInput({ symbol: 'SPY', winningSide: 'PUT' }),
+    {},
+    'wealthsimple_snaptrade'
+  );
+
+  assert(exitSubmitted === false, 'UNKNOWN broker evidence must not submit another close');
+  assert(summary.blocked === true && summary.message.includes('UNKNOWN'), 'Unsafe reversal should explain the broker evidence that blocked it');
+}
+
+async function testDeferredSupersededExitQueuesSignalWithoutFailureState() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  const originalAcquireLock = TradeRedisService.acquireLock;
+  const originalReleaseLock = TradeRedisService.releaseLock;
+  let failureMarked = false;
+  let retryQueued = false;
+  let deferredMarked = false;
+  let correlatedRiskChecked = false;
+  try {
+    (TradeRedisService as any).acquireLock = async () => ({ acquired: true, key: 'entry-lock', token: 'token' });
+    (TradeRedisService as any).releaseLock = async () => {};
+    service.getSignalExecutionContract = async () => ({ engineVersion: 'signal-only-v2', optionDetails: { planned_contracts: 1 } });
+    service.getRiskState = async () => ({ maxCorrelatedPositions: 1 });
+    service.getExistingSignalExecution = async () => null;
+    service.getSignalSetupGrade = async () => 'A+';
+    service.reconcileBrokerOrdersBeforeEntry = async () => true;
+    service.findDuplicateOpenEntry = async () => null;
+    service.closeSupersededPositions = async () => ({
+      checked: 1,
+      closed: 0,
+      supersededPending: 0,
+      errors: [],
+      blocked: false,
+      deferred: true,
+      message: 'Waiting for position #733 to close at Wealthsimple.'
+    });
+    service.scheduleDeferredSignalRetry = () => { retryQueued = true; };
+    service.markSignalExecutionDeferred = async () => { deferredMarked = true; };
+    service.getCorrelatedOpenPositions = async () => { correlatedRiskChecked = true; return []; };
+    service.markSignalExecutionFailure = async () => { failureMarked = true; };
+
+    const result = await service.executeSignal(createSignalInput({ symbol: 'SPY', winningSide: 'PUT' }), {
+      execution_broker: 'wealthsimple_snaptrade',
+      snaptrade_auto_trade: 'true',
+      live_trading_acknowledged: 'true',
+      snaptrade_trading_account_id: '7:account',
+      contracts_per_trade: '1'
+    });
+
+    assert(result.retryable === true && result.riskCode === 'SUPERSEDED_EXIT_PENDING', 'Pending reversal close should return a retryable deferred result');
+    assert(retryQueued, 'Pending reversal close should queue the active signal for another guarded evaluation');
+    assert(deferredMarked, 'Pending reversal close should replace stale failure UI with a non-terminal deferred state');
+    assert(failureMarked === false, 'Pending reversal close must not consume the signal as FAILED or CANCELLED');
+    assert(correlatedRiskChecked === false, 'No opposite-entry risk path may run before the old position is broker-confirmed closed');
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+    (TradeRedisService as any).releaseLock = originalReleaseLock;
+  }
+}
+
+async function testDeferredSignalRetryRevalidatesLifecycleBeforeExecution() {
+  let executionAttempted = false;
+  let skippedMarked = false;
+  const fastify = createFastifyMock();
+  fastify.strategyEngine = {
+    assertSignalExecutable: async () => { throw new Error('Setup expired'); }
+  };
+  const service = new TradeExecutionService(fastify) as any;
+  service.executeSignal = async () => { executionAttempted = true; return { success: true }; };
+  service.markSignalExecutionFailure = async (_userId: number, _signalId: number, _message: string, skipped: boolean) => {
+    skippedMarked = skipped;
+  };
+
+  const result = await service.runDeferredSignalRetry(createSignalInput(), {});
+  assert(result === null, 'An expired setup should end the deferred reversal queue');
+  assert(executionAttempted === false, 'Deferred reversal must revalidate strategy lifecycle before re-entering execution');
+  assert(skippedMarked, 'An expired deferred setup should end in an explicit skipped state');
+}
+
+async function testSimulatedSupersededClosureNeverCallsBrokerSync() {
+  const service = new TradeExecutionService(createFastifyMock()) as any;
+  let brokerSyncCalled = false;
+  service.getPositionById = async () => ({
+    id: 736,
+    status: 'CLOSED',
+    is_simulated: true,
+    execution_broker: 'simulated'
+  });
+  service.reconcileBrokerOrdersBeforeEntry = async () => { brokerSyncCalled = true; return true; };
+
+  const result = await service.waitForSupersededExitResolution(7, 736);
+  assert(result.state === 'closed', 'A simulated superseded close should resolve from its local ledger state');
+  assert(brokerSyncCalled === false, 'Paper/simulated reversals must never call Wealthsimple reconciliation');
+}
+
+async function testSupersededExitRaceDoesNotOverwritePendingBrokerState() {
+  const originalAcquireLock = TradeRedisService.acquireLock;
+  const originalReleaseLock = TradeRedisService.releaseLock;
+  const originalSync = SnaptradeService.prototype.syncPendingBrokerOrders;
+  const originalMarkFailure = TradeLifecycleService.markExitSubmissionFailure;
+  let failureMarked = false;
+  try {
+    (TradeRedisService as any).acquireLock = async () => ({ acquired: true, key: 'exit-lock', token: 'token' });
+    (TradeRedisService as any).releaseLock = async () => {};
+    SnaptradeService.prototype.syncPendingBrokerOrders = async () => ({ success: true } as any);
+    (TradeLifecycleService as any).markExitSubmissionFailure = async () => { failureMarked = true; };
+    const service = new TradeExecutionService({
+      log: { info: () => {}, warn: () => {}, error: () => {} },
+      pg: {
+        query: async (sql: string) => {
+          if (sql.includes('SELECT *') && sql.includes('FROM positions')) {
+            return { rows: [{
+              id: 735,
+              user_id: 7,
+              status: 'OPEN',
+              execution_status: 'PENDING_EXIT',
+              execution_broker: 'wealthsimple_snaptrade',
+              is_simulated: false
+            }] };
+          }
+          return { rows: [] };
+        }
+      }
+    } as any) as any;
+
+    let rejected = false;
+    try {
+      await service.submitSupersededExit({
+        id: 735,
+        user_id: 7,
+        status: 'OPEN',
+        execution_status: 'OPEN',
+        execution_broker: 'wealthsimple_snaptrade',
+        is_simulated: false
+      }, {}, 'wealthsimple_snaptrade', 42, false);
+    } catch (err: any) {
+      rejected = String(err.message || '').includes('already pending');
+    }
+
+    assert(rejected, 'A close that became pending during reconciliation must stop the duplicate submission');
+    assert(failureMarked === false, 'A pre-submission state race must not overwrite PENDING_EXIT with EXIT_RETRYABLE');
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+    (TradeRedisService as any).releaseLock = originalReleaseLock;
+    SnaptradeService.prototype.syncPendingBrokerOrders = originalSync;
+    (TradeLifecycleService as any).markExitSubmissionFailure = originalMarkFailure;
+  }
+}
+
 async function testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim() {
   let revalidated = false;
   let claimCalled = false;
@@ -902,16 +1195,25 @@ async function runTests() {
   await testShadowModeNeverResolvesToLiveBroker();
   await testDuplicateSignalPreservesExecutedRecord();
   await testDurableSubmissionClaim();
+  await testDeferredExecutionStateClearsStaleBrokerReview();
   await testStrategyPlanCapsConfiguredQuantity();
   await testStrategyDebitPlanUsesSubmittedLimit();
   await testPreSubmitRiskDenialSkipsBeforeBrokerPath();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   await testStrategyManagedSyntheticTrailUsesStrategyTargets();
   await testLiveEntryUsesCorrelatedExposureLockAndFailsClosed();
+  await testDeferredEntryLockCollisionReschedulesWithoutConsumingSignal();
   await testEntryWaitsForOverlappingBrokerSync();
   await testEntryWaitsThroughBrokerSyncLockLifetime();
   await testBusyBrokerSyncDefersWithoutConsumingSignal();
   await testGenuineBrokerSyncFailureStillRequiresReview();
+  await testSupersededRejectedExitRetriesOnlyAfterBrokerConfirmation();
+  await testSupersededPendingExitDefersOppositeEntryUntilClosed();
+  await testSupersededRejectedExitWithoutBrokerEvidenceStaysBlocked();
+  await testDeferredSupersededExitQueuesSignalWithoutFailureState();
+  await testDeferredSignalRetryRevalidatesLifecycleBeforeExecution();
+  await testSimulatedSupersededClosureNeverCallsBrokerSync();
+  await testSupersededExitRaceDoesNotOverwritePendingBrokerState();
   await testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim();
   await testFreshQuotePlannedLossRespectsRemainingDailyBudget();
   await testStrategyStopRiskReplacesFlatDebitAssumption();

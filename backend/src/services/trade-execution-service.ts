@@ -71,7 +71,18 @@ type EntryQuoteValidation = {
   stabilityMovePct: number | null;
 };
 
+type SupersededExitResolution = {
+  state: 'closed' | 'open' | 'pending' | 'review';
+  position: any;
+};
+
+type DeferredSignalRetryState = {
+  startedAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+};
+
 export class TradeExecutionService {
+  private static deferredSignalRetries = new Map<string, DeferredSignalRetryState>();
   constructor(private fastify: FastifyInstance) {}
 
   private readonly ENTRY_MAX_QUOTE_AGE_MS = 2_000;
@@ -81,6 +92,9 @@ export class TradeExecutionService {
   private readonly PLANNED_LOSS_FRACTION = 0.40;
   private readonly BROKER_SYNC_RETRY_BACKOFF_BASE_MS = 500;
   private readonly BROKER_SYNC_ENTRY_MAX_ATTEMPTS = 13;
+  private readonly SUPERSEDED_EXIT_CONFIRMATION_ATTEMPTS = 4;
+  private readonly DEFERRED_SIGNAL_RETRY_DELAY_MS = 2_000;
+  private readonly DEFERRED_SIGNAL_RETRY_MAX_AGE_MS = 10 * 60_000;
   public async getSettingsForUser(userId: number): Promise<ExecutionSettings> {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
 
@@ -170,11 +184,21 @@ export class TradeExecutionService {
     );
     const entryLock = await TradeRedisService.acquireLock(entryLockKey, broker === 'wealthsimple_snaptrade' ? 120 : 30);
     if (!entryLock.acquired) {
+      if (String(existingExecution?.execution_status || '').toUpperCase() === 'DEFERRED_ENTRY') {
+        const message = 'Deferred entry is waiting for the prior per-user execution lock to finish.';
+        this.scheduleDeferredSignalRetry(input, settings);
+        return { success: false, deferred: true, retryable: true, broker, message, riskCode: 'ENTRY_LOCK_BUSY' };
+      }
       const message = `Skipped duplicate entry: ${this.contractLabel(input)} already has an entry request in progress`;
       await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
       return { success: false, skipped: true, broker, message };
     }
     if (entryLock.degraded && broker === 'wealthsimple_snaptrade') {
+      if (String(existingExecution?.execution_status || '').toUpperCase() === 'DEFERRED_ENTRY') {
+        const message = 'Deferred live entry is waiting for the protected exposure lock to recover.';
+        this.scheduleDeferredSignalRetry(input, settings);
+        return { success: false, deferred: true, retryable: true, broker, message, riskCode: 'ENTRY_LOCK_DEGRADED' };
+      }
       const message = 'Live entry blocked because the exposure lock is unavailable';
       await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
       return { success: false, skipped: true, broker, message };
@@ -187,6 +211,8 @@ export class TradeExecutionService {
         if (!brokerOrdersVerified) {
           const message = 'Entry remains eligible, but Wealthsimple order verification did not finish within the guarded retry window. No broker order was submitted.';
           this.fastify.log.info(`[TradeExecutionService] ${message}`);
+          await this.markSignalExecutionDeferred(input.userId, input.signalId, broker, message);
+          this.scheduleDeferredSignalRetry(input, settings);
           return {
             success: false,
             deferred: true,
@@ -218,6 +244,19 @@ export class TradeExecutionService {
     if (supersededSummary.blocked) {
       await this.markSignalExecutionFailure(input.userId, input.signalId, supersededSummary.message);
       return { success: false, broker, message: supersededSummary.message, superseded: supersededSummary };
+    }
+    if (supersededSummary.deferred) {
+      await this.markSignalExecutionDeferred(input.userId, input.signalId, broker, supersededSummary.message);
+      this.scheduleDeferredSignalRetry(input, settings);
+      return {
+        success: false,
+        deferred: true,
+        retryable: true,
+        broker,
+        message: supersededSummary.message,
+        riskCode: 'SUPERSEDED_EXIT_PENDING',
+        superseded: supersededSummary
+      };
     }
 
     const correlatedPositions = await this.getCorrelatedOpenPositions(input.userId, input.symbol, broker);
@@ -502,7 +541,6 @@ export class TradeExecutionService {
          AND option_type <> $3
          AND status IN ('OPEN', 'PENDING_ORDER')
          AND ${this.executionScopeSql(broker)}
-         AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')
        ORDER BY created_at DESC`,
       [input.userId, input.symbol, input.winningSide]
     );
@@ -513,23 +551,16 @@ export class TradeExecutionService {
       supersededPending: 0,
       errors: [] as string[],
       blocked: false,
+      deferred: false,
       message: ''
     };
 
     for (const position of positions) {
       try {
-        if (TradeLifecycleService.isBrokerExitReviewStatus(position.execution_status)) {
-          throw new Error(`Position has ${position.execution_status}; verify broker status before opening the opposite signal`);
-        }
-
-        if (position.status === 'PENDING_ORDER') {
-          await this.markPendingPositionSuperseded(position, settings, broker, input.signalId);
-          summary.supersededPending += 1;
-          continue;
-        }
-
-        const closed = await this.submitSupersededExit(position, settings, broker, input.signalId);
-        if (closed) summary.closed += 1;
+        const outcome = await this.resolveSupersededPosition(position, settings, broker, input.signalId);
+        if (outcome.closed) summary.closed += 1;
+        if (outcome.supersededPending) summary.supersededPending += 1;
+        if (outcome.deferred) summary.deferred = true;
       } catch (err: any) {
         const message = `Position #${position.id}: ${err.message || String(err)}`;
         summary.errors.push(message);
@@ -540,6 +571,8 @@ export class TradeExecutionService {
     if (summary.errors.length > 0) {
       summary.blocked = true;
       summary.message = `Superseded ${input.symbol} order cleanup failed: ${summary.errors.join('; ')}`;
+    } else if (summary.deferred) {
+      summary.message = `Waiting for Wealthsimple to confirm the superseded ${input.symbol} position is closed before opening the opposite signal.`;
     }
 
     if (summary.closed > 0 || summary.supersededPending > 0) {
@@ -553,6 +586,78 @@ export class TradeExecutionService {
     }
 
     return summary;
+  }
+
+  private async resolveSupersededPosition(position: any, settings: ExecutionSettings, broker: ExecutionBroker, signalId: number) {
+    let current = position;
+    let supersededPending = false;
+    const maxTransitions = TradeLifecycleService.MAX_EXIT_RETRIES + 5;
+
+    for (let transition = 0; transition < maxTransitions; transition += 1) {
+      if (!current || current.status === 'CLOSED') {
+        return { closed: true, deferred: false, supersededPending };
+      }
+
+      if (current.status === 'PENDING_ORDER') {
+        await this.markPendingPositionSuperseded(current, settings, broker, signalId);
+        supersededPending = true;
+        current = await this.getPositionById(current.id);
+        continue;
+      }
+
+      const executionStatus = String(current.execution_status || '');
+      if (TradeLifecycleService.isPendingExitStatus(executionStatus)) {
+        const resolution = await this.waitForSupersededExitResolution(Number(current.user_id), current.id);
+        if (resolution.state === 'closed') return { closed: true, deferred: false, supersededPending };
+        if (resolution.state === 'pending') return { closed: false, deferred: true, supersededPending };
+        current = resolution.position;
+        continue;
+      }
+
+      const retry = TradeLifecycleService.isBrokerExitReviewStatus(executionStatus);
+      if (retry) {
+        const retryDecision = TradeLifecycleService.canAutoRetryExit(current);
+        if (!retryDecision.allowed) {
+          throw new Error(`Position has ${executionStatus}; ${retryDecision.reason || 'verify broker status before opening the opposite signal'}`);
+        }
+      }
+
+      await this.submitSupersededExit(current, settings, broker, signalId, retry);
+      const resolution = await this.waitForSupersededExitResolution(Number(current.user_id), current.id);
+      if (resolution.state === 'closed') return { closed: true, deferred: false, supersededPending };
+      if (resolution.state === 'pending') return { closed: false, deferred: true, supersededPending };
+      current = resolution.position;
+    }
+
+    throw new Error(`Position #${position.id} did not reach a safe terminal state within the bounded reversal workflow`);
+  }
+
+  private async getPositionById(positionId: number | string) {
+    const { rows } = await this.fastify.pg.query('SELECT * FROM positions WHERE id = $1', [positionId]);
+    return rows[0] || null;
+  }
+
+  private async waitForSupersededExitResolution(userId: number, positionId: number | string): Promise<SupersededExitResolution> {
+    let position: any = await this.getPositionById(positionId);
+    if (!position) throw new Error(`Position #${positionId} disappeared before broker reconciliation`);
+    if (position.status === 'CLOSED') return { state: 'closed', position };
+    if (position.is_simulated || String(position.execution_broker || '') !== 'wealthsimple_snaptrade') {
+      return { state: 'open', position };
+    }
+    for (let attempt = 0; attempt < this.SUPERSEDED_EXIT_CONFIRMATION_ATTEMPTS; attempt += 1) {
+      if (attempt > 0) {
+        const delayMs = Math.min(this.BROKER_SYNC_RETRY_BACKOFF_BASE_MS * (2 ** (attempt - 1)), 2_000);
+        await this.wait(delayMs);
+      }
+      const verified = await this.reconcileBrokerOrdersBeforeEntry(userId);
+      if (!verified) return { state: 'pending', position };
+      position = await this.getPositionById(positionId);
+      if (!position) throw new Error(`Position #${positionId} disappeared during broker reconciliation`);
+      if (position.status === 'CLOSED') return { state: 'closed', position };
+      if (TradeLifecycleService.isBrokerExitReviewStatus(position.execution_status)) return { state: 'review', position };
+      if (!TradeLifecycleService.isPendingExitStatus(position.execution_status)) return { state: 'open', position };
+    }
+    return { state: 'pending', position };
   }
 
   private async markPendingPositionSuperseded(position: any, settings: ExecutionSettings, broker: ExecutionBroker, signalId: number) {
@@ -590,12 +695,8 @@ export class TradeExecutionService {
     );
   }
 
-  private async submitSupersededExit(position: any, settings: ExecutionSettings, broker: ExecutionBroker, signalId: number): Promise<boolean> {
-    try {
-      TradeLifecycleService.assertCanRequestExit(position);
-    } catch (err: any) {
-      throw new Error(`Superseded exit blocked for position #${position.id}: ${err.message}`);
-    }
+  private async submitSupersededExit(position: any, settings: ExecutionSettings, broker: ExecutionBroker, signalId: number, retry = false): Promise<boolean> {
+    this.assertCanSubmitSupersededExit(position, retry);
 
     const executionBroker = String(position.execution_broker || broker || '');
     if (!position.is_simulated && executionBroker === 'wealthsimple_snaptrade') {
@@ -605,6 +706,7 @@ export class TradeExecutionService {
       }
 
       let acceptedOrder: { orderId?: string | null; tradeId?: string | null } | null = null;
+      let submissionAttempted = false;
       try {
         const snaptradeService = new SnaptradeService(this.fastify);
         await snaptradeService.syncPendingBrokerOrders(Number(position.user_id));
@@ -616,18 +718,15 @@ export class TradeExecutionService {
           [position.id]
         );
         const refreshed = rows[0];
-        try {
-          TradeLifecycleService.assertCanRequestExit(refreshed);
-        } catch (err: any) {
-          if (refreshed?.status === 'CLOSED') return false;
-          throw new Error(`Superseded exit blocked for position #${position.id} after broker sync: ${err.message}`);
-        }
+        if (refreshed?.status === 'CLOSED') return false;
+        this.assertCanSubmitSupersededExit(refreshed, retry);
 
         const accountId = String(refreshed.execution_account_id || refreshed.account_id || settings.snaptrade_trading_account_id || '').trim();
         if (!accountId) throw new Error('No SnapTrade account id is attached to the superseded position');
 
         const osiTicker = this.constructOSITicker(refreshed.symbol, Number(refreshed.strike_price), refreshed.option_type, refreshed.expiration_date);
         const exitAction = TradeLifecycleService.getExitAction(refreshed);
+        submissionAttempted = true;
         const order = await snaptradeService.placeOptionOrder(
           Number(refreshed.user_id),
           accountId,
@@ -645,6 +744,7 @@ export class TradeExecutionService {
           {
             reason: 'SUPERSEDED',
             orderType: 'MARKET',
+            incrementRetry: retry,
             note: ` [Superseded by Signal #${signalId}; SnapTrade MARKET ${exitAction} exit submitted${order.orderId ? `: ${order.orderId}` : ''}]`
           }
         );
@@ -660,31 +760,33 @@ export class TradeExecutionService {
         this.scheduleSnapTradePendingSync(Number(refreshed.user_id));
         return true;
       } catch (err: any) {
-        await TradeLifecycleService.markExitSubmissionFailure(
-          this.fastify.pg,
-          position.id,
-          err.message || String(err),
-          'Superseded SnapTrade exit failed',
-          {
-            ambiguous: Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err),
-            orderId: acceptedOrder?.orderId || null,
-            tradeId: acceptedOrder?.tradeId || null,
-            requestedQuantity: Number(position.quantity || 1)
+        if (submissionAttempted) {
+          await TradeLifecycleService.markExitSubmissionFailure(
+            this.fastify.pg,
+            position.id,
+            err.message || String(err),
+            'Superseded SnapTrade exit failed',
+            {
+              ambiguous: Boolean(acceptedOrder) || isAmbiguousSnapTradeOrderError(err),
+              orderId: acceptedOrder?.orderId || null,
+              tradeId: acceptedOrder?.tradeId || null,
+              requestedQuantity: Number(position.quantity || 1)
+            }
+          );
+          await new DiscordAlertService(this.fastify).send({
+            userId: Number(position.user_id),
+            title: 'Superseded exit needs attention',
+            message: `Position #${position.id} could not complete its reversal exit. Verify Wealthsimple before retrying: ${err.message || String(err)}`,
+            severity: 'critical',
+            category: 'exit-failure',
+            tradeId: position.id,
+            dedupeKey: `superseded-exit-failed:${position.id}:${String(err.message || err).slice(0, 120)}`,
+            dedupeSeconds: 900
+          });
+          if (acceptedOrder || isAmbiguousSnapTradeOrderError(err)) {
+            await TradeRedisService.requestBrokerSync(Number(position.user_id));
+            this.scheduleSnapTradePendingSync(Number(position.user_id));
           }
-        );
-        await new DiscordAlertService(this.fastify).send({
-          userId: Number(position.user_id),
-          title: 'Superseded exit needs attention',
-          message: `Position #${position.id} could not complete its reversal exit. Verify Wealthsimple before retrying: ${err.message || String(err)}`,
-          severity: 'critical',
-          category: 'exit-failure',
-          tradeId: position.id,
-          dedupeKey: `superseded-exit-failed:${position.id}:${String(err.message || err).slice(0, 120)}`,
-          dedupeSeconds: 900
-        });
-        if (acceptedOrder || isAmbiguousSnapTradeOrderError(err)) {
-          await TradeRedisService.requestBrokerSync(Number(position.user_id));
-          this.scheduleSnapTradePendingSync(Number(position.user_id));
         }
         throw err;
       } finally {
@@ -715,6 +817,22 @@ export class TradeExecutionService {
     return true;
   }
 
+  private assertCanSubmitSupersededExit(position: any, retry: boolean) {
+    const decision = retry
+      ? TradeLifecycleService.canAutoRetryExit(position)
+      : (() => {
+          try {
+            TradeLifecycleService.assertCanRequestExit(position);
+            return { allowed: true };
+          } catch (err: any) {
+            return { allowed: false, reason: err.message || String(err) };
+          }
+        })();
+    if (!decision.allowed) {
+      throw new Error(`Superseded exit blocked for position #${position?.id}: ${decision.reason || 'exit is not safe to submit'}`);
+    }
+  }
+
   private wait(ms: number) {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
@@ -733,6 +851,57 @@ export class TradeExecutionService {
       }
     }
     return false;
+  }
+
+  private scheduleDeferredSignalRetry(input: ExecuteSignalInput, settings: ExecutionSettings) {
+    const key = `${input.userId}:${input.signalId}`;
+    const existing = TradeExecutionService.deferredSignalRetries.get(key);
+    const state = existing || { startedAt: Date.now(), timer: null };
+    if (state.timer) return;
+    if (Date.now() - state.startedAt >= this.DEFERRED_SIGNAL_RETRY_MAX_AGE_MS) {
+      TradeExecutionService.deferredSignalRetries.delete(key);
+      this.fastify.log.warn(`[TradeExecutionService] Deferred reversal window expired for signal #${input.signalId}, user ${input.userId}`);
+      this.markSignalExecutionFailure(
+        input.userId,
+        input.signalId,
+        'Deferred entry retry window expired before the reversal close was confirmed',
+        true,
+        { riskCode: 'DEFERRED_ENTRY_EXPIRED' }
+      ).catch((err: any) => {
+        this.fastify.log.warn(`[TradeExecutionService] Failed to close expired deferred entry #${input.signalId}: ${err.message || String(err)}`);
+      });
+      return;
+    }
+
+    state.timer = setTimeout(async () => {
+      state.timer = null;
+      try {
+        const result = await new TradeExecutionService(this.fastify).runDeferredSignalRetry(input, settings);
+        if (!(result as any)?.retryable) TradeExecutionService.deferredSignalRetries.delete(key);
+      } catch (err: any) {
+        TradeExecutionService.deferredSignalRetries.delete(key);
+        this.fastify.log.error(`[TradeExecutionService] Deferred reversal retry failed for signal #${input.signalId}, user ${input.userId}: ${err.message || String(err)}`);
+      }
+    }, this.DEFERRED_SIGNAL_RETRY_DELAY_MS);
+    state.timer.unref?.();
+    TradeExecutionService.deferredSignalRetries.set(key, state);
+  }
+
+  private async runDeferredSignalRetry(input: ExecuteSignalInput, settings: ExecutionSettings) {
+    const strategyEngine = (this.fastify as any).strategyEngine;
+    if (strategyEngine?.assertSignalExecutable) {
+      try {
+        await strategyEngine.assertSignalExecutable(input.signalId);
+      } catch (err: any) {
+        const message = err.message || 'The deferred setup is no longer accepting an entry';
+        await this.markSignalExecutionFailure(input.userId, input.signalId, message, true, {
+          riskCode: 'DEFERRED_SETUP_EXPIRED'
+        });
+        this.fastify.log.info(`[TradeExecutionService] Deferred reversal ended for signal #${input.signalId}: ${message}`);
+        return null;
+      }
+    }
+    return this.executeSignal(input, settings);
   }
 
   private async getSignalOptionDetails(signalId: number): Promise<any> {
@@ -1250,12 +1419,38 @@ export class TradeExecutionService {
          AND signal_user_executions.broker_trade_id IS NULL
          AND (
            signal_user_executions.status = 'CANCELLED'
-           OR signal_user_executions.execution_status IN ('FAILED', 'SKIPPED')
+           OR signal_user_executions.execution_status IN ('FAILED', 'SKIPPED', 'DEFERRED_ENTRY')
          )
        RETURNING signal_id`,
       [signalId, userId, quantity]
     );
     return (result.rowCount ?? result.rows?.length ?? 0) > 0;
+  }
+
+  private async markSignalExecutionDeferred(userId: number, signalId: number, broker: ExecutionBroker, message: string) {
+    await this.fastify.pg.query(
+      `INSERT INTO signal_user_executions (
+         signal_id, user_id, status, execution_broker, execution_status,
+         execution_error, updated_at
+       ) VALUES ($1, $2, 'PENDING', $3, 'DEFERRED_ENTRY', NULL, CURRENT_TIMESTAMP)
+       ON CONFLICT (signal_id, user_id) DO UPDATE
+       SET status = 'PENDING',
+           execution_broker = EXCLUDED.execution_broker,
+           execution_status = 'DEFERRED_ENTRY',
+           execution_error = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE signal_user_executions.broker_order_id IS NULL
+         AND signal_user_executions.broker_trade_id IS NULL
+         AND signal_user_executions.status <> 'EXECUTED'`,
+      [signalId, userId, broker]
+    );
+    await this.recordTradeEventBestEffort({
+      userId,
+      signalId,
+      eventType: 'ENTRY_DEFERRED',
+      message,
+      metadata: { broker, retryable: true }
+    });
   }
 
   private async markSignalBrokerAccepted(userId: number, signalId: number, orderId: string | null, tradeId: string | null, quantity: number): Promise<void> {

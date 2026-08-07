@@ -104,6 +104,55 @@ async function testExitSubmissionFailureSeparatesRetryableAndAmbiguousOutcomes()
     'An ambiguous submission must never be retried without broker reconciliation');
 }
 
+async function testAutonomousExitRetryRequiresFreshTerminalBrokerEvidence() {
+  const now = new Date().toISOString();
+  const confirmedRejected = TradeLifecycleService.canAutoRetryExit({
+    status: 'OPEN',
+    execution_status: 'EXIT_REJECTED',
+    broker_exit_order_id: 'exit-order-1',
+    last_broker_order_status: 'REJECTED',
+    last_broker_sync_at: now,
+    exit_retry_count: 0
+  });
+  const unknownBrokerState = TradeLifecycleService.canAutoRetryExit({
+    status: 'OPEN',
+    execution_status: 'EXIT_REJECTED',
+    broker_exit_order_id: 'exit-order-1',
+    last_broker_order_status: 'UNKNOWN',
+    last_broker_sync_at: now,
+    exit_retry_count: 0
+  });
+  const staleEvidence = TradeLifecycleService.canAutoRetryExit({
+    status: 'OPEN',
+    execution_status: 'EXIT_REJECTED',
+    broker_exit_order_id: 'exit-order-1',
+    last_broker_order_status: 'REJECTED',
+    last_broker_sync_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    exit_retry_count: 0
+  });
+  const definitePreAcceptanceFailure = TradeLifecycleService.canAutoRetryExit({
+    status: 'OPEN',
+    execution_status: 'EXIT_RETRYABLE',
+    broker_exit_order_id: null,
+    broker_exit_trade_id: null,
+    exit_retry_count: 0
+  });
+  const retryLimitReached = TradeLifecycleService.canAutoRetryExit({
+    status: 'OPEN',
+    execution_status: 'EXIT_REJECTED',
+    broker_exit_order_id: 'exit-order-1',
+    last_broker_order_status: 'REJECTED',
+    last_broker_sync_at: now,
+    exit_retry_count: TradeLifecycleService.MAX_EXIT_RETRIES
+  });
+
+  assert(confirmedRejected.allowed, 'A freshly broker-confirmed rejected exit should be safe for bounded autonomous retry');
+  assert(!unknownBrokerState.allowed, 'UNKNOWN broker state must never authorize an autonomous close retry');
+  assert(!staleEvidence.allowed, 'Stale terminal broker evidence must not authorize an autonomous close retry');
+  assert(definitePreAcceptanceFailure.allowed, 'A definite pre-acceptance failure without a broker id should remain autonomously retryable');
+  assert(!retryLimitReached.allowed, 'Autonomous close retry must respect the existing retry limit');
+}
+
 async function testShortOptionLifecycleHelpers() {
   const longCall = { option_type: 'CALL', entry_action: 'BUY_TO_OPEN', entry_price: 1.5 };
   const shortCall = { option_type: 'CALL', entry_action: 'SELL_TO_OPEN', entry_price: 1.5 };
@@ -126,6 +175,7 @@ async function runTests() {
   await testMarkExitSubmittedRecordsPendingTrimMetadata();
   await testMarkExitSubmittedDoesNotMarkTrimWithoutTrimQuantity();
   await testExitSubmissionFailureSeparatesRetryableAndAmbiguousOutcomes();
+  await testAutonomousExitRetryRequiresFreshTerminalBrokerEvidence();
   await testShortOptionLifecycleHelpers();
   console.log('All TradeLifecycleService tests passed!');
 }

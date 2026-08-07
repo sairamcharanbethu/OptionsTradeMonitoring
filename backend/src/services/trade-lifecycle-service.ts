@@ -25,6 +25,7 @@ export type ExitRetryDecision = {
 
 export class TradeLifecycleService {
   static readonly MAX_EXIT_RETRIES = Number(process.env.MAX_EXIT_RETRIES || 2);
+  static readonly AUTO_EXIT_RETRY_EVIDENCE_MAX_AGE_MS = 120_000;
   static readonly FINAL_ENTRY_EXECUTION_STATUSES = ['EXECUTED', 'FILLED', 'FILLED_FULLY', 'ENTRY_STALE', 'ENTRY_RECONCILE_REQUIRED'];
 
   static entrySubmittedStatus(orderType: 'MARKET' | 'LIMIT'): EntryOrderDecision {
@@ -134,6 +135,41 @@ export class TradeLifecycleService {
     const retryCount = Number(position.exit_retry_count || 0);
     if (retryCount >= this.MAX_EXIT_RETRIES) {
       return { allowed: false, reason: `Exit retry limit reached (${retryCount}/${this.MAX_EXIT_RETRIES})` };
+    }
+    return { allowed: true };
+  }
+
+  static canAutoRetryExit(position: any): ExitRetryDecision {
+    const retryDecision = this.canRetryExit(position);
+    if (!retryDecision.allowed) return retryDecision;
+
+    const executionStatus = String(position.execution_status || '').toUpperCase();
+    if (executionStatus === 'EXIT_RETRYABLE') {
+      if (position.broker_exit_order_id || position.broker_exit_trade_id) {
+        return { allowed: false, reason: 'A broker order id exists, so the failed submission must be reconciled before autonomous retry' };
+      }
+      return { allowed: true };
+    }
+
+    const terminalBrokerStatuses: Record<string, string[]> = {
+      EXIT_REJECTED: ['REJECTED'],
+      EXIT_FAILED: ['FAILED'],
+      EXIT_CANCELED: ['CANCELED', 'CANCELLED'],
+      EXIT_CANCELLED: ['CANCELED', 'CANCELLED'],
+      EXIT_EXPIRED: ['EXPIRED']
+    };
+    const allowedBrokerStatuses = terminalBrokerStatuses[executionStatus];
+    if (!allowedBrokerStatuses) {
+      return { allowed: false, reason: `${executionStatus || 'Unknown exit state'} is not safe for autonomous retry` };
+    }
+
+    const brokerStatus = String(position.last_broker_order_status || '').toUpperCase();
+    if (!allowedBrokerStatuses.includes(brokerStatus)) {
+      return { allowed: false, reason: `Latest broker status is ${brokerStatus || 'missing'}, not a confirmed terminal ${executionStatus}` };
+    }
+    const brokerSyncAtMs = position.last_broker_sync_at ? new Date(position.last_broker_sync_at).getTime() : NaN;
+    if (!Number.isFinite(brokerSyncAtMs) || Date.now() - brokerSyncAtMs > this.AUTO_EXIT_RETRY_EVIDENCE_MAX_AGE_MS) {
+      return { allowed: false, reason: 'Terminal broker status is stale; refresh Wealthsimple before autonomous retry' };
     }
     return { allowed: true };
   }
