@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07100d">
+  <meta name="description" content="A dependency-free long options entry, risk, trailing stop, and profit protection calculator.">
+  <title>StrikePilot Options Trading Calculator</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #050a08;
+      --surface: rgba(12, 22, 18, 0.94);
+      --surface-raised: rgba(17, 30, 24, 0.94);
+      --surface-soft: rgba(255, 255, 255, 0.035);
+      --line: rgba(221, 255, 239, 0.105);
+      --line-bright: rgba(221, 255, 239, 0.2);
+      --ink: #f3f8f5;
+      --muted: #93a69d;
+      --faint: #667a70;
+      --accent: #9ef0c7;
+      --accent-strong: #52d99b;
+      --accent-ink: #042417;
+      --positive: #72e7ad;
+      --negative: #ff8e91;
+      --warning: #f0c57a;
+      --danger: #ff9a9d;
+      --radius-xl: 30px;
+      --radius-lg: 24px;
+      --radius-md: 16px;
+      --spring: cubic-bezier(0.32, 0.72, 0, 1);
+      --font-sans: "Avenir Next", "Segoe UI Variable", system-ui, sans-serif;
+      --font-mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      min-width: 320px;
+      min-height: 100dvh;
+      margin: 0;
+      overflow-x: hidden;
+      background:
+        radial-gradient(circle at 8% 2%, rgba(67, 197, 139, 0.13), transparent 31rem),
+        radial-gradient(circle at 92% 18%, rgba(93, 134, 255, 0.1), transparent 29rem),
+        var(--canvas);
+      color: var(--ink);
+      font-family: var(--font-sans);
+      font-size: 16px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      position: fixed;
+      z-index: 4;
+      inset: 0;
+      pointer-events: none;
+      content: "";
+      opacity: 0.025;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.86' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.75'/%3E%3C/svg%3E");
+    }
+
+    button, input { font: inherit; }
+
+    button { -webkit-tap-highlight-color: transparent; }
+
+    .page-shell {
+      position: relative;
+      z-index: 1;
+      width: min(1480px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 34px 0 72px;
+    }
+
+    .masthead {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(310px, 0.6fr);
+      gap: clamp(32px, 6vw, 96px);
+      align-items: end;
+      min-height: 310px;
+      padding: clamp(40px, 7vw, 96px) clamp(10px, 2vw, 28px) 54px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      width: max-content;
+      padding: 7px 11px;
+      border: 1px solid rgba(158, 240, 199, 0.18);
+      border-radius: 999px;
+      background: rgba(158, 240, 199, 0.055);
+      color: var(--accent);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-strong);
+      box-shadow: 0 0 0 4px rgba(82, 217, 155, 0.1);
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      max-width: 850px;
+      margin: 22px 0 22px;
+      font-size: clamp(2.8rem, 6vw, 6.25rem);
+      font-weight: 560;
+      letter-spacing: -0.067em;
+      line-height: 0.94;
+    }
+
+    .lede {
+      max-width: 700px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: clamp(1rem, 1.5vw, 1.22rem);
+      letter-spacing: -0.015em;
+    }
+
+    .masthead-note {
+      padding: 0 0 6px clamp(0px, 2vw, 22px);
+      border-left: 1px solid var(--line-bright);
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .masthead-note strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 0.75rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(420px, 0.78fr) minmax(0, 1.22fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .panel-stack { display: grid; min-width: 0; gap: 18px; }
+
+    .workspace > *,
+    .bezel,
+    .card { min-width: 0; }
+
+    .bezel {
+      padding: 6px;
+      border: 1px solid rgba(225, 255, 240, 0.08);
+      border-radius: var(--radius-xl);
+      background: rgba(255, 255, 255, 0.025);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.15);
+    }
+
+    .card {
+      border: 1px solid rgba(255, 255, 255, 0.075);
+      border-radius: calc(var(--radius-xl) - 6px);
+      background: var(--surface);
+      box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.07);
+    }
+
+    .input-card { padding: clamp(22px, 3vw, 34px); }
+
+    .section-heading {
+      display: flex;
+      gap: 18px;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 26px;
+    }
+
+    .section-index {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--surface-soft);
+      color: var(--accent);
+      font: 700 0.72rem/1 var(--font-mono);
+    }
+
+    .section-title-wrap { display: flex; gap: 12px; }
+
+    .section-heading h2,
+    .section-heading h3 {
+      margin-bottom: 4px;
+      font-size: 1.02rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+    }
+
+    .section-heading p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 17px 14px;
+    }
+
+    .field { min-width: 0; }
+    .field.full { grid-column: 1 / -1; }
+
+    label,
+    .field-label {
+      display: block;
+      margin-bottom: 8px;
+      color: #c7d4ce;
+      font-size: 0.74rem;
+      font-weight: 650;
+      letter-spacing: 0.025em;
+    }
+
+    .input-wrap { position: relative; }
+
+    input[type="number"] {
+      width: 100%;
+      height: 48px;
+      padding: 0 42px 0 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      outline: none;
+      background: rgba(2, 8, 6, 0.5);
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      font-variant-numeric: tabular-nums;
+      transition: border-color 320ms var(--spring), background-color 320ms var(--spring), transform 320ms var(--spring);
+    }
+
+    input[type="number"]:focus {
+      border-color: rgba(158, 240, 199, 0.55);
+      background: rgba(8, 19, 14, 0.9);
+      transform: translateY(-1px);
+    }
+
+    input[aria-invalid="true"] { border-color: rgba(255, 142, 145, 0.72); }
+
+    .input-affix {
+      position: absolute;
+      top: 50%;
+      right: 14px;
+      transform: translateY(-50%);
+      color: var(--faint);
+      font: 600 0.72rem/1 var(--font-mono);
+      pointer-events: none;
+    }
+
+    .hint {
+      display: block;
+      margin-top: 7px;
+      color: var(--faint);
+      font-size: 0.68rem;
+      line-height: 1.4;
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(2, 8, 6, 0.5);
+    }
+
+    .segmented input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .segmented label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      margin: 0;
+      border-radius: 10px;
+      color: var(--muted);
+      cursor: pointer;
+      transition: color 320ms var(--spring), background-color 320ms var(--spring), transform 320ms var(--spring);
+    }
+
+    .segmented label:hover { color: var(--ink); }
+    .segmented label:active { transform: scale(0.985); }
+    .segmented input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .segmented input:checked + label { background: rgba(158, 240, 199, 0.12); color: var(--accent); }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 24px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      padding: 6px 8px 6px 18px;
+      border: 0;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      font-weight: 720;
+      letter-spacing: 0.015em;
+      transition: transform 420ms var(--spring), background-color 420ms var(--spring), color 420ms var(--spring);
+    }
+
+    .button:hover { transform: translateY(-2px); }
+    .button:active { transform: scale(0.98); }
+    .button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+    .button-primary { background: var(--accent); color: var(--accent-ink); }
+    .button-secondary { padding-right: 18px; background: rgba(255, 255, 255, 0.07); color: var(--ink); }
+    .button-quiet { padding-right: 18px; background: transparent; color: var(--muted); }
+
+    .button-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      margin-left: 12px;
+      border-radius: 50%;
+      background: rgba(4, 36, 23, 0.12);
+      font-size: 1rem;
+      transition: transform 420ms var(--spring);
+    }
+
+    .button:hover .button-icon { transform: translate(2px, -1px) scale(1.05); }
+
+    .validation {
+      display: none;
+      margin: 0 0 18px;
+      padding: 14px 16px;
+      border: 1px solid rgba(255, 142, 145, 0.25);
+      border-radius: 15px;
+      background: rgba(255, 142, 145, 0.075);
+      color: #ffd1d2;
+      font-size: 0.76rem;
+    }
+
+    .validation.visible { display: block; }
+    .validation ul { margin: 8px 0 0; padding-left: 18px; }
+
+    .results-shell {
+      position: sticky;
+      top: 18px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .snapshot {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 12px;
+      padding: 12px;
+    }
+
+    .metric-card {
+      min-height: 145px;
+      padding: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.065);
+      border-radius: 20px;
+      background: var(--surface-raised);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+      transition: transform 520ms var(--spring), border-color 520ms var(--spring);
+    }
+
+    .metric-card:hover { transform: translateY(-3px); border-color: rgba(158, 240, 199, 0.18); }
+    .metric-card.position { grid-column: span 7; }
+    .metric-card.pnl { grid-column: span 5; }
+    .metric-card.risk { grid-column: span 4; }
+    .metric-card.trail { grid-column: span 4; }
+    .metric-card.target { grid-column: span 4; }
+
+    .metric-label {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 22px;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 720;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .metric-value {
+      margin-bottom: 7px;
+      font-family: var(--font-mono);
+      font-size: clamp(1.45rem, 2.6vw, 2.25rem);
+      font-weight: 650;
+      letter-spacing: -0.055em;
+      line-height: 1;
+    }
+
+    .metric-subvalue { color: var(--muted); font-size: 0.72rem; }
+    .positive { color: var(--positive); }
+    .negative { color: var(--negative); }
+    .warning { color: var(--warning); }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      width: max-content;
+      margin-top: 12px;
+      padding: 5px 8px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--muted);
+      font-size: 0.65rem;
+      font-weight: 700;
+    }
+
+    .status-pill.good { background: rgba(114, 231, 173, 0.09); color: var(--positive); }
+    .status-pill.bad { background: rgba(255, 142, 145, 0.09); color: var(--negative); }
+
+    .detail-card { padding: clamp(22px, 3vw, 34px); }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: var(--line);
+    }
+
+    .detail-item { padding: 15px 16px; background: rgba(6, 14, 11, 0.95); }
+    .detail-name { margin-bottom: 5px; color: var(--muted); font-size: 0.68rem; }
+    .detail-value { font: 620 0.9rem/1.25 var(--font-mono); }
+
+    .planner-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+    }
+
+    table { width: 100%; min-width: 520px; border-collapse: collapse; }
+    th, td { padding: 14px 16px; text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th {
+      color: var(--faint);
+      font-size: 0.63rem;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+    td { border-top: 1px solid var(--line); font: 580 0.78rem/1 var(--font-mono); }
+    tbody tr { transition: background-color 340ms var(--spring); }
+    tbody tr:hover { background: rgba(158, 240, 199, 0.035); }
+
+    .plan-copy {
+      margin: 0;
+      color: #dbe5e0;
+      font-size: clamp(1rem, 1.5vw, 1.18rem);
+      line-height: 1.75;
+      letter-spacing: -0.012em;
+    }
+
+    .execution-note {
+      display: flex;
+      gap: 12px;
+      margin-top: 22px;
+      padding: 15px;
+      border-radius: 15px;
+      background: rgba(240, 197, 122, 0.07);
+      color: #d9c49f;
+      font-size: 0.73rem;
+    }
+
+    .execution-note-mark {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      border: 1px solid rgba(240, 197, 122, 0.3);
+      border-radius: 50%;
+      color: var(--warning);
+      font-weight: 800;
+    }
+
+    .disclaimer {
+      max-width: 920px;
+      margin: 54px auto 0;
+      padding: 0 24px;
+      color: var(--faint);
+      font-size: 0.7rem;
+      text-align: center;
+    }
+
+    .reveal { opacity: 1; transform: none; }
+
+    @media (max-width: 1060px) {
+      .masthead { grid-template-columns: 1fr; min-height: auto; }
+      .masthead-note { max-width: 660px; }
+      .workspace { grid-template-columns: 1fr; }
+      .results-shell { position: static; }
+    }
+
+    @media (max-width: 720px) {
+      .page-shell { width: 100%; padding: 0 16px 48px; }
+      .masthead { gap: 28px; padding: 54px 4px 38px; }
+      .masthead-note { padding-left: 16px; }
+      .workspace, .panel-stack { gap: 14px; }
+      .bezel { padding: 4px; border-radius: 24px; }
+      .card { border-radius: 20px; }
+      .input-card, .detail-card { padding: 20px 17px; }
+      .field-grid { grid-template-columns: 1fr; }
+      .field.full { grid-column: auto; }
+      .snapshot { grid-template-columns: 1fr; padding: 8px; }
+      .metric-card.position,
+      .metric-card.pnl,
+      .metric-card.risk,
+      .metric-card.trail,
+      .metric-card.target { grid-column: auto; min-height: 128px; }
+      .metric-value { font-size: 1.7rem; }
+      .actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .button { width: 100%; }
+      .button-primary { grid-column: 1 / -1; }
+      .detail-grid { grid-template-columns: 1fr; }
+      table { min-width: 0; table-layout: fixed; }
+      th, td { padding: 12px 7px; }
+      th { font-size: 0.56rem; letter-spacing: 0.055em; }
+      td { font-size: 0.7rem; }
+      .disclaimer { margin-top: 38px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page-shell">
+    <header class="masthead reveal">
+      <div>
+        <div class="eyebrow"><span class="eyebrow-dot"></span> StrikePilot planning desk</div>
+        <h1>Options risk,<br>made tangible.</h1>
+        <p class="lede">Plan a long call or put before the order: premium exposure, protected exits, trailing-stop behavior, spread quality, and account-level risk—all in one view.</p>
+      </div>
+      <aside class="masthead-note">
+        <strong>Planning mode</strong>
+        This calculator never connects to a broker or submits an order. Prices are entered manually and remain only in this browser.
+      </aside>
+    </header>
+
+    <div class="workspace">
+      <form id="calculatorForm" class="panel-stack" novalidate>
+        <div class="bezel reveal">
+          <section class="card input-card" aria-labelledby="entryHeading">
+            <div class="section-heading">
+              <div class="section-title-wrap">
+                <span class="section-index">01</span>
+                <div><h2 id="entryHeading">Entry</h2><p>Define the long option position.</p></div>
+              </div>
+            </div>
+            <div class="field-grid">
+              <fieldset class="field full" style="border:0;padding:0;margin:0">
+                <legend class="field-label">Option type</legend>
+                <div class="segmented">
+                  <input id="optionCall" name="optionType" type="radio" value="CALL" checked>
+                  <label for="optionCall">Call</label>
+                  <input id="optionPut" name="optionType" type="radio" value="PUT">
+                  <label for="optionPut">Put</label>
+                </div>
+              </fieldset>
+              <div class="field">
+                <label for="quantity">Contracts</label>
+                <div class="input-wrap"><input id="quantity" name="quantity" type="number" min="1" max="10000" step="1" inputmode="numeric" value="5" required><span class="input-affix">×100</span></div>
+              </div>
+              <div class="field">
+                <label for="entryPrice">Entry price</label>
+                <div class="input-wrap"><input id="entryPrice" name="entryPrice" type="number" min="0.01" step="0.01" inputmode="decimal" value="0.53" required><span class="input-affix">$</span></div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="bezel reveal">
+          <section class="card input-card" aria-labelledby="positionHeading">
+            <div class="section-heading">
+              <div class="section-title-wrap">
+                <span class="section-index">02</span>
+                <div><h2 id="positionHeading">Position &amp; market</h2><p>Use the latest option premium and quote.</p></div>
+              </div>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="currentPrice">Current option price</label>
+                <div class="input-wrap"><input id="currentPrice" name="currentPrice" type="number" min="0" step="0.01" inputmode="decimal" value="0.65" required><span class="input-affix">$</span></div>
+              </div>
+              <div class="field">
+                <label for="highestPrice">Highest price since entry</label>
+                <div class="input-wrap"><input id="highestPrice" name="highestPrice" type="number" min="0" step="0.01" inputmode="decimal" value="0.70" required><span class="input-affix">$</span></div>
+              </div>
+              <div class="field">
+                <label for="currentBid">Current bid</label>
+                <div class="input-wrap"><input id="currentBid" name="currentBid" type="number" min="0" step="0.01" inputmode="decimal" value="0.64" required><span class="input-affix">$</span></div>
+              </div>
+              <div class="field">
+                <label for="currentAsk">Current ask</label>
+                <div class="input-wrap"><input id="currentAsk" name="currentAsk" type="number" min="0" step="0.01" inputmode="decimal" value="0.66" required><span class="input-affix">$</span></div>
+              </div>
+              <div class="field full">
+                <button class="button button-secondary" id="useCurrentHigh" type="button">Use current price as high</button>
+                <span class="hint">The high-water mark cannot be below the current option price.</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="bezel reveal">
+          <section class="card input-card" aria-labelledby="trailingHeading">
+            <div class="section-heading">
+              <div class="section-title-wrap">
+                <span class="section-index">03</span>
+                <div><h2 id="trailingHeading">Trailing stop</h2><p>Model the trigger and limit offset.</p></div>
+              </div>
+            </div>
+            <div class="field-grid">
+              <fieldset class="field full" style="border:0;padding:0;margin:0">
+                <legend class="field-label">Trailing stop type</legend>
+                <div class="segmented">
+                  <input id="trailDollar" name="trailingType" type="radio" value="DOLLAR">
+                  <label for="trailDollar">Dollar</label>
+                  <input id="trailPercent" name="trailingType" type="radio" value="PERCENT" checked>
+                  <label for="trailPercent">Percentage</label>
+                </div>
+              </fieldset>
+              <div class="field">
+                <label for="trailingAmount">Trailing amount</label>
+                <div class="input-wrap"><input id="trailingAmount" name="trailingAmount" type="number" min="0.01" step="0.01" inputmode="decimal" value="15" required><span class="input-affix" id="trailingAffix">%</span></div>
+              </div>
+              <div class="field">
+                <label for="limitOffset">Stop-limit offset</label>
+                <div class="input-wrap"><input id="limitOffset" name="limitOffset" type="number" min="0" step="0.01" inputmode="decimal" value="0.02" required><span class="input-affix">$</span></div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="bezel reveal">
+          <section class="card input-card" aria-labelledby="riskHeading">
+            <div class="section-heading">
+              <div class="section-title-wrap">
+                <span class="section-index">04</span>
+                <div><h2 id="riskHeading">Risk &amp; target</h2><p>Set the loss budget and planned reward.</p></div>
+              </div>
+            </div>
+            <div class="field-grid">
+              <div class="field">
+                <label for="manualStop">Manual stop-loss price</label>
+                <div class="input-wrap"><input id="manualStop" name="manualStop" type="number" min="0" step="0.01" inputmode="decimal" value="0.45"><span class="input-affix">$</span></div>
+                <span class="hint">Leave blank to model full premium loss.</span>
+              </div>
+              <div class="field">
+                <label for="profitTarget">Profit target price</label>
+                <div class="input-wrap"><input id="profitTarget" name="profitTarget" type="number" min="0" step="0.01" inputmode="decimal" value="1.00"><span class="input-affix">$</span></div>
+              </div>
+              <div class="field">
+                <label for="accountSize">Account size</label>
+                <div class="input-wrap"><input id="accountSize" name="accountSize" type="number" min="1" step="100" inputmode="decimal" value="25000" required><span class="input-affix">$</span></div>
+              </div>
+              <div class="field">
+                <label for="maxRiskPercent">Maximum risk per trade</label>
+                <div class="input-wrap"><input id="maxRiskPercent" name="maxRiskPercent" type="number" min="0.01" max="100" step="0.1" inputmode="decimal" value="1" required><span class="input-affix">%</span></div>
+              </div>
+            </div>
+            <div class="actions">
+              <button class="button button-primary" type="submit">Calculate <span class="button-icon" aria-hidden="true">↗</span></button>
+              <button class="button button-secondary" id="resetCalculator" type="button">Reset</button>
+              <button class="button button-quiet" id="clearSaved" type="button">Clear saved values</button>
+            </div>
+          </section>
+        </div>
+      </form>
+
+      <section class="results-shell" aria-label="Calculated trade plan" aria-live="polite">
+        <div id="validationSummary" class="validation" role="alert"></div>
+
+        <div class="bezel reveal">
+          <div class="card snapshot">
+            <article class="metric-card position">
+              <div class="metric-label"><span>Position</span><span id="positionTypeLabel">Long call</span></div>
+              <div class="metric-value" id="totalCost">$265.00</div>
+              <div class="metric-subvalue"><span id="currentValue">$325.00</span> current market value</div>
+            </article>
+            <article class="metric-card pnl">
+              <div class="metric-label"><span>Open P&amp;L</span><span>Mark based</span></div>
+              <div class="metric-value positive" id="currentPnl">+$60.00</div>
+              <div class="metric-subvalue positive" id="currentPnlPercent">+22.64%</div>
+            </article>
+            <article class="metric-card risk">
+              <div class="metric-label"><span>Planned risk</span><span>Manual stop</span></div>
+              <div class="metric-value" id="plannedLoss">$40.00</div>
+              <div class="metric-subvalue" id="plannedLossPercent">0.16% of account</div>
+              <div class="status-pill good" id="riskStatus">Within $250.00 budget</div>
+            </article>
+            <article class="metric-card trail">
+              <div class="metric-label"><span>Trailing stop</span><span id="trailTypeLabel">15%</span></div>
+              <div class="metric-value" id="trailingTrigger">$0.595</div>
+              <div class="metric-subvalue"><span id="trailingLimit">$0.575</span> estimated limit</div>
+            </article>
+            <article class="metric-card target">
+              <div class="metric-label"><span>Profit target</span><span id="riskReward">5.88 : 1</span></div>
+              <div class="metric-value positive" id="targetProfit">+$235.00</div>
+              <div class="metric-subvalue">Estimated target P&amp;L</div>
+            </article>
+          </div>
+        </div>
+
+        <div class="bezel reveal">
+          <section class="card detail-card" aria-labelledby="detailsHeading">
+            <div class="section-heading">
+              <div class="section-title-wrap">
+                <span class="section-index">05</span>
+                <div><h2 id="detailsHeading">Position details</h2><p>Execution-aware planning metrics.</p></div>
+              </div>
+            </div>
+            <div class="detail-grid">
+              <div class="detail-item"><div class="detail-name">Stop-limit P&amp;L</div><div class="detail-value" id="stopPnl">+$22.50</div></div>
+              <div class="detail-item"><div class="detail-name">Allowed account risk</div><div class="detail-value" id="allowedRisk">$250.00</div></div>
+              <div class="detail-item"><div class="detail-name">Bid / ask spread</div><div class="detail-value" id="spreadDollars">$0.02</div></div>
+              <div class="detail-item"><div class="detail-name">Spread percentage</div><div class="detail-value" id="spreadPercent">3.08%</div></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="bezel reveal">
+          <section class="card detail-card" aria-labelledby="plannerHeading">
+            <div class="section-heading">
+              <div class="section-title-wrap">
+                <span class="section-index">06</span>
+                <div><h2 id="plannerHeading">Trailing Stop Planner</h2><p id="plannerAnchor">Suggestions anchored to the $0.70 high-water mark.</p></div>
+              </div>
+            </div>
+            <div class="planner-table-wrap">
+              <table>
+                <thead><tr><th>Trail</th><th>Trail amount</th><th>Trigger</th><th>Trigger P&amp;L</th></tr></thead>
+                <tbody id="plannerRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <div class="bezel reveal">
+          <section class="card detail-card" aria-labelledby="planHeading">
+            <div class="section-heading">
+              <div class="section-title-wrap">
+                <span class="section-index">07</span>
+                <div><h2 id="planHeading">Trade Plan</h2><p>A plain-English summary of the setup.</p></div>
+              </div>
+            </div>
+            <p class="plan-copy" id="tradePlan"></p>
+            <div class="execution-note">
+              <span class="execution-note-mark" aria-hidden="true">!</span>
+              <span>A stop trigger does not guarantee execution at the trigger or limit price. Fast option-price movement, low liquidity, and wide bid/ask spreads can cause delayed, partial, or no execution.</span>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <footer class="disclaimer reveal">
+      For planning and educational purposes only—not investment advice. Option contracts can lose their entire premium. Stop and limit orders may execute differently than estimated during volatile, fast-moving, or illiquid markets.
+    </footer>
+  </main>
+
+  <script>
+    /*
+     * Pure calculation core. Keeping formulas separate from the DOM makes them
+     * easier to audit, test, and modify without touching the interface.
+     */
+    const CalculatorCore = (() => {
+      const CONTRACT_MULTIPLIER = 100;
+      const PLANNER_PERCENTAGES = [5, 10, 15, 20, 25];
+
+      const finite = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+      const optionalFinite = (value) => value === "" || value === null || value === undefined ? null : finite(value);
+
+      function validate(values, missingFields = new Set()) {
+        const requiredLabels = {
+          quantity: "Quantity",
+          entryPrice: "Entry price",
+          currentPrice: "Current option price",
+          currentBid: "Current bid",
+          currentAsk: "Current ask",
+          highestPrice: "High-water mark",
+          trailingAmount: "Trailing amount",
+          limitOffset: "Stop-limit offset",
+          accountSize: "Account size",
+          maxRiskPercent: "Maximum risk"
+        };
+        const errors = [...missingFields].map((field) => ({ field, message: `${requiredLabels[field]} is required.` }));
+        const present = (field) => !missingFields.has(field);
+        if (!Number.isInteger(values.quantity) || values.quantity < 1) errors.push({ field: "quantity", message: "Quantity must be a whole number of at least 1 contract." });
+        if (values.entryPrice <= 0) errors.push({ field: "entryPrice", message: "Entry price must be greater than $0." });
+        if (values.currentPrice < 0) errors.push({ field: "currentPrice", message: "Current option price cannot be negative." });
+        if (values.currentBid < 0) errors.push({ field: "currentBid", message: "Current bid cannot be negative." });
+        if (values.currentAsk < 0) errors.push({ field: "currentAsk", message: "Current ask cannot be negative." });
+        if (present("currentAsk") && present("currentBid") && values.currentAsk < values.currentBid) errors.push({ field: "currentAsk", message: "Current ask must be greater than or equal to the current bid." });
+        if (present("highestPrice") && present("currentPrice") && values.highestPrice < values.currentPrice) errors.push({ field: "highestPrice", message: "High-water mark cannot be below the current option price." });
+        if (values.highestPrice <= 0) errors.push({ field: "highestPrice", message: "High-water mark must be greater than $0." });
+        if (values.trailingAmount <= 0) errors.push({ field: "trailingAmount", message: "Trailing amount must be greater than 0." });
+        if (values.trailingType === "PERCENT" && values.trailingAmount > 100) errors.push({ field: "trailingAmount", message: "Percentage trail cannot exceed 100%." });
+        if (values.limitOffset < 0) errors.push({ field: "limitOffset", message: "Stop-limit offset cannot be negative." });
+        if (values.manualStop !== null && values.manualStop < 0) errors.push({ field: "manualStop", message: "Manual stop-loss price cannot be negative." });
+        if (present("currentPrice") && values.manualStop !== null && values.manualStop > values.currentPrice) errors.push({ field: "manualStop", message: "For a live long position, the manual stop cannot be above the current option price." });
+        if (values.profitTarget !== null && values.profitTarget <= values.entryPrice) errors.push({ field: "profitTarget", message: "Profit target must be above the entry price for a long option." });
+        if (values.accountSize <= 0) errors.push({ field: "accountSize", message: "Account size must be greater than $0." });
+        if (values.maxRiskPercent <= 0 || values.maxRiskPercent > 100) errors.push({ field: "maxRiskPercent", message: "Maximum risk must be greater than 0% and no more than 100%." });
+
+        const trailDollars = values.trailingType === "PERCENT"
+          ? values.highestPrice * values.trailingAmount / 100
+          : values.trailingAmount;
+        const trigger = values.highestPrice - trailDollars;
+        if (present("highestPrice") && present("trailingAmount") && trigger < 0) errors.push({ field: "trailingAmount", message: "Trailing amount is larger than the high-water mark." });
+        if (present("highestPrice") && present("trailingAmount") && present("limitOffset") && values.limitOffset > Math.max(0, trigger)) errors.push({ field: "limitOffset", message: "Stop-limit offset cannot exceed the calculated trailing trigger." });
+        return errors.filter((error, index, all) => present(error.field) || all.findIndex((item) => item.field === error.field) === index);
+      }
+
+      function calculate(rawValues) {
+        const requiredFields = ["quantity", "entryPrice", "currentPrice", "currentBid", "currentAsk", "highestPrice", "trailingAmount", "limitOffset", "accountSize", "maxRiskPercent"];
+        const missingFields = new Set(requiredFields.filter((field) => rawValues[field] === "" || rawValues[field] === null || rawValues[field] === undefined));
+        const values = {
+          optionType: rawValues.optionType === "PUT" ? "PUT" : "CALL",
+          trailingType: rawValues.trailingType === "DOLLAR" ? "DOLLAR" : "PERCENT",
+          quantity: finite(rawValues.quantity),
+          entryPrice: finite(rawValues.entryPrice),
+          currentPrice: finite(rawValues.currentPrice),
+          currentBid: finite(rawValues.currentBid),
+          currentAsk: finite(rawValues.currentAsk),
+          highestPrice: finite(rawValues.highestPrice),
+          trailingAmount: finite(rawValues.trailingAmount),
+          limitOffset: finite(rawValues.limitOffset),
+          manualStop: optionalFinite(rawValues.manualStop),
+          profitTarget: optionalFinite(rawValues.profitTarget),
+          accountSize: finite(rawValues.accountSize),
+          maxRiskPercent: finite(rawValues.maxRiskPercent)
+        };
+
+        const errors = validate(values, missingFields);
+        const contracts = Math.max(0, values.quantity);
+        const totalCost = values.entryPrice * contracts * CONTRACT_MULTIPLIER;
+        const currentValue = values.currentPrice * contracts * CONTRACT_MULTIPLIER;
+        const currentPnl = currentValue - totalCost;
+        const currentPnlPercent = totalCost > 0 ? currentPnl / totalCost * 100 : 0;
+        const manualStopPrice = values.manualStop === null ? 0 : values.manualStop;
+        const plannedLoss = Math.max(0, (values.entryPrice - manualStopPrice) * contracts * CONTRACT_MULTIPLIER);
+        const plannedLossPercent = values.accountSize > 0 ? plannedLoss / values.accountSize * 100 : 0;
+        const allowedRisk = values.accountSize * values.maxRiskPercent / 100;
+        const trailingAmountDollars = values.trailingType === "PERCENT"
+          ? values.highestPrice * values.trailingAmount / 100
+          : values.trailingAmount;
+        const trailingTrigger = Math.max(0, values.highestPrice - trailingAmountDollars);
+        const trailingLimit = Math.max(0, trailingTrigger - values.limitOffset);
+        const stopPnl = (trailingLimit - values.entryPrice) * contracts * CONTRACT_MULTIPLIER;
+        const targetProfit = values.profitTarget === null
+          ? null
+          : (values.profitTarget - values.entryPrice) * contracts * CONTRACT_MULTIPLIER;
+        const riskReward = targetProfit !== null && plannedLoss > 0 ? targetProfit / plannedLoss : null;
+        const spreadDollars = Math.max(0, values.currentAsk - values.currentBid);
+        const quoteMid = (values.currentAsk + values.currentBid) / 2;
+        const spreadPercent = quoteMid > 0 ? spreadDollars / quoteMid * 100 : 0;
+        const riskWithinBudget = plannedLoss <= allowedRisk;
+        const protectedProfit = values.manualStop !== null
+          ? Math.max(0, (values.manualStop - values.entryPrice) * contracts * CONTRACT_MULTIPLIER)
+          : 0;
+
+        const planner = PLANNER_PERCENTAGES.map((percent) => {
+          const amount = values.highestPrice * percent / 100;
+          const trigger = Math.max(0, values.highestPrice - amount);
+          return {
+            percent,
+            amount,
+            trigger,
+            pnl: (trigger - values.entryPrice) * contracts * CONTRACT_MULTIPLIER
+          };
+        });
+
+        return {
+          values,
+          errors,
+          totalCost,
+          currentValue,
+          currentPnl,
+          currentPnlPercent,
+          plannedLoss,
+          plannedLossPercent,
+          allowedRisk,
+          trailingAmountDollars,
+          trailingTrigger,
+          trailingLimit,
+          stopPnl,
+          targetProfit,
+          riskReward,
+          spreadDollars,
+          spreadPercent,
+          riskWithinBudget,
+          protectedProfit,
+          planner
+        };
+      }
+
+      return { calculate, validate, CONTRACT_MULTIPLIER, PLANNER_PERCENTAGES };
+    })();
+
+    if (typeof module !== "undefined" && module.exports) module.exports = CalculatorCore;
+
+    if (typeof document !== "undefined") {
+      const STORAGE_KEY = "strikepilot.optionsCalculator.v1";
+      const form = document.getElementById("calculatorForm");
+      const validationSummary = document.getElementById("validationSummary");
+      const trailingAffix = document.getElementById("trailingAffix");
+      const plannerRows = document.getElementById("plannerRows");
+
+      const defaults = {
+        optionType: "CALL", quantity: "5", entryPrice: "0.53", currentPrice: "0.65",
+        currentBid: "0.64", currentAsk: "0.66", highestPrice: "0.70",
+        trailingType: "PERCENT", trailingAmount: "15", limitOffset: "0.02",
+        manualStop: "0.45", profitTarget: "1.00", accountSize: "25000", maxRiskPercent: "1"
+      };
+
+      const byId = (id) => document.getElementById(id);
+      const money = (value, digits = 2) => Number(value).toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: digits, maximumFractionDigits: digits });
+      const signedMoney = (value) => `${value >= 0 ? "+" : "−"}${money(Math.abs(value))}`;
+      const signedPercent = (value) => `${value >= 0 ? "+" : "−"}${Math.abs(value).toFixed(2)}%`;
+      const premium = (value) => money(value, 3);
+      const numberValue = (id) => byId(id).value === "" ? "" : Number(byId(id).value);
+
+      function readValues() {
+        return {
+          optionType: form.elements.optionType.value,
+          quantity: numberValue("quantity"),
+          entryPrice: numberValue("entryPrice"),
+          currentPrice: numberValue("currentPrice"),
+          currentBid: numberValue("currentBid"),
+          currentAsk: numberValue("currentAsk"),
+          highestPrice: numberValue("highestPrice"),
+          trailingType: form.elements.trailingType.value,
+          trailingAmount: numberValue("trailingAmount"),
+          limitOffset: numberValue("limitOffset"),
+          manualStop: numberValue("manualStop"),
+          profitTarget: numberValue("profitTarget"),
+          accountSize: numberValue("accountSize"),
+          maxRiskPercent: numberValue("maxRiskPercent")
+        };
+      }
+
+      function setTone(element, value) {
+        element.classList.toggle("positive", value >= 0);
+        element.classList.toggle("negative", value < 0);
+      }
+
+      function renderValidation(errors) {
+        form.querySelectorAll("input").forEach((input) => input.removeAttribute("aria-invalid"));
+        if (!errors.length) {
+          validationSummary.classList.remove("visible");
+          validationSummary.innerHTML = "";
+          return;
+        }
+        errors.forEach(({ field }) => byId(field)?.setAttribute("aria-invalid", "true"));
+        validationSummary.innerHTML = `<strong>Review ${errors.length} input${errors.length === 1 ? "" : "s"}</strong><ul>${errors.map((error) => `<li>${error.message}</li>`).join("")}</ul>`;
+        validationSummary.classList.add("visible");
+      }
+
+      function renderPlanner(result) {
+        plannerRows.innerHTML = result.planner.map((row) => {
+          const tone = row.pnl >= 0 ? "positive" : "negative";
+          return `<tr><td>${row.percent}%</td><td>${premium(row.amount)}</td><td>${premium(row.trigger)}</td><td class="${tone}">${signedMoney(row.pnl)}</td></tr>`;
+        }).join("");
+        byId("plannerAnchor").textContent = `Suggestions anchored to the ${premium(result.values.highestPrice)} high-water mark.`;
+      }
+
+      function renderPlan(result) {
+        const v = result.values;
+        const contracts = `${v.quantity} contract${v.quantity === 1 ? "" : "s"}`;
+        const trailDescription = v.trailingType === "PERCENT"
+          ? `${v.trailingAmount}% trailing stop`
+          : `${money(v.trailingAmount)} trailing stop`;
+        const targetSentence = v.profitTarget === null
+          ? "No profit target is currently defined."
+          : `The ${money(v.profitTarget)} target estimates ${signedMoney(result.targetProfit)} of P&L.`;
+        const riskSentence = result.protectedProfit > 0
+          ? `The manual stop protects approximately ${money(result.protectedProfit)} of profit before execution differences.`
+          : `Planned loss is ${money(result.plannedLoss)}, or ${result.plannedLossPercent.toFixed(2)}% of the account.`;
+
+        byId("tradePlan").textContent = `You bought ${contracts} of a long ${v.optionType.toLowerCase()} at ${money(v.entryPrice)} for a total cost of ${money(result.totalCost)}. The option is currently ${money(v.currentPrice)}. A ${trailDescription} from a ${money(v.highestPrice)} high would trigger around ${premium(result.trailingTrigger)}. With a ${money(v.limitOffset)} limit offset, the approximate limit price would be ${premium(result.trailingLimit)}. ${riskSentence} ${targetSentence}`;
+      }
+
+      function saveValues() {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(readValues())); } catch (_) { /* Storage can be unavailable in private browsing. */ }
+      }
+
+      function calculateAndRender({ persist = true } = {}) {
+        const result = CalculatorCore.calculate(readValues());
+        renderValidation(result.errors);
+        trailingAffix.textContent = result.values.trailingType === "PERCENT" ? "%" : "$";
+
+        byId("positionTypeLabel").textContent = `Long ${result.values.optionType.toLowerCase()}`;
+        byId("totalCost").textContent = money(result.totalCost);
+        byId("currentValue").textContent = money(result.currentValue);
+        byId("currentPnl").textContent = signedMoney(result.currentPnl);
+        byId("currentPnlPercent").textContent = signedPercent(result.currentPnlPercent);
+        setTone(byId("currentPnl"), result.currentPnl);
+        setTone(byId("currentPnlPercent"), result.currentPnl);
+
+        byId("plannedLoss").textContent = result.protectedProfit > 0 ? money(0) : money(result.plannedLoss);
+        byId("plannedLossPercent").textContent = result.protectedProfit > 0
+          ? `${money(result.protectedProfit)} profit protected`
+          : `${result.plannedLossPercent.toFixed(2)}% of account`;
+        const riskStatus = byId("riskStatus");
+        riskStatus.textContent = result.riskWithinBudget
+          ? `Within ${money(result.allowedRisk)} budget`
+          : `${money(result.plannedLoss - result.allowedRisk)} over risk budget`;
+        riskStatus.className = `status-pill ${result.riskWithinBudget ? "good" : "bad"}`;
+
+        byId("trailTypeLabel").textContent = result.values.trailingType === "PERCENT"
+          ? `${result.values.trailingAmount}%`
+          : money(result.values.trailingAmount);
+        byId("trailingTrigger").textContent = premium(result.trailingTrigger);
+        byId("trailingLimit").textContent = premium(result.trailingLimit);
+        byId("stopPnl").textContent = signedMoney(result.stopPnl);
+        setTone(byId("stopPnl"), result.stopPnl);
+
+        byId("targetProfit").textContent = result.targetProfit === null ? "—" : signedMoney(result.targetProfit);
+        setTone(byId("targetProfit"), result.targetProfit ?? 0);
+        byId("riskReward").textContent = result.protectedProfit > 0
+          ? "Profit protected"
+          : result.riskReward === null ? "—" : `${result.riskReward.toFixed(2)} : 1`;
+        byId("allowedRisk").textContent = money(result.allowedRisk);
+        byId("spreadDollars").textContent = money(result.spreadDollars);
+        byId("spreadPercent").textContent = `${result.spreadPercent.toFixed(2)}%`;
+
+        renderPlanner(result);
+        renderPlan(result);
+        if (persist) saveValues();
+        return result;
+      }
+
+      function applyValues(values) {
+        const merged = { ...defaults, ...values };
+        Object.entries(merged).forEach(([key, value]) => {
+          const control = form.elements[key];
+          if (!control) return;
+          if (control instanceof RadioNodeList) control.value = String(value);
+          else control.value = String(value);
+        });
+      }
+
+      function loadSavedValues() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+          applyValues(saved && typeof saved === "object" ? saved : defaults);
+        } catch (_) {
+          applyValues(defaults);
+        }
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const result = calculateAndRender();
+        if (result.errors.length) validationSummary.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      form.addEventListener("input", () => calculateAndRender());
+      form.addEventListener("change", () => calculateAndRender());
+
+      byId("useCurrentHigh").addEventListener("click", () => {
+        byId("highestPrice").value = byId("currentPrice").value;
+        calculateAndRender();
+      });
+
+      byId("resetCalculator").addEventListener("click", () => {
+        applyValues(defaults);
+        calculateAndRender();
+      });
+
+      byId("clearSaved").addEventListener("click", () => {
+        try { localStorage.removeItem(STORAGE_KEY); } catch (_) { /* No action needed. */ }
+        applyValues(defaults);
+        calculateAndRender({ persist: false });
+      });
+
+      loadSavedValues();
+      calculateAndRender({ persist: false });
+    }
+  </script>
+</body>
+</html>
