@@ -347,6 +347,7 @@ def _compact_entry_structure_context(payload: Any) -> dict[str, Any]:
             "mode",
             "ema_vwap",
             "gex_range",
+            "gex_wall_break",
             "observation",
         ),
     )
@@ -767,6 +768,174 @@ def calculate_gex_range_context(
         "range_play_eligible": range_play_eligible,
         "suggested_side": suggested_side,
         "advisory": advisory,
+    }
+
+
+def calculate_gex_wall_break_context(
+    completed_bars: list[dict[str, Any]],
+    *,
+    atr_5m: Any,
+    gex_context: dict[str, Any] | None,
+    retest_window_bars: int = 5,
+) -> dict[str, Any]:
+    """Track completed-close GEX wall breaks and retests in shadow mode."""
+    context = gex_context or {}
+    bars = _normalized_completed_structure_bars(completed_bars)
+    five = _aggregate_bars(bars, 5)
+
+    def active_wall(kind: str) -> float | None:
+        wall = context.get(f"{kind}_wall")
+        if isinstance(wall, dict):
+            if wall.get("stage") in {"Delivered", "Spent"}:
+                return None
+            wall = wall.get("strike")
+        return float(wall) if _number(wall) else None
+
+    call_wall = active_wall("call")
+    put_wall = active_wall("put")
+    if (
+        context.get("available") is not True
+        or not _number(atr_5m)
+        or float(atr_5m) <= 0
+        or len(five) < 2
+        or (call_wall is None and put_wall is None)
+    ):
+        return {
+            "available": False,
+            "mode": "shadow",
+            "reason": "fresh_wall_or_completed_5m_bars_unavailable",
+            "break": None,
+            "retest": {"status": "none", "bars_since_break": None},
+            "observation": "SHADOW: GEX wall break data is unavailable",
+        }
+
+    candidates = []
+    walls = (("bullish", call_wall), ("bearish", put_wall))
+    for index in range(1, len(five)):
+        previous = five[index - 1]
+        current = five[index]
+        for side, wall in walls:
+            if wall is None:
+                continue
+            crossed = (
+                float(previous["close"]) <= wall < float(current["close"])
+                if side == "bullish"
+                else float(previous["close"]) >= wall > float(current["close"])
+            )
+            if not crossed:
+                continue
+            reference_volumes = [
+                float(bar.get("volume", 0) or 0)
+                for bar in five[max(0, index - 20):index]
+                if float(bar.get("volume", 0) or 0) > 0
+            ]
+            median_volume = (
+                statistics.median(reference_volumes)
+                if reference_volumes
+                else None
+            )
+            volume_ratio = (
+                float(current.get("volume", 0) or 0) / median_volume
+                if median_volume
+                else None
+            )
+            volume_confirmed = bool(
+                volume_ratio is not None and volume_ratio >= 1.20
+            )
+            candidates.append({
+                "index": index,
+                "side": side,
+                "wall": wall,
+                "bar_time": current["time"],
+                "previous_close": float(previous["close"]),
+                "close": float(current["close"]),
+                "completed_close_confirmed": True,
+                "volume_ratio": (
+                    round(volume_ratio, 3)
+                    if volume_ratio is not None
+                    else None
+                ),
+                "volume_confirmed": volume_confirmed,
+                "confirmed": volume_confirmed,
+                "status": (
+                    "confirmed" if volume_confirmed else "low_volume_cross"
+                ),
+                "event_id": (
+                    f"gex-wall:{side}:{wall:g}:{int(float(current['time']))}"
+                ),
+            })
+
+    if not candidates:
+        return {
+            "available": True,
+            "mode": "shadow",
+            "reason": None,
+            "break": None,
+            "retest": {"status": "none", "bars_since_break": None},
+            "observation": "SHADOW: price has not closed through an active GEX wall",
+        }
+
+    latest = max(candidates, key=lambda item: float(item["bar_time"]))
+    break_index = int(latest.pop("index"))
+    side = str(latest["side"])
+    wall = float(latest["wall"])
+    later = five[break_index + 1:]
+    tolerance = float(atr_5m) * 0.15
+    retest = {"status": "awaiting", "bars_since_break": 0}
+    for offset, bar in enumerate(later[:retest_window_bars], start=1):
+        close = float(bar["close"])
+        if (
+            (side == "bullish" and close < wall)
+            or (side == "bearish" and close > wall)
+        ):
+            retest = {
+                "status": "failed",
+                "bars_since_break": offset,
+                "bar_time": bar["time"],
+                "line_value": wall,
+                "close": close,
+            }
+            break
+        touched = (
+            float(bar["low"]) <= wall + tolerance and close >= wall
+            if side == "bullish"
+            else float(bar["high"]) >= wall - tolerance and close <= wall
+        )
+        if touched:
+            retest = {
+                "status": "confirmed",
+                "bars_since_break": offset,
+                "bar_time": bar["time"],
+                "line_value": wall,
+                "close": close,
+            }
+            break
+    else:
+        if len(later) >= retest_window_bars:
+            retest = {
+                "status": "expired",
+                "bars_since_break": len(later),
+                "line_value": wall,
+            }
+        elif later:
+            retest = {
+                "status": "awaiting",
+                "bars_since_break": len(later),
+                "line_value": wall,
+            }
+
+    quality = "volume-confirmed " if latest["volume_confirmed"] else "low-volume "
+    return {
+        "available": True,
+        "mode": "shadow",
+        "reason": None,
+        "retest_window_bars": retest_window_bars,
+        "break": latest,
+        "retest": retest,
+        "observation": (
+            f"SHADOW: {quality}{side} GEX wall close; "
+            f"retest {retest['status']}"
+        ),
     }
 
 
@@ -3751,6 +3920,13 @@ def build_signal(
         spot,
         atr_5m=spy.get("atr_5m"),
         gex_context=gex_ctx,
+    )
+    entry_structure_context["gex_wall_break"] = (
+        calculate_gex_wall_break_context(
+            completed,
+            atr_5m=spy.get("atr_5m"),
+            gex_context=gex_ctx,
+        )
     )
     zerogex_ctx = _zerogex_context(
         zerogex,

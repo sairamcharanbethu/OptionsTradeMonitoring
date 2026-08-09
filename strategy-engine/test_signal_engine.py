@@ -23,6 +23,7 @@ from signal_engine import (
     calculate_indicators,
     calculate_entry_structure_context,
     calculate_gex_range_context,
+    calculate_gex_wall_break_context,
     calculate_trendline_context,
     render_signal,
 )
@@ -110,6 +111,24 @@ def structure_bars(*, side: str = "bullish") -> list[dict]:
             "low": 98.8,
             "close": close,
             "volume": 2_000.0,
+        })
+    return bars
+
+
+def wall_break_bars(*, side: str = "bullish", volume: float = 3_000.0) -> list[dict]:
+    bars = []
+    baseline_close = 99.5 if side == "bullish" else 100.5
+    break_close = 100.5 if side == "bullish" else 99.5
+    for index in range(35):
+        breaking = index >= 30
+        close = break_close if breaking else baseline_close
+        bars.append({
+            "time": 18_000.0 + index * 60,
+            "open": baseline_close,
+            "high": 101.0 if breaking else close + 0.2,
+            "low": 99.0 if breaking else close - 0.2,
+            "close": close,
+            "volume": volume if breaking else 1_000.0,
         })
     return bars
 
@@ -253,6 +272,152 @@ class EntryStructureContextTest(unittest.TestCase):
 
         self.assertFalse(missing["available"])
         self.assertFalse(inverted["available"])
+
+    def test_bullish_wall_break_requires_completed_close_and_volume(self) -> None:
+        context = calculate_gex_wall_break_context(
+            wall_break_bars(side="bullish"),
+            atr_5m=0.5,
+            gex_context={
+                "available": True,
+                "call_wall": {"strike": 100.0, "stage": "Fresh"},
+                "put_wall": {"strike": 95.0, "stage": "Fresh"},
+            },
+        )
+
+        event = context["break"]
+        self.assertEqual(event["side"], "bullish")
+        self.assertTrue(event["completed_close_confirmed"])
+        self.assertTrue(event["volume_confirmed"])
+        self.assertTrue(event["confirmed"])
+        self.assertEqual(context["retest"]["status"], "awaiting")
+
+    def test_bearish_wall_break_is_detected(self) -> None:
+        context = calculate_gex_wall_break_context(
+            wall_break_bars(side="bearish"),
+            atr_5m=0.5,
+            gex_context={
+                "available": True,
+                "call_wall": {"strike": 105.0},
+                "put_wall": {"strike": 100.0},
+            },
+        )
+
+        self.assertEqual(context["break"]["side"], "bearish")
+        self.assertTrue(context["break"]["confirmed"])
+
+    def test_wall_wick_without_close_does_not_break(self) -> None:
+        bars = wall_break_bars(side="bullish")
+        for bar in bars[-5:]:
+            bar["close"] = 99.8
+            bar["high"] = 100.8
+
+        context = calculate_gex_wall_break_context(
+            bars,
+            atr_5m=0.5,
+            gex_context={
+                "available": True,
+                "call_wall": {"strike": 100.0},
+                "put_wall": {"strike": 95.0},
+            },
+        )
+
+        self.assertIsNone(context["break"])
+
+    def test_low_volume_wall_cross_is_not_quality_confirmed(self) -> None:
+        context = calculate_gex_wall_break_context(
+            wall_break_bars(side="bullish", volume=500.0),
+            atr_5m=0.5,
+            gex_context={
+                "available": True,
+                "call_wall": {"strike": 100.0},
+                "put_wall": {"strike": 95.0},
+            },
+        )
+
+        self.assertTrue(context["break"]["completed_close_confirmed"])
+        self.assertFalse(context["break"]["volume_confirmed"])
+        self.assertFalse(context["break"]["confirmed"])
+        self.assertEqual(context["break"]["status"], "low_volume_cross")
+
+    def test_wall_retest_hold_and_duplicate_event_are_stable(self) -> None:
+        bars = wall_break_bars(side="bullish")
+        for index in range(35, 40):
+            bars.append({
+                "time": 18_000.0 + index * 60,
+                "open": 100.4,
+                "high": 100.6,
+                "low": 99.9,
+                "close": 100.2,
+                "volume": 1_500.0,
+            })
+        gex = {
+            "available": True,
+            "call_wall": {"strike": 100.0},
+            "put_wall": {"strike": 95.0},
+        }
+
+        first = calculate_gex_wall_break_context(
+            bars,
+            atr_5m=0.5,
+            gex_context=gex,
+        )
+        duplicate = calculate_gex_wall_break_context(
+            [*bars, dict(bars[-1])],
+            atr_5m=0.5,
+            gex_context=gex,
+        )
+
+        self.assertEqual(first["retest"]["status"], "confirmed")
+        self.assertEqual(first["break"]["event_id"], duplicate["break"]["event_id"])
+
+    def test_wall_retest_close_back_inside_fails_event(self) -> None:
+        bars = wall_break_bars(side="bullish")
+        for index in range(35, 40):
+            bars.append({
+                "time": 18_000.0 + index * 60,
+                "open": 100.3,
+                "high": 100.4,
+                "low": 99.6,
+                "close": 99.8,
+                "volume": 1_000.0,
+            })
+
+        context = calculate_gex_wall_break_context(
+            bars,
+            atr_5m=0.5,
+            gex_context={
+                "available": True,
+                "call_wall": {"strike": 100.0},
+                "put_wall": {"strike": 95.0},
+            },
+        )
+
+        self.assertEqual(context["retest"]["status"], "failed")
+
+    def test_wall_retest_window_expires_after_five_completed_bars(self) -> None:
+        bars = wall_break_bars(side="bullish")
+        for index in range(35, 60):
+            bars.append({
+                "time": 18_000.0 + index * 60,
+                "open": 101.0,
+                "high": 101.2,
+                "low": 100.5,
+                "close": 101.0,
+                "volume": 1_000.0,
+            })
+
+        context = calculate_gex_wall_break_context(
+            bars,
+            atr_5m=0.5,
+            gex_context={
+                "available": True,
+                "call_wall": {"strike": 100.0},
+                "put_wall": {"strike": 95.0},
+            },
+        )
+
+        self.assertEqual(context["retest"]["status"], "expired")
+        self.assertEqual(context["retest"]["bars_since_break"], 5)
 
 
 class TrendlineStructureTest(unittest.TestCase):
@@ -2063,6 +2228,37 @@ class ContinuationStateTest(unittest.TestCase):
             "confirmations",
         ):
             self.assertEqual(without_context.get(field), baseline.get(field))
+
+    def test_shadow_gex_wall_break_does_not_change_signal_authority(self) -> None:
+        baseline = self.build()
+        with patch(
+            "signal_engine.calculate_gex_wall_break_context",
+            return_value={
+                "available": True,
+                "mode": "shadow",
+                "break": {
+                    "side": "bearish",
+                    "confirmed": True,
+                    "event_id": "test-conflict",
+                },
+                "retest": {"status": "confirmed"},
+            },
+        ):
+            conflicting_context = self.build()
+
+        for field in (
+            "state",
+            "signal_phase",
+            "favoring",
+            "strategy",
+            "confidence_score",
+            "call_setup",
+            "put_setup",
+            "lifecycle",
+            "blockers",
+            "confirmations",
+        ):
+            self.assertEqual(conflicting_context.get(field), baseline.get(field))
 
     def test_unavailable_shadow_trendlines_do_not_block_valid_signal(self) -> None:
         signal = self.build(trendline_structure={
