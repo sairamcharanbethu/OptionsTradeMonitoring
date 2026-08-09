@@ -25,6 +25,7 @@ from signal_engine import (
     calculate_entry_confluence_context,
     calculate_gex_range_context,
     calculate_gex_wall_break_context,
+    calculate_prior_session_rejection_context,
     calculate_trendline_context,
     render_signal,
 )
@@ -486,6 +487,64 @@ class EntryStructureContextTest(unittest.TestCase):
         self.assertTrue(context["conflicted"])
         self.assertEqual(context["score"], 1)
         self.assertEqual(context["grade"], "CONFLICTED")
+
+    def test_prior_session_rejection_levels_ignore_current_session(self) -> None:
+        prior_date = datetime(2026, 7, 28, 9, 30, tzinfo=ET)
+        current_date = datetime(2026, 7, 29, 10, 30, tzinfo=ET)
+        highs = [101, 103, 105, 103, 101, 103, 105, 103, 101]
+        lows = [99, 97, 95, 97, 99, 97, 95, 97, 99]
+        bars = []
+        for bucket, (high, low) in enumerate(zip(highs, lows)):
+            for minute in range(5):
+                bars.append({
+                    "time": (prior_date + timedelta(minutes=bucket * 5 + minute)).timestamp(),
+                    "open": 100.0,
+                    "high": float(high),
+                    "low": float(low),
+                    "close": 100.0,
+                    "volume": 1_000.0,
+                })
+        bars.append({
+            "time": current_date.timestamp() - 60,
+            "open": 100.0,
+            "high": 110.0,
+            "low": 90.0,
+            "close": 109.0,
+            "volume": 5_000.0,
+        })
+
+        context = calculate_prior_session_rejection_context(
+            bars,
+            spot=104.8,
+            atr_5m=1.0,
+            now=current_date.timestamp(),
+        )
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["session_date"], "2026-07-28")
+        self.assertEqual(context["resistance"]["price"], 105.0)
+        self.assertEqual(context["support"]["price"], 95.0)
+        self.assertEqual(context["nearest_level"], "resistance")
+        self.assertTrue(context["at_resistance"])
+
+    def test_prior_session_context_is_unavailable_without_previous_day(self) -> None:
+        now = datetime(2026, 7, 29, 10, 30, tzinfo=ET)
+        context = calculate_prior_session_rejection_context(
+            [{
+                "time": now.timestamp() - 60,
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 1_000.0,
+            }],
+            spot=100.0,
+            atr_5m=1.0,
+            now=now.timestamp(),
+        )
+
+        self.assertFalse(context["available"])
+        self.assertEqual(context["reason"], "prior_session_unavailable")
 
 
 class TrendlineStructureTest(unittest.TestCase):
@@ -2358,6 +2417,35 @@ class ContinuationStateTest(unittest.TestCase):
             "confirmations",
         ):
             self.assertEqual(conflicting_context.get(field), baseline.get(field))
+
+    def test_shadow_prior_session_levels_do_not_change_signal_authority(self) -> None:
+        baseline = self.build()
+        with patch(
+            "signal_engine.calculate_prior_session_rejection_context",
+            return_value={
+                "available": True,
+                "mode": "shadow",
+                "support": {"price": 90.0},
+                "resistance": {"price": 100.2},
+                "nearest_level": "resistance",
+                "at_resistance": True,
+            },
+        ):
+            with_levels = self.build()
+
+        for field in (
+            "state",
+            "signal_phase",
+            "favoring",
+            "strategy",
+            "confidence_score",
+            "call_setup",
+            "put_setup",
+            "lifecycle",
+            "blockers",
+            "confirmations",
+        ):
+            self.assertEqual(with_levels.get(field), baseline.get(field))
 
     def test_unavailable_shadow_trendlines_do_not_block_valid_signal(self) -> None:
         signal = self.build(trendline_structure={

@@ -349,6 +349,7 @@ def _compact_entry_structure_context(payload: Any) -> dict[str, Any]:
             "gex_range",
             "gex_wall_break",
             "confluence",
+            "prior_session_levels",
             "observation",
         ),
     )
@@ -1010,6 +1011,174 @@ def calculate_entry_confluence_context(
         "source_event_id": event.get("event_id"),
         "observation": (
             f"SHADOW: {aligned_side or 'no-side'} confluence {score}/3 ({grade.lower()})"
+        ),
+    }
+
+
+def calculate_prior_session_rejection_context(
+    completed_bars: list[dict[str, Any]],
+    *,
+    spot: Any,
+    atr_5m: Any,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Find prior-session 5m support/resistance without current-day lookahead."""
+    current = time.time() if now is None else now
+    current_date = datetime.fromtimestamp(current, ET).date()
+    bars = _normalized_completed_structure_bars(completed_bars)
+    previous_dates = sorted({
+        datetime.fromtimestamp(float(bar["time"]), ET).date()
+        for bar in bars
+        if datetime.fromtimestamp(float(bar["time"]), ET).date() < current_date
+    })
+    if not previous_dates:
+        return {
+            "available": False,
+            "mode": "shadow",
+            "reason": "prior_session_unavailable",
+            "support": None,
+            "resistance": None,
+        }
+    session_date = previous_dates[-1]
+    previous = [
+        bar
+        for bar in bars
+        if datetime.fromtimestamp(float(bar["time"]), ET).date() == session_date
+    ]
+    five = _aggregate_bars(previous, 5)
+    if len(five) < 5 or not _number(atr_5m) or float(atr_5m) <= 0:
+        return {
+            "available": False,
+            "mode": "shadow",
+            "reason": "insufficient_prior_session_5m_bars",
+            "session_date": session_date.isoformat(),
+            "support": None,
+            "resistance": None,
+        }
+
+    tolerance = max(0.05, float(atr_5m) * 0.15)
+    high_pivots = []
+    low_pivots = []
+    for index in range(2, len(five) - 2):
+        bar = five[index]
+        left = five[index - 2:index]
+        right = five[index + 1:index + 3]
+        high = float(bar["high"])
+        low = float(bar["low"])
+        if high >= max(float(item["high"]) for item in left) and high > max(
+            float(item["high"]) for item in right
+        ):
+            high_pivots.append((high, index))
+        if low <= min(float(item["low"]) for item in left) and low < min(
+            float(item["low"]) for item in right
+        ):
+            low_pivots.append((low, index))
+
+    def strongest(
+        pivots: list[tuple[float, int]],
+        kind: str,
+    ) -> dict[str, Any] | None:
+        if not pivots:
+            return None
+        candidates = []
+        for price, pivot_index in pivots:
+            touches = []
+            rejection = 0.0
+            for bar in five:
+                close = float(bar["close"])
+                if kind == "resistance":
+                    touched = (
+                        abs(float(bar["high"]) - price) <= tolerance
+                        and close < price
+                    )
+                    wick = max(0.0, float(bar["high"]) - close)
+                else:
+                    touched = (
+                        abs(float(bar["low"]) - price) <= tolerance
+                        and close > price
+                    )
+                    wick = max(0.0, close - float(bar["low"]))
+                if touched:
+                    touches.append(bar)
+                    rejection += wick
+            candidates.append({
+                "price": round(price, 4),
+                "touch_count": len(touches),
+                "rejection_atr": round(rejection / float(atr_5m), 3),
+                "pivot_time": five[pivot_index]["time"],
+                "last_touch_at": touches[-1]["time"] if touches else None,
+            })
+        return max(
+            candidates,
+            key=lambda item: (
+                int(item["touch_count"]),
+                float(item["rejection_atr"]),
+                float(item["last_touch_at"] or 0),
+            ),
+        )
+
+    resistance = strongest(high_pivots, "resistance")
+    support = strongest(low_pivots, "support")
+    if (
+        not resistance
+        or not support
+        or float(support["price"]) >= float(resistance["price"])
+    ):
+        return {
+            "available": False,
+            "mode": "shadow",
+            "reason": "confirmed_prior_rejections_unavailable",
+            "session_date": session_date.isoformat(),
+            "support": support,
+            "resistance": resistance,
+        }
+
+    price = float(spot) if _number(spot) else None
+    support_distance = (
+        abs(price - float(support["price"])) if price is not None else None
+    )
+    resistance_distance = (
+        abs(price - float(resistance["price"])) if price is not None else None
+    )
+    proximity = float(atr_5m) * 0.50
+    nearest = (
+        "support"
+        if support_distance is not None
+        and resistance_distance is not None
+        and support_distance <= resistance_distance
+        else "resistance"
+        if resistance_distance is not None
+        else None
+    )
+    return {
+        "available": True,
+        "mode": "shadow",
+        "reason": None,
+        "session_date": session_date.isoformat(),
+        "timeframe": "5m",
+        "confirmation": "completed_prior_session_only",
+        "support": support,
+        "resistance": resistance,
+        "nearest_level": nearest,
+        "distance_to_support_atr": (
+            round(support_distance / float(atr_5m), 3)
+            if support_distance is not None
+            else None
+        ),
+        "distance_to_resistance_atr": (
+            round(resistance_distance / float(atr_5m), 3)
+            if resistance_distance is not None
+            else None
+        ),
+        "at_support": bool(
+            support_distance is not None and support_distance <= proximity
+        ),
+        "at_resistance": bool(
+            resistance_distance is not None
+            and resistance_distance <= proximity
+        ),
+        "observation": (
+            f"SHADOW: prior-session {nearest or 'rejection'} level is nearest"
         ),
     }
 
@@ -4005,6 +4174,14 @@ def build_signal(
     )
     entry_structure_context["confluence"] = (
         calculate_entry_confluence_context(entry_structure_context)
+    )
+    entry_structure_context["prior_session_levels"] = (
+        calculate_prior_session_rejection_context(
+            spy_bars,
+            spot=spot,
+            atr_5m=spy.get("atr_5m"),
+            now=now,
+        )
     )
     zerogex_ctx = _zerogex_context(
         zerogex,
