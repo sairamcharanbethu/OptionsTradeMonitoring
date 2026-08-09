@@ -454,6 +454,19 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             prefetcher._signal_fingerprint = Mock(return_value="test")
             signal = {
                 "state": "WAIT",
+                "entry_structure_context": {
+                    "version": "entry-structure-v1",
+                    "available": True,
+                    "mode": "shadow",
+                    "ema_vwap": {
+                        "event": {
+                            "event_id": "ema-vwap:3m:bullish:ema9:1000",
+                            "side": "bullish",
+                        },
+                        "timeframes": {},
+                    },
+                    "raw_bar_history": [{"close": 741.25}] * 100,
+                },
                 "trendline_context": {
                     "version": "trendline-structure-v1",
                     "available": True,
@@ -486,6 +499,14 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         self.assertNotIn(
             "flow_context",
             record["zerogex_decision"],
+        )
+        self.assertEqual(
+            record["entry_structure_context"]["ema_vwap"]["event"]["event_id"],
+            "ema-vwap:3m:bullish:ema9:1000",
+        )
+        self.assertNotIn(
+            "raw_bar_history",
+            record["entry_structure_context"],
         )
         self.assertEqual(
             record["trendline_context"]["break"]["event_id"],

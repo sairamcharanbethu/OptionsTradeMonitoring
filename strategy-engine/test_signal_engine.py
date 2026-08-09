@@ -21,6 +21,7 @@ from signal_engine import (
     _zerogex_decision_context,
     build_signal,
     calculate_indicators,
+    calculate_entry_structure_context,
     calculate_trendline_context,
     render_signal,
 )
@@ -86,6 +87,99 @@ def trendline_bar(
         "close": close,
         "volume": 1_000.0,
     }
+
+
+def structure_bars(*, side: str = "bullish") -> list[dict]:
+    bars = []
+    for index in range(27):
+        bars.append({
+            "time": 10_800.0 + index * 60,
+            "open": 100.0,
+            "high": 100.15,
+            "low": 99.85,
+            "close": 100.0,
+            "volume": 1_000.0,
+        })
+    close = 101.0 if side == "bullish" else 99.0
+    for index in range(27, 30):
+        bars.append({
+            "time": 10_800.0 + index * 60,
+            "open": 100.0,
+            "high": 101.2,
+            "low": 98.8,
+            "close": close,
+            "volume": 2_000.0,
+        })
+    return bars
+
+
+class EntryStructureContextTest(unittest.TestCase):
+    def test_completed_bullish_wick_reclaim_emits_stable_shadow_event(self) -> None:
+        bars = structure_bars(side="bullish")
+
+        first = calculate_entry_structure_context(bars)
+        duplicate = calculate_entry_structure_context([*bars, dict(bars[-1])])
+
+        self.assertTrue(first["available"])
+        self.assertEqual(first["mode"], "shadow")
+        event = first["ema_vwap"]["event"]
+        self.assertEqual(event["side"], "bullish")
+        self.assertEqual(event["timeframe"], "3m")
+        self.assertEqual(event["line"], "ema9+vwap")
+        self.assertTrue(event["completed_close_confirmed"])
+        self.assertEqual(event["event_id"], duplicate["ema_vwap"]["event"]["event_id"])
+
+    def test_completed_bearish_wick_rejection_is_detected(self) -> None:
+        context = calculate_entry_structure_context(
+            structure_bars(side="bearish")
+        )
+
+        event = context["ema_vwap"]["event"]
+        self.assertEqual(event["side"], "bearish")
+        self.assertLess(event["close"], event["ema9"])
+        self.assertLess(event["close"], event["vwap"])
+
+    def test_wick_without_close_reclaim_does_not_emit_event(self) -> None:
+        bars = structure_bars(side="bullish")
+        for bar in bars[-3:]:
+            bar["close"] = 100.0
+
+        context = calculate_entry_structure_context(bars)
+
+        self.assertTrue(context["available"])
+        self.assertIsNone(context["ema_vwap"]["event"])
+        self.assertIn("no completed EMA9/VWAP rejection", context["observation"])
+
+    def test_incomplete_candle_cannot_create_rejection(self) -> None:
+        bars = structure_bars(side="bullish")
+        for bar in bars[-3:]:
+            bar["complete"] = False
+
+        context = calculate_entry_structure_context(bars)
+
+        self.assertIsNone(context["ema_vwap"]["event"])
+
+    def test_conflicting_ema_and_vwap_rejections_do_not_emit_direction(self) -> None:
+        bars = []
+        for index in range(30):
+            early = index < 3
+            latest = index >= 27
+            close = 102.0 if early else 100.0 if latest else 99.0
+            bars.append({
+                "time": 10_800.0 + index * 60,
+                "open": close,
+                "high": 103.0 if latest else close + 0.2,
+                "low": 98.0 if latest else close - 0.2,
+                "close": close,
+                "volume": 100_000.0 if early else 100.0,
+            })
+
+        context = calculate_entry_structure_context(bars)
+
+        self.assertIsNone(context["ema_vwap"]["event"])
+        self.assertTrue(
+            context["ema_vwap"]["timeframes"]["3m"]["conflicted_rejection"]
+        )
 
 
 class TrendlineStructureTest(unittest.TestCase):
@@ -1834,6 +1928,40 @@ class ContinuationStateTest(unittest.TestCase):
         self.assertGreaterEqual(signal["confidence_score"], 90)
         self.assertEqual(signal["continuation_quality"]["calls"]["grade"], "A+")
         self.assertIn("gex_trend_context", signal["continuation_quality"]["calls"]["components"])
+
+    def test_shadow_entry_structure_does_not_change_signal_authority(self) -> None:
+        baseline = self.build()
+        unavailable = {
+            "version": "entry-structure-v1",
+            "available": False,
+            "reason": "test_unavailable",
+            "mode": "shadow",
+            "ema_vwap": {"event": None, "timeframes": {}},
+            "observation": "SHADOW: unavailable",
+        }
+        with patch(
+            "signal_engine.calculate_entry_structure_context",
+            return_value=unavailable,
+        ):
+            without_context = self.build()
+
+        for field in (
+            "state",
+            "signal_phase",
+            "favoring",
+            "strategy",
+            "confidence_score",
+            "call_setup",
+            "put_setup",
+            "lifecycle",
+            "blockers",
+            "confirmations",
+        ):
+            self.assertEqual(without_context.get(field), baseline.get(field))
+        self.assertEqual(
+            baseline["decision_telemetry"]["entry_structure_context"]["mode"],
+            "shadow",
+        )
 
     def test_unavailable_shadow_trendlines_do_not_block_valid_signal(self) -> None:
         signal = self.build(trendline_structure={

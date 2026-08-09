@@ -337,17 +337,36 @@ def _compact_trendline_context(payload: Any) -> dict[str, Any]:
     return compact
 
 
+def _compact_entry_structure_context(payload: Any) -> dict[str, Any]:
+    return _journal_fields(
+        payload,
+        (
+            "version",
+            "available",
+            "reason",
+            "mode",
+            "ema_vwap",
+            "observation",
+        ),
+    )
+
+
 def compact_signal_for_journal(signal: dict[str, Any]) -> dict[str, Any]:
     """Keep replay fields while removing repeated ZeroGEX endpoint payloads."""
     compact = {
         key: copy.deepcopy(value)
         for key, value in signal.items()
         if key not in {
+            "entry_structure_context",
             "trendline_context",
             "zerogex_shadow",
             "zerogex_decision",
         }
     }
+    if "entry_structure_context" in signal:
+        compact["entry_structure_context"] = _compact_entry_structure_context(
+            signal.get("entry_structure_context")
+        )
     if "trendline_context" in signal:
         compact["trendline_context"] = _compact_trendline_context(
             signal.get("trendline_context")
@@ -422,6 +441,225 @@ def _aggregate_bars(bars: list[dict[str, Any]], minutes: int) -> list[dict[str, 
 
 def _aggregate_5m(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return _aggregate_bars(bars, 5)
+
+
+def _normalized_completed_structure_bars(
+    completed_bars: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized: dict[float, dict[str, Any]] = {}
+    for bar in completed_bars:
+        if not isinstance(bar, dict) or bar.get("complete") is False:
+            continue
+        if not all(
+            _number(bar.get(field))
+            for field in ("time", "open", "high", "low", "close")
+        ):
+            continue
+        stamp = float(bar["time"])
+        normalized[stamp] = {
+            "time": stamp,
+            "open": float(bar["open"]),
+            "high": float(bar["high"]),
+            "low": float(bar["low"]),
+            "close": float(bar["close"]),
+            "volume": max(0.0, float(bar.get("volume", 0) or 0)),
+        }
+    return [normalized[stamp] for stamp in sorted(normalized)]
+
+
+def _completed_vwap(
+    bars: list[dict[str, Any]],
+    cutoff: float,
+) -> float | None:
+    eligible = [bar for bar in bars if float(bar["time"]) < cutoff]
+    volume = sum(float(bar["volume"]) for bar in eligible)
+    if volume <= 0:
+        return None
+    weighted = sum(
+        (
+            float(bar["open"])
+            + float(bar["high"])
+            + float(bar["low"])
+            + float(bar["close"])
+        )
+        / 4
+        * float(bar["volume"])
+        for bar in eligible
+    )
+    return round(weighted / volume, 4)
+
+
+def _ema_vwap_rejection_event(
+    source_bars: list[dict[str, Any]],
+    timeframe_minutes: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    aggregated = _aggregate_bars(source_bars, timeframe_minutes)
+    timeframe = f"{timeframe_minutes}m"
+    if len(aggregated) < 9:
+        return None, {
+            "available": False,
+            "reason": "insufficient_completed_bars",
+            "completed_bars": len(aggregated),
+        }
+
+    closes = [float(bar["close"]) for bar in aggregated]
+    latest = aggregated[-1]
+    ema9 = _ema(closes, 9)
+    cutoff = float(latest["time"]) + timeframe_minutes * 60
+    vwap = _completed_vwap(source_bars, cutoff)
+    if not (_number(ema9) and _number(vwap)):
+        return None, {
+            "available": False,
+            "reason": "missing_ema_or_vwap",
+            "completed_bars": len(aggregated),
+        }
+
+    close = float(latest["close"])
+    low = float(latest["low"])
+    high = float(latest["high"])
+    bullish_lines = [
+        name
+        for name, value in (("ema9", float(ema9)), ("vwap", float(vwap)))
+        if low <= value and close > value
+    ]
+    bearish_lines = [
+        name
+        for name, value in (("ema9", float(ema9)), ("vwap", float(vwap)))
+        if high >= value and close < value
+    ]
+    conflicted = bool(bullish_lines and bearish_lines)
+    side = (
+        "bullish"
+        if bullish_lines and not bearish_lines
+        else "bearish"
+        if bearish_lines and not bullish_lines
+        else None
+    )
+    lines = bullish_lines if side == "bullish" else bearish_lines
+    line = "+".join(lines) if lines else None
+
+    touch_count = 0
+    if side and line:
+        for index in range(max(8, len(aggregated) - 6), len(aggregated)):
+            candidate = aggregated[index]
+            candidate_ema = _ema(
+                [float(bar["close"]) for bar in aggregated[: index + 1]],
+                9,
+            )
+            candidate_cutoff = (
+                float(candidate["time"]) + timeframe_minutes * 60
+            )
+            candidate_vwap = _completed_vwap(source_bars, candidate_cutoff)
+            if not (_number(candidate_ema) and _number(candidate_vwap)):
+                continue
+            values = {
+                "ema9": float(candidate_ema),
+                "vwap": float(candidate_vwap),
+            }
+            candidate_close = float(candidate["close"])
+            held = all(
+                (
+                    float(candidate["low"]) <= values[name]
+                    and candidate_close > values[name]
+                )
+                if side == "bullish"
+                else (
+                    float(candidate["high"]) >= values[name]
+                    and candidate_close < values[name]
+                )
+                for name in lines
+            )
+            touch_count += int(held)
+
+    fifteen = _aggregate_bars(source_bars, 15)
+    fifteen_closes = [float(bar["close"]) for bar in fifteen]
+    fifteen_ema9 = _ema(fifteen_closes, 9)
+    higher_timeframe_bias = "unavailable"
+    if _number(fifteen_ema9) and len(fifteen_closes) >= 2:
+        if all(value > float(fifteen_ema9) for value in fifteen_closes[-2:]):
+            higher_timeframe_bias = "bullish"
+        elif all(value < float(fifteen_ema9) for value in fifteen_closes[-2:]):
+            higher_timeframe_bias = "bearish"
+        else:
+            higher_timeframe_bias = "mixed"
+
+    status = {
+        "available": True,
+        "completed_bars": len(aggregated),
+        "ema9": ema9,
+        "vwap": vwap,
+        "last_completed_at": latest["time"],
+        "relationship": (
+            "established_hold" if touch_count >= 2 else "first_confirmed_touch"
+            if side else "no_rejection"
+        ),
+        "touch_count": touch_count,
+        "higher_timeframe_bias": higher_timeframe_bias,
+        "conflicted_rejection": conflicted,
+    }
+    if not side or not line:
+        return None, status
+    event = {
+        "side": side,
+        "timeframe": timeframe,
+        "line": line,
+        "bar_time": latest["time"],
+        "close": close,
+        "ema9": ema9,
+        "vwap": vwap,
+        "completed_close_confirmed": True,
+        "relationship": status["relationship"],
+        "touch_count": touch_count,
+        "higher_timeframe_bias": higher_timeframe_bias,
+        "event_id": (
+            f"ema-vwap:{timeframe}:{side}:{line}:{int(float(latest['time']))}"
+        ),
+    }
+    return event, status
+
+
+def calculate_entry_structure_context(
+    completed_bars: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Calculate replayable entry timing evidence without signal authority."""
+    bars = _normalized_completed_structure_bars(completed_bars)
+    events = []
+    timeframes = {}
+    for minutes in (3, 5):
+        event, status = _ema_vwap_rejection_event(bars, minutes)
+        timeframes[f"{minutes}m"] = status
+        if event:
+            events.append(event)
+    available = any(status.get("available") for status in timeframes.values())
+    event = max(
+        events,
+        key=lambda item: (
+            float(item["bar_time"]),
+            1 if item["timeframe"] == "5m" else 0,
+        ),
+        default=None,
+    )
+    if event:
+        observation = (
+            "SHADOW: "
+            f"{event['side']} {event['line'].replace('+', ' and ')} "
+            f"rejection confirmed on completed {event['timeframe']} candle"
+        )
+    elif available:
+        observation = "SHADOW: no completed EMA9/VWAP rejection is active"
+    else:
+        observation = "SHADOW: EMA9/VWAP rejection data is unavailable"
+    return {
+        "version": "entry-structure-v1",
+        "available": available,
+        "reason": None if available else "insufficient_completed_bars",
+        "mode": "shadow",
+        "ema_vwap": {
+            "event": event,
+            "timeframes": timeframes,
+        },
+        "observation": observation,
+    }
 
 
 def _atr(bars: list[dict[str, Any]], period: int = 14) -> float | None:
@@ -2761,6 +2999,9 @@ def _dedupe_messages(result: dict[str, Any]) -> dict[str, Any]:
         "blockers": copy.deepcopy(result["blockers"]),
         "warnings": copy.deepcopy(result["warnings"]),
         "session": copy.deepcopy(result.get("session_policy")),
+        "entry_structure_context": _compact_entry_structure_context(
+            result.get("entry_structure_context")
+        ),
         "trendline_context": _compact_trendline_context(
             result.get("trendline_context")
         ),
@@ -3372,6 +3613,7 @@ def build_signal(
     use_qqq = "QQQ" in (market.get("symbols") or {})
     spy_bars = spy_market.get("bars") or []
     completed = _completed_bars(_session_bars(spy_bars, now=now))
+    entry_structure_context = calculate_entry_structure_context(completed)
     if trendline_config["enabled"]:
         trendline_context = calculate_trendline_context(
             completed,
@@ -3458,6 +3700,7 @@ def build_signal(
         "blockers": [],
         "warnings": [],
         "confirmations": [],
+        "entry_structure_context": entry_structure_context,
         "trendline_context": trendline_context,
         "gex": gex_ctx,
         "zerogex_shadow": zerogex_ctx,
@@ -3485,6 +3728,7 @@ def build_signal(
             blocker=blocker,
         )
         if preserved is not None:
+            preserved["entry_structure_context"] = entry_structure_context
             preserved["trendline_context"] = trendline_context
             return _dedupe_messages(preserved)
         result["blockers"].append(blocker)
@@ -3498,6 +3742,7 @@ def build_signal(
             blocker=blocker,
         )
         if preserved is not None:
+            preserved["entry_structure_context"] = entry_structure_context
             preserved["trendline_context"] = trendline_context
             return _dedupe_messages(preserved)
         result["blockers"].append(blocker)
@@ -3517,6 +3762,7 @@ def build_signal(
             spot=spot,
             gex=gex_ctx,
             zerogex_shadow=zerogex_ctx,
+            entry_structure_context=entry_structure_context,
             trendline_context=trendline_context,
             execution_enabled=False,
             engine_version=ENGINE_VERSION,
