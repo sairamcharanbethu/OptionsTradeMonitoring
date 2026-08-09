@@ -346,6 +346,7 @@ def _compact_entry_structure_context(payload: Any) -> dict[str, Any]:
             "reason",
             "mode",
             "ema_vwap",
+            "gex_range",
             "observation",
         ),
     )
@@ -659,6 +660,113 @@ def calculate_entry_structure_context(
             "timeframes": timeframes,
         },
         "observation": observation,
+    }
+
+
+def calculate_gex_range_context(
+    spot: Any,
+    *,
+    atr_5m: Any,
+    gex_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Classify GEX range location as shadow context, never as an entry gate."""
+    context = gex_context or {}
+
+    def active_wall(kind: str) -> float | None:
+        wall = context.get(f"{kind}_wall")
+        if isinstance(wall, dict):
+            if wall.get("stage") in {"Delivered", "Spent"}:
+                return None
+            value = wall.get("strike")
+        else:
+            value = wall
+        return float(value) if _number(value) else None
+
+    floor = active_wall("put")
+    ceiling = active_wall("call")
+    if (
+        context.get("available") is not True
+        or not _number(spot)
+        or not _number(atr_5m)
+        or float(atr_5m) <= 0
+        or floor is None
+        or ceiling is None
+        or floor >= ceiling
+    ):
+        return {
+            "available": False,
+            "mode": "shadow",
+            "reason": "fresh_ordered_gex_boundaries_unavailable",
+            "floor": floor,
+            "ceiling": ceiling,
+            "location": "UNAVAILABLE",
+            "range_play_eligible": False,
+            "suggested_side": None,
+            "advisory": "observe_only",
+        }
+
+    price = float(spot)
+    atr = float(atr_5m)
+    width = ceiling - floor
+    boundary_zone = max(0.05, atr * 0.50)
+    floor_distance = abs(price - floor)
+    ceiling_distance = abs(price - ceiling)
+    position = (price - floor) / width
+    if floor_distance <= boundary_zone:
+        location = "AT_FLOOR"
+    elif ceiling_distance <= boundary_zone:
+        location = "AT_CEILING"
+    elif price < floor:
+        location = "BELOW_FLOOR"
+    elif price > ceiling:
+        location = "ABOVE_CEILING"
+    elif position < 1 / 3:
+        location = "LOWER_THIRD"
+    elif position > 2 / 3:
+        location = "UPPER_THIRD"
+    else:
+        location = "MID_RANGE"
+
+    positive_range = bool(
+        context.get("regime") == "Positive"
+        and context.get("gamma_regime") == "Range"
+    )
+    suggested_side = (
+        "calls" if location == "AT_FLOOR"
+        else "puts" if location == "AT_CEILING"
+        else None
+    )
+    range_play_eligible = bool(positive_range and suggested_side)
+    advisory = (
+        "boundary_rejection_watch"
+        if range_play_eligible
+        else "avoid_mid_range"
+        if location == "MID_RANGE"
+        else "range_fade_not_supported"
+        if not positive_range
+        else "observe_only"
+    )
+    return {
+        "available": True,
+        "mode": "shadow",
+        "reason": None,
+        "regime": context.get("regime"),
+        "gamma_regime": context.get("gamma_regime"),
+        "floor": round(floor, 4),
+        "ceiling": round(ceiling, 4),
+        "range_width": round(width, 4),
+        "range_width_atr": round(width / atr, 3),
+        "boundary_zone": round(boundary_zone, 4),
+        "position_in_range": round(position, 4),
+        "distance_to_floor_atr": round(floor_distance / atr, 3),
+        "distance_to_ceiling_atr": round(ceiling_distance / atr, 3),
+        "nearest_boundary": (
+            "floor" if floor_distance <= ceiling_distance else "ceiling"
+        ),
+        "location": location,
+        "range_play_eligible": range_play_eligible,
+        "suggested_side": suggested_side,
+        "advisory": advisory,
     }
 
 
@@ -3639,6 +3747,11 @@ def build_signal(
     quote_age = spy_market.get("quote_age_seconds")
     qqq_quote_age = qqq_market.get("quote_age_seconds")
     gex_ctx = _gex_context(gex, heatmap)
+    entry_structure_context["gex_range"] = calculate_gex_range_context(
+        spot,
+        atr_5m=spy.get("atr_5m"),
+        gex_context=gex_ctx,
+    )
     zerogex_ctx = _zerogex_context(
         zerogex,
         gex_ctx,

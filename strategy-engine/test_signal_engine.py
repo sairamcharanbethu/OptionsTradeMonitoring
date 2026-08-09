@@ -22,6 +22,7 @@ from signal_engine import (
     build_signal,
     calculate_indicators,
     calculate_entry_structure_context,
+    calculate_gex_range_context,
     calculate_trendline_context,
     render_signal,
 )
@@ -180,6 +181,78 @@ class EntryStructureContextTest(unittest.TestCase):
         self.assertTrue(
             context["ema_vwap"]["timeframes"]["3m"]["conflicted_rejection"]
         )
+
+    def test_positive_gamma_floor_is_classified_as_call_location(self) -> None:
+        context = calculate_gex_range_context(
+            740.15,
+            atr_5m=0.50,
+            gex_context={
+                "available": True,
+                "regime": "Positive",
+                "gamma_regime": "Range",
+                "put_wall": {"strike": 740.0, "stage": "Fresh"},
+                "call_wall": {"strike": 745.0, "stage": "Fresh"},
+            },
+        )
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["location"], "AT_FLOOR")
+        self.assertEqual(context["suggested_side"], "calls")
+        self.assertTrue(context["range_play_eligible"])
+
+    def test_positive_gamma_mid_range_is_explicit_dead_ground(self) -> None:
+        context = calculate_gex_range_context(
+            742.5,
+            atr_5m=0.50,
+            gex_context={
+                "available": True,
+                "regime": "Positive",
+                "gamma_regime": "Range",
+                "put_wall": {"strike": 740.0},
+                "call_wall": {"strike": 745.0},
+            },
+        )
+
+        self.assertEqual(context["location"], "MID_RANGE")
+        self.assertIsNone(context["suggested_side"])
+        self.assertFalse(context["range_play_eligible"])
+        self.assertEqual(context["advisory"], "avoid_mid_range")
+
+    def test_negative_gamma_never_qualifies_as_range_play(self) -> None:
+        context = calculate_gex_range_context(
+            740.1,
+            atr_5m=0.50,
+            gex_context={
+                "available": True,
+                "regime": "Negative",
+                "gamma_regime": "Trend",
+                "put_wall": {"strike": 740.0},
+                "call_wall": {"strike": 745.0},
+            },
+        )
+
+        self.assertEqual(context["location"], "AT_FLOOR")
+        self.assertFalse(context["range_play_eligible"])
+        self.assertEqual(context["advisory"], "range_fade_not_supported")
+
+    def test_missing_or_inverted_gex_boundaries_are_unavailable(self) -> None:
+        missing = calculate_gex_range_context(
+            742.0,
+            atr_5m=0.50,
+            gex_context={"available": True},
+        )
+        inverted = calculate_gex_range_context(
+            742.0,
+            atr_5m=0.50,
+            gex_context={
+                "available": True,
+                "put_wall": {"strike": 745.0},
+                "call_wall": {"strike": 740.0},
+            },
+        )
+
+        self.assertFalse(missing["available"])
+        self.assertFalse(inverted["available"])
 
 
 class TrendlineStructureTest(unittest.TestCase):
@@ -1962,6 +2035,34 @@ class ContinuationStateTest(unittest.TestCase):
             baseline["decision_telemetry"]["entry_structure_context"]["mode"],
             "shadow",
         )
+
+    def test_shadow_gex_range_location_does_not_change_signal_authority(self) -> None:
+        baseline = self.build()
+        with patch(
+            "signal_engine.calculate_gex_range_context",
+            return_value={
+                "available": False,
+                "mode": "shadow",
+                "reason": "test_unavailable",
+                "location": "UNAVAILABLE",
+                "range_play_eligible": False,
+            },
+        ):
+            without_context = self.build()
+
+        for field in (
+            "state",
+            "signal_phase",
+            "favoring",
+            "strategy",
+            "confidence_score",
+            "call_setup",
+            "put_setup",
+            "lifecycle",
+            "blockers",
+            "confirmations",
+        ):
+            self.assertEqual(without_context.get(field), baseline.get(field))
 
     def test_unavailable_shadow_trendlines_do_not_block_valid_signal(self) -> None:
         signal = self.build(trendline_structure={
