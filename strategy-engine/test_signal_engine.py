@@ -22,6 +22,7 @@ from signal_engine import (
     build_signal,
     calculate_indicators,
     calculate_entry_structure_context,
+    calculate_entry_confluence_context,
     calculate_gex_range_context,
     calculate_gex_wall_break_context,
     calculate_trendline_context,
@@ -418,6 +419,73 @@ class EntryStructureContextTest(unittest.TestCase):
 
         self.assertEqual(context["retest"]["status"], "expired")
         self.assertEqual(context["retest"]["bars_since_break"], 5)
+
+    def test_bullish_floor_vwap_ema_stack_is_triple_confluence(self) -> None:
+        context = calculate_entry_confluence_context({
+            "gex_range": {
+                "available": True,
+                "location": "AT_FLOOR",
+                "range_play_eligible": True,
+                "suggested_side": "calls",
+            },
+            "ema_vwap": {
+                "event": {
+                    "side": "bullish",
+                    "line": "ema9+vwap",
+                    "event_id": "reclaim",
+                },
+            },
+        })
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["side"], "calls")
+        self.assertEqual(context["score"], 3)
+        self.assertEqual(context["grade"], "TRIPLE_CONFLUENCE")
+        self.assertEqual(context["variant"], "documented_bullish_stack")
+        self.assertTrue(context["all_aligned"])
+        self.assertFalse(context["entry_authority"])
+
+    def test_mid_range_cannot_receive_gex_location_credit(self) -> None:
+        context = calculate_entry_confluence_context({
+            "gex_range": {
+                "available": True,
+                "location": "MID_RANGE",
+                "range_play_eligible": False,
+                "suggested_side": None,
+            },
+            "ema_vwap": {
+                "event": {
+                    "side": "bullish",
+                    "line": "ema9+vwap",
+                    "event_id": "reclaim",
+                },
+            },
+        })
+
+        self.assertEqual(context["score"], 2)
+        self.assertEqual(context["grade"], "TIMING_ONLY")
+        self.assertFalse(context["components"]["gex_boundary_location"])
+
+    def test_conflicting_location_and_rejection_are_not_confluence(self) -> None:
+        context = calculate_entry_confluence_context({
+            "gex_range": {
+                "available": True,
+                "location": "AT_FLOOR",
+                "range_play_eligible": True,
+                "suggested_side": "calls",
+            },
+            "ema_vwap": {
+                "event": {
+                    "side": "bearish",
+                    "line": "ema9+vwap",
+                    "event_id": "rejection",
+                },
+            },
+        })
+
+        self.assertTrue(context["conflicted"])
+        self.assertEqual(context["score"], 1)
+        self.assertEqual(context["grade"], "CONFLICTED")
 
 
 class TrendlineStructureTest(unittest.TestCase):
@@ -2242,6 +2310,37 @@ class ContinuationStateTest(unittest.TestCase):
                     "event_id": "test-conflict",
                 },
                 "retest": {"status": "confirmed"},
+            },
+        ):
+            conflicting_context = self.build()
+
+        for field in (
+            "state",
+            "signal_phase",
+            "favoring",
+            "strategy",
+            "confidence_score",
+            "call_setup",
+            "put_setup",
+            "lifecycle",
+            "blockers",
+            "confirmations",
+        ):
+            self.assertEqual(conflicting_context.get(field), baseline.get(field))
+
+    def test_shadow_confluence_grade_does_not_change_signal_authority(self) -> None:
+        baseline = self.build()
+        with patch(
+            "signal_engine.calculate_entry_confluence_context",
+            return_value={
+                "available": True,
+                "mode": "shadow",
+                "entry_authority": False,
+                "side": "puts",
+                "score": 3,
+                "grade": "TRIPLE_CONFLUENCE",
+                "all_aligned": True,
+                "conflicted": False,
             },
         ):
             conflicting_context = self.build()

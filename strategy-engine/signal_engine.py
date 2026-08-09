@@ -348,6 +348,7 @@ def _compact_entry_structure_context(payload: Any) -> dict[str, Any]:
             "ema_vwap",
             "gex_range",
             "gex_wall_break",
+            "confluence",
             "observation",
         ),
     )
@@ -935,6 +936,80 @@ def calculate_gex_wall_break_context(
         "observation": (
             f"SHADOW: {quality}{side} GEX wall close; "
             f"retest {retest['status']}"
+        ),
+    }
+
+
+def calculate_entry_confluence_context(
+    entry_structure_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Grade independent shadow evidence without changing signal authority."""
+    structure = entry_structure_context or {}
+    gex_range = structure.get("gex_range") or {}
+    event = (structure.get("ema_vwap") or {}).get("event") or {}
+    location_side = gex_range.get("suggested_side")
+    event_side = (
+        "calls" if event.get("side") == "bullish"
+        else "puts" if event.get("side") == "bearish"
+        else None
+    )
+    conflicted = bool(
+        location_side and event_side and location_side != event_side
+    )
+    aligned_side = (
+        location_side
+        if location_side and (not event_side or location_side == event_side)
+        else event_side
+        if event_side and not location_side
+        else None
+    )
+    line = str(event.get("line") or "")
+    components = {
+        "gex_boundary_location": bool(
+            gex_range.get("range_play_eligible") is True
+            and location_side
+        ),
+        "vwap_rejection": bool(event_side and "vwap" in line),
+        "ema9_reclaim_rejection": bool(event_side and "ema9" in line),
+    }
+    if conflicted:
+        components["vwap_rejection"] = False
+        components["ema9_reclaim_rejection"] = False
+    score = sum(int(value) for value in components.values())
+    all_aligned = bool(score == 3 and not conflicted)
+    grade = (
+        "CONFLICTED"
+        if conflicted
+        else "TRIPLE_CONFLUENCE"
+        if all_aligned
+        else "TIMING_ONLY"
+        if score == 2 and not components["gex_boundary_location"]
+        else "PARTIAL"
+        if score > 0
+        else "NONE"
+    )
+    variant = (
+        "documented_bullish_stack"
+        if all_aligned and aligned_side == "calls"
+        else "symmetric_bearish_hypothesis"
+        if all_aligned and aligned_side == "puts"
+        else "partial_evidence"
+    )
+    return {
+        "available": bool(gex_range.get("available") or event),
+        "mode": "shadow",
+        "entry_authority": False,
+        "side": aligned_side,
+        "score": score,
+        "maximum_score": 3,
+        "grade": grade,
+        "variant": variant,
+        "all_aligned": all_aligned,
+        "conflicted": conflicted,
+        "components": components,
+        "source_event_id": event.get("event_id"),
+        "observation": (
+            f"SHADOW: {aligned_side or 'no-side'} confluence {score}/3 ({grade.lower()})"
         ),
     }
 
@@ -3927,6 +4002,9 @@ def build_signal(
             atr_5m=spy.get("atr_5m"),
             gex_context=gex_ctx,
         )
+    )
+    entry_structure_context["confluence"] = (
+        calculate_entry_confluence_context(entry_structure_context)
     )
     zerogex_ctx = _zerogex_context(
         zerogex,
