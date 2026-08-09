@@ -68,7 +68,7 @@ export default function StrategyGuidePage() {
               'Continuation, multi-timeframe trend-break/reversal, and GEX-rejection plans freeze their trigger, invalidation, targets, and exact option contract before activation.',
               'ZeroGEX is authoritative for GEX regime, flip, and walls, but local price structure remains the activation authority. ZeroGEX STAND_DOWN is context, not a veto.',
               'The app blocks duplicate entries for the same user, symbol, side, strike, and expiration while an OPEN or PENDING_ORDER position already exists.',
-              'After 1:00 PM ET, the engine selects the next listed expiry. New entries stop and open exposure must flatten at 3:55 PM ET.'
+              'After 1:00 PM ET, the engine selects the next listed expiry. New entries stop 60 minutes before the scheduled close, and open 0DTE exposure must flatten 40 minutes before close (3:00 PM and 3:20 PM ET on a regular session).'
             ]}
           />
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
