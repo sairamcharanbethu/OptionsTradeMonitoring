@@ -350,6 +350,7 @@ def _compact_entry_structure_context(payload: Any) -> dict[str, Any]:
             "gex_wall_break",
             "confluence",
             "prior_session_levels",
+            "cross_market",
             "observation",
         ),
     )
@@ -3555,6 +3556,95 @@ def _trend_direction(indicators: dict[str, Any], suffix: str) -> str:
     return "flat"
 
 
+def calculate_cross_market_context(
+    spy_indicators: dict[str, Any] | None,
+    qqq_indicators: dict[str, Any] | None,
+    *,
+    qqq_quote_age_seconds: Any,
+    stale_after: float = 5,
+    max_bar_age_seconds: float = 125,
+) -> dict[str, Any]:
+    """Describe SPY/QQQ breadth while retaining SPY-only signal authority."""
+    spy = spy_indicators or {}
+    qqq = qqq_indicators or {}
+    if (
+        not qqq
+        or not _number(qqq_quote_age_seconds)
+        or float(qqq_quote_age_seconds) < 0
+        or float(qqq_quote_age_seconds) > stale_after
+        or not _number(qqq.get("completed_bar_age_seconds"))
+        or float(qqq["completed_bar_age_seconds"]) < 0
+        or float(qqq["completed_bar_age_seconds"]) > max_bar_age_seconds
+    ):
+        return {
+            "available": False,
+            "mode": "shadow",
+            "entry_authority": False,
+            "reason": "QQQ quote or indicators unavailable",
+            "alignment": "UNAVAILABLE",
+            "side": None,
+        }
+    directions = {
+        "spy_5m": _trend_direction(spy, "5m"),
+        "spy_15m": _trend_direction(spy, "15m"),
+        "qqq_5m": _trend_direction(qqq, "5m"),
+        "qqq_15m": _trend_direction(qqq, "15m"),
+    }
+    values = list(directions.values())
+    if any(value not in {"up", "down"} for value in values):
+        return {
+            "available": False,
+            "mode": "shadow",
+            "entry_authority": False,
+            "reason": "SPY/QQQ 5m and 15m structure is incomplete",
+            "alignment": "UNAVAILABLE",
+            "side": None,
+            "directions": directions,
+        }
+    up_count = values.count("up")
+    down_count = values.count("down")
+    spy_side = (
+        "up"
+        if directions["spy_5m"] == directions["spy_15m"] == "up"
+        else "down"
+        if directions["spy_5m"] == directions["spy_15m"] == "down"
+        else None
+    )
+    qqq_side = (
+        "up"
+        if directions["qqq_5m"] == directions["qqq_15m"] == "up"
+        else "down"
+        if directions["qqq_5m"] == directions["qqq_15m"] == "down"
+        else None
+    )
+    if spy_side and qqq_side and spy_side != qqq_side:
+        alignment = "DIVERGENT"
+        side = None
+    elif up_count == 4 or down_count == 4:
+        alignment = "FULL"
+        side = "calls" if up_count == 4 else "puts"
+    elif max(up_count, down_count) == 3:
+        alignment = "PARTIAL"
+        side = "calls" if up_count == 3 else "puts"
+    else:
+        alignment = "MIXED"
+        side = None
+    return {
+        "available": True,
+        "mode": "shadow",
+        "entry_authority": False,
+        "reason": None,
+        "alignment": alignment,
+        "side": side,
+        "aligned_timeframes": max(up_count, down_count),
+        "directions": directions,
+        "observation": (
+            f"SHADOW: SPY/QQQ breadth is {alignment.lower()}"
+            + (f" for {side}" if side else "")
+        ),
+    }
+
+
 def _atr_plan(entry: float, side: str, atr_5m: float) -> dict[str, Any]:
     risk = round(max(0.10, atr_5m * 1.5), 2)
     if side == "puts":
@@ -4049,6 +4139,7 @@ def build_signal(
     option_max_spread_pct: float = MAX_OPTION_SPREAD_PCT,
     session_policy: dict[str, Any] | None = None,
     trendline_structure: dict[str, Any] | None = None,
+    cross_market_confirmation: str = "required",
 ) -> dict[str, Any]:
     trendline_config = validate_trendline_structure_config(
         trendline_structure
@@ -4126,12 +4217,17 @@ def build_signal(
         or not 0 <= option_limit_price_offset <= 1
     ):
         raise ValueError("option limit price offset must be between 0 and 1")
+    if cross_market_confirmation not in {"required", "shadow", "disabled"}:
+        raise ValueError(
+            "cross_market_confirmation must be required, shadow, or disabled"
+        )
     now = time.time()
     session = _session_policy(now, session_policy)
     previous_signal = previous_signal or {}
     spy_market = (market.get("symbols") or {}).get("SPY") or {}
     qqq_market = (market.get("symbols") or {}).get("QQQ") or {}
-    use_qqq = "QQQ" in (market.get("symbols") or {})
+    has_qqq = "QQQ" in (market.get("symbols") or {})
+    use_qqq = has_qqq and cross_market_confirmation == "required"
     spy_bars = spy_market.get("bars") or []
     completed = _completed_bars(_session_bars(spy_bars, now=now))
     entry_structure_context = calculate_entry_structure_context(completed)
@@ -4159,6 +4255,19 @@ def build_signal(
     market_age = now - float(market.get("generated_at", 0))
     quote_age = spy_market.get("quote_age_seconds")
     qqq_quote_age = qqq_market.get("quote_age_seconds")
+    entry_structure_context["cross_market"] = calculate_cross_market_context(
+        spy,
+        qqq,
+        qqq_quote_age_seconds=qqq_quote_age,
+        stale_after=stale_after,
+    ) if has_qqq and cross_market_confirmation != "disabled" else {
+        "available": False,
+        "mode": "shadow",
+        "entry_authority": False,
+        "reason": "cross-market context disabled or unsubscribed",
+        "alignment": "UNAVAILABLE",
+        "side": None,
+    }
     gex_ctx = _gex_context(gex, heatmap)
     entry_structure_context["gex_range"] = calculate_gex_range_context(
         spot,
@@ -4236,7 +4345,13 @@ def build_signal(
             "t1_premium_lock_floor_pct": t1_premium_lock_floor_pct,
         },
         "session_policy": session,
-        "confirmation_mode": "SPY_QQQ" if use_qqq else "SPY_ONLY",
+        "confirmation_mode": (
+            "SPY_QQQ_REQUIRED"
+            if use_qqq
+            else "SPY_QQQ_SHADOW"
+            if has_qqq and cross_market_confirmation == "shadow"
+            else "SPY_ONLY"
+        ),
         "state": "WAIT",
         "signal_phase": "NO_TRADE",
         "favoring": "no-trade",

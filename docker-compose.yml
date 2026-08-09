@@ -188,6 +188,9 @@ services:
       - ${IBKR_CLIENT_ID_STRATEGY:-23}
       - --symbols
       - SPY
+      - QQQ
+      - --cross-market-confirmation
+      - shadow
       - --data-type
       - ${STRATEGY_IBKR_DATA_TYPE:-live}
       - --primary-gex-source

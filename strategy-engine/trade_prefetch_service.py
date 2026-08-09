@@ -895,6 +895,11 @@ class TradePrefetcher:
                 if isinstance(policy.get("trendline_structure"), dict)
                 else None
             ),
+            cross_market_confirmation=getattr(
+                self.args,
+                "cross_market_confirmation",
+                "required",
+            ),
         )
         provider_roles = {
             "primary": primary_source,
@@ -1196,6 +1201,15 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=4001)
     parser.add_argument("--client-id", type=int, default=89)
     parser.add_argument("--symbols", nargs="+", default=["SPY"])
+    parser.add_argument(
+        "--cross-market-confirmation",
+        choices=("required", "shadow", "disabled"),
+        default="required",
+        help=(
+            "Treat subscribed QQQ structure as a required gate, shadow-only "
+            "breadth, or disabled context."
+        ),
+    )
     parser.add_argument("--strikes-per-side", type=int, default=6)
     parser.add_argument(
         "--option-max-total-debit-dollars",

@@ -23,6 +23,7 @@ from signal_engine import (
     calculate_indicators,
     calculate_entry_structure_context,
     calculate_entry_confluence_context,
+    calculate_cross_market_context,
     calculate_gex_range_context,
     calculate_gex_wall_break_context,
     calculate_prior_session_rejection_context,
@@ -545,6 +546,50 @@ class EntryStructureContextTest(unittest.TestCase):
 
         self.assertFalse(context["available"])
         self.assertEqual(context["reason"], "prior_session_unavailable")
+
+    def test_cross_market_context_reports_full_bullish_alignment(self) -> None:
+        context = calculate_cross_market_context(
+            {
+                "ema9_5m": 101.0,
+                "ema21_5m": 100.0,
+                "ema9_15m": 102.0,
+                "ema21_15m": 100.0,
+            },
+            {
+                "ema9_5m": 501.0,
+                "ema21_5m": 500.0,
+                "ema9_15m": 502.0,
+                "ema21_15m": 500.0,
+                "completed_bar_age_seconds": 60,
+            },
+            qqq_quote_age_seconds=1.0,
+        )
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["alignment"], "FULL")
+        self.assertEqual(context["side"], "calls")
+        self.assertFalse(context["entry_authority"])
+
+    def test_cross_market_context_reports_divergence(self) -> None:
+        context = calculate_cross_market_context(
+            {
+                "ema9_5m": 101.0,
+                "ema21_5m": 100.0,
+                "ema9_15m": 102.0,
+                "ema21_15m": 100.0,
+            },
+            {
+                "ema9_5m": 499.0,
+                "ema21_5m": 500.0,
+                "ema9_15m": 498.0,
+                "ema21_15m": 500.0,
+                "completed_bar_age_seconds": 60,
+            },
+            qqq_quote_age_seconds=1.0,
+        )
+
+        self.assertEqual(context["alignment"], "DIVERGENT")
+        self.assertIsNone(context["side"])
 
 
 class TrendlineStructureTest(unittest.TestCase):
@@ -2446,6 +2491,59 @@ class ContinuationStateTest(unittest.TestCase):
             "confirmations",
         ):
             self.assertEqual(with_levels.get(field), baseline.get(field))
+
+    def test_shadow_qqq_breadth_does_not_become_cross_market_gate(self) -> None:
+        baseline = self.build()
+        self.market["symbols"]["QQQ"] = {
+            "spot": 500.0,
+            "quote_age_seconds": 0.1,
+            "bars": self.bars,
+        }
+        self.indicators["QQQ"] = {
+            "ema9_5m": 499.0,
+            "ema21_5m": 500.0,
+            "ema9_15m": 498.0,
+            "ema21_15m": 500.0,
+            "completed_bar_age_seconds": 60,
+        }
+
+        shadow = self.build(cross_market_confirmation="shadow")
+        required = self.build(cross_market_confirmation="required")
+
+        for field in (
+            "state",
+            "signal_phase",
+            "favoring",
+            "strategy",
+            "confidence_score",
+            "call_setup",
+            "put_setup",
+            "lifecycle",
+            "blockers",
+            "confirmations",
+        ):
+            self.assertEqual(shadow.get(field), baseline.get(field))
+        self.assertEqual(shadow["confirmation_mode"], "SPY_QQQ_SHADOW")
+        self.assertEqual(
+            shadow["entry_structure_context"]["cross_market"]["alignment"],
+            "DIVERGENT",
+        )
+        self.assertNotEqual(required["state"], "ACTIVE")
+
+        self.market["symbols"]["QQQ"]["quote_age_seconds"] = 30.0
+        stale_shadow = self.build(cross_market_confirmation="shadow")
+        self.assertEqual(stale_shadow["state"], baseline["state"])
+        self.assertFalse(
+            stale_shadow["entry_structure_context"]["cross_market"]["available"]
+        )
+        self.assertNotIn(
+            "QQQ",
+            " ".join(stale_shadow.get("blockers") or []),
+        )
+
+    def test_cross_market_confirmation_rejects_unknown_mode(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cross_market_confirmation"):
+            self.build(cross_market_confirmation="live")
 
     def test_unavailable_shadow_trendlines_do_not_block_valid_signal(self) -> None:
         signal = self.build(trendline_structure={
