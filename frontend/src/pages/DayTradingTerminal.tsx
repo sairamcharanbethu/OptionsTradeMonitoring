@@ -13,6 +13,7 @@ import {
   Clock3,
   Loader2,
   Play,
+  Radar,
   RefreshCw,
   ShieldCheck,
   X
@@ -1308,7 +1309,17 @@ export default function DayTradingTerminal() {
               Follow the strategy lifecycle from setup formation through guarded execution and position management.
             </p>
           </div>
-          <div className="grid shrink-0 grid-cols-3 gap-1.5 sm:gap-2">
+          <div className="grid shrink-0 grid-cols-4 gap-1.5 sm:gap-2">
+            <Link
+              to="/strategy-desk"
+              className="inline-flex h-9 w-9 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[11px] font-medium text-zinc-300 transition-colors hover:border-violet-500/40 hover:text-violet-200 active:translate-y-px sm:w-auto sm:px-3"
+              title="Open Strategy Desk"
+              aria-label="Open Strategy Desk"
+            >
+              <Radar className="h-3.5 w-3.5 text-violet-300" />
+              <span className="hidden sm:inline">Strategy Desk</span>
+              <ArrowUpRight className="hidden h-3 w-3 sm:block" />
+            </Link>
             <Link
               to="/system-health"
               className="inline-flex h-9 w-9 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { BadgeDollarSign, Clock3, Info, Layers, ShieldAlert, Target, Workflow } from 'lucide-react';
+import { BadgeDollarSign, Clock3, Info, Layers, Radar, ShieldAlert, Target, Workflow } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 
 function RuleCard({ title, detail, icon: Icon, children }: { title: string; detail: string; icon: any; children: ReactNode }) {
@@ -97,6 +97,27 @@ export default function StrategyGuidePage() {
             </Example>
             <Example title="PUT skipped">
               Price is above VWAP and looks extended, but EMA9 is still above EMA21 or volume is average. The scanner records the context but blocks execution.
+            </Example>
+          </div>
+        </RuleCard>
+
+        <RuleCard title="Shadow Intelligence" detail="Additional context is recorded for review but cannot activate or block a trade." icon={Radar}>
+          <BulletList
+            items={[
+              'The Strategy Desk labels every advisory observation as Shadow. Only the existing signal lifecycle, blockers, confirmations, and entry permission remain authoritative.',
+              'Completed 3-minute and 5-minute candles can record EMA9 or VWAP wick-through and close-back rejections. An unfinished candle never creates an event.',
+              'GEX range location, completed-close wall breaks, volume confirmation, and retests are tracked without changing the authoritative ZeroGEX gates.',
+              'The desk grades GEX location, VWAP rejection, and EMA9 timing as a 0-to-3 confluence read. This grade is evidence, not a confidence-score input.',
+              'Prior-session rejection clusters, ATR pivot trendlines, and SPY/QQQ 5-minute and 15-minute breadth provide replay context. QQQ is read-only and is never used for contract selection.',
+              'Compact context is saved with strategy setup and lifecycle history. Raw intraday bar history is not copied into each journal event.'
+            ]}
+          />
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Example title="Triple confluence observed">
+              SPY is at a positive-gamma boundary and a completed candle confirms both VWAP and EMA9 rejection. The desk records 3/3, while entry remains locked unless the live strategy independently reaches ACTIVE.
+            </Example>
+            <Example title="Breadth diverges">
+              SPY and QQQ structure point in opposite directions. The desk records divergence for later evaluation, but it does not add a blocker or cancel a valid SPY setup.
             </Example>
           </div>
         </RuleCard>
@@ -210,7 +231,7 @@ export default function StrategyGuidePage() {
           />
           <div className="mt-4">
             <Example title="After 1 PM">
-              A QQQ CALL scan at 1:15 PM ET chooses tomorrow expiration instead of today. A 10:30 AM scan can still choose same-day expiry.
+              A SPY CALL scan at 1:15 PM ET chooses tomorrow expiration instead of today. A 10:30 AM scan can still choose same-day expiry.
             </Example>
           </div>
         </RuleCard>
