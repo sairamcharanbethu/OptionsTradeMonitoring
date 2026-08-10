@@ -25,10 +25,12 @@ async function testStrategyHistoryIncludesCompactShadowEvidence() {
           setup_id: 'setup-1',
           side: 'CALL',
           entry_structure_context: entryStructure,
+          strategy_family_context: { mode: 'shadow', entry_authority: false },
           trendline_context: { mode: 'shadow' },
           lifecycle_events: [{
             id: 10,
             entryStructure,
+            strategyFamilyContext: { mode: 'shadow', entry_authority: false },
             trendlineContext: { mode: 'shadow' }
           }]
         }]
@@ -45,10 +47,12 @@ async function testStrategyHistoryIncludesCompactShadowEvidence() {
 
     assert(response.statusCode === 200, `Expected 200, got ${response.statusCode}: ${response.body}`);
     assert(capturedSql.includes("'entryStructure'"), 'Lifecycle replay must select compact entry structure evidence');
+    assert(capturedSql.includes("'strategyFamilyContext'"), 'Lifecycle replay must select compact strategy family evidence');
     assert(capturedSql.includes("'trendlineContext'"), 'Lifecycle replay must select compact trendline evidence');
     assert(!capturedSql.includes('completed_bars'), 'Strategy history must not return raw completed bars');
     const payload = response.json();
     assert(payload[0].entry_structure_context.mode === 'shadow', 'Setup history must expose shadow entry structure');
+    assert(payload[0].strategy_family_context.entry_authority === false, 'Setup history must expose advisory strategy families');
     assert(payload[0].lifecycle_events[0].entryStructure.confluence.entry_authority === false, 'Lifecycle evidence must retain advisory authority');
   } finally {
     await app.close();

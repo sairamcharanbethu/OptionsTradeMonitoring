@@ -1949,6 +1949,7 @@ export interface StrategyLifecycleEvent {
   closeReason?: string | null;
   blockers: string[];
   entryStructure?: ShadowEntryStructureContext;
+  strategyFamilyContext?: ShadowStrategyFamilyContext;
   trendlineContext?: Record<string, any>;
   createdAt: string;
 }
@@ -1966,6 +1967,17 @@ export interface ShadowEntryStructureContext {
   cross_market?: Record<string, any>;
 }
 
+export interface ShadowStrategyFamilyContext {
+  version?: string;
+  enabled?: boolean;
+  mode?: 'shadow';
+  entry_authority?: false;
+  orb_index?: Record<string, any> | null;
+  vwap_trend?: Record<string, any> | null;
+  shared_risk?: Record<string, any>;
+  observation?: string;
+}
+
 export interface StrategyHistorySetup {
   id: number;
   setup_id: string;
@@ -1980,6 +1992,7 @@ export interface StrategyHistorySetup {
   confidence_score: number;
   option_details?: OptionDetailsJSON | null;
   entry_structure_context?: ShadowEntryStructureContext | null;
+  strategy_family_context?: ShadowStrategyFamilyContext | null;
   trendline_context?: Record<string, any> | null;
   no_trade_reasons?: string[] | null;
   created_at: string;

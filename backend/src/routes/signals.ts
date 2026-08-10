@@ -41,6 +41,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
            s.confidence_score,
            s.option_details,
            s.option_details->'decision_telemetry'->'entry_structure_context' AS entry_structure_context,
+           s.option_details->'decision_telemetry'->'strategy_family_context' AS strategy_family_context,
            s.option_details->'decision_telemetry'->'trendline_context' AS trendline_context,
            s.no_trade_reasons,
            s.created_at,
@@ -87,6 +88,7 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
                'closeReason', event.signal_snapshot->'lifecycle'->>'close_reason',
                'blockers', COALESCE(event.signal_snapshot->'blockers', '[]'::jsonb),
                'entryStructure', COALESCE(event.signal_snapshot->'decision_telemetry'->'entry_structure_context', '{}'::jsonb),
+               'strategyFamilyContext', COALESCE(event.signal_snapshot->'decision_telemetry'->'strategy_family_context', '{}'::jsonb),
                'trendlineContext', COALESCE(event.signal_snapshot->'decision_telemetry'->'trendline_context', '{}'::jsonb),
                'createdAt', event.created_at
              )
