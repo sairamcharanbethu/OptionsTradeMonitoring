@@ -607,6 +607,13 @@ export class PaperTradingService {
     return { quantity: Math.min(desired[tier], maxAffordable), maxAffordable };
   }
 
+  public static premiumStopPct(signal: Record<string, any>): number {
+    const configured = Number(signal.paper_policy?.premium_stop_pct);
+    return Number.isFinite(configured) && configured > 0 && configured < 100
+      ? configured
+      : 20;
+  }
+
   public static normalizeAIDecision(raw: any): PaperDecision | null {
     const decision = String(raw?.decision || raw?.verdict || '').toUpperCase();
     const riskTier = String(raw?.risk_tier || raw?.riskTier || '').toUpperCase();
@@ -861,6 +868,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const fillPrice = Number(ask.toFixed(2));
     const debit = Number((fillPrice * Number(order.quantity) * 100).toFixed(2));
     const targets = Array.isArray(setup.targets) ? setup.targets : [];
+    const premiumStopPct = PaperTradingService.premiumStopPct(signal);
+    const premiumStopPrice = Number((fillPrice * (1 - premiumStopPct / 100)).toFixed(2));
     const client = await (this.fastify as any).pg.connect();
     let filledPosition: any = null;
     let liveEntryState: Record<string, any> | null = null;
@@ -894,7 +903,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            ) VALUES (NULL,'SPY',$1,$2,$3,$4,$5,$6,$7,$4,$8,'OPEN',TRUE,$9,'system_paper','FILLED',$5,
                    'BUY_TO_OPEN','SELL_TO_CLOSE',$10,$11,$12,$13,$14,'signal-only-v2','ACTIVE',$15,TRUE,$9,$16,$17,$18)
          RETURNING *`,
-        [side, Number(order.strike), order.expiration, fillPrice, Number(order.quantity), Number((fillPrice * 0.8).toFixed(2)), Number(option.bid || fillPrice),
+        [side, Number(order.strike), order.expiration, fillPrice, Number(order.quantity), premiumStopPrice, Number(option.bid || fillPrice),
           Number(order.trailing_stop_pct), ACCOUNT_ID, setup.invalidation || null, targets[0] || null, targets[1] || targets[0] || null,
           order.signal_id, setupId, JSON.stringify(signal), order.decision_id,
           JSON.stringify({
@@ -904,6 +913,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
             trailingActive: false,
             trailingHighPremium: fillPrice,
             trailingStopPct: Number(order.trailing_stop_pct),
+            premiumStopPct,
             policyVersion: order.policy_version
           }),
           `[System paper entry from setup ${setupId}]`]

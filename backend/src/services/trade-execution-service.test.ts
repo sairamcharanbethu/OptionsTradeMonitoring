@@ -710,6 +710,55 @@ async function testStrategyManagedSyntheticTrailUsesStrategyTargets() {
   assert(insertParams[33] === true, 'The strategy position must remain marked as strategy-managed');
 }
 
+async function testPrimaryFamilyUsesThirtyFivePercentPremiumStop() {
+  let insertParams: any[] = [];
+  const service = new TradeExecutionService({
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (sql: string, params: any[] = []) => {
+        if (sql.includes('FROM signals')) {
+          return {
+            rows: [{
+              strategy_setup_id: 'orb-setup-42',
+              engine_version: 'signal-only-v2',
+              lifecycle_status: 'ACTIVE',
+              strategy_snapshot: {
+                strategy: 'ORB_INDEX',
+                paper_policy: { premium_stop_pct: 35 },
+                call_setup: { targets: [101, 102] }
+              }
+            }]
+          };
+        }
+        if (sql.includes('INSERT INTO positions')) {
+          insertParams = params;
+          return { rows: [{ id: 9002 }] };
+        }
+        return { rows: [] };
+      }
+    }
+  } as any);
+
+  await (service as any).insertExecutedPosition(createSignalInput({ winningSide: 'CALL', mark: 2, targetUnderlying: 102 }), {
+    quantity: 1,
+    entryPrice: 2,
+    isSimulated: false,
+    accountId: '7:wealthsimple-account',
+    executionBroker: 'wealthsimple_snaptrade',
+    brokerOrderId: 'orb-order-42',
+    brokerTradeId: null,
+    executionStatus: 'PENDING_RECONCILE',
+    positionStatus: 'PENDING_ORDER',
+    takeProfitPct: '10',
+    syntheticTrailingEnabled: false,
+    notes: '[ORB test entry]'
+  });
+
+  assert(insertParams[7] === 1.3, `ORB live premium stop should be 35% below a $2 entry, got ${insertParams[7]}`);
+  assert(insertParams[8] === null, 'ORB must not use the generic automatic premium take-profit setting');
+  assert(String(insertParams[15]).includes('(35%)'), 'ORB position notes must record the frozen premium-stop percentage');
+}
+
 async function testLiveEntryUsesCorrelatedExposureLockAndFailsClosed() {
   const service = new TradeExecutionService(createFastifyMock()) as any;
   let lockKey = '';
@@ -1201,6 +1250,7 @@ async function runTests() {
   await testPreSubmitRiskDenialSkipsBeforeBrokerPath();
   await testDuplicateOpenEntrySkipsBeforeOrderLifecycle();
   await testStrategyManagedSyntheticTrailUsesStrategyTargets();
+  await testPrimaryFamilyUsesThirtyFivePercentPremiumStop();
   await testLiveEntryUsesCorrelatedExposureLockAndFailsClosed();
   await testDeferredEntryLockCollisionReschedulesWithoutConsumingSignal();
   await testEntryWaitsForOverlappingBrokerSync();

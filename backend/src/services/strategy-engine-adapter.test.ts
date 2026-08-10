@@ -87,6 +87,15 @@ async function runTests() {
     }
   }));
   assert(first !== changedPlan, 'A changed frozen trigger must create a new setup identity');
+  const firstFamilyEvent = adapter.planFingerprint(signal({
+    strategy: 'VWAP_TREND',
+    call_setup: { ...signal().call_setup, source_event_id: 'vwap:event:1' }
+  }));
+  const secondFamilyEvent = adapter.planFingerprint(signal({
+    strategy: 'VWAP_TREND',
+    call_setup: { ...signal().call_setup, source_event_id: 'vwap:event:2' }
+  }));
+  assert(firstFamilyEvent !== secondFamilyEvent, 'Distinct VWAP reclaim events must create distinct setup identities even when their rounded levels match');
 
   adapter.updateSetupIdentity(signal());
   const setupId = adapter.currentSetupId;
@@ -275,8 +284,8 @@ async function runTests() {
         confluence: { grade: 'TRIPLE_CONFLUENCE', entry_authority: false }
       },
       strategy_family_context: {
-        mode: 'shadow',
-        entry_authority: false,
+        mode: 'primary',
+        entry_authority: true,
         orb_index: { status: 'FRESH_BREAK', candidate: { event_id: 'orb-index:test' } },
         shared_risk: { trim_ladder_pct: [25, 45, 75] }
       }
@@ -298,7 +307,7 @@ async function runTests() {
   assert(persistedOption.decision_telemetry.version === 'strategy-decision-v1', 'Persisted signal must retain replay telemetry');
   assert(persistedOption.decision_telemetry.entry_structure_context.mode === 'shadow', 'Persisted signal must retain compact shadow entry evidence');
   assert(persistedOption.decision_telemetry.entry_structure_context.confluence.entry_authority === false, 'Persisted shadow evidence must remain non-authoritative');
-  assert(persistedOption.decision_telemetry.strategy_family_context.entry_authority === false, 'Persisted strategy family evidence must remain non-authoritative');
+  assert(persistedOption.decision_telemetry.strategy_family_context.entry_authority === true, 'Persisted primary strategy family evidence must retain entry authority');
   assert(persistedOption.decision_telemetry.strategy_family_context.shared_risk.trim_ladder_pct[2] === 75, 'Persisted strategy family evidence must retain the trim ladder');
   assert(positionUpdate?.values[2] === 552, 'Open strategy positions must retain the first target as TP1');
   assert(positionUpdate?.values[3] === 554, 'Open strategy positions must retain the configured final target as TP2');
@@ -334,6 +343,7 @@ async function runTests() {
             { key: 'snaptrade_trading_account_id', value: 'account-1' },
             { key: 'shadow_trading_enabled', value: 'false' },
             { key: 'contracts_per_trade', value: '4' },
+            { key: 'max_trades_per_day', value: '2' },
             { key: 'max_correlated_positions', value: '4' }
           ] };
         }
@@ -371,6 +381,7 @@ async function runTests() {
   assert(autonomousCalls.length === 2 && autonomousCalls.every(call => call.signalId === 88), 'Every eligible autonomous user must route the active strategy signal');
   assert(maxActiveAutonomousCalls === 2, 'Independent autonomous users must execute concurrently');
   assert(autonomousCalls.every(call => call.settings.contracts_per_trade === '1'), 'Autonomous live entries must hard-cap each order at one contract');
+  assert(autonomousCalls.every(call => call.settings.max_trades_per_day === '2'), 'Autonomous live entries must preserve each user daily trade limit');
   assert(autonomousCalls.every(call => call.settings.max_correlated_positions === '4'), 'Autonomous live entries must preserve each configured concurrent exposure limit');
 
   queries.length = 0;
@@ -413,12 +424,12 @@ async function runTests() {
       generated_at: 1_786_000_199,
       spot: 551,
       strategy_family_context: {
-        mode: 'shadow',
-        entry_authority: false,
+        mode: 'primary',
+        entry_authority: true,
         vwap_trend: {
           strategy: 'VWAP_TREND',
           status: 'REENTRY_COOLDOWN',
-          observation: 'SHADOW: reclaim inside cooldown',
+          observation: 'PRIMARY: reclaim inside cooldown',
           trend: { side: 'calls', vwap: 550.5, slope_bps: 3.2 },
           suppressed_candidate: {
             side: 'calls',
@@ -441,6 +452,7 @@ async function runTests() {
     assert(familyEvents.length === 2, 'Family history must deduplicate stable event IDs and ignore malformed rows');
     assert(familyEvents[0].event_id.startsWith('vwap-trend:'), 'Family history must return newest candidates first');
     assert(familyEvents[0].suppressed === true, 'Family history must retain suppressed VWAP observations');
+    assert(familyEvents[0].entry_authority === true, 'Family history must retain primary authority for promoted strategy candidates');
     assert(familyEvents[1].family === 'ORB_INDEX', 'Family history must retain standalone ORB observations');
     assert(familyEvents[1].entry_authority === false, 'Family history must remain explicitly non-authoritative');
     assert(!('raw_bar_history' in familyEvents[1]), 'Family history must never expose raw bar history');

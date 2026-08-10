@@ -1307,12 +1307,22 @@ export class TradeExecutionService {
       : input.targetUnderlying;
     const finalUnderlyingTarget = input.targetUnderlying;
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
-    const premiumStopLoss = Number((entryPrice * 0.8).toFixed(2));
+    const strategyName = String(strategySnapshot?.strategy || '').toUpperCase();
+    const familyStrategy = ['ORB_INDEX', 'VWAP_TREND'].includes(strategyName);
+    const configuredStrategyStopPct = Number(strategySnapshot?.paper_policy?.premium_stop_pct);
+    const premiumStopPct = familyStrategy
+      && Number.isFinite(configuredStrategyStopPct)
+      && configuredStrategyStopPct > 0
+      && configuredStrategyStopPct < 100
+      ? configuredStrategyStopPct
+      : 20;
+    const premiumStopLoss = Number((entryPrice * (1 - premiumStopPct / 100)).toFixed(2));
     const configuredTakeProfitPct = this.parseOptionalPct(execution.takeProfitPct, 500);
     const syntheticTrailingPct = !execution.isSimulated && execution.syntheticTrailingEnabled
       ? this.parseOptionalPct(execution.syntheticTrailingPct || '15', 50)
       : null;
     const premiumTakeProfit = configuredTakeProfitPct !== null
+      && !familyStrategy
       && !(strategyManaged && syntheticTrailingPct !== null)
       ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
       : null;
@@ -1355,7 +1365,7 @@ export class TradeExecutionService {
         execution.positionStatus || 'OPEN',
         execution.isSimulated,
         execution.accountId,
-        `${execution.notes} [Auto exits: premium SL $${premiumStopLoss}, premium TP ${premiumTakeProfit === null ? 'suggested TP only' : `$${premiumTakeProfit}`}, synthetic trail ${syntheticTrailingPct === null ? 'off' : `${syntheticTrailingPct}% after TP1`}, underlying SL ${input.stopUnderlying}, underlying TP ${input.targetUnderlying}]`,
+        `${execution.notes} [Auto exits: premium SL $${premiumStopLoss} (${premiumStopPct}%), premium TP ${premiumTakeProfit === null ? 'suggested TP only' : `$${premiumTakeProfit}`}, synthetic trail ${syntheticTrailingPct === null ? 'off' : `${syntheticTrailingPct}% after TP1`}, underlying SL ${input.stopUnderlying}, underlying TP ${input.targetUnderlying}]`,
         execution.executionBroker,
         execution.brokerOrderId,
         execution.brokerTradeId,

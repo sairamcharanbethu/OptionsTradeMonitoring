@@ -154,8 +154,8 @@ export class StrategyEngineAdapter {
         const context = record.strategy_family_context;
         if (
           !context
-          || context.mode !== 'shadow'
-          || context.entry_authority !== false
+          || !['shadow', 'primary'].includes(String(context.mode || ''))
+          || typeof context.entry_authority !== 'boolean'
         ) continue;
         for (const [field, familyName] of [
           ['vwap_trend', 'VWAP_TREND'],
@@ -178,7 +178,7 @@ export class StrategyEngineAdapter {
             spot: Number(record.spot || 0) || null,
             fresh: candidate.fresh === true,
             suppressed: !family.candidate && Boolean(family.suppressed_candidate),
-            entry_authority: false,
+            entry_authority: context.entry_authority === true,
             observation: family.observation || null,
             opening_range: family.opening_range || null,
             gex_alignment: family.gex_alignment || null,
@@ -485,6 +485,7 @@ export class StrategyEngineAdapter {
       engine: signal.engine_version,
       marketDate: new Date(Number(signal.generated_at || 0) * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }),
       strategy: signal.strategy,
+      sourceEventId: setup.source_event_id || signal.reversal_setup?.event_id || null,
       side,
       trigger: setup.trigger,
       invalidation: setup.invalidation,
@@ -553,7 +554,9 @@ export class StrategyEngineAdapter {
       MTF_TREND_BREAK: 'multi-timeframe trend breakout',
       MTF_REVERSAL: 'multi-timeframe reversal',
       GEX_REJECTION: 'GEX level rejection',
-      CONTINUATION: 'trend continuation'
+      CONTINUATION: 'trend continuation',
+      ORB_INDEX: 'opening-range breakout',
+      VWAP_TREND: 'VWAP trend pullback'
     };
     const strategyCode = String(signal.strategy || 'setup').toUpperCase();
     const strategyName = strategyNames[strategyCode] || strategyCode.toLowerCase().replace(/_/g, ' ');
@@ -952,6 +955,12 @@ export class StrategyEngineAdapter {
         1,
         5
       ),
+      strategy_families: {
+        enabled: true,
+        mode: 'primary',
+        orb_index: { enabled: true },
+        vwap_trend: { enabled: true }
+      },
       ibkr_host: ibkr.host,
       ibkr_port: ibkr.port,
       ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live',
