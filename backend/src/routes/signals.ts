@@ -40,6 +40,8 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
            s.target_price::double precision AS target,
            s.confidence_score,
            s.option_details,
+           s.option_details->'decision_telemetry'->'entry_structure_context' AS entry_structure_context,
+           s.option_details->'decision_telemetry'->'trendline_context' AS trendline_context,
            s.no_trade_reasons,
            s.created_at,
            s.activated_at,
@@ -84,6 +86,8 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
                'targetsHit', COALESCE((event.signal_snapshot->'lifecycle'->>'targets_hit')::integer, 0),
                'closeReason', event.signal_snapshot->'lifecycle'->>'close_reason',
                'blockers', COALESCE(event.signal_snapshot->'blockers', '[]'::jsonb),
+               'entryStructure', COALESCE(event.signal_snapshot->'decision_telemetry'->'entry_structure_context', '{}'::jsonb),
+               'trendlineContext', COALESCE(event.signal_snapshot->'decision_telemetry'->'trendline_context', '{}'::jsonb),
                'createdAt', event.created_at
              )
              ORDER BY event.created_at ASC, event.id ASC

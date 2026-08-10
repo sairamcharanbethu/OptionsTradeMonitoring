@@ -1948,7 +1948,22 @@ export interface StrategyLifecycleEvent {
   targetsHit: number;
   closeReason?: string | null;
   blockers: string[];
+  entryStructure?: ShadowEntryStructureContext;
+  trendlineContext?: Record<string, any>;
   createdAt: string;
+}
+
+export interface ShadowEntryStructureContext {
+  version?: string;
+  mode?: 'shadow';
+  available?: boolean;
+  observation?: string;
+  ema_vwap?: Record<string, any>;
+  gex_range?: Record<string, any>;
+  gex_wall_break?: Record<string, any>;
+  confluence?: Record<string, any>;
+  prior_session_levels?: Record<string, any>;
+  cross_market?: Record<string, any>;
 }
 
 export interface StrategyHistorySetup {
@@ -1964,6 +1979,8 @@ export interface StrategyHistorySetup {
   target?: number | null;
   confidence_score: number;
   option_details?: OptionDetailsJSON | null;
+  entry_structure_context?: ShadowEntryStructureContext | null;
+  trendline_context?: Record<string, any> | null;
   no_trade_reasons?: string[] | null;
   created_at: string;
   activated_at?: string | null;

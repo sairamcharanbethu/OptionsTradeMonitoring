@@ -268,7 +268,13 @@ async function runTests() {
         estimated_stop_risk: { per_contract_dollars: 55, total_dollars: 110 }
       }
     },
-    decision_telemetry: { version: 'strategy-decision-v1' }
+    decision_telemetry: {
+      version: 'strategy-decision-v1',
+      entry_structure_context: {
+        mode: 'shadow',
+        confluence: { grade: 'TRIPLE_CONFLUENCE', entry_authority: false }
+      }
+    }
   }));
   const signalInsert = queries.find((query) => query.sql.includes('INSERT INTO signals'));
   const positionUpdate = queries.find((query) => query.sql.includes('UPDATE positions'));
@@ -284,6 +290,8 @@ async function runTests() {
   assert(persistedOption.plan_quality.reward_risk === 2, 'Persisted signal must retain authoritative plan quality');
   assert(persistedOption.estimated_stop_risk.per_contract_dollars === 55, 'Persisted signal must retain modeled stop risk');
   assert(persistedOption.decision_telemetry.version === 'strategy-decision-v1', 'Persisted signal must retain replay telemetry');
+  assert(persistedOption.decision_telemetry.entry_structure_context.mode === 'shadow', 'Persisted signal must retain compact shadow entry evidence');
+  assert(persistedOption.decision_telemetry.entry_structure_context.confluence.entry_authority === false, 'Persisted shadow evidence must remain non-authoritative');
   assert(positionUpdate?.values[2] === 552, 'Open strategy positions must retain the first target as TP1');
   assert(positionUpdate?.values[3] === 554, 'Open strategy positions must retain the configured final target as TP2');
   queries.length = 0;
