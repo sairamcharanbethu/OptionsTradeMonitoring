@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Sparkles
 } from 'lucide-react';
-import { usePaperAccount, useStrategyHistory, useStrategyState } from '@/hooks/useDashboardData';
+import { usePaperAccount, useStrategyFamilyHistory, useStrategyHistory, useStrategyState } from '@/hooks/useDashboardData';
 import type { ShadowEntryStructureContext, ShadowStrategyFamilyContext, StrategyHistorySetup } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -33,6 +33,13 @@ const compactTime = (value: unknown) => {
   const date = new Date(String(value));
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+};
+
+const compactEpochTime = (value: unknown) => {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0
+    ? compactTime(new Date(seconds * 1000).toISOString())
+    : '—';
 };
 
 const humanize = (value: unknown, fallback = 'Watching') => {
@@ -165,9 +172,10 @@ function EvidenceFact({ label, value, detail }: { label: string; value: string; 
 export default function StrategyDeskPage() {
   const strategy = useStrategyState(5000);
   const history = useStrategyHistory(15000);
+  const familyHistory = useStrategyFamilyHistory(15000);
   const paper = usePaperAccount(10000);
   const loading = strategy.isLoading && !strategy.data;
-  const refreshing = strategy.isFetching || history.isFetching || paper.isFetching;
+  const refreshing = strategy.isFetching || history.isFetching || familyHistory.isFetching || paper.isFetching;
   const signal = strategy.data?.signal || {};
   const structure: ShadowEntryStructureContext = signal.entry_structure_context
     || signal.decision_telemetry?.entry_structure_context
@@ -195,6 +203,7 @@ export default function StrategyDeskPage() {
   const breakEvent = wallBreak.break || {};
   const trendlineBreak = trendline.break || {};
   const recentEvidence = (history.data || []).slice(0, 6);
+  const recentFamilyEvents = (familyHistory.data || []).slice(0, 8);
   const telemetryEvidence = (history.data || []).filter(setup => (
     Object.keys(historyContext(setup)).length > 0
     || Object.keys(historyFamilyContext(setup)).length > 0
@@ -218,7 +227,7 @@ export default function StrategyDeskPage() {
     return lines;
   }, [breadth, confluence, emaEvent, gexRange, isActionable, side]);
 
-  const refresh = () => Promise.all([strategy.refetch(), history.refetch(), paper.refetch()]);
+  const refresh = () => Promise.all([strategy.refetch(), history.refetch(), familyHistory.refetch(), paper.refetch()]);
 
   if (loading) return <LoadingDesk />;
 
@@ -244,7 +253,7 @@ export default function StrategyDeskPage() {
         </div>
       </header>
 
-      {(strategy.error || history.error || paper.error) && (
+      {(strategy.error || history.error || familyHistory.error || paper.error) && (
         <div className="mt-4 flex flex-col gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3 text-sm text-amber-800 dark:text-amber-200 sm:flex-row sm:items-center sm:justify-between" role="alert">
           <span>Some desk panels could not refresh. Existing evidence remains visible while the services recover.</span>
           <Button variant="outline" size="sm" onClick={refresh}>Retry all</Button>
@@ -311,6 +320,59 @@ export default function StrategyDeskPage() {
           <div className="bg-card px-4 py-3"><div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Future trim ladder</div><div className="mt-1 font-mono text-sm font-semibold">{Array.isArray(sharedRisk.trim_ladder_pct) ? sharedRisk.trim_ladder_pct.map((value: number) => `+${value}%`).join(' · ') : '—'}</div></div>
           <div className="bg-card px-4 py-3"><div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Quantity handling</div><div className="mt-1 text-xs font-medium leading-5">{sharedRisk.quantity_aware_ladder || 'Uses configured contract quantity.'}</div></div>
         </div>
+      </section>
+
+      <section className="mt-4 overflow-hidden rounded-xl border border-border bg-card" aria-labelledby="family-history-title">
+        <div className="flex flex-col gap-3 border-b border-border px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <div>
+            <div className="flex items-center gap-2">
+              <Clock3 className="h-4 w-4 text-muted-foreground" />
+              <h2 id="family-history-title" className="text-sm font-semibold">Family candidate journal</h2>
+              <Badge variant="outline" className="text-[9px] uppercase tracking-wider">Shadow evidence</Badge>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">Standalone ORB_INDEX and VWAP_TREND observations are retained even when the authoritative strategy remains in WAIT.</p>
+          </div>
+          <div className="text-[11px] text-muted-foreground">{familyHistory.data?.length || 0} deduplicated candidates retained</div>
+        </div>
+        {familyHistory.isLoading && !familyHistory.data ? (
+          <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Loading family candidate history">
+            {[0, 1, 2, 3].map(item => <div key={item} className="h-36 animate-pulse rounded-xl bg-muted/50" />)}
+          </div>
+        ) : recentFamilyEvents.length === 0 ? (
+          <div className="px-4 py-9 text-center sm:px-5">
+            <Radar className="mx-auto h-6 w-6 text-muted-foreground" />
+            <h3 className="mt-3 text-sm font-semibold">No family candidates recorded yet</h3>
+            <p className="mt-1 text-xs text-muted-foreground">The first completed ORB break or VWAP pullback-reclaim will appear here without creating a trade.</p>
+          </div>
+        ) : (
+          <div className="grid gap-3 p-3 sm:grid-cols-2 sm:p-4 xl:grid-cols-4">
+            {recentFamilyEvents.map(event => {
+              const isCall = event.side === 'calls';
+              const isPut = event.side === 'puts';
+              const levelDetail = event.family === 'ORB_INDEX'
+                ? `${money(event.opening_range?.low)} → ${money(event.opening_range?.high)}`
+                : `${money(event.trend?.vwap)} · ${Number(event.trend?.slope_bps || 0).toFixed(1)} bps`;
+              return (
+                <article key={event.event_id} className="rounded-xl border border-border bg-muted/[0.12] p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="text-[10px] font-bold uppercase tracking-[0.13em] text-muted-foreground">{event.family}</div>
+                      <div className={cn('mt-1 text-sm font-semibold', isCall && 'text-emerald-600 dark:text-emerald-300', isPut && 'text-rose-600 dark:text-rose-300')}>{isCall ? 'CALL' : isPut ? 'PUT' : 'Observed'}</div>
+                    </div>
+                    <Badge variant="outline" className={cn('text-[9px]', event.suppressed && 'border-amber-500/30 text-amber-700 dark:text-amber-300')}>{event.suppressed ? 'Suppressed' : humanize(event.status)}</Badge>
+                  </div>
+                  <div className="mt-3 space-y-2 text-xs">
+                    <div className="flex items-center justify-between gap-3"><span className="text-muted-foreground">Confirmed</span><span>{compactEpochTime(event.confirmed_at)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-muted-foreground">SPY</span><span className="font-mono">{money(event.spot)}</span></div>
+                    <div className="flex items-center justify-between gap-3"><span className="text-muted-foreground">Structure</span><span className="truncate font-mono" title={levelDetail}>{levelDetail}</span></div>
+                  </div>
+                  <p className="mt-3 line-clamp-2 text-[10px] leading-4 text-muted-foreground">{event.observation || 'Shadow candidate recorded for evaluation.'}</p>
+                  <div className="mt-3 truncate font-mono text-[9px] text-muted-foreground" title={event.event_id}>{event.event_id}</div>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(20rem,0.7fr)]">

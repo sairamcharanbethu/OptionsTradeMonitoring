@@ -59,9 +59,45 @@ async function testStrategyHistoryIncludesCompactShadowEvidence() {
   }
 }
 
+async function testStrategyFamilyHistoryUsesShadowJournalReader() {
+  let requestedLimit = 0;
+  const app = Fastify({ logger: false });
+  (app as any).decorate('authenticate', async (request: any) => {
+    request.user = { id: 42 };
+  });
+  (app as any).decorate('pg', { query: async () => ({ rows: [] }) });
+  (app as any).decorate('strategyEngine', {
+    getStrategyFamilyHistory: async (limit: number) => {
+      requestedLimit = limit;
+      return [{
+        event_id: 'orb-index:test',
+        family: 'ORB_INDEX',
+        entry_authority: false
+      }];
+    }
+  });
+
+  try {
+    await app.register(signalRoutes, { prefix: '/api/signals' });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/signals/strategy-family-history?limit=25'
+    });
+
+    assert(response.statusCode === 200, `Expected 200, got ${response.statusCode}: ${response.body}`);
+    assert(requestedLimit === 25, 'Strategy family history must validate and forward the requested limit');
+    const payload = response.json();
+    assert(payload[0].family === 'ORB_INDEX', 'Strategy family history must return journal candidates');
+    assert(payload[0].entry_authority === false, 'Strategy family history must remain non-authoritative');
+  } finally {
+    await app.close();
+  }
+}
+
 async function runTests() {
   console.log('Running signal route tests...');
   await testStrategyHistoryIncludesCompactShadowEvidence();
+  await testStrategyFamilyHistoryUsesShadowJournalReader();
   console.log('All signal route tests passed!');
 }
 

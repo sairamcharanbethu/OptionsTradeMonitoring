@@ -1690,6 +1690,19 @@ export const api = {
     }));
   },
 
+  async getStrategyFamilyHistory(limit = 100): Promise<StrategyFamilyHistoryEvent[]> {
+    const res = await authFetch(`${API_BASE}/signals/strategy-family-history?limit=${limit}&t=${Date.now()}`);
+    if (!res.ok) throw new Error('Failed to fetch strategy family history');
+    const rows = await res.json();
+    return rows.map((row: any) => ({
+      ...row,
+      confirmed_at: row.confirmed_at == null ? null : Number(row.confirmed_at),
+      journaled_at: row.journaled_at == null ? null : Number(row.journaled_at),
+      generated_at: row.generated_at == null ? null : Number(row.generated_at),
+      spot: row.spot == null ? null : Number(row.spot)
+    }));
+  },
+
   async getSignalRiskAssessment(id: number): Promise<SignalRiskAssessment> {
     const res = await authFetch(`${API_BASE}/signals/${id}/risk-assessment`);
     if (!res.ok) {
@@ -1976,6 +1989,26 @@ export interface ShadowStrategyFamilyContext {
   vwap_trend?: Record<string, any> | null;
   shared_risk?: Record<string, any>;
   observation?: string;
+}
+
+export interface StrategyFamilyHistoryEvent {
+  event_id: string;
+  family: 'ORB_INDEX' | 'VWAP_TREND';
+  side?: 'calls' | 'puts' | null;
+  status?: string | null;
+  confirmed_at?: number | null;
+  journaled_at?: number | null;
+  generated_at?: number | null;
+  spot?: number | null;
+  fresh: boolean;
+  suppressed: boolean;
+  entry_authority: false;
+  observation?: string | null;
+  opening_range?: Record<string, any> | null;
+  gex_alignment?: Record<string, any> | null;
+  trend?: Record<string, any> | null;
+  kill_switch?: Record<string, any> | null;
+  risk_plan?: Record<string, any> | null;
 }
 
 export interface StrategyHistorySetup {
