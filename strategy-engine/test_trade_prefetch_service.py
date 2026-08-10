@@ -533,6 +533,25 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         self.assertNotIn("raw_bar_history", record["strategy_family_context"])
         self.assertIn("advanced_signals", signal["zerogex_shadow"])
 
+    def test_strategy_family_event_changes_signal_fingerprint(self) -> None:
+        baseline = {
+            "state": "WAIT",
+            "strategy_family_context": {
+                "orb_index": {"status": "WATCHING", "candidate": None},
+                "vwap_trend": {"status": "WAITING_PULLBACK_RECLAIM"},
+            },
+        }
+        candidate = json.loads(json.dumps(baseline))
+        candidate["strategy_family_context"]["orb_index"] = {
+            "status": "FRESH_BREAK",
+            "candidate": {"event_id": "orb-index:test"},
+        }
+
+        self.assertNotEqual(
+            TradePrefetcher._signal_fingerprint(baseline),
+            TradePrefetcher._signal_fingerprint(candidate),
+        )
+
     def test_runtime_ibkr_policy_reconnects_on_admin_config_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_file = Path(tmp) / "policy.json"

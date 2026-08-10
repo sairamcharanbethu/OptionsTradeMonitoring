@@ -1085,6 +1085,15 @@ class TradePrefetcher:
         trendline = signal.get("trendline_context") or {}
         trendline_break = trendline.get("break") or {}
         trendline_retest = trendline.get("retest") or {}
+        families = signal.get("strategy_family_context") or {}
+        orb = families.get("orb_index") or {}
+        vwap = families.get("vwap_trend") or {}
+        orb_candidate = orb.get("candidate") or {}
+        vwap_candidate = (
+            vwap.get("candidate")
+            or vwap.get("suppressed_candidate")
+            or {}
+        )
         return (
             signal.get("state"),
             signal.get("favoring"),
@@ -1112,6 +1121,11 @@ class TradePrefetcher:
             zero_composite.get("posture"),
             trendline_break.get("event_id"),
             trendline_retest.get("status"),
+            orb.get("status"),
+            orb_candidate.get("event_id"),
+            vwap.get("status"),
+            vwap_candidate.get("event_id"),
+            (vwap.get("kill_switch") or {}).get("active"),
             tuple(
                 (
                     item.get("name"),
