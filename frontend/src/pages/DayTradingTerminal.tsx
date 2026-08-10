@@ -15,6 +15,7 @@ import {
   Play,
   Radar,
   RefreshCw,
+  Search,
   ShieldCheck,
   X
 } from 'lucide-react';
@@ -42,9 +43,82 @@ import {
 } from '@/components/ui/dialog';
 
 type LifecycleTone = 'idle' | 'armed' | 'active' | 'manage' | 'complete' | 'blocked';
+type PaperActivityTab = 'trades' | 'orders' | 'events';
 type ServicesHealth = Awaited<ReturnType<typeof api.getServicesHealth>>;
 const MAX_GEX_PROVIDER_AGE_SECONDS = 120;
 const BROWSER_SETUP_ALERTS_KEY = 'day-trading-browser-setup-alerts';
+
+const PAPER_ACTIVITY_FILTERS: Record<PaperActivityTab, Array<{ value: string; label: string }>> = {
+  trades: [
+    { value: 'ALL', label: 'All trades' },
+    { value: 'OPEN', label: 'Open' },
+    { value: 'CLOSED', label: 'Closed' },
+    { value: 'WIN', label: 'Winners' },
+    { value: 'LOSS', label: 'Losses' },
+    { value: 'ATTENTION', label: 'Needs attention' }
+  ],
+  orders: [
+    { value: 'ALL', label: 'All orders' },
+    { value: 'FILLED', label: 'Filled' },
+    { value: 'PENDING', label: 'Pending' },
+    { value: 'REJECTED', label: 'Rejected' },
+    { value: 'EXPIRED', label: 'Expired' },
+    { value: 'FAILED', label: 'Failed' }
+  ],
+  events: [
+    { value: 'ALL', label: 'All events' },
+    { value: 'DECISION', label: 'Decisions' },
+    { value: 'ENTRY', label: 'Entries' },
+    { value: 'TARGET', label: 'Targets and trims' },
+    { value: 'EXIT', label: 'Exits and stops' },
+    { value: 'ERROR', label: 'Errors' }
+  ]
+};
+
+const paperRecordLinksToPosition = (
+  position: PaperAccountSummary['recentPositions'][number],
+  record: { position_id?: number | string | null; setup_id?: string | null; decision_id?: number | string | null }
+) => {
+  const setupId = String(position.strategy_setup_id || '');
+  const decisionId = Number(position.paper_decision_id || 0);
+  return Number(record.position_id || 0) === Number(position.id)
+    || Boolean(setupId && record.setup_id === setupId)
+    || Boolean(decisionId > 0 && Number(record.decision_id || 0) === decisionId);
+};
+
+const paperOrderNeedsAttention = (order: PaperAccountSummary['recentOrders'][number]) => {
+  const status = String(order.status || '').toUpperCase();
+  return ['REJECTED', 'FAILED'].includes(status)
+    || Boolean(order.failure_reason && !['EXPIRED', 'CANCELLED'].includes(status));
+};
+
+const paperOrderCashEffect = (order: PaperAccountSummary['recentOrders'][number]) => {
+  const status = String(order.status || '').toUpperCase();
+  const intent = String(order.intent || '').toUpperCase();
+  const fillPrice = Number(order.fill_price || 0);
+  const quantity = Number(order.quantity || 0);
+  if (status === 'FILLED' && fillPrice > 0 && quantity > 0) {
+    return {
+      amount: fillPrice * quantity * 100,
+      label: intent === 'ENTRY' ? 'Debit' : 'Credit'
+    };
+  }
+  if (status === 'PENDING' && intent === 'ENTRY') {
+    return { amount: Number(order.reserved_debit || 0), label: 'Reserved' };
+  }
+  if (status === 'PENDING') return { amount: 0, label: 'Awaiting fill' };
+  return { amount: 0, label: 'No cash effect' };
+};
+
+const paperEventCategory = (eventType: string) => {
+  const value = eventType.toUpperCase();
+  if (/(ERROR|FAIL|REJECT)/.test(value)) return 'ERROR';
+  if (/(TARGET|TP1|TP2|TRIM|PROTECT)/.test(value)) return 'TARGET';
+  if (/(EXIT|CLOSE|STOP|INVALID)/.test(value)) return 'EXIT';
+  if (/(ENTRY|OPEN|FILLED)/.test(value)) return 'ENTRY';
+  if (/(DECISION|SKIP|EVALUAT)/.test(value)) return 'DECISION';
+  return 'OTHER';
+};
 
 const dateInNewYork = (date = new Date()) => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/New_York',
@@ -642,7 +716,9 @@ export default function DayTradingTerminal() {
   const [paperForceCloseAvailable, setPaperForceCloseAvailable] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
   const [paperExpanded, setPaperExpanded] = useState(false);
-  const [paperTransactionsExpanded, setPaperTransactionsExpanded] = useState(true);
+  const [paperActivityTab, setPaperActivityTab] = useState<PaperActivityTab>('trades');
+  const [paperActivityFilter, setPaperActivityFilter] = useState('ALL');
+  const [paperActivitySearch, setPaperActivitySearch] = useState('');
   const [aiReviewExpanded, setAiReviewExpanded] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [diagnosticsExpanded, setDiagnosticsExpanded] = useState(false);
@@ -1294,6 +1370,70 @@ export default function DayTradingTerminal() {
     (total, position) => total + (Number(position.current_price) - Number(position.entry_price)) * Number(position.quantity) * 100,
     0
   ) || 0;
+  const paperAvailableCash = paperAccount
+    ? Number(paperAccount.account.cash_balance) - Number(paperAccount.account.reserved_cash)
+    : 0;
+  const normalizedPaperSearch = paperActivitySearch.trim().toLowerCase();
+  const filteredPaperOrders = (paperAccount?.recentOrders || []).filter(order => {
+    const status = String(order.status || 'UNKNOWN').toUpperCase();
+    const matchesFilter = paperActivityFilter === 'ALL' || status === paperActivityFilter;
+    const matchesSearch = !normalizedPaperSearch || [
+      order.osi_ticker,
+      order.intent,
+      order.action,
+      order.status,
+      order.position_id,
+      order.setup_id,
+      order.decision_id,
+      order.failure_reason
+    ].some(value => String(value || '').toLowerCase().includes(normalizedPaperSearch));
+    return matchesFilter && matchesSearch;
+  });
+  const filteredPaperJournal = (paperAccount?.journal || []).filter(item => {
+    const category = paperEventCategory(item.event_type);
+    const matchesFilter = paperActivityFilter === 'ALL' || category === paperActivityFilter;
+    const matchesSearch = !normalizedPaperSearch || [
+      item.event_type,
+      item.message,
+      item.position_id,
+      item.setup_id,
+      item.decision_id,
+      item.policy_version
+    ].some(value => String(value || '').toLowerCase().includes(normalizedPaperSearch));
+    return matchesFilter && matchesSearch;
+  });
+  const filteredPaperPositions = (paperAccount?.recentPositions || []).filter(position => {
+    const status = String(position.status || '').toUpperCase();
+    const realizedPnl = Number(position.realized_pnl || 0);
+    const executionStatus = String(position.execution_status || '').toUpperCase();
+    const needsAttention = Boolean(position.execution_error)
+      || /(REJECTED|FAILED|STALE|UNKNOWN)/.test(executionStatus)
+      || (paperAccount?.recentOrders || []).some(order => (
+        paperRecordLinksToPosition(position, order) && paperOrderNeedsAttention(order)
+      ));
+    const matchesFilter = paperActivityFilter === 'ALL'
+      || status === paperActivityFilter
+      || (paperActivityFilter === 'WIN' && status === 'CLOSED' && realizedPnl > 0)
+      || (paperActivityFilter === 'LOSS' && status === 'CLOSED' && realizedPnl < 0)
+      || (paperActivityFilter === 'ATTENTION' && needsAttention);
+    const matchesSearch = !normalizedPaperSearch || [
+      position.id,
+      position.symbol,
+      position.option_type,
+      position.strike_price,
+      position.expiration_date,
+      position.strategy_setup_id,
+      position.paper_decision_id,
+      position.exit_reason,
+      position.decision_rationale
+    ].some(value => String(value || '').toLowerCase().includes(normalizedPaperSearch));
+    return matchesFilter && matchesSearch;
+  });
+
+  const selectPaperActivityTab = (tab: PaperActivityTab) => {
+    setPaperActivityTab(tab);
+    setPaperActivityFilter('ALL');
+  };
 
   return (
     <main className="day-trading-terminal mx-auto w-full max-w-[1440px] space-y-3 px-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4 sm:px-0 sm:pb-0">
@@ -1747,7 +1887,7 @@ export default function DayTradingTerminal() {
           <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5 sm:pb-4">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">System paper portfolio</span>
+                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">Paper Trading Center</span>
                 <Badge variant="outline" className={`text-[10px] ${
                   paperAccount.account.automation_status === 'ACTIVE'
                     ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-300'
@@ -1759,7 +1899,7 @@ export default function DayTradingTerminal() {
               </div>
               <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
-                Independent simulation portfolio. It records and manages paper entries without enabling, disabling, or changing Wealthsimple orders.
+                Trade-first simulation workspace for positions, orders, decisions, and lifecycle evidence. It never enables, disables, or changes Wealthsimple orders.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1789,17 +1929,18 @@ export default function DayTradingTerminal() {
           </div>
 
           <div className={`${paperExpanded ? 'block' : 'hidden'} border-t border-zinc-800 px-4 pb-4 sm:block sm:px-5 sm:pb-5`}>
-          <div className="grid grid-cols-2 gap-x-4 border-b border-zinc-800 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-x-4 border-b border-zinc-800 sm:grid-cols-3 lg:grid-cols-6">
             <Metric label="Equity" value={money(paperAccount.account.equity)} detail={`started ${money(paperAccount.account.initial_equity)}`} />
-            <Metric label="Cash" value={money(paperAccount.account.cash_balance)} detail={`${money(paperAccount.account.reserved_cash)} reserved`} />
+            <Metric label="Available cash" value={money(paperAvailableCash)} detail={`${money(paperAccount.account.cash_balance)} ledger cash`} />
+            <Metric label="Reserved cash" value={money(paperAccount.account.reserved_cash)} detail="pending entry orders" />
             <Metric
-              label="Today"
+              label="Today account P&L"
               value={`${paperAccount.session.pnl >= 0 ? '+' : ''}${money(paperAccount.session.pnl)}`}
               detail={`${number(paperAccount.session.pnlPct)}%`}
               tone={paperAccount.session.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
             />
-            <Metric label="Paper entries today" value={`${paperAccount.session.entries} · unlimited`} detail="distinct qualified setups" />
-            <Metric label="Open positions" value={String(paperAccount.openPositions.length)} detail={paperAccount.health.lastProcessedAt ? `checked ${dateTime(paperAccount.health.lastProcessedAt)}` : 'waiting for snapshot'} />
+            <Metric label="Unrealized P&L" value={`${paperUnrealizedPnl >= 0 ? '+' : ''}${money(paperUnrealizedPnl)}`} detail={`${paperAccount.openPositions.length} open positions`} tone={paperUnrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
+            <Metric label="Paper entries today" value={`${paperAccount.session.entries} · unlimited`} detail={paperAccount.health.lastProcessedAt ? `checked ${dateTime(paperAccount.health.lastProcessedAt)}` : 'waiting for snapshot'} />
           </div>
 
           <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
@@ -1858,6 +1999,9 @@ export default function DayTradingTerminal() {
                       <div className="mt-1 text-[11px] text-zinc-500">
                         Structural SL → TP1 protection/trim → TP2 · {Number(position.decision_trailing_stop_pct || paperAccount.limits.trailingStopPct)}% premium trail · {position.policy_version || paperAccount.limits.policyVersion}
                       </div>
+                      <div className="mt-1 select-all truncate font-mono text-[9px] text-zinc-600" title={position.strategy_setup_id || undefined}>
+                        Trade #{position.id}{position.strategy_setup_id ? ` · ${position.strategy_setup_id}` : ' · no setup id'}
+                      </div>
                     </div>
                     <div className="flex flex-col items-start font-mono text-xs sm:items-end sm:text-right">
                       <div className="text-zinc-300">
@@ -1900,37 +2044,85 @@ export default function DayTradingTerminal() {
             </div>
           )}
 
-          <section className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
-            <button
-              type="button"
-              className="flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-left"
-              onClick={() => setPaperTransactionsExpanded(value => !value)}
-              aria-expanded={paperTransactionsExpanded}
-              aria-controls="paper-transactions-content"
-            >
+          <section className="mt-4 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/30" aria-labelledby="paper-activity-title">
+            <div className="border-b border-zinc-800 px-3 py-3 sm:px-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <h4 id="paper-activity-title" className="text-sm font-semibold text-zinc-200">Paper activity</h4>
+                  <p className="mt-0.5 text-[10px] leading-4 text-zinc-500">Start with a trade, then inspect its linked orders and system events.</p>
+                </div>
+                <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-[#0d0f12] p-1" role="tablist" aria-label="Paper activity views">
+                  {([
+                    ['trades', 'Trade history', paperAccount.recentPositions.length],
+                    ['orders', 'Paper orders', paperAccount.recentOrders.length],
+                    ['events', 'System events', paperAccount.journal.length]
+                  ] as Array<[PaperActivityTab, string, number]>).map(([tab, label, count]) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      role="tab"
+                      id={`paper-tab-${tab}`}
+                      aria-controls={`paper-panel-${tab}`}
+                      aria-selected={paperActivityTab === tab}
+                      className={`min-h-9 rounded-md px-2 text-[10px] font-semibold transition-colors sm:px-3 ${
+                        paperActivityTab === tab
+                          ? 'bg-zinc-800 text-zinc-100'
+                          : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300'
+                      }`}
+                      onClick={() => selectPaperActivityTab(tab)}
+                    >
+                      <span className="block sm:inline">{label}</span>
+                      <span className="ml-1 font-mono text-[9px] opacity-60">{count}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_12rem]">
+                <label className="relative block">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-600" />
+                  <span className="sr-only">Search paper activity</span>
+                  <input
+                    value={paperActivitySearch}
+                    onChange={event => setPaperActivitySearch(event.target.value)}
+                    placeholder="Search contract, trade, setup, or message"
+                    className="h-10 w-full rounded-lg border border-zinc-800 bg-[#0d0f12] pl-9 pr-3 text-xs text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/15"
+                  />
+                </label>
+                <label>
+                  <span className="sr-only">Filter paper activity</span>
+                  <select
+                    value={paperActivityFilter}
+                    onChange={event => setPaperActivityFilter(event.target.value)}
+                    className="h-10 w-full rounded-lg border border-zinc-800 bg-[#0d0f12] px-3 text-xs text-zinc-300 outline-none focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/15"
+                  >
+                    {PAPER_ACTIVITY_FILTERS[paperActivityTab].map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+          <section id="paper-panel-orders" className={paperActivityTab === 'orders' ? 'block' : 'hidden'} role="tabpanel" aria-labelledby="paper-tab-orders">
+            <div className="flex w-full items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2.5 text-left sm:px-4">
               <div>
-                <div className="text-xs font-semibold text-zinc-300">Paper transactions</div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">Filled, pending, expired, and rejected paper orders</div>
+                <div className="text-xs font-semibold text-zinc-300">Paper orders</div>
+                <div className="mt-0.5 text-[10px] text-zinc-500">Entry, trim, and exit instructions with their simulated cash effect</div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[10px] text-zinc-500">{paperAccount.recentOrders.length}</span>
-                <ChevronDown className={`h-3.5 w-3.5 text-zinc-500 transition-transform ${paperTransactionsExpanded ? 'rotate-180' : ''}`} />
-              </div>
-            </button>
-            <div id="paper-transactions-content" className={`${paperTransactionsExpanded ? 'block' : 'hidden'} border-t border-zinc-800`}>
-              {paperAccount.recentOrders.length === 0 ? (
-                <div className="px-3 py-6 text-center text-xs text-zinc-500">No paper transactions have been recorded.</div>
+              <span className="font-mono text-[10px] text-zinc-500">{filteredPaperOrders.length} shown</span>
+            </div>
+            <div>
+              {filteredPaperOrders.length === 0 ? (
+                <div className="px-3 py-8 text-center text-xs text-zinc-500">No paper orders match the current search and filter.</div>
               ) : (
                 <>
                   <div className="divide-y divide-zinc-800 sm:hidden">
-                    {paperAccount.recentOrders.slice(0, 20).map(order => {
+                    {filteredPaperOrders.map(order => {
                       const fillPrice = Number(order.fill_price);
                       const limitPrice = Number(order.limit_price);
                       const quantity = Number(order.quantity || 0);
                       const status = String(order.status || 'UNKNOWN').toUpperCase();
-                      const transactionValue = Number.isFinite(fillPrice) && fillPrice > 0
-                        ? fillPrice * quantity * 100
-                        : status === 'PENDING' ? Number(order.reserved_debit || 0) : 0;
+                      const cashEffect = paperOrderCashEffect(order);
                       return (
                         <article key={order.id} className="px-3 py-3">
                           <div className="flex items-start justify-between gap-3">
@@ -1941,19 +2133,24 @@ export default function DayTradingTerminal() {
                               <div className="mt-1 text-[10px] text-zinc-500">
                                 {order.intent.replace(/_/g, ' ')} · {order.action.replace(/_/g, ' ')} · {quantity} contract{quantity === 1 ? '' : 's'}
                               </div>
+                              <div className="mt-1 font-mono text-[9px] text-zinc-600">
+                                {order.position_id ? `Trade #${order.position_id}` : 'Unlinked trade'}{order.setup_id ? ` · ${order.setup_id}` : ''}
+                              </div>
                             </div>
                             <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] ${
                               status === 'FILLED'
                                 ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-300'
                                 : status === 'PENDING'
                                   ? 'border-amber-500/25 bg-amber-950/20 text-amber-300'
+                                : paperOrderNeedsAttention(order)
+                                  ? 'border-rose-500/25 bg-rose-950/20 text-rose-300'
                                   : 'border-zinc-700 bg-zinc-900 text-zinc-400'
                             }`}>{status}</span>
                           </div>
                           <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px] text-zinc-400">
                             <div><span className="block text-zinc-600">Limit</span>{Number.isFinite(limitPrice) && limitPrice > 0 ? money(limitPrice) : '—'}</div>
                             <div><span className="block text-zinc-600">Fill</span>{Number.isFinite(fillPrice) && fillPrice > 0 ? money(fillPrice) : '—'}</div>
-                            <div><span className="block text-zinc-600">{status === 'PENDING' ? 'Reserved' : order.intent === 'ENTRY' ? 'Debit' : 'Credit'}</span>{transactionValue > 0 ? money(transactionValue) : '—'}</div>
+                            <div><span className="block text-zinc-600">{cashEffect.label}</span>{cashEffect.amount > 0 ? money(cashEffect.amount) : '—'}</div>
                           </div>
                           <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-zinc-600">
                             <span>{dateTime(order.filled_at || order.updated_at || order.created_at)}</span>
@@ -1965,28 +2162,26 @@ export default function DayTradingTerminal() {
                     })}
                   </div>
                   <div className="hidden overflow-x-auto sm:block">
-                    <table className="w-full min-w-[860px] text-xs">
+                    <table className="w-full min-w-[940px] text-xs">
                       <thead className="bg-zinc-900/45 text-[10px] uppercase tracking-[0.08em] text-zinc-500">
                         <tr>
                           <th className="px-3 py-2 text-left">Time</th>
-                          <th className="px-3 py-2 text-left">Transaction</th>
+                          <th className="px-3 py-2 text-left">Intent</th>
                           <th className="px-3 py-2 text-left">Contract</th>
                           <th className="px-3 py-2 text-right">Qty</th>
                           <th className="px-3 py-2 text-right">Limit</th>
                           <th className="px-3 py-2 text-right">Fill</th>
-                          <th className="px-3 py-2 text-right">Amount</th>
+                          <th className="px-3 py-2 text-right">Cash effect</th>
                           <th className="px-3 py-2 text-right">Status</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-zinc-800">
-                        {paperAccount.recentOrders.slice(0, 50).map(order => {
+                        {filteredPaperOrders.slice(0, 50).map(order => {
                           const fillPrice = Number(order.fill_price);
                           const limitPrice = Number(order.limit_price);
                           const quantity = Number(order.quantity || 0);
                           const status = String(order.status || 'UNKNOWN').toUpperCase();
-                          const transactionValue = Number.isFinite(fillPrice) && fillPrice > 0
-                            ? fillPrice * quantity * 100
-                            : status === 'PENDING' ? Number(order.reserved_debit || 0) : 0;
+                          const cashEffect = paperOrderCashEffect(order);
                           return (
                             <tr key={order.id} className="transition-colors hover:bg-zinc-900/35">
                               <td className="whitespace-nowrap px-3 py-2.5 text-[10px] text-zinc-500">{dateTime(order.filled_at || order.updated_at || order.created_at)}</td>
@@ -1997,12 +2192,18 @@ export default function DayTradingTerminal() {
                               <td className="px-3 py-2.5">
                                 <div className="font-medium text-zinc-300">{humanContractName({ strike: order.strike, expiry: order.expiration }, order.option_type)}</div>
                                 <div className="mt-0.5 max-w-48 select-all truncate font-mono text-[9px] text-zinc-600" title={order.osi_ticker}>{order.osi_ticker}</div>
+                                <div className="mt-0.5 max-w-64 select-all truncate font-mono text-[9px] text-zinc-600" title={order.setup_id || undefined}>
+                                  {order.position_id ? `Trade #${order.position_id}` : 'Unlinked trade'}{order.setup_id ? ` · ${order.setup_id}` : ''}
+                                </div>
                               </td>
                               <td className="px-3 py-2.5 text-right font-mono text-zinc-400">{quantity}</td>
                               <td className="px-3 py-2.5 text-right font-mono text-zinc-400">{Number.isFinite(limitPrice) && limitPrice > 0 ? money(limitPrice) : '—'}</td>
                               <td className="px-3 py-2.5 text-right font-mono text-zinc-300">{Number.isFinite(fillPrice) && fillPrice > 0 ? money(fillPrice) : '—'}</td>
-                              <td className="px-3 py-2.5 text-right font-mono text-zinc-300">{transactionValue > 0 ? money(transactionValue) : '—'}</td>
-                              <td className={`px-3 py-2.5 text-right font-mono text-[10px] ${status === 'FILLED' ? 'text-emerald-300' : status === 'PENDING' ? 'text-amber-300' : 'text-zinc-500'}`}>{status}</td>
+                              <td className="px-3 py-2.5 text-right">
+                                <div className="font-mono text-zinc-300">{cashEffect.amount > 0 ? money(cashEffect.amount) : '—'}</div>
+                                <div className="mt-0.5 text-[9px] text-zinc-600">{cashEffect.label}</div>
+                              </td>
+                              <td className={`px-3 py-2.5 text-right font-mono text-[10px] ${status === 'FILLED' ? 'text-emerald-300' : status === 'PENDING' ? 'text-amber-300' : paperOrderNeedsAttention(order) ? 'text-rose-300' : 'text-zinc-500'}`}>{status}</td>
                             </tr>
                           );
                         })}
@@ -2014,35 +2215,31 @@ export default function DayTradingTerminal() {
             </div>
           </section>
 
-          <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5">
+          <section id="paper-panel-trades" className={paperActivityTab === 'trades' ? 'block' : 'hidden'} role="tabpanel" aria-labelledby="paper-tab-trades">
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2.5 sm:px-4">
               <div>
-                <div className="text-xs font-semibold text-zinc-300">Paper trade intelligence</div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">Paper-only decision, execution, outcome, baseline, and lifecycle evidence</div>
+                <div className="text-xs font-semibold text-zinc-300">Trade history</div>
+                <div className="mt-0.5 text-[10px] text-zinc-500">One trade with its decision, orders, lifecycle, risk policy, and outcome</div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[10px] text-zinc-500">{paperAccount.recentPositions.length} trades</span>
-                <ChevronDown className="h-3.5 w-3.5 text-zinc-500 transition-transform group-open:rotate-180" />
-              </div>
-            </summary>
-            <div className="border-t border-zinc-800 p-2 sm:p-3">
-              {paperAccount.recentPositions.length === 0 ? (
-                <div className="px-3 py-6 text-center text-xs text-zinc-500">No filled paper trades are available for analysis.</div>
+              <span className="font-mono text-[10px] text-zinc-500">
+                {filteredPaperPositions.length > 25 ? `25 of ${filteredPaperPositions.length} matching` : `${filteredPaperPositions.length} shown`}
+              </span>
+            </div>
+            <div className="p-2 sm:p-3">
+              {filteredPaperPositions.length === 0 ? (
+                <div className="px-3 py-8 text-center text-xs text-zinc-500">No paper trades match the current search and filter.</div>
               ) : (
                 <div className="space-y-2">
-                  {paperAccount.recentPositions.slice(0, 25).map(position => {
+                  {filteredPaperPositions.slice(0, 25).map(position => {
                     const setupId = String(position.strategy_setup_id || '');
-                    const decisionId = Number(position.paper_decision_id || 0);
-                    const relatedOrders = paperAccount.recentOrders.filter(order => (
-                      Number(order.position_id || 0) === Number(position.id)
-                      || (setupId && order.setup_id === setupId)
-                      || (decisionId > 0 && Number(order.decision_id || 0) === decisionId)
-                    ));
-                    const relatedJournal = paperAccount.journal.filter(item => (
-                      Number(item.position_id || 0) === Number(position.id)
-                      || (setupId && item.setup_id === setupId)
-                      || (decisionId > 0 && Number(item.decision_id || 0) === decisionId)
-                    ));
+                    const relatedOrders = paperAccount.recentOrders.filter(order => paperRecordLinksToPosition(position, order));
+                    const relatedJournal = paperAccount.journal.filter(item => paperRecordLinksToPosition(position, item));
+                    const attentionOrders = relatedOrders.filter(paperOrderNeedsAttention);
+                    const executionStatus = String(position.execution_status || '').toUpperCase();
+                    const positionAttention = position.execution_error
+                      || (/(REJECTED|FAILED|STALE|UNKNOWN)/.test(executionStatus)
+                        ? `Execution state ${executionStatus.replace(/_/g, ' ')}`
+                        : null);
                     const initialQuantity = Math.max(1, Number(position.contracts_requested || position.quantity || 1));
                     const entryPrice = Number(position.entry_price || 0);
                     const currentPrice = Number(position.current_price || entryPrice);
@@ -2072,9 +2269,15 @@ export default function DayTradingTerminal() {
                                   ? 'border-zinc-700 bg-zinc-900 text-zinc-400'
                                   : 'border-sky-500/25 bg-sky-950/20 text-sky-300'
                               }`}>{position.status}</span>
+                              {(positionAttention || attentionOrders.length > 0) && (
+                                <span className="rounded border border-rose-500/25 bg-rose-950/20 px-1.5 py-0.5 text-[9px] font-semibold text-rose-300">Needs attention</span>
+                              )}
                             </div>
                             <div className="mt-1 text-[10px] text-zinc-500">
                               {position.decision_source || 'Rules'} · {position.risk_tier || 'bounded'} risk · {String(position.exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
+                            </div>
+                            <div className="mt-1 select-all truncate font-mono text-[9px] text-zinc-600" title={setupId || undefined}>
+                              Trade #{position.id}{setupId ? ` · ${setupId}` : ' · no setup id'} · {relatedOrders.length} orders · {relatedJournal.length} events
                             </div>
                           </div>
                           <div className="sm:text-right">
@@ -2089,6 +2292,15 @@ export default function DayTradingTerminal() {
                           </div>
                         </summary>
                         <div className="border-t border-zinc-800 p-3">
+                          {(positionAttention || attentionOrders.length > 0) && (
+                            <div className="mb-3 rounded-lg border border-rose-500/25 bg-rose-950/15 px-3 py-2 text-[10px] leading-5 text-rose-200" role="alert">
+                              <div className="font-semibold">Trade attention required</div>
+                              {positionAttention && <div>{positionAttention}</div>}
+                              {attentionOrders.map(order => (
+                                <div key={order.id}>Order #{order.id} · {String(order.status).replace(/_/g, ' ')} · {order.failure_reason || 'No failure reason recorded'}</div>
+                              ))}
+                            </div>
+                          )}
                           <div className="grid gap-3 lg:grid-cols-3">
                             <div className="rounded-lg bg-zinc-950/65 p-3">
                               <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Execution and outcome</div>
@@ -2166,6 +2378,33 @@ export default function DayTradingTerminal() {
                               </div>
                             </div>
                           </div>
+                          <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/35 p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Linked paper orders</div>
+                              <div className="font-mono text-[9px] text-zinc-600">{relatedOrders.length} total</div>
+                            </div>
+                            {relatedOrders.length === 0 ? (
+                              <div className="mt-2 text-[10px] text-zinc-600">No entry, trim, or exit order is linked to this trade.</div>
+                            ) : (
+                              <div className="mt-2 divide-y divide-zinc-800">
+                                {relatedOrders.map(order => {
+                                  const orderStatus = String(order.status || 'UNKNOWN').toUpperCase();
+                                  const cashEffect = paperOrderCashEffect(order);
+                                  return (
+                                    <div key={order.id} className="grid gap-1 py-2 text-[10px] sm:grid-cols-[4.5rem_minmax(0,1fr)_auto_auto] sm:items-center sm:gap-3">
+                                      <span className="font-mono text-zinc-600">{time(order.filled_at || order.updated_at || order.created_at)}</span>
+                                      <span className="min-w-0 text-zinc-400">
+                                        <span className="font-semibold text-zinc-300">#{order.id} · {order.intent.replace(/_/g, ' ')}</span> · {order.action.replace(/_/g, ' ')} · {order.quantity} contract{Number(order.quantity) === 1 ? '' : 's'}
+                                        {order.failure_reason && <span className="mt-0.5 block text-rose-300">{order.failure_reason}</span>}
+                                      </span>
+                                      <span className="font-mono text-zinc-400">{cashEffect.amount > 0 ? money(cashEffect.amount) : cashEffect.label}</span>
+                                      <span className={`font-mono ${orderStatus === 'FILLED' ? 'text-emerald-300' : orderStatus === 'PENDING' ? 'text-amber-300' : paperOrderNeedsAttention(order) ? 'text-rose-300' : 'text-zinc-500'}`}>{orderStatus}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </details>
                     );
@@ -2173,25 +2412,39 @@ export default function DayTradingTerminal() {
                 </div>
               )}
             </div>
-          </details>
+          </section>
 
-          {paperAccount.journal.length > 0 && (
-            <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
-              <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2.5 text-xs font-medium text-zinc-400">
-                Paper trade journal
-                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
-              </summary>
-              <div className="max-h-72 divide-y divide-zinc-800 overflow-y-auto border-t border-zinc-800 px-3">
-                {paperAccount.journal.map(item => (
-                  <div key={item.id} className="grid gap-1 py-2.5 sm:grid-cols-[150px_1fr_auto] sm:gap-3">
-                    <span className="font-mono text-[11px] text-violet-300">{item.event_type.replace(/_/g, ' ')}</span>
-                    <span className="text-xs leading-relaxed text-zinc-300">{item.message}</span>
-                    <span className="font-mono text-[10px] text-zinc-500">{dateTime(item.created_at)}</span>
-                  </div>
-                ))}
+          <section id="paper-panel-events" className={paperActivityTab === 'events' ? 'block' : 'hidden'} role="tabpanel" aria-labelledby="paper-tab-events">
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2.5 sm:px-4">
+              <div>
+                <div className="text-xs font-semibold text-zinc-300">System events</div>
+                <div className="mt-0.5 text-[10px] text-zinc-500">Strategy decisions, lifecycle transitions, protection changes, and diagnostics</div>
               </div>
-            </details>
-          )}
+              <span className="font-mono text-[10px] text-zinc-500">{filteredPaperJournal.length} shown</span>
+            </div>
+            {filteredPaperJournal.length === 0 ? (
+              <div className="px-3 py-8 text-center text-xs text-zinc-500">No system events match the current search and filter.</div>
+            ) : (
+              <div className="max-h-[32rem] divide-y divide-zinc-800 overflow-y-auto px-3 sm:px-4">
+                {filteredPaperJournal.map(item => {
+                  const category = paperEventCategory(item.event_type);
+                  return (
+                    <div key={item.id} className="grid gap-1 py-2.5 sm:grid-cols-[150px_minmax(0,1fr)_auto] sm:gap-3">
+                      <span className={`font-mono text-[11px] ${category === 'ERROR' ? 'text-rose-300' : 'text-violet-300'}`}>{item.event_type.replace(/_/g, ' ')}</span>
+                      <span className="min-w-0 text-xs leading-relaxed text-zinc-300">
+                        {item.message}
+                        <span className="mt-1 block select-all truncate font-mono text-[9px] text-zinc-600" title={item.setup_id || undefined}>
+                          {item.position_id ? `Trade #${item.position_id}` : 'Unlinked event'}{item.setup_id ? ` · ${item.setup_id}` : ''}{item.decision_id ? ` · decision ${item.decision_id}` : ''}
+                        </span>
+                      </span>
+                      <span className="font-mono text-[10px] text-zinc-500">{dateTime(item.created_at)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+          </section>
 
           {paperAccount.monthlyReports.length > 0 && (
             <details className="group mt-3 rounded-lg border border-zinc-800 bg-zinc-950/30">
