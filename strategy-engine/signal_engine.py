@@ -25,7 +25,13 @@ ZEROGEX_MINUTE_BUCKET_GRACE_SECONDS = 60
 MAX_OPTION_SPREAD_PCT = 15.0
 MIN_PLAN_REWARD_RISK = 1.5
 MIN_CONTINUATION_CONFIDENCE = 70
-FROZEN_SETUP_STRATEGIES = {"MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION"}
+STRATEGY_FAMILY_NAMES = {"ORB_INDEX", "VWAP_TREND"}
+FROZEN_SETUP_STRATEGIES = {
+    "MTF_REVERSAL",
+    "MTF_TREND_BREAK",
+    "GEX_REJECTION",
+    *STRATEGY_FAMILY_NAMES,
+}
 CONTINUATION_OPEN_STATES = {"ACTIVE", "MANAGE", "EXTENDED"}
 WATCH_STATES = {"WATCH", "ARMED"}
 ARM_ENTER_DISTANCE = 0.08
@@ -751,8 +757,8 @@ def validate_strategy_families_config(
     }
     if not isinstance(resolved["enabled"], bool):
         raise ValueError("strategy_families enabled must be true or false")
-    if resolved["mode"] != "shadow":
-        raise ValueError("strategy_families mode must be shadow")
+    if resolved["mode"] not in {"shadow", "primary"}:
+        raise ValueError("strategy_families mode must be shadow or primary")
     for family in ("orb_index", "vwap_trend"):
         if not isinstance(resolved[family]["enabled"], bool):
             raise ValueError(f"strategy_families {family} enabled must be true or false")
@@ -1214,6 +1220,8 @@ def calculate_vwap_trend_context(
             "confirmed_at": confirmed_at,
             "close": float(reclaim["close"]),
             "vwap": round(reclaim_vwap, 4),
+            "pullback_low": float(pullback["low"]),
+            "pullback_high": float(pullback["high"]),
             "fresh": age <= float(freshness_seconds),
             "age_seconds": round(age, 1),
             "completed_close_confirmed": True,
@@ -1326,6 +1334,16 @@ def calculate_strategy_family_context(
         if vwap_config["enabled"]
         else None
     )
+    mode = str(config["mode"])
+    entry_authority = mode == "primary"
+    for family in (orb, vwap):
+        if isinstance(family, dict):
+            family["mode"] = mode
+            family["entry_authority"] = entry_authority
+            if entry_authority and isinstance(family.get("observation"), str):
+                family["observation"] = family["observation"].replace(
+                    "SHADOW:", "PRIMARY:", 1
+                )
     observations = [
         item.get("observation")
         for item in (orb, vwap)
@@ -1334,12 +1352,139 @@ def calculate_strategy_family_context(
     return {
         "version": "strategy-family-lab-v1",
         "enabled": True,
-        "mode": "shadow",
-        "entry_authority": False,
+        "mode": mode,
+        "entry_authority": entry_authority,
         "orb_index": orb,
         "vwap_trend": vwap,
         "shared_risk": risk,
         "observation": " · ".join(observations),
+    }
+
+
+def _completed_bar_atr(
+    completed_bars: list[dict[str, Any]],
+    length: int = 14,
+) -> float | None:
+    bars = _normalized_completed_structure_bars(completed_bars)
+    if len(bars) < 2:
+        return None
+    ranges = []
+    window = bars[-(length + 1):]
+    for previous, current in zip(window, window[1:]):
+        previous_close = float(previous["close"])
+        ranges.append(max(
+            float(current["high"]) - float(current["low"]),
+            abs(float(current["high"]) - previous_close),
+            abs(float(current["low"]) - previous_close),
+        ))
+    return round(sum(ranges) / len(ranges), 4) if ranges else None
+
+
+def _authoritative_strategy_family_candidate(
+    context: dict[str, Any],
+    completed_bars: list[dict[str, Any]],
+    *,
+    atr_5m: Any,
+    gex_context: dict[str, Any],
+    previous_signal: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Translate one fresh primary family event into the frozen setup contract."""
+    if context.get("entry_authority") is not True or context.get("mode") != "primary":
+        return None
+    previous = previous_signal or {}
+    previous_event_id = (
+        ((previous.get("reversal_setup") or {}).get("event_id"))
+        or ((previous.get("call_setup") or {}).get("source_event_id"))
+        or ((previous.get("put_setup") or {}).get("source_event_id"))
+    )
+    previous_terminal = (
+        previous.get("state") == "FAILED"
+        or str((previous.get("lifecycle") or {}).get("status") or "").upper()
+        in {"COMPLETED", "FAILED"}
+    )
+    selected_family = None
+    selected_context = None
+    for family_name in ("orb_index", "vwap_trend"):
+        family = context.get(family_name) or {}
+        candidate = family.get("candidate") or {}
+        if (
+            family.get("entry_authority") is True
+            and candidate.get("fresh") is True
+            and candidate.get("completed_close_confirmed") is True
+            and candidate.get("side") in {"calls", "puts"}
+            and candidate.get("event_id")
+            and not (
+                previous_terminal
+                and previous_event_id == candidate.get("event_id")
+            )
+        ):
+            selected_family = family_name
+            selected_context = family
+            break
+    if not selected_family or not selected_context:
+        return None
+
+    event = selected_context["candidate"]
+    side = str(event["side"])
+    entry = float(event["close"])
+    derived_atr = _completed_bar_atr(completed_bars)
+    safe_atr = (
+        float(atr_5m)
+        if _number(atr_5m) and float(atr_5m) > 0
+        else float(derived_atr)
+        if _number(derived_atr) and float(derived_atr) > 0
+        else max(0.10, entry * 0.0005)
+    )
+    if selected_family == "orb_index":
+        opening_range = selected_context.get("opening_range") or {}
+        stop_anchor = (
+            opening_range.get("low")
+            if side == "calls"
+            else opening_range.get("high")
+        )
+        setup_text = "fresh completed-close break of the five-minute opening range"
+        alignment = (selected_context.get("gex_alignment") or {}).get("alignment")
+        score = 85 if alignment in {"WALL_CLEARED", "ALIGNED"} else 75 if alignment == "HEADWIND" else 80
+    else:
+        stop_anchor = (
+            float(event["pullback_low"]) - safe_atr * 0.10
+            if side == "calls" and _number(event.get("pullback_low"))
+            else float(event["pullback_high"]) + safe_atr * 0.10
+            if side == "puts" and _number(event.get("pullback_high"))
+            else entry - safe_atr
+            if side == "calls"
+            else entry + safe_atr
+        )
+        setup_text = "fresh completed pullback-and-reclaim in the direction of VWAP slope"
+        slope_bps = abs(float((selected_context.get("trend") or {}).get("slope_bps") or 0))
+        score = 80 if slope_bps >= 2 else 75
+    if not _number(stop_anchor):
+        return None
+
+    plan = _structure_plan(
+        entry,
+        side,
+        safe_atr,
+        float(stop_anchor),
+        _gex_target_levels(gex_context),
+    )
+    confirmed_at = float(event["confirmed_at"])
+    freshness_seconds = float(selected_context.get("freshness_seconds") or 300)
+    strategy = str(selected_context.get("strategy"))
+    return {
+        "strategy": strategy,
+        "side": side,
+        "score": score,
+        "base_score": score,
+        "quality": "HIGH" if score >= 80 else "MEDIUM",
+        "setup": setup_text,
+        "risk_plan": plan,
+        "event_id": str(event["event_id"]),
+        "confirmed_at": confirmed_at,
+        "armed_at": confirmed_at,
+        "frozen_until": confirmed_at + freshness_seconds,
+        "completed_close_triggered": True,
+        "family_risk_plan": copy.deepcopy(context.get("shared_risk") or {}),
     }
 
 
@@ -4960,6 +5105,13 @@ def build_signal(
         previous_context=previous_signal.get("strategy_family_context"),
         planned_contracts=option_preferred_contracts,
     )
+    family_candidate = _authoritative_strategy_family_candidate(
+        strategy_family_context,
+        completed,
+        atr_5m=spy.get("atr_5m"),
+        gex_context=gex_ctx,
+        previous_signal=previous_signal,
+    )
     entry_structure_context["gex_range"] = calculate_gex_range_context(
         spot,
         atr_5m=spy.get("atr_5m"),
@@ -5057,6 +5209,13 @@ def build_signal(
         "zerogex_shadow": zerogex_ctx,
         "zerogex_decision": zerogex_decision,
     }
+    if previous_signal.get("strategy") in STRATEGY_FAMILY_NAMES:
+        previous_paper_policy = previous_signal.get("paper_policy") or {}
+        for field in ("premium_stop_pct", "trim_ladder_pct", "family_strategy"):
+            if field in previous_paper_policy:
+                result["paper_policy"][field] = copy.deepcopy(
+                    previous_paper_policy[field]
+                )
     applied_zerogex_context: set[str] = set()
 
     def apply_zerogex_context(side: str) -> None:
@@ -5085,7 +5244,14 @@ def build_signal(
             return _dedupe_messages(preserved)
         result["blockers"].append(blocker)
         return _dedupe_messages(result)
-    if len(completed) < 22 or not _number(spy.get("vwap")):
+    prior_primary_family_open = (
+        previous_signal.get("strategy") in STRATEGY_FAMILY_NAMES
+        and previous_signal.get("state") in CONTINUATION_OPEN_STATES
+        and (previous_signal.get("lifecycle") or {}).get("paper_position_open") is True
+    )
+    if (
+        len(completed) < 22 or not _number(spy.get("vwap"))
+    ) and family_candidate is None and not prior_primary_family_open:
         blocker = "insufficient completed intraday bars"
         preserved = _preserve_open_tracking_during_data_block(
             previous_signal,
@@ -5180,8 +5346,9 @@ def build_signal(
     qqq_down = (not use_qqq) or (
         qqq.get("ema9_5m") and qqq.get("ema21_5m") and qqq["ema9_5m"] < qqq["ema21_5m"]
     )
-    above_vwap = spot > spy["vwap"]
-    below_vwap = spot < spy["vwap"]
+    indicator_vwap = spy.get("vwap")
+    above_vwap = bool(_number(indicator_vwap) and spot > indicator_vwap)
+    below_vwap = bool(_number(indicator_vwap) and spot < indicator_vwap)
     volume_ok = rvol >= 1.2
     call_break = latest_close > raw_call_trigger
     put_break = latest_close < raw_put_trigger
@@ -5427,7 +5594,9 @@ def build_signal(
     if cooldown_until > now:
         result["reversal_cooldown_until"] = cooldown_until
 
-    reversal = None if cooldown_until > now else _frozen_reversal(previous_signal, now, float(spot))
+    reversal = _frozen_reversal(previous_signal, now, float(spot))
+    if reversal is None and family_candidate is not None:
+        reversal = family_candidate
     if reversal is None and cooldown_until <= now:
         reversal = _mtf_reversal_candidate(spy, latest, float(spot), gex_ctx)
         if reversal:
@@ -5435,10 +5604,11 @@ def build_signal(
             reversal["frozen_until"] = now + 15 * 60
     if reversal:
         reversal["score"] = int(reversal.get("base_score", reversal["score"]))
-        if gex_ctx.get("vix_gamma_regime") == "Whipsaw":
+        family_reversal = reversal.get("strategy") in STRATEGY_FAMILY_NAMES
+        if not family_reversal and gex_ctx.get("vix_gamma_regime") == "Whipsaw":
             reversal["score"] = max(0, int(reversal["score"]) - 10)
             result["warnings"].append("VIX gamma regime is Whipsaw; require stronger confirmation")
-        if not volume_ok:
+        if not family_reversal and not volume_ok:
             reversal["score"] = max(0, int(reversal["score"]) - 5)
             result["warnings"].append(f"1m RVOL {rvol:.2f} below 1.20; wait for trigger-bar expansion")
         continuing_reversal = (
@@ -6040,11 +6210,13 @@ def build_signal(
             result["warnings"].append("activation window expired or move extended; track signal only")
     elif reversal and not hard_data_block:
         side = reversal["side"]
+        family_reversal = reversal.get("strategy") in STRATEGY_FAMILY_NAMES
         plan = reversal["risk_plan"]
         target_setup = result["put_setup"] if side == "puts" else result["call_setup"]
         reversal_option = put_option if side == "puts" else call_option
-        triggered_raw = (side == "puts" and spot <= plan["entry"]) or (
-            side == "calls" and spot >= plan["entry"]
+        triggered_raw = bool(reversal.get("completed_close_triggered")) or (
+            (side == "puts" and spot <= plan["entry"])
+            or (side == "calls" and spot >= plan["entry"])
         )
         apply_zerogex_context(side)
         ema9_1m, ema21_1m = spy.get("ema9"), spy.get("ema21")
@@ -6053,8 +6225,12 @@ def build_signal(
         ) or (
             side == "puts" and _number(ema9_1m) and _number(ema21_1m) and ema9_1m < ema21_1m
         )
-        confirmation_ready = bool(one_min_aligned)
-        same_side_cooldown = continuation_reentry_blocked and continuation_reset_side == side
+        confirmation_ready = bool(one_min_aligned) or family_reversal
+        same_side_cooldown = (
+            not family_reversal
+            and continuation_reentry_blocked
+            and continuation_reset_side == side
+        )
         option_ready = _option_eligible(reversal_option)
         plan_risk = plan.get("risk_dollars")
         if not _number(plan_risk) and _number(plan.get("stop")):
@@ -6098,8 +6274,11 @@ def build_signal(
         )
         result["confirmations"] = [
             reversal["setup"],
-            "price on trend side of VWAP",
-            "trigger frozen for 15 minutes",
+            *(
+                ["entry event confirmed by a completed one-minute close", "family event remains inside its five-minute freshness window"]
+                if family_reversal
+                else ["price on trend side of VWAP", "trigger frozen for 15 minutes"]
+            ),
             *result["confirmations"],
         ]
         target_setup.update(
@@ -6115,9 +6294,22 @@ def build_signal(
             risk_method=plan["method"],
             risk_dollars=round(abs(float(plan["entry"]) - float(plan["stop"])), 2),
             plan_quality=reversal_plan_quality,
+            source_event_id=reversal.get("event_id"),
         )
         _enrich_setup_quality(target_setup, side, paper_exit_target)
         if activation_ready:
+            if family_reversal:
+                result["paper_policy"].update(
+                    premium_stop_pct=float(
+                        (reversal.get("family_risk_plan") or {}).get("premium_stop_pct")
+                        or STRATEGY_FAMILY_RISK_PLAN["premium_stop_pct"]
+                    ),
+                    trim_ladder_pct=copy.deepcopy(
+                        (reversal.get("family_risk_plan") or {}).get("trim_ladder_pct")
+                        or STRATEGY_FAMILY_RISK_PLAN["trim_ladder_pct"]
+                    ),
+                    family_strategy=reversal.get("strategy"),
+                )
             target_setup["option"]["locked_at_activation"] = True
             target_setup["option"]["locked_at"] = now
             result["lifecycle"] = {

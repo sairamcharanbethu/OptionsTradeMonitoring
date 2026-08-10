@@ -58,14 +58,18 @@ class StrategyContractTest(unittest.TestCase):
             with self.subTest(config=config), self.assertRaises(ValueError):
                 validate_trendline_structure_config(config)
 
-    def test_strategy_family_runtime_config_is_shadow_only(self):
+    def test_strategy_family_runtime_config_defaults_to_shadow_and_allows_primary(self):
         config = validate_strategy_families_config(None)
 
         self.assertTrue(config["orb_index"]["enabled"])
         self.assertTrue(config["vwap_trend"]["enabled"])
         self.assertEqual(config["mode"], "shadow")
-        with self.assertRaisesRegex(ValueError, "mode must be shadow"):
-            validate_strategy_families_config({"mode": "primary"})
+        self.assertEqual(
+            validate_strategy_families_config({"mode": "primary"})["mode"],
+            "primary",
+        )
+        with self.assertRaisesRegex(ValueError, "mode must be shadow or primary"):
+            validate_strategy_families_config({"mode": "live"})
 
     def test_strategy_family_runtime_config_rejects_invalid_values(self):
         invalid = (

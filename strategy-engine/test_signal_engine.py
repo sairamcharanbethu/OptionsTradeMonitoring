@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import unittest
 import time
 from datetime import datetime, timedelta, timezone
@@ -934,6 +935,184 @@ class VwapTrendContextTest(unittest.TestCase):
         )
 
         self.assertEqual(incremental, batch)
+
+
+class PrimaryStrategyFamilySignalTest(unittest.TestCase):
+    def build(
+        self,
+        bars: list[dict],
+        now: float,
+        spot: float,
+        *,
+        strategy_families: dict | None = None,
+        previous_signal: dict | None = None,
+        include_indicator_vwap: bool = True,
+    ) -> dict:
+        expiry = datetime.fromtimestamp(now, ET).strftime("%Y%m%d")
+        market = {
+            "generated_at": now,
+            "symbols": {
+                "SPY": {
+                    "spot": spot,
+                    "quote_age_seconds": 0.1,
+                    "bars": bars,
+                }
+            },
+        }
+        spy_indicators = {
+            "atr_5m": 0.40,
+            "rvol": 1.0,
+            "completed_bar_age_seconds": 60,
+        }
+        if include_indicator_vwap:
+            spy_indicators["vwap"] = 100.0
+        indicators = {"SPY": spy_indicators}
+        options = {
+            "expiry": expiry,
+            "contracts": [
+                liquid_contract(right, strike, expiry=expiry)
+                for strike in range(97, 105)
+                for right in ("C", "P")
+            ],
+        }
+        gex = {
+            "fetched_at": now,
+            "data": {
+                "SPY": {
+                    "gamma_regime": "Trend",
+                    "regime": "Negative",
+                    "rolling": "FLOOR_UP",
+                    "flip": 100.0,
+                    "call_wall": {"strike": 103.0, "stage": "Fresh"},
+                    "put_wall": {"strike": 97.0, "stage": "Fresh"},
+                },
+                "VIX": {"gamma_regime": "Range"},
+            },
+        }
+        with patch("signal_engine.time.time", return_value=now), patch(
+            "signal_engine._regular_session_open", return_value=True
+        ), patch("signal_engine._new_entry_window_open", return_value=True), patch(
+            "signal_engine._mandatory_flatten_due", return_value=False
+        ), patch("signal_engine._mtf_reversal_candidate", return_value=None):
+            return build_signal(
+                market,
+                indicators,
+                options,
+                gex,
+                previous_signal=previous_signal,
+                strategy_families=strategy_families or {
+                    "enabled": True,
+                    "mode": "primary",
+                },
+            )
+
+    def test_primary_orb_activates_before_twenty_two_completed_bars(self) -> None:
+        bars = OrbIndexContextTest().opening_range() + [
+            family_bar(5, open_price=100.0, high=101.3, low=99.9, close=101.2),
+        ]
+        now = datetime(2026, 7, 29, 9, 36, 5, tzinfo=ET).timestamp()
+
+        signal = self.build(
+            bars,
+            now,
+            101.22,
+            include_indicator_vwap=False,
+        )
+
+        self.assertEqual(len(bars), 6)
+        self.assertEqual(signal["strategy"], "ORB_INDEX")
+        self.assertEqual(signal["state"], "ACTIVE")
+        self.assertTrue(signal["lifecycle"]["entry_allowed"])
+        self.assertEqual(signal["call_setup"]["source_event_id"], signal["reversal_setup"]["event_id"])
+        self.assertEqual(signal["paper_policy"]["premium_stop_pct"], 35.0)
+        self.assertEqual(signal["paper_policy"]["trim_ladder_pct"], [25.0, 45.0, 75.0])
+        self.assertNotIn("insufficient completed intraday bars", signal["blockers"])
+
+    def test_active_orb_keeps_tracking_after_family_freshness_expires(self) -> None:
+        bars = OrbIndexContextTest().opening_range() + [
+            family_bar(5, open_price=100.0, high=101.3, low=99.9, close=101.2),
+        ]
+        first_now = datetime(2026, 7, 29, 9, 36, 5, tzinfo=ET).timestamp()
+        first = self.build(bars, first_now, 101.22)
+        later_bars = [
+            *bars,
+            *[
+                family_bar(
+                    minute,
+                    open_price=101.20,
+                    high=101.30,
+                    low=101.10,
+                    close=101.20,
+                )
+                for minute in range(6, 12)
+            ],
+        ]
+        later_now = datetime(2026, 7, 29, 9, 42, 5, tzinfo=ET).timestamp()
+        previous = copy.deepcopy(first)
+        previous["generated_at"] = later_now - 1
+        previous["lifecycle"]["last_trusted_tracking_at"] = later_now - 1
+
+        later = self.build(
+            later_bars,
+            later_now,
+            101.20,
+            previous_signal=previous,
+        )
+
+        self.assertEqual(len(later_bars), 12)
+        self.assertEqual(later["strategy"], "ORB_INDEX")
+        self.assertEqual(later["state"], "ACTIVE")
+        self.assertEqual(later["paper_policy"]["premium_stop_pct"], 35.0)
+        self.assertNotIn("insufficient completed intraday bars", later["blockers"])
+
+    def test_terminal_family_event_cannot_reenter_from_same_completed_bar(self) -> None:
+        bars = OrbIndexContextTest().opening_range() + [
+            family_bar(5, open_price=100.0, high=101.3, low=99.9, close=101.2),
+        ]
+        first_now = datetime(2026, 7, 29, 9, 36, 5, tzinfo=ET).timestamp()
+        first = self.build(bars, first_now, 101.22)
+        retry_now = first_now + 20
+        terminal = copy.deepcopy(first)
+        terminal.update(state="FAILED", generated_at=retry_now - 16)
+        terminal["lifecycle"].update(
+            status="FAILED",
+            entry_allowed=False,
+            paper_position_open=False,
+            closed_at=retry_now - 16,
+        )
+
+        retry = self.build(
+            bars,
+            retry_now,
+            101.22,
+            previous_signal=terminal,
+            include_indicator_vwap=False,
+        )
+
+        self.assertNotEqual(retry.get("state"), "ACTIVE")
+        self.assertFalse((retry.get("lifecycle") or {}).get("entry_allowed", False))
+
+    def test_primary_vwap_reclaim_activates_without_mtf_confirmation(self) -> None:
+        bars = VwapTrendContextTest().bullish_cycle()
+        now = datetime(2026, 7, 29, 9, 40, 5, tzinfo=ET).timestamp()
+
+        signal = self.build(
+            bars,
+            now,
+            101.01,
+            strategy_families={
+                "enabled": True,
+                "mode": "primary",
+                "orb_index": {"enabled": False},
+            },
+        )
+
+        self.assertEqual(signal["strategy"], "VWAP_TREND")
+        self.assertEqual(signal["state"], "ACTIVE")
+        self.assertTrue(signal["lifecycle"]["entry_allowed"])
+        self.assertIn("completed pullback-and-reclaim", signal["confirmations"][0])
+        self.assertEqual(signal["strategy_family_context"]["mode"], "primary")
+        self.assertTrue(signal["strategy_family_context"]["entry_authority"])
 
 
 class TrendlineStructureTest(unittest.TestCase):

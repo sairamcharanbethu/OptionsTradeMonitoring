@@ -953,6 +953,11 @@ class TradePrefetcher:
             "strategy_preferred_contracts": preferred_contracts,
             "strategy_max_contracts": max_contracts,
             "session": signal.get("session_policy"),
+            "strategy_families": (
+                policy.get("strategy_families")
+                if isinstance(policy.get("strategy_families"), dict)
+                else None
+            ),
         }
         signal["policy_fingerprint"] = _policy_fingerprint(
             signal["strategy_policy"]
