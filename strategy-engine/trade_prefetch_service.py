@@ -895,6 +895,11 @@ class TradePrefetcher:
                 if isinstance(policy.get("trendline_structure"), dict)
                 else None
             ),
+            strategy_families=(
+                policy.get("strategy_families")
+                if isinstance(policy.get("strategy_families"), dict)
+                else None
+            ),
             cross_market_confirmation=getattr(
                 self.args,
                 "cross_market_confirmation",

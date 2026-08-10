@@ -27,6 +27,8 @@ from signal_engine import (
     calculate_gex_range_context,
     calculate_gex_wall_break_context,
     calculate_prior_session_rejection_context,
+    calculate_orb_index_context,
+    calculate_vwap_trend_context,
     calculate_trendline_context,
     render_signal,
 )
@@ -91,6 +93,26 @@ def trendline_bar(
         "low": low,
         "close": close,
         "volume": 1_000.0,
+    }
+
+
+def family_bar(
+    minute: int,
+    *,
+    open_price: float,
+    high: float,
+    low: float,
+    close: float,
+    volume: float = 1_000,
+) -> dict:
+    start = datetime(2026, 7, 29, 9, 30, tzinfo=ET)
+    return {
+        "time": (start + timedelta(minutes=minute)).timestamp(),
+        "open": open_price,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": volume,
     }
 
 
@@ -590,6 +612,312 @@ class EntryStructureContextTest(unittest.TestCase):
 
         self.assertEqual(context["alignment"], "DIVERGENT")
         self.assertIsNone(context["side"])
+
+
+class OrbIndexContextTest(unittest.TestCase):
+    def opening_range(self) -> list[dict]:
+        return [
+            family_bar(0, open_price=100.0, high=100.4, low=99.8, close=100.2),
+            family_bar(1, open_price=100.2, high=100.8, low=100.0, close=100.5),
+            family_bar(2, open_price=100.5, high=101.0, low=100.3, close=100.7),
+            family_bar(3, open_price=100.7, high=100.9, low=99.5, close=99.9),
+            family_bar(4, open_price=99.9, high=100.3, low=99.0, close=99.8),
+        ]
+
+    def calculate(self, bars: list[dict], minute: int) -> dict:
+        now = datetime(2026, 7, 29, 9, 30, tzinfo=ET) + timedelta(minutes=minute)
+        return calculate_orb_index_context(bars, now=now.timestamp())
+
+    def test_completed_close_confirms_fresh_bullish_break(self) -> None:
+        bars = self.opening_range() + [
+            family_bar(5, open_price=100.0, high=101.3, low=99.9, close=101.2),
+        ]
+        context = self.calculate(bars, 6)
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["opening_range"]["high"], 101.0)
+        self.assertEqual(context["opening_range"]["low"], 99.0)
+        self.assertEqual(context["candidate"]["side"], "calls")
+        self.assertTrue(context["candidate"]["fresh"])
+        self.assertTrue(context["candidate"]["completed_close_confirmed"])
+        self.assertFalse(context["entry_authority"])
+
+    def test_bearish_break_uses_second_confirmation_bar(self) -> None:
+        bars = self.opening_range() + [
+            family_bar(5, open_price=99.8, high=100.2, low=99.1, close=99.4),
+            family_bar(6, open_price=99.4, high=99.5, low=98.6, close=98.8),
+        ]
+        context = self.calculate(bars, 7)
+
+        self.assertEqual(context["candidate"]["side"], "puts")
+        self.assertEqual(context["candidate"]["bar_time"], bars[-1]["time"])
+
+    def test_wick_crossing_and_late_close_do_not_trigger(self) -> None:
+        bars = self.opening_range() + [
+            family_bar(5, open_price=100.0, high=101.4, low=99.8, close=100.8),
+            family_bar(6, open_price=100.8, high=101.1, low=100.2, close=100.9),
+            family_bar(7, open_price=100.9, high=101.4, low=100.8, close=101.2),
+        ]
+        context = self.calculate(bars, 8)
+
+        self.assertIsNone(context["candidate"])
+        self.assertEqual(context["status"], "WINDOW_CLOSED")
+
+    def test_missing_opening_minute_is_unavailable(self) -> None:
+        context = self.calculate(self.opening_range()[:-1], 35)
+
+        self.assertFalse(context["available"])
+        self.assertEqual(context["reason"], "opening_range_incomplete")
+
+    def test_break_freshness_and_duplicate_event_are_deterministic(self) -> None:
+        break_bar = family_bar(
+            5, open_price=100.0, high=101.3, low=99.9, close=101.2
+        )
+        bars = self.opening_range() + [break_bar]
+        fresh = self.calculate(bars, 6)
+        duplicate = self.calculate([*bars, dict(break_bar)], 6)
+        expired = self.calculate(bars, 12)
+
+        self.assertEqual(duplicate, fresh)
+        self.assertEqual(
+            duplicate["candidate"]["event_id"],
+            fresh["candidate"]["event_id"],
+        )
+        self.assertFalse(expired["candidate"]["fresh"])
+        self.assertEqual(expired["status"], "EXPIRED_BREAK")
+
+    def test_incomplete_break_bar_is_ignored(self) -> None:
+        break_bar = family_bar(
+            5, open_price=100.0, high=101.3, low=99.9, close=101.2
+        )
+        break_bar["complete"] = False
+        context = self.calculate([*self.opening_range(), break_bar], 6)
+
+        self.assertIsNone(context["candidate"])
+        self.assertEqual(context["confirmation_bars_seen"], 0)
+
+    def test_future_completed_bar_is_not_visible_before_its_close(self) -> None:
+        break_bar = family_bar(
+            5, open_price=100.0, high=101.3, low=99.9, close=101.2
+        )
+        before_close = calculate_orb_index_context(
+            [*self.opening_range(), break_bar],
+            now=datetime(2026, 7, 29, 9, 35, 59, tzinfo=ET).timestamp(),
+        )
+        after_close = calculate_orb_index_context(
+            [*self.opening_range(), break_bar],
+            now=datetime(2026, 7, 29, 9, 36, tzinfo=ET).timestamp(),
+        )
+
+        self.assertIsNone(before_close["candidate"])
+        self.assertEqual(after_close["candidate"]["side"], "calls")
+
+    def test_gex_alignment_is_advisory_only(self) -> None:
+        bars = self.opening_range() + [
+            family_bar(5, open_price=100.0, high=101.3, low=99.9, close=101.2),
+        ]
+        now = datetime(2026, 7, 29, 9, 36, tzinfo=ET).timestamp()
+        context = calculate_orb_index_context(
+            bars,
+            now=now,
+            gex_context={
+                "available": True,
+                "call_wall": {"strike": 102.0},
+                "put_wall": {"strike": 98.0},
+                "gamma_flip": 100.0,
+            },
+        )
+
+        self.assertEqual(context["gex_alignment"]["alignment"], "HEADWIND")
+        self.assertFalse(context["gex_alignment"]["entry_authority"])
+
+
+class VwapTrendContextTest(unittest.TestCase):
+    def bullish_cycle(self) -> list[dict]:
+        bars = []
+        for minute in range(8):
+            base = 100.0 + minute * 0.10
+            bars.append(family_bar(
+                minute,
+                open_price=base,
+                high=base + 0.12,
+                low=base - 0.04,
+                close=base + 0.08,
+            ))
+        bars.append(family_bar(
+            8,
+            open_price=100.78,
+            high=100.82,
+            low=100.35,
+            close=100.46,
+        ))
+        bars.append(family_bar(
+            9,
+            open_price=100.46,
+            high=101.05,
+            low=100.42,
+            close=101.0,
+            volume=1_500,
+        ))
+        return bars
+
+    def calculate(self, bars: list[dict], minute: int = 10) -> dict:
+        now = datetime(2026, 7, 29, 9, 30, tzinfo=ET) + timedelta(minutes=minute)
+        return calculate_vwap_trend_context(
+            bars,
+            now=now.timestamp(),
+            slope_lookback_bars=5,
+            minimum_slope_bps=1.0,
+            hold_bars=3,
+            pullback_band_pct=0.15,
+            chop_lookback_bars=10,
+            max_vwap_crosses=2,
+        )
+
+    def test_bullish_pullback_reclaim_confirms_candidate(self) -> None:
+        context = self.calculate(self.bullish_cycle())
+
+        self.assertTrue(context["available"])
+        self.assertEqual(context["trend"]["side"], "calls")
+        self.assertGreater(context["trend"]["slope_bps"], 1.0)
+        self.assertEqual(context["candidate"]["side"], "calls")
+        self.assertTrue(context["candidate"]["fresh"])
+        self.assertFalse(context["entry_authority"])
+
+    def test_flat_vwap_does_not_qualify(self) -> None:
+        bars = [
+            family_bar(
+                minute,
+                open_price=100.0,
+                high=100.1,
+                low=99.9,
+                close=100.0,
+            )
+            for minute in range(10)
+        ]
+        context = self.calculate(bars)
+
+        self.assertIsNone(context["candidate"])
+        self.assertEqual(context["status"], "NO_TREND")
+
+    def test_bearish_pullback_rejection_confirms_candidate(self) -> None:
+        bars = []
+        for minute in range(8):
+            base = 100.8 - minute * 0.10
+            bars.append(family_bar(
+                minute,
+                open_price=base,
+                high=base + 0.04,
+                low=base - 0.12,
+                close=base - 0.08,
+            ))
+        bars.extend([
+            family_bar(
+                8,
+                open_price=100.02,
+                high=100.45,
+                low=99.98,
+                close=100.34,
+            ),
+            family_bar(
+                9,
+                open_price=100.34,
+                high=100.38,
+                low=99.45,
+                close=99.50,
+                volume=1_500,
+            ),
+        ])
+
+        context = self.calculate(bars)
+
+        self.assertEqual(context["trend"]["side"], "puts")
+        self.assertEqual(context["candidate"]["side"], "puts")
+        self.assertTrue(context["candidate"]["completed_close_confirmed"])
+
+    def test_chop_kill_switch_suppresses_reclaim(self) -> None:
+        bars = self.bullish_cycle()
+        for index, bar in enumerate(bars[2:8], start=2):
+            bar["close"] = 100.25 + (0.20 if index % 2 else -0.20)
+        context = self.calculate(bars)
+
+        self.assertTrue(context["kill_switch"]["active"])
+        self.assertIsNone(context["candidate"])
+
+    def test_duplicate_cycle_has_stable_event_id_and_expires(self) -> None:
+        bars = self.bullish_cycle()
+        fresh = self.calculate(bars, 10)
+        duplicate = self.calculate([*bars, dict(bars[-1])], 10)
+        expired = self.calculate(bars, 16)
+
+        self.assertEqual(duplicate, fresh)
+        self.assertEqual(
+            duplicate["candidate"]["event_id"],
+            fresh["candidate"]["event_id"],
+        )
+        self.assertFalse(expired["candidate"]["fresh"])
+
+    def test_incomplete_reclaim_bar_is_ignored(self) -> None:
+        bars = self.bullish_cycle()
+        bars[-1]["complete"] = False
+        context = self.calculate(bars)
+
+        self.assertIsNone(context["candidate"])
+
+    def test_future_reclaim_bar_is_not_visible_before_its_close(self) -> None:
+        bars = self.bullish_cycle()
+        before_close = self.calculate(bars, 9)
+        after_close = self.calculate(bars, 10)
+
+        self.assertIsNone(before_close["candidate"])
+        self.assertEqual(after_close["candidate"]["side"], "calls")
+
+    def test_new_pullback_cycle_creates_a_new_event_after_cooldown(self) -> None:
+        first_bars = self.bullish_cycle()
+        first = self.calculate(first_bars, 10)
+        later = [
+            family_bar(10, open_price=101.0, high=101.2, low=100.95, close=101.15),
+            family_bar(11, open_price=101.15, high=101.3, low=101.1, close=101.25),
+            family_bar(12, open_price=101.25, high=101.4, low=101.2, close=101.35),
+            family_bar(13, open_price=101.35, high=100.82, low=100.55, close=100.70),
+            family_bar(14, open_price=100.70, high=101.55, low=100.65, close=101.50),
+        ]
+        second = calculate_vwap_trend_context(
+            [*first_bars, *later],
+            now=datetime(2026, 7, 29, 9, 45, tzinfo=ET).timestamp(),
+            previous_context=first,
+        )
+
+        self.assertIsNotNone(second["candidate"])
+        self.assertNotEqual(
+            second["candidate"]["event_id"], first["candidate"]["event_id"]
+        )
+
+    def test_repeat_cycle_inside_cooldown_is_recorded_but_suppressed(self) -> None:
+        first_bars = self.bullish_cycle()
+        later = [
+            family_bar(10, open_price=101.0, high=101.2, low=100.95, close=101.15),
+            family_bar(11, open_price=101.15, high=101.3, low=101.1, close=101.25),
+            family_bar(12, open_price=100.75, high=100.82, low=100.5, close=100.65),
+            family_bar(13, open_price=100.65, high=101.45, low=100.6, close=101.4),
+        ]
+        context = self.calculate([*first_bars, *later], 14)
+
+        self.assertEqual(context["status"], "REENTRY_COOLDOWN")
+        self.assertIsNone(context["candidate"])
+        self.assertEqual(context["suppressed_candidate"]["side"], "calls")
+
+    def test_batch_and_incremental_calculations_match(self) -> None:
+        bars = self.bullish_cycle()
+        first = self.calculate(bars[:-1], 9)
+        batch = self.calculate(bars, 10)
+        incremental = calculate_vwap_trend_context(
+            bars,
+            now=datetime(2026, 7, 29, 9, 40, tzinfo=ET).timestamp(),
+            previous_context=first,
+        )
+
+        self.assertEqual(incremental, batch)
 
 
 class TrendlineStructureTest(unittest.TestCase):
@@ -2598,6 +2926,40 @@ class ContinuationStateTest(unittest.TestCase):
         self.assertIn(
             "trendline_context",
             enabled["decision_telemetry"],
+        )
+
+    def test_shadow_strategy_families_do_not_change_signal_authority(self) -> None:
+        disabled = self.build(strategy_families={
+            "enabled": False,
+            "mode": "shadow",
+        })
+        enabled = self.build(strategy_families={
+            "enabled": True,
+            "mode": "shadow",
+        })
+
+        authority_fields = (
+            "state",
+            "signal_phase",
+            "favoring",
+            "strategy",
+            "confidence_score",
+            "call_setup",
+            "put_setup",
+            "lifecycle",
+            "blockers",
+            "confirmations",
+        )
+        for field in authority_fields:
+            self.assertEqual(enabled.get(field), disabled.get(field))
+        self.assertFalse(enabled["strategy_family_context"]["entry_authority"])
+        self.assertEqual(
+            enabled["decision_telemetry"]["strategy_family_context"]["mode"],
+            "shadow",
+        )
+        self.assertEqual(
+            enabled["strategy_family_context"]["shared_risk"]["trim_ladder_pct"],
+            [25.0, 45.0, 75.0],
         )
 
     def test_zerogex_stand_down_does_not_block_confirmed_continuation(self) -> None:

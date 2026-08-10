@@ -479,6 +479,19 @@ class TradePrefetchHelpersTest(unittest.TestCase):
                         "event_id": "stable-event",
                     },
                 },
+                "strategy_family_context": {
+                    "version": "strategy-family-lab-v1",
+                    "mode": "shadow",
+                    "entry_authority": False,
+                    "orb_index": {
+                        "candidate": {"event_id": "orb-index:test"},
+                    },
+                    "vwap_trend": {
+                        "candidate": {"event_id": "vwap-trend:test"},
+                    },
+                    "shared_risk": {"trim_ladder_pct": [25, 45, 75]},
+                    "raw_bar_history": [{"close": 741.25}] * 100,
+                },
                 "zerogex_shadow": {
                     "fresh": True,
                     "advanced_signals": {"raw": "x" * 20_000},
@@ -513,6 +526,11 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             "stable-event",
         )
         self.assertNotIn("raw_bar_history", record["trendline_context"])
+        self.assertEqual(
+            record["strategy_family_context"]["orb_index"]["candidate"]["event_id"],
+            "orb-index:test",
+        )
+        self.assertNotIn("raw_bar_history", record["strategy_family_context"])
         self.assertIn("advanced_signals", signal["zerogex_shadow"])
 
     def test_runtime_ibkr_policy_reconnects_on_admin_config_change(self) -> None:

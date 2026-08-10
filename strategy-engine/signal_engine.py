@@ -48,6 +48,44 @@ DEFAULT_TRENDLINE_STRUCTURE_CONFIG = {
     "slope_multiplier": 1.0,
     "retest_window_bars": 5,
 }
+DEFAULT_STRATEGY_FAMILIES_CONFIG = {
+    "enabled": True,
+    "mode": "shadow",
+    "orb_index": {
+        "enabled": True,
+        "trigger_bar_count": 2,
+        "freshness_seconds": 300,
+    },
+    "vwap_trend": {
+        "enabled": True,
+        "freshness_seconds": 300,
+        "slope_lookback_bars": 5,
+        "minimum_slope_bps": 1.0,
+        "hold_bars": 3,
+        "pullback_band_pct": 0.15,
+        "chop_lookback_bars": 10,
+        "max_vwap_crosses": 2,
+        "reentry_cooldown_seconds": 300,
+    },
+}
+STRATEGY_FAMILY_RISK_PLAN = {
+    "premium_stop_pct": 35.0,
+    "trim_ladder_pct": [25.0, 45.0, 75.0],
+    "source_entry_cutoff_minute_et": 15 * 60 + 25,
+    "loss_tags": [
+        "spread_tax",
+        "wrong_direction",
+        "late_entry_theta",
+        "whipsaw_stop",
+        "unclassified",
+    ],
+    "consecutive_loss_bench": {
+        "losses": 3,
+        "sessions": 5,
+        "status": "future_activation_gate",
+    },
+    "family_circuit_breaker": {"status": "future_activation_gate"},
+}
 
 
 def _session_policy(
@@ -356,6 +394,22 @@ def _compact_entry_structure_context(payload: Any) -> dict[str, Any]:
     )
 
 
+def _compact_strategy_family_context(payload: Any) -> dict[str, Any]:
+    return _journal_fields(
+        payload,
+        (
+            "version",
+            "enabled",
+            "mode",
+            "entry_authority",
+            "orb_index",
+            "vwap_trend",
+            "shared_risk",
+            "observation",
+        ),
+    )
+
+
 def compact_signal_for_journal(signal: dict[str, Any]) -> dict[str, Any]:
     """Keep replay fields while removing repeated ZeroGEX endpoint payloads."""
     compact = {
@@ -363,6 +417,7 @@ def compact_signal_for_journal(signal: dict[str, Any]) -> dict[str, Any]:
         for key, value in signal.items()
         if key not in {
             "entry_structure_context",
+            "strategy_family_context",
             "trendline_context",
             "zerogex_shadow",
             "zerogex_decision",
@@ -375,6 +430,10 @@ def compact_signal_for_journal(signal: dict[str, Any]) -> dict[str, Any]:
     if "trendline_context" in signal:
         compact["trendline_context"] = _compact_trendline_context(
             signal.get("trendline_context")
+        )
+    if "strategy_family_context" in signal:
+        compact["strategy_family_context"] = _compact_strategy_family_context(
+            signal.get("strategy_family_context")
         )
     if "zerogex_shadow" in signal:
         compact["zerogex_shadow"] = _compact_zerogex_context(
@@ -664,6 +723,621 @@ def calculate_entry_structure_context(
             "timeframes": timeframes,
         },
         "observation": observation,
+    }
+
+
+def validate_strategy_families_config(
+    config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if config is not None and not isinstance(config, dict):
+        raise ValueError("strategy_families must be an object")
+    source = config or {}
+    for family in ("orb_index", "vwap_trend"):
+        if family in source and not isinstance(source[family], dict):
+            raise ValueError(f"strategy_families {family} must be an object")
+    resolved = {
+        "enabled": source.get(
+            "enabled", DEFAULT_STRATEGY_FAMILIES_CONFIG["enabled"]
+        ),
+        "mode": source.get("mode", DEFAULT_STRATEGY_FAMILIES_CONFIG["mode"]),
+        "orb_index": {
+            **DEFAULT_STRATEGY_FAMILIES_CONFIG["orb_index"],
+            **(source.get("orb_index") or {}),
+        },
+        "vwap_trend": {
+            **DEFAULT_STRATEGY_FAMILIES_CONFIG["vwap_trend"],
+            **(source.get("vwap_trend") or {}),
+        },
+    }
+    if not isinstance(resolved["enabled"], bool):
+        raise ValueError("strategy_families enabled must be true or false")
+    if resolved["mode"] != "shadow":
+        raise ValueError("strategy_families mode must be shadow")
+    for family in ("orb_index", "vwap_trend"):
+        if not isinstance(resolved[family]["enabled"], bool):
+            raise ValueError(f"strategy_families {family} enabled must be true or false")
+    orb = resolved["orb_index"]
+    if (
+        isinstance(orb["trigger_bar_count"], bool)
+        or not isinstance(orb["trigger_bar_count"], int)
+        or not 1 <= orb["trigger_bar_count"] <= 5
+    ):
+        raise ValueError("ORB trigger bar count must be between 1 and 5")
+    if (
+        isinstance(orb["freshness_seconds"], bool)
+        or not _number(orb["freshness_seconds"])
+        or not 60 <= orb["freshness_seconds"] <= 900
+    ):
+        raise ValueError("ORB freshness must be between 60 and 900 seconds")
+    vwap = resolved["vwap_trend"]
+    integer_ranges = {
+        "slope_lookback_bars": (2, 30),
+        "hold_bars": (2, 10),
+        "chop_lookback_bars": (5, 30),
+        "max_vwap_crosses": (0, 10),
+    }
+    for field, (minimum, maximum) in integer_ranges.items():
+        value = vwap[field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not minimum <= value <= maximum
+        ):
+            raise ValueError(
+                f"VWAP trend {field} must be between {minimum} and {maximum}"
+            )
+    numeric_ranges = {
+        "freshness_seconds": (60, 900),
+        "minimum_slope_bps": (0.1, 25),
+        "pullback_band_pct": (0.01, 1.0),
+        "reentry_cooldown_seconds": (60, 3600),
+    }
+    for field, (minimum, maximum) in numeric_ranges.items():
+        value = vwap[field]
+        if (
+            isinstance(value, bool)
+            or not _number(value)
+            or not minimum <= float(value) <= maximum
+        ):
+            raise ValueError(
+                f"VWAP trend {field} must be between {minimum} and {maximum}"
+            )
+        vwap[field] = float(value)
+    orb["freshness_seconds"] = float(orb["freshness_seconds"])
+    return resolved
+
+
+def _strategy_family_risk_plan(planned_contracts: int = 1) -> dict[str, Any]:
+    quantity = max(1, min(5, int(planned_contracts)))
+    if quantity == 1:
+        ladder_execution = (
+            "No partial trim is possible; each rung tightens protection and the "
+            "single contract remains the tail."
+        )
+    elif quantity == 2:
+        ladder_execution = "Trim one contract at the first rung; trail one tail."
+    elif quantity == 3:
+        ladder_execution = "Trim one contract at each of the first two rungs; trail one tail."
+    else:
+        ladder_execution = (
+            "Trim one contract at each rung; trail all remaining contracts as the tail."
+        )
+    return {
+        **copy.deepcopy(STRATEGY_FAMILY_RISK_PLAN),
+        "planned_contracts": quantity,
+        "quantity_aware_ladder": ladder_execution,
+        "effective_entry_cutoff_minute_et": 15 * 60,
+        "effective_entry_cutoff_label": "3:00 PM ET",
+        "source_entry_cutoff_label": "3:25 PM ET",
+    }
+
+
+def _family_session_bars(
+    completed_bars: list[dict[str, Any]],
+    now: float | None,
+) -> tuple[list[dict[str, Any]], float]:
+    explicitly_completed = [
+        bar
+        for bar in completed_bars
+        if isinstance(bar, dict)
+        and not any(
+            bar.get(flag) is False
+            for flag in ("complete", "completed", "is_complete")
+            if flag in bar
+        )
+    ]
+    bars = _normalized_completed_structure_bars(explicitly_completed)
+    current = (
+        float(now)
+        if _number(now)
+        else float(bars[-1]["time"]) + 60
+        if bars
+        else time.time()
+    )
+    market_date = datetime.fromtimestamp(current, ET).date()
+    session = [
+        bar
+        for bar in bars
+        if datetime.fromtimestamp(float(bar["time"]), ET).date() == market_date
+        and float(bar["time"]) + 60 <= current
+        and REGULAR_OPEN_MINUTE_ET
+        <= (
+            datetime.fromtimestamp(float(bar["time"]), ET).hour * 60
+            + datetime.fromtimestamp(float(bar["time"]), ET).minute
+        )
+        < REGULAR_CLOSE_MINUTE_ET
+    ]
+    return session, current
+
+
+def _orb_gex_alignment(
+    side: str,
+    close: float,
+    gex_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    context = gex_context or {}
+
+    def level(name: str) -> float | None:
+        value = context.get(name)
+        if isinstance(value, dict):
+            value = value.get("strike")
+        return float(value) if _number(value) else None
+
+    call_wall = level("call_wall")
+    put_wall = level("put_wall")
+    gamma_flip = level("gamma_flip")
+    if context.get("available") is not True:
+        alignment = "UNAVAILABLE"
+    elif side == "calls" and call_wall is not None and close >= call_wall:
+        alignment = "WALL_CLEARED"
+    elif side == "puts" and put_wall is not None and close <= put_wall:
+        alignment = "WALL_CLEARED"
+    elif side == "calls" and call_wall is not None and close < call_wall:
+        alignment = "HEADWIND"
+    elif side == "puts" and put_wall is not None and close > put_wall:
+        alignment = "HEADWIND"
+    elif gamma_flip is not None and (
+        (side == "calls" and close >= gamma_flip)
+        or (side == "puts" and close <= gamma_flip)
+    ):
+        alignment = "ALIGNED"
+    else:
+        alignment = "NEUTRAL"
+    return {
+        "available": context.get("available") is True,
+        "entry_authority": False,
+        "alignment": alignment,
+        "gamma_flip": gamma_flip,
+        "call_wall": call_wall,
+        "put_wall": put_wall,
+    }
+
+
+def calculate_orb_index_context(
+    completed_bars: list[dict[str, Any]],
+    *,
+    now: float | None = None,
+    gex_context: dict[str, Any] | None = None,
+    trigger_bar_count: int = 2,
+    freshness_seconds: float = 300,
+    planned_contracts: int = 1,
+) -> dict[str, Any]:
+    """Build a completed-close 5-minute opening-range candidate."""
+    bars, current = _family_session_bars(completed_bars, now)
+    market_date = datetime.fromtimestamp(current, ET).strftime("%Y-%m-%d")
+    by_minute = {}
+    for bar in bars:
+        stamp = datetime.fromtimestamp(float(bar["time"]), ET)
+        by_minute[stamp.hour * 60 + stamp.minute] = bar
+    opening = [by_minute.get(REGULAR_OPEN_MINUTE_ET + offset) for offset in range(5)]
+    risk = _strategy_family_risk_plan(planned_contracts)
+    base = {
+        "version": "orb-index-v1",
+        "strategy": "ORB_INDEX",
+        "mode": "shadow",
+        "entry_authority": False,
+        "market_date": market_date,
+        "opening_range_minutes": 5,
+        "trigger_timeframe_minutes": 1,
+        "trigger_bar_count": trigger_bar_count,
+        "freshness_seconds": float(freshness_seconds),
+        "instrument": "SPY 0DTE or nearest liquid ATM / one-strike OTM option",
+        "risk_plan": risk,
+    }
+    if any(bar is None for bar in opening):
+        return {
+            **base,
+            "available": False,
+            "reason": "opening_range_incomplete",
+            "status": "BUILDING_RANGE",
+            "opening_range": None,
+            "candidate": None,
+            "gex_alignment": {"available": False, "entry_authority": False},
+            "observation": "SHADOW: ORB opening range is still building",
+        }
+    range_high = max(float(bar["high"]) for bar in opening if bar)
+    range_low = min(float(bar["low"]) for bar in opening if bar)
+    range_confirmed_at = max(float(bar["time"]) for bar in opening if bar) + 60
+    candidate = None
+    prior_close = float(opening[-1]["close"])
+    trigger_bars = []
+    for offset in range(trigger_bar_count):
+        bar = by_minute.get(REGULAR_OPEN_MINUTE_ET + 5 + offset)
+        if bar is None:
+            continue
+        trigger_bars.append(bar)
+        close = float(bar["close"])
+        side = (
+            "calls"
+            if close > range_high and prior_close <= range_high
+            else "puts"
+            if close < range_low and prior_close >= range_low
+            else None
+        )
+        if side:
+            confirmed_at = float(bar["time"]) + 60
+            age = max(0.0, current - confirmed_at)
+            candidate = {
+                "side": side,
+                "bar_time": float(bar["time"]),
+                "confirmed_at": confirmed_at,
+                "close": close,
+                "boundary": range_high if side == "calls" else range_low,
+                "completed_close_confirmed": True,
+                "fresh": age <= float(freshness_seconds),
+                "age_seconds": round(age, 1),
+                "event_id": (
+                    f"orb-index:{market_date}:{side}:{int(confirmed_at)}"
+                ),
+            }
+            break
+        prior_close = close
+    if candidate:
+        status = "FRESH_BREAK" if candidate["fresh"] else "EXPIRED_BREAK"
+        observation = (
+            f"SHADOW: {candidate['side']} ORB close confirmed"
+            + (" inside the freshness window" if candidate["fresh"] else " but freshness expired")
+        )
+        gex_alignment = _orb_gex_alignment(
+            str(candidate["side"]), float(candidate["close"]), gex_context
+        )
+    else:
+        last_window_start = REGULAR_OPEN_MINUTE_ET + 5 + trigger_bar_count - 1
+        stamp = datetime.fromtimestamp(current, ET)
+        minute_now = stamp.hour * 60 + stamp.minute
+        status = "WINDOW_CLOSED" if minute_now > last_window_start else "WATCHING"
+        observation = (
+            "SHADOW: ORB confirmation window closed without a completed-close break"
+            if status == "WINDOW_CLOSED"
+            else "SHADOW: ORB is waiting for a completed-close break"
+        )
+        gex_alignment = {"available": False, "entry_authority": False}
+    return {
+        **base,
+        "available": True,
+        "reason": None,
+        "status": status,
+        "opening_range": {
+            "high": round(range_high, 4),
+            "low": round(range_low, 4),
+            "confirmed_at": range_confirmed_at,
+            "bar_count": 5,
+        },
+        "confirmation_bars_seen": len(trigger_bars),
+        "candidate": candidate,
+        "gex_alignment": gex_alignment,
+        "observation": observation,
+    }
+
+
+def _session_vwap_series(
+    bars: list[dict[str, Any]],
+) -> list[float | None]:
+    cumulative_volume = 0.0
+    cumulative_value = 0.0
+    values = []
+    for bar in bars:
+        volume = float(bar.get("volume") or 0)
+        if volume > 0:
+            typical = (
+                float(bar["high"]) + float(bar["low"]) + float(bar["close"])
+            ) / 3
+            cumulative_value += typical * volume
+            cumulative_volume += volume
+        values.append(
+            round(cumulative_value / cumulative_volume, 6)
+            if cumulative_volume > 0
+            else None
+        )
+    return values
+
+
+def calculate_vwap_trend_context(
+    completed_bars: list[dict[str, Any]],
+    *,
+    now: float | None = None,
+    freshness_seconds: float = 300,
+    slope_lookback_bars: int = 5,
+    minimum_slope_bps: float = 1.0,
+    hold_bars: int = 3,
+    pullback_band_pct: float = 0.15,
+    chop_lookback_bars: int = 10,
+    max_vwap_crosses: int = 2,
+    previous_context: dict[str, Any] | None = None,
+    reentry_cooldown_seconds: float = 300,
+    planned_contracts: int = 1,
+) -> dict[str, Any]:
+    """Find a completed-bar VWAP trend pullback and reclaim cycle."""
+    bars, current = _family_session_bars(completed_bars, now)
+    risk = _strategy_family_risk_plan(planned_contracts)
+    base = {
+        "version": "vwap-trend-v1",
+        "strategy": "VWAP_TREND",
+        "mode": "shadow",
+        "entry_authority": False,
+        "freshness_seconds": float(freshness_seconds),
+        "slope_lookback_bars": slope_lookback_bars,
+        "minimum_slope_bps": float(minimum_slope_bps),
+        "hold_bars": hold_bars,
+        "pullback_band_pct": float(pullback_band_pct),
+        "risk_plan": risk,
+    }
+    minimum_bars = max(slope_lookback_bars + 2, hold_bars + 2)
+    if len(bars) < minimum_bars:
+        return {
+            **base,
+            "available": False,
+            "reason": "insufficient_completed_bars",
+            "status": "BUILDING_CONTEXT",
+            "trend": None,
+            "kill_switch": {"active": False, "reason": None},
+            "candidate": None,
+            "observation": "SHADOW: VWAP trend needs more completed bars",
+        }
+    vwaps = _session_vwap_series(bars)
+    if any(value is None for value in vwaps):
+        return {
+            **base,
+            "available": False,
+            "reason": "missing_session_volume",
+            "status": "UNAVAILABLE",
+            "trend": None,
+            "kill_switch": {"active": False, "reason": None},
+            "candidate": None,
+            "observation": "SHADOW: VWAP trend is unavailable without volume",
+        }
+
+    latest_index = len(bars) - 1
+    latest_slope_start = max(0, latest_index - slope_lookback_bars)
+    latest_slope = (
+        (float(vwaps[latest_index]) / float(vwaps[latest_slope_start]) - 1) * 10_000
+    )
+    latest_side = (
+        "calls"
+        if latest_slope >= float(minimum_slope_bps)
+        else "puts"
+        if latest_slope <= -float(minimum_slope_bps)
+        else None
+    )
+
+    signs = []
+    for index in range(max(0, len(bars) - chop_lookback_bars), len(bars)):
+        difference = float(bars[index]["close"]) - float(vwaps[index])
+        signs.append(1 if difference > 0 else -1 if difference < 0 else 0)
+    non_zero_signs = [sign for sign in signs if sign]
+    crosses = sum(
+        int(current_sign != prior_sign)
+        for prior_sign, current_sign in zip(non_zero_signs, non_zero_signs[1:])
+    )
+    kill_switch = {
+        "active": crosses > max_vwap_crosses,
+        "reason": "repeated_vwap_crosses" if crosses > max_vwap_crosses else None,
+        "crosses": crosses,
+        "lookback_bars": chop_lookback_bars,
+        "maximum_crosses": max_vwap_crosses,
+    }
+
+    events: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    start_index = max(slope_lookback_bars, hold_bars) + 1
+    band_ratio = float(pullback_band_pct) / 100
+    for reclaim_index in range(start_index, len(bars)):
+        pullback_index = reclaim_index - 1
+        slope_start = reclaim_index - slope_lookback_bars
+        if slope_start < 0:
+            continue
+        slope_bps = (
+            (float(vwaps[reclaim_index]) / float(vwaps[slope_start]) - 1)
+            * 10_000
+        )
+        side = (
+            "calls"
+            if slope_bps >= float(minimum_slope_bps)
+            else "puts"
+            if slope_bps <= -float(minimum_slope_bps)
+            else None
+        )
+        if not side:
+            continue
+        hold_start = pullback_index - hold_bars
+        if hold_start < 0:
+            continue
+        held = all(
+            (
+                float(bars[index]["close"]) > float(vwaps[index])
+                if side == "calls"
+                else float(bars[index]["close"]) < float(vwaps[index])
+            )
+            for index in range(hold_start, pullback_index)
+        )
+        if not held:
+            continue
+        pullback = bars[pullback_index]
+        reclaim = bars[reclaim_index]
+        pullback_vwap = float(vwaps[pullback_index])
+        reclaim_vwap = float(vwaps[reclaim_index])
+        if side == "calls":
+            touched = (
+                float(pullback["low"]) <= pullback_vwap * (1 + band_ratio)
+                and float(pullback["close"]) >= pullback_vwap * (1 - band_ratio)
+                and float(pullback["close"]) < float(pullback["open"])
+            )
+            reclaimed = (
+                float(reclaim["close"]) > reclaim_vwap
+                and float(reclaim["close"]) > float(pullback["high"])
+                and float(reclaim["close"]) > float(reclaim["open"])
+            )
+        else:
+            touched = (
+                float(pullback["high"]) >= pullback_vwap * (1 - band_ratio)
+                and float(pullback["close"]) <= pullback_vwap * (1 + band_ratio)
+                and float(pullback["close"]) > float(pullback["open"])
+            )
+            reclaimed = (
+                float(reclaim["close"]) < reclaim_vwap
+                and float(reclaim["close"]) < float(pullback["low"])
+                and float(reclaim["close"]) < float(reclaim["open"])
+            )
+        if not (touched and reclaimed):
+            continue
+        confirmed_at = float(reclaim["time"]) + 60
+        event_id = (
+            f"vwap-trend:{datetime.fromtimestamp(confirmed_at, ET).strftime('%Y-%m-%d')}:"
+            f"{side}:{int(confirmed_at)}"
+        )
+        age = max(0.0, current - confirmed_at)
+        event = {
+            "side": side,
+            "pullback_bar_time": float(pullback["time"]),
+            "bar_time": float(reclaim["time"]),
+            "confirmed_at": confirmed_at,
+            "close": float(reclaim["close"]),
+            "vwap": round(reclaim_vwap, 4),
+            "fresh": age <= float(freshness_seconds),
+            "age_seconds": round(age, 1),
+            "completed_close_confirmed": True,
+            "event_id": event_id,
+        }
+        trend_at_event = {
+            "side": side,
+            "slope_bps": round(slope_bps, 3),
+            "held_bars": hold_bars,
+            "vwap": round(reclaim_vwap, 4),
+        }
+        events.append((event, trend_at_event))
+
+    event, trend_at_event = events[-1] if events else (None, None)
+    cooldown = bool(
+        len(events) >= 2
+        and float(events[-1][0]["confirmed_at"])
+        - float(events[-2][0]["confirmed_at"])
+        < float(reentry_cooldown_seconds)
+    )
+    suppressed_candidate = None
+    if kill_switch["active"]:
+        suppressed_candidate = event
+        event = None
+        status = "CHOP_SUPPRESSED"
+        observation = "SHADOW: VWAP trend entries are suppressed by repeated crosses"
+    elif cooldown:
+        suppressed_candidate = event
+        event = None
+        status = "REENTRY_COOLDOWN"
+        observation = "SHADOW: a new VWAP reclaim is inside the family cooldown"
+    elif event:
+        status = "FRESH_RECLAIM" if event["fresh"] else "EXPIRED_RECLAIM"
+        observation = (
+            f"SHADOW: {event['side']} VWAP pullback and reclaim confirmed"
+            + (" inside the freshness window" if event["fresh"] else " but freshness expired")
+        )
+    elif latest_side:
+        status = "WAITING_PULLBACK_RECLAIM"
+        observation = f"SHADOW: {latest_side} VWAP trend is waiting for a fresh reclaim"
+    else:
+        status = "NO_TREND"
+        observation = "SHADOW: VWAP slope is flat or below the minimum"
+    trend = trend_at_event or {
+        "side": latest_side,
+        "slope_bps": round(latest_slope, 3),
+        "held_bars": None,
+        "vwap": round(float(vwaps[-1]), 4),
+    }
+    return {
+        **base,
+        "available": True,
+        "reason": None,
+        "status": status,
+        "trend": trend,
+        "kill_switch": kill_switch,
+        "candidate": event,
+        "suppressed_candidate": suppressed_candidate,
+        "observation": observation,
+    }
+
+
+def calculate_strategy_family_context(
+    completed_bars: list[dict[str, Any]],
+    *,
+    now: float,
+    gex_context: dict[str, Any] | None,
+    config: dict[str, Any],
+    previous_context: dict[str, Any] | None,
+    planned_contracts: int,
+) -> dict[str, Any]:
+    risk = _strategy_family_risk_plan(planned_contracts)
+    if not config["enabled"]:
+        return {
+            "version": "strategy-family-lab-v1",
+            "enabled": False,
+            "mode": "shadow",
+            "entry_authority": False,
+            "orb_index": None,
+            "vwap_trend": None,
+            "shared_risk": risk,
+            "observation": "SHADOW: experimental strategy families are disabled",
+        }
+    orb_config = config["orb_index"]
+    vwap_config = config["vwap_trend"]
+    orb = (
+        calculate_orb_index_context(
+            completed_bars,
+            now=now,
+            gex_context=gex_context,
+            trigger_bar_count=orb_config["trigger_bar_count"],
+            freshness_seconds=orb_config["freshness_seconds"],
+            planned_contracts=planned_contracts,
+        )
+        if orb_config["enabled"]
+        else None
+    )
+    vwap = (
+        calculate_vwap_trend_context(
+            completed_bars,
+            now=now,
+            previous_context=(previous_context or {}).get("vwap_trend"),
+            planned_contracts=planned_contracts,
+            **{
+                key: value
+                for key, value in vwap_config.items()
+                if key != "enabled"
+            },
+        )
+        if vwap_config["enabled"]
+        else None
+    )
+    observations = [
+        item.get("observation")
+        for item in (orb, vwap)
+        if isinstance(item, dict) and item.get("observation")
+    ]
+    return {
+        "version": "strategy-family-lab-v1",
+        "enabled": True,
+        "mode": "shadow",
+        "entry_authority": False,
+        "orb_index": orb,
+        "vwap_trend": vwap,
+        "shared_risk": risk,
+        "observation": " · ".join(observations),
     }
 
 
@@ -3524,6 +4198,9 @@ def _dedupe_messages(result: dict[str, Any]) -> dict[str, Any]:
         "entry_structure_context": _compact_entry_structure_context(
             result.get("entry_structure_context")
         ),
+        "strategy_family_context": _compact_strategy_family_context(
+            result.get("strategy_family_context")
+        ),
         "trendline_context": _compact_trendline_context(
             result.get("trendline_context")
         ),
@@ -4139,10 +4816,14 @@ def build_signal(
     option_max_spread_pct: float = MAX_OPTION_SPREAD_PCT,
     session_policy: dict[str, Any] | None = None,
     trendline_structure: dict[str, Any] | None = None,
+    strategy_families: dict[str, Any] | None = None,
     cross_market_confirmation: str = "required",
 ) -> dict[str, Any]:
     trendline_config = validate_trendline_structure_config(
         trendline_structure
+    )
+    strategy_families_config = validate_strategy_families_config(
+        strategy_families
     )
     if (
         isinstance(paper_exit_target, bool)
@@ -4269,6 +4950,14 @@ def build_signal(
         "side": None,
     }
     gex_ctx = _gex_context(gex, heatmap)
+    strategy_family_context = calculate_strategy_family_context(
+        completed,
+        now=now,
+        gex_context=gex_ctx,
+        config=strategy_families_config,
+        previous_context=previous_signal.get("strategy_family_context"),
+        planned_contracts=option_preferred_contracts,
+    )
     entry_structure_context["gex_range"] = calculate_gex_range_context(
         spot,
         atr_5m=spy.get("atr_5m"),
@@ -4360,6 +5049,7 @@ def build_signal(
         "warnings": [],
         "confirmations": [],
         "entry_structure_context": entry_structure_context,
+        "strategy_family_context": strategy_family_context,
         "trendline_context": trendline_context,
         "gex": gex_ctx,
         "zerogex_shadow": zerogex_ctx,
@@ -4388,6 +5078,7 @@ def build_signal(
         )
         if preserved is not None:
             preserved["entry_structure_context"] = entry_structure_context
+            preserved["strategy_family_context"] = strategy_family_context
             preserved["trendline_context"] = trendline_context
             return _dedupe_messages(preserved)
         result["blockers"].append(blocker)
@@ -4402,6 +5093,7 @@ def build_signal(
         )
         if preserved is not None:
             preserved["entry_structure_context"] = entry_structure_context
+            preserved["strategy_family_context"] = strategy_family_context
             preserved["trendline_context"] = trendline_context
             return _dedupe_messages(preserved)
         result["blockers"].append(blocker)
@@ -4422,6 +5114,7 @@ def build_signal(
             gex=gex_ctx,
             zerogex_shadow=zerogex_ctx,
             entry_structure_context=entry_structure_context,
+            strategy_family_context=strategy_family_context,
             trendline_context=trendline_context,
             execution_enabled=False,
             engine_version=ENGINE_VERSION,
