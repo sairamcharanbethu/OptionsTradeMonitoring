@@ -196,6 +196,7 @@ export default function StrategyDeskPage() {
   const vwapTrend = family.vwap_trend || {};
   const vwapCandidate = vwapTrend.candidate || vwapTrend.suppressed_candidate || {};
   const sharedRisk = family.shared_risk || orb.risk_plan || vwapTrend.risk_plan || {};
+  const familyIsPrimary = family.entry_authority === true && family.mode === 'primary';
   const lifecycle = signal.lifecycle || {};
   const side = signal.favoring === 'calls' ? 'CALL' : signal.favoring === 'puts' ? 'PUT' : 'WAIT';
   const isActionable = lifecycle.entry_allowed === true;
@@ -273,9 +274,11 @@ export default function StrategyDeskPage() {
             <div className="flex flex-wrap items-center gap-2">
               <Radar className="h-4 w-4 text-violet-500" />
               <h2 id="family-lab-title" className="text-sm font-semibold">Strategy family lab</h2>
-              <Badge variant="secondary">No entry authority</Badge>
+              <Badge variant="secondary">{familyIsPrimary ? 'Autonomous authority' : 'No entry authority'}</Badge>
             </div>
-            <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">ORB_INDEX and VWAP_TREND are calculated from completed SPY bars and recorded for forward paper evaluation. Their candidates cannot activate, block, or rewrite the live strategy.</p>
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">{familyIsPrimary
+              ? 'Qualified ORB_INDEX and VWAP_TREND events enter the authoritative lifecycle for independent paper processing and per-user guarded live execution.'
+              : 'ORB_INDEX and VWAP_TREND are calculated from completed SPY bars and recorded for forward paper evaluation. Their candidates cannot activate, block, or rewrite the live strategy.'}</p>
           </div>
           <Button asChild variant="ghost" size="sm" className="w-fit gap-1.5 text-xs">
             <Link to="/strategy-guide">Read exact rules <ArrowRight className="h-3.5 w-3.5" /></Link>
@@ -294,7 +297,7 @@ export default function StrategyDeskPage() {
               { label: 'Freshness', value: orbCandidate.fresh == null ? '—' : orbCandidate.fresh ? `${Number(orbCandidate.age_seconds || 0).toFixed(0)}s · fresh` : 'Expired' },
               { label: 'GEX alignment', value: humanize(orb.gex_alignment?.alignment, 'Unavailable') },
               { label: 'Confirmation', value: `${Number(orb.confirmation_bars_seen || 0)}/${Number(orb.trigger_bar_count || 2)} bars` },
-              { label: 'Entry authority', value: 'None' }
+              { label: 'Entry authority', value: familyIsPrimary ? 'Autonomous' : 'None' }
             ]}
             tone={orbCandidate.side === 'calls' ? 'positive' : orbCandidate.side === 'puts' ? 'negative' : orb.status === 'EXPIRED_BREAK' ? 'warning' : 'neutral'}
           />
@@ -310,7 +313,7 @@ export default function StrategyDeskPage() {
               { label: 'Freshness', value: vwapCandidate.fresh == null ? '—' : vwapCandidate.fresh ? `${Number(vwapCandidate.age_seconds || 0).toFixed(0)}s · fresh` : 'Expired' },
               { label: 'VWAP crosses', value: vwapTrend.kill_switch?.crosses == null ? '—' : `${vwapTrend.kill_switch.crosses}/${vwapTrend.kill_switch.maximum_crosses}` },
               { label: 'Regime switch', value: vwapTrend.kill_switch?.active ? 'Suppressed' : 'Clear' },
-              { label: 'Entry authority', value: 'None' }
+              { label: 'Entry authority', value: familyIsPrimary ? 'Autonomous' : 'None' }
             ]}
             tone={vwapTrend.kill_switch?.active || vwapTrend.status === 'REENTRY_COOLDOWN' ? 'warning' : vwapCandidate.side === 'calls' ? 'positive' : vwapCandidate.side === 'puts' ? 'negative' : 'neutral'}
           />
@@ -328,9 +331,9 @@ export default function StrategyDeskPage() {
             <div className="flex items-center gap-2">
               <Clock3 className="h-4 w-4 text-muted-foreground" />
               <h2 id="family-history-title" className="text-sm font-semibold">Family candidate journal</h2>
-              <Badge variant="outline" className="text-[9px] uppercase tracking-wider">Shadow evidence</Badge>
+              <Badge variant="outline" className="text-[9px] uppercase tracking-wider">Candidate evidence</Badge>
             </div>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">Standalone ORB_INDEX and VWAP_TREND observations are retained even when the authoritative strategy remains in WAIT.</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">ORB_INDEX and VWAP_TREND candidates are retained with stable event IDs whether they activate, expire, or are suppressed.</p>
           </div>
           <div className="text-[11px] text-muted-foreground">{familyHistory.data?.length || 0} deduplicated candidates retained</div>
         </div>
@@ -342,7 +345,7 @@ export default function StrategyDeskPage() {
           <div className="px-4 py-9 text-center sm:px-5">
             <Radar className="mx-auto h-6 w-6 text-muted-foreground" />
             <h3 className="mt-3 text-sm font-semibold">No family candidates recorded yet</h3>
-            <p className="mt-1 text-xs text-muted-foreground">The first completed ORB break or VWAP pullback-reclaim will appear here without creating a trade.</p>
+            <p className="mt-1 text-xs text-muted-foreground">The first completed ORB break or VWAP pullback-reclaim will appear here with its activation outcome.</p>
           </div>
         ) : (
           <div className="grid gap-3 p-3 sm:grid-cols-2 sm:p-4 xl:grid-cols-4">
@@ -499,7 +502,7 @@ export default function StrategyDeskPage() {
 
       <footer className="mt-4 flex flex-col gap-2 rounded-xl border border-border bg-muted/20 px-4 py-3 text-[11px] leading-5 text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
         <span className="flex items-center gap-2"><Activity className="h-3.5 w-3.5" /> Live state refreshes every 5 seconds; history every 15 seconds.</span>
-        <span className="flex items-center gap-2"><BarChart3 className="h-3.5 w-3.5" /> Shadow observations require forward paper evidence before promotion.</span>
+        <span className="flex items-center gap-2"><BarChart3 className="h-3.5 w-3.5" /> ORB and VWAP are primary; contextual overlays remain shadow-only.</span>
       </footer>
     </div>
   );

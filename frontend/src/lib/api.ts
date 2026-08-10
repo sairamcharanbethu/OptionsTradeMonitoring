@@ -1983,8 +1983,8 @@ export interface ShadowEntryStructureContext {
 export interface ShadowStrategyFamilyContext {
   version?: string;
   enabled?: boolean;
-  mode?: 'shadow';
-  entry_authority?: false;
+  mode?: 'shadow' | 'primary';
+  entry_authority?: boolean;
   orb_index?: Record<string, any> | null;
   vwap_trend?: Record<string, any> | null;
   shared_risk?: Record<string, any>;
@@ -2002,7 +2002,7 @@ export interface StrategyFamilyHistoryEvent {
   spot?: number | null;
   fresh: boolean;
   suppressed: boolean;
-  entry_authority: false;
+  entry_authority: boolean;
   observation?: string | null;
   opening_range?: Record<string, any> | null;
   gex_alignment?: Record<string, any> | null;

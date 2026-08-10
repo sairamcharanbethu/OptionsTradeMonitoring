@@ -377,6 +377,14 @@ const strategyDisplay = (strategy?: string | null) => {
     CONTINUATION: {
       name: 'Trend continuation',
       explanation: 'SPY is attempting to resume the established move after holding its continuation structure.'
+    },
+    ORB_INDEX: {
+      name: 'Opening-range breakout',
+      explanation: 'A completed one-minute candle closed outside SPY’s first five-minute range while the breakout was still fresh.'
+    },
+    VWAP_TREND: {
+      name: 'VWAP trend pullback',
+      explanation: 'SPY held the sloping side of session VWAP, pulled back into the VWAP band, and completed a reclaim in the trend direction.'
     }
   };
   return strategies[code] || {
