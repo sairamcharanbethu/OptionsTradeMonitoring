@@ -273,6 +273,12 @@ async function runTests() {
       entry_structure_context: {
         mode: 'shadow',
         confluence: { grade: 'TRIPLE_CONFLUENCE', entry_authority: false }
+      },
+      strategy_family_context: {
+        mode: 'shadow',
+        entry_authority: false,
+        orb_index: { status: 'FRESH_BREAK', candidate: { event_id: 'orb-index:test' } },
+        shared_risk: { trim_ladder_pct: [25, 45, 75] }
       }
     }
   }));
@@ -292,6 +298,8 @@ async function runTests() {
   assert(persistedOption.decision_telemetry.version === 'strategy-decision-v1', 'Persisted signal must retain replay telemetry');
   assert(persistedOption.decision_telemetry.entry_structure_context.mode === 'shadow', 'Persisted signal must retain compact shadow entry evidence');
   assert(persistedOption.decision_telemetry.entry_structure_context.confluence.entry_authority === false, 'Persisted shadow evidence must remain non-authoritative');
+  assert(persistedOption.decision_telemetry.strategy_family_context.entry_authority === false, 'Persisted strategy family evidence must remain non-authoritative');
+  assert(persistedOption.decision_telemetry.strategy_family_context.shared_risk.trim_ladder_pct[2] === 75, 'Persisted strategy family evidence must retain the trim ladder');
   assert(positionUpdate?.values[2] === 552, 'Open strategy positions must retain the first target as TP1');
   assert(positionUpdate?.values[3] === 554, 'Open strategy positions must retain the configured final target as TP2');
   queries.length = 0;
