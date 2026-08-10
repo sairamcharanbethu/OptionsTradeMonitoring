@@ -731,6 +731,22 @@ class OrbIndexContextTest(unittest.TestCase):
         self.assertEqual(context["gex_alignment"]["alignment"], "HEADWIND")
         self.assertFalse(context["gex_alignment"]["entry_authority"])
 
+    def test_gex_alignment_reads_normalized_flip_field(self) -> None:
+        bars = self.opening_range() + [
+            family_bar(5, open_price=100.0, high=101.3, low=99.9, close=101.2),
+        ]
+        context = calculate_orb_index_context(
+            bars,
+            now=datetime(2026, 7, 29, 9, 36, tzinfo=ET).timestamp(),
+            gex_context={
+                "available": True,
+                "flip": 100.0,
+            },
+        )
+
+        self.assertEqual(context["gex_alignment"]["gamma_flip"], 100.0)
+        self.assertEqual(context["gex_alignment"]["alignment"], "ALIGNED")
+
 
 class VwapTrendContextTest(unittest.TestCase):
     def bullish_cycle(self) -> list[dict]:

@@ -885,7 +885,9 @@ def _orb_gex_alignment(
 
     call_wall = level("call_wall")
     put_wall = level("put_wall")
-    gamma_flip = level("gamma_flip")
+    gamma_flip = level("flip")
+    if gamma_flip is None:
+        gamma_flip = level("gamma_flip")
     if context.get("available") is not True:
         alignment = "UNAVAILABLE"
     elif side == "calls" and call_wall is not None and close >= call_wall:
