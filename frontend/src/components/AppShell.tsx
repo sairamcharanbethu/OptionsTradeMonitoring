@@ -18,6 +18,7 @@ import {
   Menu,
   Moon,
   PanelTop,
+  Radar,
   ShieldCheck,
   Sun,
   Target,
@@ -71,6 +72,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Strategies',
     targets: [
       { label: 'Day Trading', description: 'Guarded strategy monitor', to: '/?tab=day-trading', icon: Gauge },
+      { label: 'Strategy Desk', description: 'Live context and shadow evidence', to: '/strategy-desk', icon: Radar },
       { label: 'Wall Reaction', description: 'Paper-only wall fades', to: '/?tab=wall-reaction', icon: Target },
       { label: 'Covered Calls', description: 'Covered-call analysis', to: '/covered-calls', icon: ShieldCheck }
     ]
