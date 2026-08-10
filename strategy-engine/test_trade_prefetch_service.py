@@ -18,6 +18,9 @@ from trade_prefetch_service import (
     _locked_option_expiry,
     _locked_option_spec,
     _preferred_option_expiry,
+    _previous_strategy_lanes,
+    _strategy_family_policy_for_lane,
+    _normalize_strategy_lane,
     _ticker_time,
     _zerogex_primary_snapshot,
 )
@@ -262,6 +265,7 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             prefetcher.option_tickers = [SimpleNamespace()]
             prefetcher.option_anchor_spot = 748.0
             prefetcher.option_expiry = "20260722"
+            prefetcher.option_expiries = {"20260722"}
             prefetcher.option_chain = SimpleNamespace(
                 expirations={"20260722", "20260723"}
             )
@@ -273,7 +277,7 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             with patch("trade_prefetch_service.time.time", return_value=after):
                 self.assertTrue(prefetcher._options_need_recenter())
 
-    def test_active_zero_dte_position_prevents_1pm_expiry_recenter(self) -> None:
+    def test_active_zero_dte_position_keeps_both_expiries_after_1pm(self) -> None:
         et = ZoneInfo("America/New_York")
         after = datetime(2026, 7, 22, 13, 0, tzinfo=et).timestamp()
         active = {
@@ -288,6 +292,7 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             prefetcher.option_tickers = [SimpleNamespace()]
             prefetcher.option_anchor_spot = 748.0
             prefetcher.option_expiry = "20260722"
+            prefetcher.option_expiries = {"20260722", "20260723"}
             prefetcher.option_chain = SimpleNamespace(
                 expirations={"20260722", "20260723"}
             )
@@ -298,6 +303,58 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             prefetcher._option_anchor_price = Mock(return_value=748.0)
             with patch("trade_prefetch_service.time.time", return_value=after):
                 self.assertFalse(prefetcher._options_need_recenter())
+
+    def test_strategy_lanes_keep_independent_previous_state(self) -> None:
+        payload = {
+            "signals": {
+                "mtf": {"strategy": "MTF_TREND_BREAK", "state": "WATCH"},
+                "orb_index": {"strategy": "ORB_INDEX", "state": "ACTIVE"},
+                "vwap_trend": {"strategy": "VWAP_TREND", "state": "MANAGE"},
+            }
+        }
+        lanes = _previous_strategy_lanes(payload)
+        self.assertEqual(lanes["mtf"]["state"], "WATCH")
+        self.assertEqual(lanes["orb_index"]["state"], "ACTIVE")
+        self.assertEqual(lanes["vwap_trend"]["state"], "MANAGE")
+
+    def test_each_family_lane_only_enables_its_own_detector(self) -> None:
+        configured = {
+            "mode": "primary",
+            "orb_index": {"enabled": True, "freshness_seconds": 300},
+            "vwap_trend": {"enabled": True, "freshness_seconds": 300},
+        }
+        orb = _strategy_family_policy_for_lane(configured, "orb_index")
+        vwap = _strategy_family_policy_for_lane(configured, "vwap_trend")
+        mtf = _strategy_family_policy_for_lane(configured, "mtf")
+        self.assertTrue(orb["orb_index"]["enabled"])
+        self.assertFalse(orb["vwap_trend"]["enabled"])
+        self.assertFalse(vwap["orb_index"]["enabled"])
+        self.assertTrue(vwap["vwap_trend"]["enabled"])
+        self.assertFalse(mtf["enabled"])
+
+    def test_family_lane_does_not_publish_an_mtf_fallback(self) -> None:
+        normalized = _normalize_strategy_lane({
+            "strategy": "MTF_TREND_BREAK",
+            "state": "ACTIVE",
+            "favoring": "calls",
+            "call_setup": {"trigger": 775},
+            "lifecycle": {"entry_allowed": True, "paper_position_open": True},
+        }, "orb_index")
+        self.assertEqual(normalized["strategy"], "ORB_INDEX")
+        self.assertEqual(normalized["state"], "WAIT")
+        self.assertEqual(normalized["favoring"], "no-trade")
+        self.assertFalse(normalized["lifecycle"]["entry_allowed"])
+
+    def test_active_family_retains_its_exact_contract_subscription(self) -> None:
+        signal = {
+            "state": "ACTIVE",
+            "strategy": "ORB_INDEX",
+            "favoring": "calls",
+            "call_setup": {
+                "option": {"expiry": "20260721", "target_strike": 747.0, "right": "C"}
+            },
+        }
+        self.assertEqual(_locked_option_spec(signal, "20260721"), (747.0, "C"))
 
     def test_open_continuation_retains_activation_contract_subscription(self) -> None:
         signal = {
@@ -437,6 +494,7 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         self.assertEqual(prefetcher.option_tickers, [])
         self.assertIsNone(prefetcher.option_chain)
         self.assertIsNone(prefetcher.option_expiry)
+        self.assertEqual(prefetcher.option_expiries, set())
         self.assertIsNone(prefetcher.option_expiry_mode)
         self.assertIsNone(prefetcher.option_anchor_spot)
         self.assertEqual(prefetcher.last_option_refresh, 0.0)

@@ -1028,6 +1028,42 @@ async function testSupersededRejectedExitWithoutBrokerEvidenceStaysBlocked() {
   assert(summary.blocked === true && summary.message.includes('UNKNOWN'), 'Unsafe reversal should explain the broker evidence that blocked it');
 }
 
+async function testOppositeStrategyLaneDoesNotSupersedeConcurrentPosition() {
+  const orbPosition = {
+    id: 735,
+    user_id: 7,
+    symbol: 'SPY',
+    option_type: 'CALL',
+    status: 'OPEN',
+    strategy_managed: true,
+    strategy_snapshot: { strategy_lane: 'orb_index', strategy: 'ORB_INDEX' },
+    execution_broker: 'wealthsimple_snaptrade',
+    is_simulated: false
+  };
+  const service = new TradeExecutionService({
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (sql: string) => sql.includes('SELECT strategy_snapshot FROM signals')
+        ? { rows: [{ strategy_snapshot: { strategy_lane: 'vwap_trend', strategy: 'VWAP_TREND' } }] }
+        : { rows: [orbPosition] }
+    }
+  } as any) as any;
+  let exitRequested = false;
+  service.resolveSupersededPosition = async () => {
+    exitRequested = true;
+    return { closed: true };
+  };
+
+  const summary = await service.closeSupersededPositions(
+    createSignalInput({ symbol: 'SPY', winningSide: 'PUT' }),
+    { max_correlated_positions: '3' },
+    'wealthsimple_snaptrade'
+  );
+
+  assert(summary.checked === 0, 'A different strategy lane must not be treated as superseded exposure');
+  assert(exitRequested === false, 'A simultaneous ORB position must remain open when a VWAP setup activates');
+}
+
 async function testDeferredSupersededExitQueuesSignalWithoutFailureState() {
   const service = new TradeExecutionService(createFastifyMock()) as any;
   const originalAcquireLock = TradeRedisService.acquireLock;
@@ -1260,6 +1296,7 @@ async function runTests() {
   await testSupersededRejectedExitRetriesOnlyAfterBrokerConfirmation();
   await testSupersededPendingExitDefersOppositeEntryUntilClosed();
   await testSupersededRejectedExitWithoutBrokerEvidenceStaysBlocked();
+  await testOppositeStrategyLaneDoesNotSupersedeConcurrentPosition();
   await testDeferredSupersededExitQueuesSignalWithoutFailureState();
   await testDeferredSignalRetryRevalidatesLifecycleBeforeExecution();
   await testSimulatedSupersededClosureNeverCallsBrokerSync();

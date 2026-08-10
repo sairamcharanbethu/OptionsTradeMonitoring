@@ -348,7 +348,7 @@ const stateCopy = (state: string, side: string | null, autonomousEntry = false) 
       return {
         eyebrow: 'Market watch',
         title: 'Waiting for a qualified SPY setup',
-        description: 'No action is required. The strategy will surface one plan when its gates align.'
+        description: 'No action is required. Each strategy lane will surface its own plan when its gates align.'
       };
   }
 };
@@ -739,6 +739,7 @@ export default function DayTradingTerminal() {
   }, []);
 
   const strategySignal = strategyState?.signal || null;
+  const strategyLanes = strategyState?.strategySignals || [];
   const strategySetupId = strategyState?.setupId || null;
   const currentSignal = useMemo(() => {
     if (!strategySetupId) return null;
@@ -1531,7 +1532,7 @@ export default function DayTradingTerminal() {
           <Metric
             label="Execution"
             value={executionMode.label}
-            detail={executionMode.autonomous ? 'one-contract autonomous entry' : executionMode.live ? 'manual real orders enabled' : 'no live orders'}
+            detail={executionMode.autonomous ? 'one contract per strategy entry' : executionMode.live ? 'manual real orders enabled' : 'no live orders'}
             tone={executionMode.live ? 'text-amber-300' : 'text-sky-300'}
           />
           <Metric
@@ -1553,6 +1554,29 @@ export default function DayTradingTerminal() {
             tone={services?.scanner?.marketOpen ? 'text-emerald-300' : 'text-zinc-400'}
           />
         </div>
+
+        {strategyLanes.length > 1 && (
+          <section className="mx-2.5 mt-2.5 grid gap-2 sm:mx-5 sm:mt-4 sm:grid-cols-3" aria-label="Independent strategy lanes">
+            {strategyLanes.map(({ lane, setupId, signal: laneSignal }) => {
+              const laneState = String(laneSignal?.state || 'WAIT').toUpperCase();
+              const laneSide = optionSide(laneSignal);
+              const laneBlocker = Array.isArray(laneSignal?.blockers) ? laneSignal.blockers[0] : null;
+              const laneName = strategyDisplay(laneSignal?.strategy).name;
+              const active = ['ACTIVE', 'MANAGE', 'EXTENDED'].includes(laneState);
+              return (
+                <div key={lane} className={`rounded-lg border px-3 py-2.5 ${active ? 'border-emerald-500/30 bg-emerald-950/15' : 'border-zinc-800 bg-zinc-950/55'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[11px] font-semibold text-zinc-200">{laneName}</span>
+                    <span className={`font-mono text-[9px] ${active ? 'text-emerald-300' : laneState === 'WATCH' ? 'text-amber-300' : 'text-zinc-500'}`}>{laneState}</span>
+                  </div>
+                  <div className="mt-1 truncate text-[10px] text-zinc-500">
+                    {laneSide ? `${laneSide} · ` : ''}{laneBlocker || (setupId ? 'Independent setup tracked' : 'Waiting for its own entry event')}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        )}
 
         <section className={`m-2.5 rounded-xl border p-3.5 sm:m-5 sm:p-6 ${toneClasses[currentTone]}`}>
           <div className="grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">

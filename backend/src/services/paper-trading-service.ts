@@ -662,6 +662,15 @@ export class PaperTradingService {
     return { side, setup, option: setup.option || {} };
   }
 
+  private strategyLane(snapshot: Record<string, any>): string {
+    const explicit = String(snapshot?.strategy_lane || '').trim().toLowerCase();
+    if (explicit) return explicit;
+    const strategy = String(snapshot?.strategy || '').toUpperCase();
+    if (strategy === 'ORB_INDEX') return 'orb_index';
+    if (strategy === 'VWAP_TREND') return 'vwap_trend';
+    return 'mtf';
+  }
+
   private async account(queryable: any = (this.fastify as any).pg) {
     const { rows } = await queryable.query('SELECT * FROM paper_accounts WHERE id = $1', [ACCOUNT_ID]);
     if (!rows[0]) throw new Error('System paper account is unavailable');
@@ -1011,6 +1020,9 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const storedSnapshot = typeof position.strategy_snapshot === 'string'
         ? JSON.parse(position.strategy_snapshot)
         : position.strategy_snapshot || {};
+      if (!sameSetup && this.strategyLane(storedSnapshot) !== this.strategyLane(signal)) {
+        continue;
+      }
       const currentTerminal = sameSetup
         && ['COMPLETED', 'FAILED', 'INVALIDATED', 'TRACKING_ABORTED'].includes(String(signal.lifecycle?.status || signal.state).toUpperCase());
       const storedTerminal = ['COMPLETED', 'FAILED', 'INVALIDATED', 'TRACKING_ABORTED'].includes(

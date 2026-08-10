@@ -852,7 +852,7 @@ Rules:
       max_consecutive_losses: '3',
       loss_cooldown_minutes: '30',
       max_premium_risk_dollars: '500',
-      max_correlated_positions: '1',
+      max_correlated_positions: '3',
       shadow_trading_enabled: 'false',
       day_trading_expiry_mode: 'adaptive',
       order_type: 'LIMIT',
@@ -2962,7 +2962,7 @@ Rules:
         maxPremiumRisk: this.positiveNumberSetting(settings.max_premium_risk_dollars, 500),
         maxConsecutiveLosses: this.positiveIntSetting(settings.max_consecutive_losses, 3),
         lossCooldownMinutes: this.positiveIntSetting(settings.loss_cooldown_minutes, 30),
-        maxCorrelatedPositions: this.positiveIntSetting(settings.max_correlated_positions, 1),
+        maxCorrelatedPositions: this.positiveIntSetting(settings.max_correlated_positions, 3),
         shadowTradingEnabled: settings.shadow_trading_enabled === 'true'
       },
       execution: {

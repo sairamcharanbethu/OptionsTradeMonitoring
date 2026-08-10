@@ -118,7 +118,7 @@ export class TradeExecutionService {
       max_consecutive_losses: '3',
       loss_cooldown_minutes: '30',
       max_premium_risk_dollars: '500',
-      max_correlated_positions: '1',
+      max_correlated_positions: '3',
       shadow_trading_enabled: 'false',
       ...dbSettings
     };
@@ -451,6 +451,15 @@ export class TradeExecutionService {
     return `${input.symbol} ${input.chosenExpiry} ${input.winningSide} ${input.chosenStrike}`;
   }
 
+  private strategyLane(snapshot: any): string {
+    const explicit = String(snapshot?.strategy_lane || '').trim().toLowerCase();
+    if (explicit) return explicit;
+    const strategy = String(snapshot?.strategy || '').toUpperCase();
+    if (strategy === 'ORB_INDEX') return 'orb_index';
+    if (strategy === 'VWAP_TREND') return 'vwap_trend';
+    return 'mtf';
+  }
+
   private async countTradesToday(userId: number, broker: ExecutionBroker): Promise<number> {
     const { rows } = await this.fastify.pg.query(
       `SELECT COUNT(*)::int AS count
@@ -468,7 +477,7 @@ export class TradeExecutionService {
     const maxConsecutiveLosses = this.parsePositiveInt(settings.max_consecutive_losses, 3, 100);
     const lossCooldownMinutes = this.parsePositiveInt(settings.loss_cooldown_minutes, 30, 24 * 60);
     const maxPremiumRisk = this.parsePositiveNumber(settings.max_premium_risk_dollars, 500, 1_000_000);
-    const maxCorrelatedPositions = this.parsePositiveInt(settings.max_correlated_positions, 1, 20);
+    const maxCorrelatedPositions = this.parsePositiveInt(settings.max_correlated_positions, 3, 20);
     const { rows: pnlRows } = await this.fastify.pg.query(
       `SELECT COALESCE(SUM(realized_pnl), 0)::numeric AS daily_pnl
        FROM positions
@@ -533,6 +542,12 @@ export class TradeExecutionService {
   }
 
   private async closeSupersededPositions(input: ExecuteSignalInput, settings: ExecutionSettings, broker: ExecutionBroker) {
+    const { rows: signalRows } = await this.fastify.pg.query(
+      'SELECT strategy_snapshot FROM signals WHERE id = $1',
+      [input.signalId]
+    );
+    const incomingSnapshot = signalRows[0]?.strategy_snapshot || null;
+    const incomingLane = incomingSnapshot ? this.strategyLane(incomingSnapshot) : null;
     const { rows: positions } = await this.fastify.pg.query(
       `SELECT *
        FROM positions
@@ -544,9 +559,14 @@ export class TradeExecutionService {
        ORDER BY created_at DESC`,
       [input.userId, input.symbol, input.winningSide]
     );
+    const supersededPositions = positions.filter((position: any) => (
+      !incomingLane
+      || position.strategy_managed !== true
+      || this.strategyLane(position.strategy_snapshot) === incomingLane
+    ));
 
     const summary = {
-      checked: positions.length,
+      checked: supersededPositions.length,
       closed: 0,
       supersededPending: 0,
       errors: [] as string[],
@@ -555,7 +575,7 @@ export class TradeExecutionService {
       message: ''
     };
 
-    for (const position of positions) {
+    for (const position of supersededPositions) {
       try {
         const outcome = await this.resolveSupersededPosition(position, settings, broker, input.signalId);
         if (outcome.closed) summary.closed += 1;

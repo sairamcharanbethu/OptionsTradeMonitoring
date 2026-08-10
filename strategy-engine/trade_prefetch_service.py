@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -42,6 +43,12 @@ from signal_engine import (
 
 ET = ZoneInfo("America/New_York")
 NEXT_EXPIRY_ROLLOVER_MINUTE_ET = 13 * 60
+STRATEGY_LANES = ("mtf", "orb_index", "vwap_trend")
+LANE_STRATEGIES = {
+    "mtf": {"CONTINUATION", "MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION"},
+    "orb_index": {"ORB_INDEX"},
+    "vwap_trend": {"VWAP_TREND"},
+}
 
 
 def _valid(value: Any) -> bool:
@@ -68,6 +75,99 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, separators=(",", ":")))
     temporary.replace(path)
+
+
+def _strategy_lane(signal: dict[str, Any] | None) -> str:
+    strategy = str((signal or {}).get("strategy") or "").upper()
+    if strategy == "ORB_INDEX":
+        return "orb_index"
+    if strategy == "VWAP_TREND":
+        return "vwap_trend"
+    return "mtf"
+
+
+def _previous_strategy_lanes(
+    payload: dict[str, Any] | None,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    raw = (payload or {}).get("signals") or {}
+    lanes = {
+        lane: dict(raw.get(lane) or {})
+        for lane in STRATEGY_LANES
+        if isinstance(raw.get(lane), dict)
+    }
+    if fallback and not lanes:
+        lanes[_strategy_lane(fallback)] = fallback
+    return lanes
+
+
+def _strategy_family_policy_for_lane(
+    configured: dict[str, Any] | None,
+    lane: str,
+) -> dict[str, Any]:
+    source = copy.deepcopy(configured or {})
+    if lane == "mtf":
+        return {"enabled": False, "mode": "shadow"}
+    families_enabled = source.get("enabled", True) is True
+    orb_enabled = (source.get("orb_index") or {}).get("enabled", True) is True
+    vwap_enabled = (source.get("vwap_trend") or {}).get("enabled", True) is True
+    return {
+        **source,
+        "enabled": families_enabled,
+        "mode": "primary",
+        "orb_index": {
+            **dict(source.get("orb_index") or {}),
+            "enabled": lane == "orb_index" and orb_enabled,
+        },
+        "vwap_trend": {
+            **dict(source.get("vwap_trend") or {}),
+            "enabled": lane == "vwap_trend" and vwap_enabled,
+        },
+    }
+
+
+def _normalize_strategy_lane(signal: dict[str, Any], lane: str) -> dict[str, Any]:
+    signal["strategy_lane"] = lane
+    strategy = str(signal.get("strategy") or "").upper()
+    favored_setup = (
+        signal.get("call_setup")
+        if signal.get("favoring") == "calls"
+        else signal.get("put_setup")
+        if signal.get("favoring") == "puts"
+        else {}
+    ) or {}
+    reversal_setup = signal.get("reversal_setup") or {}
+    has_family_event = bool(
+        favored_setup.get("source_event_id")
+        or reversal_setup.get("event_id")
+    )
+    if strategy in LANE_STRATEGIES[lane] and (
+        lane == "mtf" or has_family_event
+    ):
+        return signal
+    if lane == "mtf":
+        return signal
+
+    idle = copy.deepcopy(signal)
+    idle.update(
+        state="WAIT",
+        signal_phase="NO_TRADE",
+        favoring="no-trade",
+        strategy="ORB_INDEX" if lane == "orb_index" else "VWAP_TREND",
+        confidence_score=None,
+        call_setup={},
+        put_setup={},
+        reversal_setup=None,
+        blockers=[],
+        confirmations=[],
+        lifecycle={
+            "status": "WAIT",
+            "entry_allowed": False,
+            "paper_position_open": False,
+        },
+        strategy_lane=lane,
+    )
+    return idle
 
 
 def _atomic_text(path: Path, payload: str) -> None:
@@ -391,7 +491,8 @@ def _locked_option_spec(signal: dict[str, Any] | None, expiry: str) -> tuple[flo
     """Return the open continuation's activation contract for subscription retention."""
     signal = signal or {}
     if signal.get("state") not in CONTINUATION_OPEN_STATES or signal.get("strategy") not in {
-        "CONTINUATION", "MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION"
+        "CONTINUATION", "MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION",
+        "ORB_INDEX", "VWAP_TREND",
     }:
         return None
     side = signal.get("favoring")
@@ -450,6 +551,7 @@ class TradePrefetcher:
         self.option_tickers: list[Ticker] = []
         self.option_chain: Any = None
         self.option_expiry: str | None = None
+        self.option_expiries: set[str] = set()
         self.option_expiry_mode: str | None = None
         self.option_anchor_spot: float | None = None
         self.last_option_refresh = 0.0
@@ -460,6 +562,8 @@ class TradePrefetcher:
         self.last_log_fingerprint: tuple[Any, ...] | None = None
         self.last_log_at = 0.0
         self.last_journal_fingerprint: tuple[Any, ...] | None = None
+        self.last_journal_fingerprints: dict[str, tuple[Any, ...]] = {}
+        self.last_journal_ats: dict[str, float] = {}
         self.local_gex: dict[str, Any] | None = None
         self.last_local_gex_at = 0.0
         self.last_journal_at = 0.0
@@ -508,6 +612,7 @@ class TradePrefetcher:
         self.option_tickers = []
         self.option_chain = None
         self.option_expiry = None
+        self.option_expiries = set()
         self.option_expiry_mode = None
         self.option_anchor_spot = None
         self.last_option_refresh = 0.0
@@ -670,16 +775,20 @@ class TradePrefetcher:
             self.option_chain = _select_chain(chains, "SPY")
         chain = self.option_chain
         previous_signal = _read_gex(self.args.output_dir / "signal.json")
+        previous_lanes = _previous_strategy_lanes(
+            _read_gex(self.args.output_dir / "strategy-signals.json"),
+            previous_signal,
+        )
         preferred_expiry, preferred_mode = _preferred_option_expiry(
             list(chain.expirations)
         )
-        locked_expiry = _locked_option_expiry(previous_signal)
-        if locked_expiry and locked_expiry in chain.expirations:
-            expiry = locked_expiry
-            expiry_mode = "LOCKED_POSITION"
-        else:
-            expiry = preferred_expiry
-            expiry_mode = preferred_mode
+        locked_expiries = {
+            expiry
+            for signal in previous_lanes.values()
+            if (expiry := _locked_option_expiry(signal))
+            and expiry in chain.expirations
+        }
+        desired_expiries = {preferred_expiry, *locked_expiries}
         strike_count = (
             max(self.args.strikes_per_side, self.args.local_gex_strikes_per_side)
             if self.args.local_gex_fallback
@@ -687,18 +796,21 @@ class TradePrefetcher:
         )
         strikes = _symmetric_strikes(list(chain.strikes), spot, strike_count)
         contract_specs = {
-            (float(strike), right)
+            (expiry, float(strike), right)
+            for expiry in desired_expiries
             for strike in strikes
             for right in ("C", "P")
         }
-        locked_spec = _locked_option_spec(
-            previous_signal, expiry
-        )
-        if locked_spec is not None:
-            contract_specs.add(locked_spec)
+        for signal in previous_lanes.values():
+            locked_expiry = _locked_option_expiry(signal)
+            if not locked_expiry or locked_expiry not in desired_expiries:
+                continue
+            locked_spec = _locked_option_spec(signal, locked_expiry)
+            if locked_spec is not None:
+                contract_specs.add((locked_expiry, *locked_spec))
         contracts = [
             _contract("SPY", expiry, strike, right, chain.tradingClass)
-            for strike, right in sorted(contract_specs)
+            for expiry, strike, right in sorted(contract_specs)
         ]
         qualified = self.ib.qualifyContracts(*contracts)
         old_by_con_id = {ticker.contract.conId: ticker for ticker in self.option_tickers}
@@ -713,8 +825,9 @@ class TradePrefetcher:
             if ticker.contract.conId not in new_con_ids:
                 self.ib.cancelMktData(ticker.contract)
         self.option_tickers = new_tickers
-        self.option_expiry = expiry
-        self.option_expiry_mode = expiry_mode
+        self.option_expiry = preferred_expiry
+        self.option_expiries = desired_expiries
+        self.option_expiry_mode = preferred_mode
         self.option_anchor_spot = spot
         self.last_option_refresh = time.time()
 
@@ -722,14 +835,25 @@ class TradePrefetcher:
         if not self.option_tickers or self.option_anchor_spot is None or self.option_expiry is None:
             return True
         signal = _read_gex(self.args.output_dir / "signal.json")
-        locked_expiry = _locked_option_expiry(signal)
-        if locked_expiry:
-            desired_expiry = locked_expiry
-        elif self.option_chain is not None:
-            desired_expiry, _ = _preferred_option_expiry(list(self.option_chain.expirations))
-        else:
+        previous_lanes = _previous_strategy_lanes(
+            _read_gex(self.args.output_dir / "strategy-signals.json"),
+            signal,
+        )
+        if self.option_chain is None:
             return True
-        if self.option_expiry != desired_expiry:
+        preferred_expiry, _ = _preferred_option_expiry(
+            list(self.option_chain.expirations)
+        )
+        desired_expiries = {
+            preferred_expiry,
+            *(
+                expiry
+                for lane_signal in previous_lanes.values()
+                if (expiry := _locked_option_expiry(lane_signal))
+                and expiry in self.option_chain.expirations
+            ),
+        }
+        if self.option_expiries != desired_expiries:
             return True
         try:
             spot = self._option_anchor_price()
@@ -787,13 +911,21 @@ class TradePrefetcher:
             "data_type": self.args.data_type,
             "symbols": symbols,
         }
+        option_contracts = [
+            _option_dict(ticker, now=generated_at)
+            for ticker in self.option_tickers
+        ]
         options = {
             "generated_at": generated_at,
             "source": "IBKR",
             "underlying": "SPY",
             "expiry": self.option_expiry,
             "expiry_mode": self.option_expiry_mode,
-            "contracts": [_option_dict(ticker, now=generated_at) for ticker in self.option_tickers],
+            "contracts": [
+                contract
+                for contract in option_contracts
+                if contract.get("expiry") == self.option_expiry
+            ],
         }
         spy_spot = (symbols.get("SPY") or {}).get("spot")
         external_gex = (
@@ -837,6 +969,10 @@ class TradePrefetcher:
         )
         _atomic_json(self.args.output_dir / "effective_gex.json", gex)
         previous_signal = _read_gex(self.args.output_dir / "signal.json")
+        previous_lanes = _previous_strategy_lanes(
+            _read_gex(self.args.output_dir / "strategy-signals.json"),
+            previous_signal,
+        )
         sscgex_heatmap = (
             _read_gex(self.args.heatmap_file)
             if getattr(self.args, "sscgex_enabled", True)
@@ -844,68 +980,6 @@ class TradePrefetcher:
         )
         primary_heatmap = sscgex_heatmap if primary_source == "sscgex" else None
         zerogex_role = "primary" if primary_source == "zerogex" else "shadow"
-        signal = build_signal(
-            market,
-            indicators,
-            options,
-            gex,
-            self.args.stale_after,
-            previous_signal=previous_signal,
-            heatmap=primary_heatmap,
-            zerogex=zerogex,
-            zerogex_role=zerogex_role,
-            zerogex_features={
-                "structure_context": self.args.zerogex_structure_context,
-                "flow_context": self.args.zerogex_flow_context,
-                "session_levels": self.args.zerogex_session_levels,
-                "late_day_forced_flow": self.args.zerogex_late_day_forced_flow,
-            },
-            zerogex_minute_bucket_grace_seconds=(
-                getattr(
-                    self.args,
-                    "zerogex_minute_bucket_grace_seconds",
-                    60,
-                )
-            ),
-            paper_exit_target=self.args.paper_exit_target,
-            same_side_reentry_cooldown_seconds=(
-                self.args.same_side_reentry_cooldown_seconds
-            ),
-            max_tracking_gap_seconds=self.args.max_tracking_gap_seconds,
-            t1_move_invalidation_to_trigger=(
-                self.args.t1_move_invalidation_to_trigger
-            ),
-            t1_premium_lock_arm_pct=self.args.t1_premium_lock_arm_pct,
-            t1_premium_lock_floor_pct=self.args.t1_premium_lock_floor_pct,
-            option_max_total_debit_dollars=(
-                max_total_debit
-            ),
-            option_preferred_contracts=preferred_contracts,
-            option_limit_price_offset=self.args.option_limit_price_offset,
-            option_max_otm_steps=self.args.option_max_otm_steps,
-            option_min_abs_delta=self.args.option_min_abs_delta,
-            option_max_spread_pct=self.args.option_max_spread_pct,
-            session_policy=(
-                policy.get("session")
-                if isinstance(policy.get("session"), dict)
-                else None
-            ),
-            trendline_structure=(
-                policy.get("trendline_structure")
-                if isinstance(policy.get("trendline_structure"), dict)
-                else None
-            ),
-            strategy_families=(
-                policy.get("strategy_families")
-                if isinstance(policy.get("strategy_families"), dict)
-                else None
-            ),
-            cross_market_confirmation=getattr(
-                self.args,
-                "cross_market_confirmation",
-                "required",
-            ),
-        )
         provider_roles = {
             "primary": primary_source,
             "sscgex": (
@@ -946,28 +1020,135 @@ class TradePrefetcher:
                 now=generated_at,
                 max_age=self.args.local_gex_max_age,
             )
-        signal["provider_roles"] = provider_roles
-        signal["gex_shadows"] = gex_shadows
-        signal["strategy_policy"] = {
-            "strategy_max_total_debit_dollars": max_total_debit,
-            "strategy_preferred_contracts": preferred_contracts,
-            "strategy_max_contracts": max_contracts,
-            "session": signal.get("session_policy"),
-            "strategy_families": (
-                policy.get("strategy_families")
-                if isinstance(policy.get("strategy_families"), dict)
-                else None
-            ),
+        configured_families = (
+            policy.get("strategy_families")
+            if isinstance(policy.get("strategy_families"), dict)
+            else None
+        )
+
+        def options_for_lane(lane: str) -> dict[str, Any]:
+            locked_expiry = _locked_option_expiry(previous_lanes.get(lane))
+            expiry = (
+                locked_expiry
+                if locked_expiry and locked_expiry in self.option_expiries
+                else self.option_expiry
+            )
+            return {
+                "generated_at": generated_at,
+                "source": "IBKR",
+                "underlying": "SPY",
+                "expiry": expiry,
+                "expiry_mode": (
+                    "LOCKED_POSITION" if locked_expiry == expiry
+                    else self.option_expiry_mode
+                ),
+                "contracts": [
+                    contract
+                    for contract in option_contracts
+                    if contract.get("expiry") == expiry
+                ],
+            }
+
+        signals: dict[str, dict[str, Any]] = {}
+        for lane in STRATEGY_LANES:
+            lane_family_policy = _strategy_family_policy_for_lane(
+                configured_families,
+                lane,
+            )
+            lane_signal = build_signal(
+                market,
+                indicators,
+                options_for_lane(lane),
+                gex,
+                self.args.stale_after,
+                previous_signal=previous_lanes.get(lane),
+                heatmap=primary_heatmap,
+                zerogex=zerogex,
+                zerogex_role=zerogex_role,
+                zerogex_features={
+                    "structure_context": self.args.zerogex_structure_context,
+                    "flow_context": self.args.zerogex_flow_context,
+                    "session_levels": self.args.zerogex_session_levels,
+                    "late_day_forced_flow": self.args.zerogex_late_day_forced_flow,
+                },
+                zerogex_minute_bucket_grace_seconds=getattr(
+                    self.args,
+                    "zerogex_minute_bucket_grace_seconds",
+                    60,
+                ),
+                paper_exit_target=self.args.paper_exit_target,
+                same_side_reentry_cooldown_seconds=(
+                    self.args.same_side_reentry_cooldown_seconds
+                ),
+                max_tracking_gap_seconds=self.args.max_tracking_gap_seconds,
+                t1_move_invalidation_to_trigger=(
+                    self.args.t1_move_invalidation_to_trigger
+                ),
+                t1_premium_lock_arm_pct=self.args.t1_premium_lock_arm_pct,
+                t1_premium_lock_floor_pct=self.args.t1_premium_lock_floor_pct,
+                option_max_total_debit_dollars=max_total_debit,
+                option_preferred_contracts=preferred_contracts,
+                option_limit_price_offset=self.args.option_limit_price_offset,
+                option_max_otm_steps=self.args.option_max_otm_steps,
+                option_min_abs_delta=self.args.option_min_abs_delta,
+                option_max_spread_pct=self.args.option_max_spread_pct,
+                session_policy=(
+                    policy.get("session")
+                    if isinstance(policy.get("session"), dict)
+                    else None
+                ),
+                trendline_structure=(
+                    policy.get("trendline_structure")
+                    if isinstance(policy.get("trendline_structure"), dict)
+                    else None
+                ),
+                strategy_families=lane_family_policy,
+                cross_market_confirmation=getattr(
+                    self.args,
+                    "cross_market_confirmation",
+                    "required",
+                ),
+            )
+            lane_signal = _normalize_strategy_lane(lane_signal, lane)
+            lane_signal["provider_roles"] = provider_roles
+            lane_signal["gex_shadows"] = gex_shadows
+            lane_signal["strategy_policy"] = {
+                "strategy_max_total_debit_dollars": max_total_debit,
+                "strategy_preferred_contracts": preferred_contracts,
+                "strategy_max_contracts": max_contracts,
+                "strategy_lane": lane,
+                "concurrent_strategy_lanes": list(STRATEGY_LANES),
+                "session": lane_signal.get("session_policy"),
+                "strategy_families": lane_family_policy,
+            }
+            lane_signal["policy_fingerprint"] = _policy_fingerprint(
+                lane_signal["strategy_policy"]
+            )
+            signals[lane] = lane_signal
+
+        state_rank = {
+            "ACTIVE": 5,
+            "MANAGE": 4,
+            "EXTENDED": 4,
+            "ARMED": 3,
+            "WATCH": 2,
+            "WAIT": 1,
         }
-        signal["policy_fingerprint"] = _policy_fingerprint(
-            signal["strategy_policy"]
+        signal = max(
+            signals.values(),
+            key=lambda item: state_rank.get(str(item.get("state") or "WAIT"), 0),
         )
         _atomic_json(self.args.output_dir / "market.json", market)
         _atomic_json(self.args.output_dir / "options.json", options)
         _atomic_json(self.args.output_dir / "indicators.json", {"generated_at": generated_at, "symbols": indicators})
+        _atomic_json(
+            self.args.output_dir / "strategy-signals.json",
+            {"generated_at": generated_at, "signals": signals},
+        )
         _atomic_json(self.args.output_dir / "signal.json", signal)
         _atomic_text(self.args.output_dir / "signal.txt", render_signal(signal))
-        self._journal_signal(signal)
+        for lane_signal in signals.values():
+            self._journal_signal(lane_signal)
         regular_session_open = _regular_session_open(
             generated_at,
             signal.get("session_policy"),
@@ -979,7 +1160,11 @@ class TradePrefetcher:
                 "status": (
                     "closed"
                     if not regular_session_open
-                    else ("guarded" if signal["blockers"] else "ok")
+                    else (
+                        "guarded"
+                        if any(item.get("blockers") for item in signals.values())
+                        else "ok"
+                    )
                 ),
                 "market_session": "open" if regular_session_open else "closed",
                 "connected": self.ib.isConnected(),
@@ -991,8 +1176,25 @@ class TradePrefetcher:
                     signal.get("lifecycle") or {}
                 ).get("status") or "FLAT",
                 "paper_position_open": (
-                    signal.get("lifecycle") or {}
-                ).get("paper_position_open") is True,
+                    any(
+                        (item.get("lifecycle") or {}).get("paper_position_open") is True
+                        for item in signals.values()
+                    )
+                ),
+                "strategy_lanes": {
+                    lane: {
+                        "state": item.get("state"),
+                        "strategy": item.get("strategy"),
+                        "favoring": item.get("favoring"),
+                        "entry_allowed": (
+                            item.get("lifecycle") or {}
+                        ).get("entry_allowed") is True,
+                        "paper_position_open": (
+                            item.get("lifecycle") or {}
+                        ).get("paper_position_open") is True,
+                    }
+                    for lane, item in signals.items()
+                },
                 "paper_close_reason": (
                     signal.get("lifecycle") or {}
                 ).get("close_reason"),
@@ -1005,6 +1207,7 @@ class TradePrefetcher:
                 "data_type": self.args.data_type,
                 "option_contracts": len(self.option_tickers),
                 "option_expiry": self.option_expiry,
+                "option_expiries": sorted(self.option_expiries),
                 "option_expiry_mode": self.option_expiry_mode,
                 "option_anchor_spot": self.option_anchor_spot,
                 "option_refresh_age_seconds": round(generated_at - self.last_option_refresh, 1),
@@ -1145,9 +1348,12 @@ class TradePrefetcher:
         """Append replayable context when a signal changes or once per interval."""
         now = time.time()
         fingerprint = self._signal_fingerprint(signal)
+        lane = str(signal.get("strategy_lane") or "legacy")
+        fingerprints = getattr(self, "last_journal_fingerprints", {})
+        journal_ats = getattr(self, "last_journal_ats", {})
         if (
-            fingerprint == self.last_journal_fingerprint
-            and now - self.last_journal_at < self.args.journal_interval
+            fingerprint == fingerprints.get(lane)
+            and now - journal_ats.get(lane, 0) < self.args.journal_interval
         ):
             return
         journal_dir = self.args.output_dir / "history"
@@ -1159,6 +1365,10 @@ class TradePrefetcher:
         }
         with (journal_dir / f"signals-{day}.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+        fingerprints[lane] = fingerprint
+        journal_ats[lane] = now
+        self.last_journal_fingerprints = fingerprints
+        self.last_journal_ats = journal_ats
         self.last_journal_fingerprint = fingerprint
         self.last_journal_at = now
 

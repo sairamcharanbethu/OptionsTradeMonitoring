@@ -2056,6 +2056,12 @@ export interface StrategyEngineState {
   error: string | null;
   health: Record<string, any> | null;
   signal: Record<string, any> | null;
+  strategySignals?: Array<{
+    lane: 'mtf' | 'orb_index' | 'vwap_trend' | string;
+    setupId: string | null;
+    ageSeconds: number | null;
+    signal: Record<string, any>;
+  }>;
   autonomousEntry?: {
     lastAttemptAt: string | null;
     lastResult: string | null;

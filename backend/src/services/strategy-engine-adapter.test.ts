@@ -106,6 +106,45 @@ async function runTests() {
   }));
   assert(supersededSetupId === setupId, 'A changed frozen plan must identify the prior setup for retirement');
 
+  const concurrentAdapter = createAdapter();
+  concurrentAdapter.persistEvent = async () => false;
+  concurrentAdapter.persistPrimarySignal = async (_snapshot: any, laneSetupId: string) => laneSetupId ? 1 : null;
+  concurrentAdapter.retireSupersededSetup = async () => undefined;
+  const concurrentExecutions: string[] = [];
+  concurrentAdapter.maybeExecuteAutonomousLiveEntries = async (snapshot: any) => {
+    concurrentExecutions.push(snapshot.strategy_lane);
+  };
+  const activeOrb = signal({
+    strategy_lane: 'orb_index',
+    strategy: 'ORB_INDEX',
+    state: 'ACTIVE',
+    lifecycle: { entry_allowed: true, paper_position_open: true },
+    call_setup: { ...signal().call_setup, source_event_id: 'orb:event:1' }
+  });
+  const activeVwap = signal({
+    strategy_lane: 'vwap_trend',
+    strategy: 'VWAP_TREND',
+    state: 'ACTIVE',
+    lifecycle: { entry_allowed: true, paper_position_open: true },
+    call_setup: { ...signal().call_setup, source_event_id: 'vwap:event:1' }
+  });
+  await concurrentAdapter.processLaneSnapshot('orb_index', activeOrb);
+  await concurrentAdapter.processLaneSnapshot('vwap_trend', activeVwap);
+  assert(
+    concurrentAdapter.laneSetupIds.orb_index
+      && concurrentAdapter.laneSetupIds.vwap_trend
+      && concurrentAdapter.laneSetupIds.orb_index !== concurrentAdapter.laneSetupIds.vwap_trend,
+    'Simultaneous ORB and VWAP activations must retain independent setup identities'
+  );
+  assert(
+    concurrentExecutions.includes('orb_index') && concurrentExecutions.includes('vwap_trend'),
+    'Each active strategy lane must independently reach guarded execution'
+  );
+  assert(
+    concurrentAdapter.getCurrentState().strategySignals.length === 2,
+    'The strategy-state API must expose simultaneous lane snapshots to the UI'
+  );
+
   const retryAdapter = createAdapter();
   const previousSignal = signal();
   const replacementSignal = signal({
@@ -131,10 +170,15 @@ async function runTests() {
     () => undefined
   );
   assert(retryAdapter.currentSignal === previousSignal, 'A failed snapshot persistence must restore the previous in-memory signal');
-  assert(retryAdapter.currentSetupId === '44444444-4444-4444-8444-444444444444', 'A failed setup replacement must restore the previous setup id');
+  const retrySetupId = retryAdapter.laneSetupIds.mtf;
+  assert(
+    retrySetupId && retrySetupId !== '44444444-4444-4444-8444-444444444444',
+    'A failed setup replacement must retain its new id for an idempotent retry'
+  );
   await retryAdapter.poll();
   assert(persistenceAttempts === 2, 'An unchanged snapshot must retry after a transient persistence failure');
   assert(retryAdapter.currentSignal === replacementSignal, 'A successful retry must publish the replacement snapshot');
+  assert(retryAdapter.currentSetupId === retrySetupId, 'A persistence retry must not generate a second setup id');
 
   const eventOne = adapter.eventFingerprint(signal());
   const eventTwo = adapter.eventFingerprint(signal({ spot: 551, generated_at: 1_786_000_001 }));

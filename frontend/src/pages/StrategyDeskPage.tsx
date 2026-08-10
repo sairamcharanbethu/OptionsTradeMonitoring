@@ -177,6 +177,9 @@ export default function StrategyDeskPage() {
   const loading = strategy.isLoading && !strategy.data;
   const refreshing = strategy.isFetching || history.isFetching || familyHistory.isFetching || paper.isFetching;
   const signal = strategy.data?.signal || {};
+  const laneSignals = strategy.data?.strategySignals || [];
+  const orbLaneSignal = laneSignals.find(item => item.lane === 'orb_index')?.signal || {};
+  const vwapLaneSignal = laneSignals.find(item => item.lane === 'vwap_trend')?.signal || {};
   const structure: ShadowEntryStructureContext = signal.entry_structure_context
     || signal.decision_telemetry?.entry_structure_context
     || {};
@@ -191,12 +194,16 @@ export default function StrategyDeskPage() {
   const family: ShadowStrategyFamilyContext = signal.strategy_family_context
     || signal.decision_telemetry?.strategy_family_context
     || {};
-  const orb = family.orb_index || {};
+  const orbFamily: ShadowStrategyFamilyContext = orbLaneSignal.strategy_family_context || {};
+  const vwapFamily: ShadowStrategyFamilyContext = vwapLaneSignal.strategy_family_context || {};
+  const orb = orbFamily.orb_index || family.orb_index || {};
   const orbCandidate = orb.candidate || {};
-  const vwapTrend = family.vwap_trend || {};
+  const vwapTrend = vwapFamily.vwap_trend || family.vwap_trend || {};
   const vwapCandidate = vwapTrend.candidate || vwapTrend.suppressed_candidate || {};
-  const sharedRisk = family.shared_risk || orb.risk_plan || vwapTrend.risk_plan || {};
-  const familyIsPrimary = family.entry_authority === true && family.mode === 'primary';
+  const sharedRisk = orbFamily.shared_risk || vwapFamily.shared_risk || family.shared_risk || orb.risk_plan || vwapTrend.risk_plan || {};
+  const familyIsPrimary = [orbFamily, vwapFamily, family].some(context => (
+    context.entry_authority === true && context.mode === 'primary'
+  ));
   const lifecycle = signal.lifecycle || {};
   const side = signal.favoring === 'calls' ? 'CALL' : signal.favoring === 'puts' ? 'PUT' : 'WAIT';
   const isActionable = lifecycle.entry_allowed === true;
@@ -277,7 +284,7 @@ export default function StrategyDeskPage() {
               <Badge variant="secondary">{familyIsPrimary ? 'Autonomous authority' : 'No entry authority'}</Badge>
             </div>
             <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">{familyIsPrimary
-              ? 'Qualified ORB_INDEX and VWAP_TREND events enter the authoritative lifecycle for independent paper processing and per-user guarded live execution.'
+              ? 'Qualified ORB_INDEX and VWAP_TREND events enter independent authoritative lifecycles for paper processing and per-user guarded live execution.'
               : 'ORB_INDEX and VWAP_TREND are calculated from completed SPY bars and recorded for forward paper evaluation. Their candidates cannot activate, block, or rewrite the live strategy.'}</p>
           </div>
           <Button asChild variant="ghost" size="sm" className="w-fit gap-1.5 text-xs">
@@ -410,7 +417,7 @@ export default function StrategyDeskPage() {
               ))}
             </div>
             <div className="mt-4 rounded-lg border border-violet-500/20 bg-violet-500/[0.05] px-3 py-2 text-[11px] leading-5 text-muted-foreground">
-              This read is deterministic and replayable. Only the authoritative lifecycle can activate an entry; shadow evidence cannot override blockers.
+              This read is deterministic and replayable. Only an authoritative strategy lane can activate its own entry; shadow evidence cannot override blockers.
             </div>
           </section>
 

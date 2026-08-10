@@ -227,7 +227,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [maxConsecutiveLosses, setMaxConsecutiveLosses] = useState('3');
     const [lossCooldownMinutes, setLossCooldownMinutes] = useState('30');
     const [maxPremiumRiskDollars, setMaxPremiumRiskDollars] = useState('500');
-    const [maxCorrelatedPositions, setMaxCorrelatedPositions] = useState('1');
+    const [maxCorrelatedPositions, setMaxCorrelatedPositions] = useState('3');
     const [shadowTradingEnabled, setShadowTradingEnabled] = useState(false);
     const [expiryMode, setExpiryMode] = useState('adaptive');
     const [orderType, setOrderType] = useState('LIMIT');
@@ -347,7 +347,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setMaxConsecutiveLosses(data.max_consecutive_losses || '3');
             setLossCooldownMinutes(data.loss_cooldown_minutes || '30');
             setMaxPremiumRiskDollars(data.max_premium_risk_dollars || '500');
-            setMaxCorrelatedPositions(data.max_correlated_positions || '1');
+            setMaxCorrelatedPositions(data.max_correlated_positions || '3');
             setShadowTradingEnabled(data.shadow_trading_enabled === 'true');
             setExpiryMode(data.day_trading_expiry_mode || 'adaptive');
             setOrderType('LIMIT');
@@ -1150,7 +1150,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <div className="grid gap-2">
                                                 <Label htmlFor="maxCorrelatedPositions">Maximum Concurrent SPY/QQQ Positions</Label>
                                                 <Input id="maxCorrelatedPositions" type="number" min="1" value={maxCorrelatedPositions} onChange={(e) => setMaxCorrelatedPositions(e.target.value)} />
-                                                <p className="text-[10px] text-muted-foreground">Controls simultaneous correlated exposure. Max Trades Per Day remains a separate daily frequency limit.</p>
+                                                <p className="text-[10px] text-muted-foreground">Defaults to one position per MTF, ORB, and VWAP lane. Max Trades Per Day remains a separate daily frequency limit.</p>
                                             </div>
                                         </div>
                                         <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">

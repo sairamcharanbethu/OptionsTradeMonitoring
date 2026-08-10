@@ -30,10 +30,15 @@ export class StrategyEngineAdapter {
   private lastRedisErrorLogAt = 0;
   private lastFallbackPollAt = 0;
   private currentSignal: StrategySnapshot | null = null;
+  private currentSignals: Record<string, StrategySnapshot> = {};
   private currentHealth: StrategySnapshot | null = null;
   private currentSetupId: string | null = null;
+  private laneSetupIds: Record<string, string | null> = {};
   private currentPlanFingerprint: string | null = null;
+  private lanePlanFingerprints: Record<string, string | null> = {};
   private lastEventFingerprint: string | null = null;
+  private laneEventFingerprints: Record<string, string | null> = {};
+  private lastSnapshotFingerprint: string | null = null;
   private lastReceivedAt: string | null = null;
   private lastError: string | null = null;
   private lastPolicyFingerprint: string | null = null;
@@ -100,6 +105,14 @@ export class StrategyEngineAdapter {
       error: this.lastError,
       health: this.currentHealth,
       signal: this.currentSignal,
+      strategySignals: Object.entries(this.currentSignals).map(([lane, signal]) => ({
+        lane,
+        setupId: this.laneSetupIds[lane] || null,
+        ageSeconds: Number(signal.generated_at || 0) > 0
+          ? Date.now() / 1000 - Number(signal.generated_at)
+          : null,
+        signal
+      })),
       autonomousEntry: {
         lastAttemptAt: this.lastAutonomousEntryAt,
         lastResult: this.lastAutonomousEntryResult,
@@ -273,11 +286,12 @@ export class StrategyEngineAdapter {
     }
 
     const row = rows[0];
-    const live = this.currentSignal;
+    const setupId = String(row.strategy_setup_id);
+    const live = this.liveSignalForSetup(setupId);
     if (!live || live.engine_version !== 'signal-only-v2') {
       throw this.conflict('The live signal-only-v2 snapshot is unavailable');
     }
-    if (String(row.strategy_setup_id) !== this.currentSetupId) {
+    if (!this.isCurrentSetup(setupId)) {
       throw this.conflict('The strategy setup changed after this signal was displayed');
     }
     const lifecycle = live.lifecycle || {};
@@ -332,8 +346,9 @@ export class StrategyEngineAdapter {
     if (rows.length === 0 || !rows[0].strategy_setup_id) {
       throw this.conflict('The strategy setup is unavailable for review');
     }
-    const live = this.currentSignal;
-    if (!live || String(rows[0].strategy_setup_id) !== this.currentSetupId) {
+    const setupId = String(rows[0].strategy_setup_id);
+    const live = this.liveSignalForSetup(setupId);
+    if (!live || !this.isCurrentSetup(setupId)) {
       throw this.conflict('The strategy setup changed before the AI review started');
     }
     const signalAge = Date.now() / 1000 - Number(live.generated_at || 0);
@@ -357,74 +372,156 @@ export class StrategyEngineAdapter {
     return error;
   }
 
+  private strategyLane(signal: StrategySnapshot | null | undefined): string {
+    const explicit = String(signal?.strategy_lane || '').trim().toLowerCase();
+    if (explicit) return explicit;
+    const strategy = String(signal?.strategy || '').toUpperCase();
+    if (strategy === 'ORB_INDEX') return 'orb_index';
+    if (strategy === 'VWAP_TREND') return 'vwap_trend';
+    return 'mtf';
+  }
+
+  private isCurrentSetup(setupId: string): boolean {
+    return Object.values(this.laneSetupIds).some(value => value === setupId)
+      || this.currentSetupId === setupId;
+  }
+
+  private liveSignalForSetup(setupId: string): StrategySnapshot | null {
+    const lane = Object.entries(this.laneSetupIds)
+      .find(([, value]) => value === setupId)?.[0];
+    return lane ? this.currentSignals[lane] || null : this.currentSignal;
+  }
+
   private async poll(): Promise<void> {
-    const [signal, health] = await Promise.all([
+    const [bundle, legacySignal, health] = await Promise.all([
+      this.readJson(path.join(this.dataDir, 'strategy-signals.json')),
       this.readJson(path.join(this.dataDir, 'signal.json')),
       this.readJson(path.join(this.dataDir, 'health.json'))
     ]);
-    if (!signal) return;
-    if (signal.engine_version !== 'signal-only-v2' || signal.execution_enabled !== false) {
-      throw new Error('Rejected strategy snapshot with an invalid signal-only contract');
+    const bundledSignals = bundle?.signals && typeof bundle.signals === 'object'
+      ? bundle.signals
+      : null;
+    const signals: Record<string, StrategySnapshot> = bundledSignals
+      ? Object.fromEntries(
+        Object.entries(bundledSignals).filter(([, value]) => value && typeof value === 'object')
+      ) as Record<string, StrategySnapshot>
+      : legacySignal
+        ? { [this.strategyLane(legacySignal)]: legacySignal }
+        : {};
+    if (Object.keys(signals).length === 0) return;
+    for (const signal of Object.values(signals)) {
+      if (signal.engine_version !== 'signal-only-v2' || signal.execution_enabled !== false) {
+        throw new Error('Rejected strategy snapshot with an invalid signal-only contract');
+      }
     }
     this.currentHealth = health;
-    const snapshotFingerprint = this.hash(signal);
-    if (snapshotFingerprint === this.hash(this.currentSignal)) return;
+    const snapshotFingerprint = this.hash(signals);
+    if (snapshotFingerprint === this.lastSnapshotFingerprint) return;
+    if (Object.keys(this.currentSignals).length === 0 && this.currentSignal) {
+      const legacyLane = this.strategyLane(this.currentSignal);
+      this.currentSignals[legacyLane] = this.currentSignal;
+      this.laneSetupIds[legacyLane] = this.currentSetupId;
+      this.lanePlanFingerprints[legacyLane] = this.currentPlanFingerprint;
+      this.laneEventFingerprints[legacyLane] = this.lastEventFingerprint;
+    }
 
-    const previousState = {
-      signal: this.currentSignal,
-      setupId: this.currentSetupId,
-      planFingerprint: this.currentPlanFingerprint,
-      eventFingerprint: this.lastEventFingerprint
-    };
     try {
-      this.currentSignal = signal;
       this.lastReceivedAt = new Date().toISOString();
       this.lastError = null;
-      const supersededSetupId = this.updateSetupIdentity(signal);
-      if (supersededSetupId) {
-        await this.retireSupersededSetup(supersededSetupId, signal);
+      for (const [lane, signal] of Object.entries(signals)) {
+        await this.processLaneSnapshot(lane, signal);
       }
-      const paperSetupId = this.currentSetupId;
-      if (paperSetupId && (this.fastify as any).paperTrading) {
-        (this.fastify as any).paperTrading.processSnapshot(signal, paperSetupId).catch((err: any) => {
-          this.fastify.log.warn(`[PaperTrading] Snapshot processing failed: ${err.message || String(err)}`);
-        });
-      }
+      const displayLane = this.selectDisplayLane(this.currentSignals);
+      this.currentSignal = this.currentSignals[displayLane] || Object.values(this.currentSignals)[0] || null;
+      this.currentSetupId = this.laneSetupIds[displayLane] || null;
+      this.currentPlanFingerprint = this.lanePlanFingerprints[displayLane] || null;
+      this.lastEventFingerprint = this.laneEventFingerprints[displayLane] || null;
+      this.lastSnapshotFingerprint = snapshotFingerprint;
       this.broadcast({
         type: 'STRATEGY_SNAPSHOT_UPDATED',
         data: this.getCurrentState()
       });
+      this.broadcast({
+        type: 'STRATEGY_STATE_CHANGED',
+        data: this.getCurrentState()
+      });
+    } catch (error) {
+      const displayLane = this.selectDisplayLane(this.currentSignals);
+      this.currentSignal = this.currentSignals[displayLane] || this.currentSignal;
+      this.currentSetupId = this.laneSetupIds[displayLane] || this.currentSetupId;
+      this.currentPlanFingerprint = this.lanePlanFingerprints[displayLane] || this.currentPlanFingerprint;
+      this.lastEventFingerprint = this.laneEventFingerprints[displayLane] || this.lastEventFingerprint;
+      throw error;
+    }
+  }
 
-      const eventFingerprint = this.eventFingerprint(signal);
-      if (eventFingerprint === this.lastEventFingerprint) return;
-      const eventInserted = await this.persistEvent(signal, eventFingerprint);
-      this.lastEventFingerprint = eventFingerprint;
+  private selectDisplayLane(signals: Record<string, StrategySnapshot>): string {
+    const rank: Record<string, number> = {
+      ACTIVE: 5,
+      MANAGE: 4,
+      EXTENDED: 4,
+      ARMED: 3,
+      WATCH: 2,
+      WAIT: 1
+    };
+    return Object.entries(signals).reduce((selected, [lane, signal]) => {
+      if (!selected) return lane;
+      const current = rank[String(signals[selected]?.state || 'WAIT').toUpperCase()] || 0;
+      const candidate = rank[String(signal.state || 'WAIT').toUpperCase()] || 0;
+      return candidate > current ? lane : selected;
+    }, '');
+  }
+
+  private async processLaneSnapshot(lane: string, signal: StrategySnapshot): Promise<void> {
+    if (this.hash(signal) === this.hash(this.currentSignals[lane])) return;
+    const previousSignal = this.currentSignals[lane];
+    const previousEventFingerprint = this.laneEventFingerprints[lane] || null;
+    const planFingerprint = this.planFingerprint(signal);
+    let setupId = this.laneSetupIds[lane] || null;
+    const previousPlanFingerprint = this.lanePlanFingerprints[lane] || null;
+    if (planFingerprint && planFingerprint !== previousPlanFingerprint) {
+      const supersededSetupId = setupId;
+      setupId = randomUUID();
+      this.laneSetupIds[lane] = setupId;
+      this.lanePlanFingerprints[lane] = planFingerprint;
+      if (supersededSetupId) {
+        await this.retireSupersededSetup(supersededSetupId, signal);
+      }
+    }
+    this.currentSignals[lane] = signal;
+
+    try {
+      if (setupId && (this.fastify as any).paperTrading) {
+        (this.fastify as any).paperTrading.processSnapshot(signal, setupId).catch((err: any) => {
+          this.fastify.log.warn(`[PaperTrading:${lane}] Snapshot processing failed: ${err.message || String(err)}`);
+        });
+      }
+
+      const eventFingerprint = this.eventFingerprint(signal, setupId);
+      if (eventFingerprint === this.laneEventFingerprints[lane]) return;
+      const eventInserted = await this.persistEvent(signal, eventFingerprint, setupId);
+      this.laneEventFingerprints[lane] = eventFingerprint;
 
       let persistedSignalId: number | null = null;
       if (this.mode === 'primary') {
-        persistedSignalId = await this.persistPrimarySignal(signal);
+        persistedSignalId = await this.persistPrimarySignal(signal, setupId);
         if (persistedSignalId) {
           await this.maybeExecuteAutonomousLiveEntries(signal, persistedSignalId);
         }
       }
       if (eventInserted) {
-        this.notifyStrategyLifecycle(signal).catch((err: any) => {
-          this.fastify.log.warn(`[StrategyEngineAdapter] Discord lifecycle alert failed: ${err.message || String(err)}`);
+        this.notifyStrategyLifecycle(signal, setupId).catch((err: any) => {
+          this.fastify.log.warn(`[StrategyEngineAdapter:${lane}] Discord lifecycle alert failed: ${err.message || String(err)}`);
         });
       }
-      this.broadcast({
-        type: 'STRATEGY_STATE_CHANGED',
-        data: this.getCurrentState()
-      });
       if (this.isTerminal(signal)) {
-        this.currentPlanFingerprint = null;
-        this.currentSetupId = null;
+        this.lanePlanFingerprints[lane] = null;
+        this.laneSetupIds[lane] = null;
       }
     } catch (error) {
-      this.currentSignal = previousState.signal;
-      this.currentSetupId = previousState.setupId;
-      this.currentPlanFingerprint = previousState.planFingerprint;
-      this.lastEventFingerprint = previousState.eventFingerprint;
+      if (previousSignal) this.currentSignals[lane] = previousSignal;
+      else delete this.currentSignals[lane];
+      this.laneEventFingerprints[lane] = previousEventFingerprint;
       throw error;
     }
   }
@@ -498,11 +595,11 @@ export class StrategyEngineAdapter {
     });
   }
 
-  private eventFingerprint(signal: StrategySnapshot): string {
+  private eventFingerprint(signal: StrategySnapshot, setupId = this.currentSetupId): string {
     const lifecycle = signal.lifecycle || {};
     return this.hash({
       mode: this.mode,
-      setupId: this.currentSetupId,
+      setupId,
       state: signal.state,
       phase: signal.signal_phase,
       strategy: signal.strategy,
@@ -516,7 +613,11 @@ export class StrategyEngineAdapter {
     });
   }
 
-  private async persistEvent(signal: StrategySnapshot, eventFingerprint: string): Promise<boolean> {
+  private async persistEvent(
+    signal: StrategySnapshot,
+    eventFingerprint: string,
+    setupId = this.currentSetupId
+  ): Promise<boolean> {
     const result = await (this.fastify as any).pg.query(
       `INSERT INTO strategy_signal_events (
          setup_id, engine_version, mode, lifecycle_status, event_fingerprint,
@@ -525,7 +626,7 @@ export class StrategyEngineAdapter {
        ON CONFLICT (event_fingerprint) DO NOTHING
        RETURNING id`,
       [
-        this.currentSetupId,
+        setupId,
         signal.engine_version,
         this.mode,
         String(signal.state || 'WAIT'),
@@ -646,9 +747,11 @@ export class StrategyEngineAdapter {
     return null;
   }
 
-  private async notifyStrategyLifecycle(signal: StrategySnapshot): Promise<void> {
+  private async notifyStrategyLifecycle(
+    signal: StrategySnapshot,
+    setupId = this.currentSetupId
+  ): Promise<void> {
     const alert = this.strategyAlert(signal);
-    const setupId = this.currentSetupId;
     if (!alert || !setupId) return;
     const [usersResult, signalResult] = await Promise.all([
       (this.fastify as any).pg.query(
@@ -686,9 +789,12 @@ export class StrategyEngineAdapter {
     }));
   }
 
-  private async persistPrimarySignal(signal: StrategySnapshot): Promise<number | null> {
+  private async persistPrimarySignal(
+    signal: StrategySnapshot,
+    setupId = this.currentSetupId
+  ): Promise<number | null> {
     const state = String(signal.state || 'WAIT');
-    if (!this.currentSetupId) return null;
+    if (!setupId) return null;
     if (this.isTerminal(signal)) {
       const terminalState = TERMINAL_STATES.has(state)
         ? state
@@ -700,7 +806,7 @@ export class StrategyEngineAdapter {
              strategy_snapshot = $3,
              status = CASE WHEN status IN ('PENDING', 'PENDING_TRIGGER') THEN 'CANCELLED' ELSE status END
          WHERE strategy_setup_id = $1`,
-        [this.currentSetupId, terminalState, JSON.stringify(signal)]
+        [setupId, terminalState, JSON.stringify(signal)]
       );
       await (this.fastify as any).pg.query(
         `UPDATE positions
@@ -712,7 +818,7 @@ export class StrategyEngineAdapter {
          WHERE strategy_setup_id = $1
            AND strategy_managed = TRUE
            AND status = 'OPEN'`,
-        [this.currentSetupId, terminalState, JSON.stringify(signal)]
+        [setupId, terminalState, JSON.stringify(signal)]
       );
       return null;
     }
@@ -786,11 +892,11 @@ export class StrategyEngineAdapter {
           plan_quality: setup.plan_quality || signal.plan_quality || null,
           estimated_stop_risk: option.estimated_stop_risk || null,
           decision_telemetry: signal.decision_telemetry || null,
-          setupId: this.currentSetupId,
+          setupId,
           lifecycle
         }),
         signal.engine_version,
-        this.currentSetupId,
+        setupId,
         lifecycle.entry_allowed === true,
         lifecycle.activated_at ? new Date(Number(lifecycle.activated_at) * 1000) : null,
         signal.policy_fingerprint || null,
@@ -812,7 +918,7 @@ export class StrategyEngineAdapter {
          AND strategy_managed = TRUE
          AND status = 'OPEN'`,
       [
-        this.currentSetupId,
+        setupId,
         setup.invalidation || null,
         targets[0] ?? target,
         target,
@@ -908,13 +1014,19 @@ export class StrategyEngineAdapter {
          LIMIT 20`
       );
       for (const row of rows) {
-        const fingerprint = this.planFingerprint(row.signal_snapshot || {});
-        if (fingerprint) {
-          this.currentSetupId = String(row.setup_id);
-          this.currentPlanFingerprint = fingerprint;
-          return;
-        }
+        const snapshot = row.signal_snapshot || {};
+        const lane = this.strategyLane(snapshot);
+        if (this.laneSetupIds[lane]) continue;
+        const fingerprint = this.planFingerprint(snapshot);
+        if (!fingerprint) continue;
+        this.laneSetupIds[lane] = String(row.setup_id);
+        this.lanePlanFingerprints[lane] = fingerprint;
       }
+      const restoredLane = Object.keys(this.laneSetupIds)[0];
+      this.currentSetupId = restoredLane ? this.laneSetupIds[restoredLane] : null;
+      this.currentPlanFingerprint = restoredLane
+        ? this.lanePlanFingerprints[restoredLane]
+        : null;
     } catch (err: any) {
       this.fastify.log.warn(`[StrategyEngineAdapter] Setup restore skipped: ${err.message || String(err)}`);
     }
