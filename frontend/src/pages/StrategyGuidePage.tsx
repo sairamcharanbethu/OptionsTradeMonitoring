@@ -122,6 +122,61 @@ export default function StrategyGuidePage() {
           </div>
         </RuleCard>
 
+        <RuleCard title="ORB_INDEX Lab" detail="Opening-range breakout evidence for the first directional thrust." icon={Clock3}>
+          <BulletList
+            items={[
+              'The engine builds one SPY box from the five completed 1-minute candles beginning at 9:30 AM ET. All five distinct minutes are required.',
+              'Only a completed 1-minute close outside that box can create a candidate. A wick through the range is ignored.',
+              'The confirmation window is deliberately narrow: the 9:35 and 9:36 candles are the only eligible trigger bars. Later closes are recorded as a missed window, not chased.',
+              'A confirmed break remains fresh for five minutes. The event ID is stable across refreshes, so the same close is not emitted repeatedly.',
+              'Call wall, put wall, and gamma-flip alignment are recorded as advisory context. They do not grant authority or create a blocker.',
+              'Contract guidance is SPY 0DTE or the nearest liquid ATM / one-strike OTM option, but this shadow family does not select or submit a contract.'
+            ]}
+          />
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Example title="Qualified observation">
+              The 9:35 candle closes above the completed opening-range high. ORB_INDEX records a fresh CALL candidate and its GEX alignment, while live entry permission remains unchanged.
+            </Example>
+            <Example title="Ignored move">
+              The 9:35 candle wicks above the box but closes inside it, and the 9:36 candle also closes inside. A 9:38 breakout is marked outside the window and is not chased.
+            </Example>
+          </div>
+        </RuleCard>
+
+        <RuleCard title="VWAP_TREND Lab" detail="Repeatable trend pullbacks with a completed reclaim and chop protection." icon={Workflow}>
+          <BulletList
+            items={[
+              'Session VWAP uses cumulative typical price times volume and resets at the regular-session open. Only completed SPY candles participate.',
+              'A directional regime requires VWAP to slope by at least 1 basis point over five completed bars and three closes to hold on the trend side.',
+              'The next candle must pull against the trend into a 0.15 percent VWAP band. A completed reversal candle must then reclaim VWAP and the pullback high for calls, or reject VWAP and break the pullback low for puts.',
+              'A candidate is fresh for five minutes. A distinct pullback-and-reclaim cycle can produce a new event after the five-minute family cooldown.',
+              'More than two side changes around VWAP in the latest ten completed bars activates the chop kill-switch and suppresses the candidate.',
+              'Flat VWAP, missing volume, an unfinished reclaim, or a touch without reversal produces context only and never a candidate.'
+            ]}
+          />
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Example title="CALL cycle">
+              VWAP slopes upward, three candles hold above it, a red candle pulls into the band, and the next completed green candle closes above VWAP and the pullback high.
+            </Example>
+            <Example title="Chop suppressed">
+              Price crosses back and forth around VWAP three times in ten bars. The desk records the observed reclaim but labels the family regime suppressed.
+            </Example>
+          </div>
+        </RuleCard>
+
+        <RuleCard title="Family Risk Plan" detail="Preserved for paper evidence and a later, separately reviewed promotion." icon={Layers}>
+          <BulletList
+            items={[
+              'Both shadow families carry a mechanical 35 percent premium-stop plan and a future profit ladder at +25, +45, and +75 percent.',
+              'The app keeps its existing stricter 3:00 PM ET new-entry cutoff. The source playbook\'s 3:25 PM cutoff is recorded for comparison but does not weaken the current rule.',
+              'One contract cannot be partially trimmed, so ladder milestones would tighten protection while keeping one tail. Two contracts would trim one and trail one; three would trim at two rungs and trail one; four or more would trim one at each rung and trail the remainder.',
+              'The system never increases quantity just to satisfy the ladder. The configured contract count remains the sizing ceiling.',
+              'Loss tags are preserved as spread_tax, wrong_direction, late_entry_theta, whipsaw_stop, and unclassified. Three-loss bench and family circuit-breaker rules are marked for future activation after forward evidence exists.',
+              'None of these family risk rules currently modifies the live paper exit engine or Wealthsimple execution.'
+            ]}
+          />
+        </RuleCard>
+
         <RuleCard title="Initial Risk Plan" detail="The app stores both premium-based and underlying-based guardrails." icon={ShieldAlert}>
           <BulletList
             items={[

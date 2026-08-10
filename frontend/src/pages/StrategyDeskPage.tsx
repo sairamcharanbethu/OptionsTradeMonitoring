@@ -14,7 +14,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { usePaperAccount, useStrategyHistory, useStrategyState } from '@/hooks/useDashboardData';
-import type { ShadowEntryStructureContext, StrategyHistorySetup } from '@/lib/api';
+import type { ShadowEntryStructureContext, ShadowStrategyFamilyContext, StrategyHistorySetup } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -98,9 +98,52 @@ function PlaybookCard({ title, subtitle, value, detail, tone = 'neutral' }: {
   );
 }
 
+function FamilyCard({ title, subtitle, status, side, observation, facts, tone = 'neutral' }: {
+  title: string;
+  subtitle: string;
+  status: string;
+  side: string;
+  observation: string;
+  facts: Array<{ label: string; value: string }>;
+  tone?: Tone;
+}) {
+  return (
+    <article className="rounded-xl border border-border bg-card p-4 sm:p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold">{title}</h3>
+            <Badge variant="outline" className="border-violet-500/25 bg-violet-500/[0.06] text-[9px] uppercase tracking-wider text-violet-700 dark:text-violet-300">Shadow</Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+        </div>
+        <div className={cn('rounded-lg border px-3 py-2 text-right', toneClass[tone])}>
+          <div className="text-[9px] font-bold uppercase tracking-[0.13em] opacity-65">{side}</div>
+          <div className="mt-0.5 text-xs font-semibold">{status}</div>
+        </div>
+      </div>
+      <p className="mt-4 text-sm leading-6">{observation}</p>
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {facts.map(fact => (
+          <div key={fact.label} className="rounded-lg bg-muted/35 px-3 py-2">
+            <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-muted-foreground">{fact.label}</div>
+            <div className="mt-1 truncate font-mono text-xs font-semibold" title={fact.value}>{fact.value}</div>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
 function historyContext(setup: StrategyHistorySetup): ShadowEntryStructureContext {
   return setup.entry_structure_context
     || setup.option_details?.decision_telemetry?.entry_structure_context
+    || {};
+}
+
+function historyFamilyContext(setup: StrategyHistorySetup): ShadowStrategyFamilyContext {
+  return setup.strategy_family_context
+    || setup.option_details?.decision_telemetry?.strategy_family_context
     || {};
 }
 
@@ -137,6 +180,14 @@ export default function StrategyDeskPage() {
   const prior = structure.prior_session_levels || {};
   const breadth = structure.cross_market || {};
   const trendline = signal.trendline_context || signal.decision_telemetry?.trendline_context || {};
+  const family: ShadowStrategyFamilyContext = signal.strategy_family_context
+    || signal.decision_telemetry?.strategy_family_context
+    || {};
+  const orb = family.orb_index || {};
+  const orbCandidate = orb.candidate || {};
+  const vwapTrend = family.vwap_trend || {};
+  const vwapCandidate = vwapTrend.candidate || vwapTrend.suppressed_candidate || {};
+  const sharedRisk = family.shared_risk || orb.risk_plan || vwapTrend.risk_plan || {};
   const lifecycle = signal.lifecycle || {};
   const side = signal.favoring === 'calls' ? 'CALL' : signal.favoring === 'puts' ? 'PUT' : 'WAIT';
   const isActionable = lifecycle.entry_allowed === true;
@@ -144,7 +195,10 @@ export default function StrategyDeskPage() {
   const breakEvent = wallBreak.break || {};
   const trendlineBreak = trendline.break || {};
   const recentEvidence = (history.data || []).slice(0, 6);
-  const telemetryEvidence = (history.data || []).filter(setup => Object.keys(historyContext(setup)).length > 0);
+  const telemetryEvidence = (history.data || []).filter(setup => (
+    Object.keys(historyContext(setup)).length > 0
+    || Object.keys(historyFamilyContext(setup)).length > 0
+  ));
   const closedEvidence = telemetryEvidence.filter(setup => setup.realized_pnl != null);
   const evidenceWins = closedEvidence.filter(setup => Number(setup.realized_pnl) > 0).length;
   const tripleConfluenceSetups = telemetryEvidence.filter(setup => historyContext(setup).confluence?.grade === 'TRIPLE_CONFLUENCE').length;
@@ -202,6 +256,61 @@ export default function StrategyDeskPage() {
         <Metric label="Favored side" value={side} detail={`${humanize(signal.strategy, 'No setup selected')} · ${Number(signal.confidence_score || 0)} confidence`} tone={side === 'CALL' ? 'positive' : side === 'PUT' ? 'negative' : 'neutral'} />
         <Metric label="SPY spot" value={money(signal.spot)} detail={`Signal age ${strategy.data?.ageSeconds == null ? '—' : `${Number(strategy.data.ageSeconds).toFixed(1)}s`}`} tone={runtimeHealthy ? 'neutral' : 'warning'} />
         <Metric label="Paper account" value={money(paper.data?.account?.equity, 0)} detail={`${paper.data?.openPositions?.length || 0} open · closed P&L ${money(paperPnl)}`} tone={paperPnl > 0 ? 'positive' : paperPnl < 0 ? 'negative' : 'neutral'} />
+      </section>
+
+      <section className="mt-4 overflow-hidden rounded-xl border border-border bg-muted/[0.08]" aria-labelledby="family-lab-title">
+        <div className="flex flex-col gap-3 border-b border-border px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-5">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Radar className="h-4 w-4 text-violet-500" />
+              <h2 id="family-lab-title" className="text-sm font-semibold">Strategy family lab</h2>
+              <Badge variant="secondary">No entry authority</Badge>
+            </div>
+            <p className="mt-1 max-w-3xl text-xs leading-5 text-muted-foreground">ORB_INDEX and VWAP_TREND are calculated from completed SPY bars and recorded for forward paper evaluation. Their candidates cannot activate, block, or rewrite the live strategy.</p>
+          </div>
+          <Button asChild variant="ghost" size="sm" className="w-fit gap-1.5 text-xs">
+            <Link to="/strategy-guide">Read exact rules <ArrowRight className="h-3.5 w-3.5" /></Link>
+          </Button>
+        </div>
+        <div className="grid gap-3 p-3 lg:grid-cols-2 sm:p-4">
+          <FamilyCard
+            title="ORB_INDEX"
+            subtitle="09:30–09:35 box · next two completed 1m closes"
+            status={humanize(orb.status, orb.available === false ? 'Building range' : 'Unavailable')}
+            side={orbCandidate.side === 'calls' ? 'CALL candidate' : orbCandidate.side === 'puts' ? 'PUT candidate' : 'No candidate'}
+            observation={orb.observation || 'Waiting for the five opening-range candles.'}
+            facts={[
+              { label: 'Range high', value: money(orb.opening_range?.high) },
+              { label: 'Range low', value: money(orb.opening_range?.low) },
+              { label: 'Freshness', value: orbCandidate.fresh == null ? '—' : orbCandidate.fresh ? `${Number(orbCandidate.age_seconds || 0).toFixed(0)}s · fresh` : 'Expired' },
+              { label: 'GEX alignment', value: humanize(orb.gex_alignment?.alignment, 'Unavailable') },
+              { label: 'Confirmation', value: `${Number(orb.confirmation_bars_seen || 0)}/${Number(orb.trigger_bar_count || 2)} bars` },
+              { label: 'Entry authority', value: 'None' }
+            ]}
+            tone={orbCandidate.side === 'calls' ? 'positive' : orbCandidate.side === 'puts' ? 'negative' : orb.status === 'EXPIRED_BREAK' ? 'warning' : 'neutral'}
+          />
+          <FamilyCard
+            title="VWAP_TREND"
+            subtitle="Slope + hold + adverse pullback + completed reclaim"
+            status={humanize(vwapTrend.status, vwapTrend.available === false ? 'Building context' : 'Unavailable')}
+            side={vwapCandidate.side === 'calls' ? 'CALL candidate' : vwapCandidate.side === 'puts' ? 'PUT candidate' : 'No candidate'}
+            observation={vwapTrend.observation || 'Waiting for completed session bars and volume.'}
+            facts={[
+              { label: 'Session VWAP', value: money(vwapTrend.trend?.vwap) },
+              { label: 'VWAP slope', value: Number.isFinite(Number(vwapTrend.trend?.slope_bps)) ? `${Number(vwapTrend.trend.slope_bps).toFixed(1)} bps` : '—' },
+              { label: 'Freshness', value: vwapCandidate.fresh == null ? '—' : vwapCandidate.fresh ? `${Number(vwapCandidate.age_seconds || 0).toFixed(0)}s · fresh` : 'Expired' },
+              { label: 'VWAP crosses', value: vwapTrend.kill_switch?.crosses == null ? '—' : `${vwapTrend.kill_switch.crosses}/${vwapTrend.kill_switch.maximum_crosses}` },
+              { label: 'Regime switch', value: vwapTrend.kill_switch?.active ? 'Suppressed' : 'Clear' },
+              { label: 'Entry authority', value: 'None' }
+            ]}
+            tone={vwapTrend.kill_switch?.active || vwapTrend.status === 'REENTRY_COOLDOWN' ? 'warning' : vwapCandidate.side === 'calls' ? 'positive' : vwapCandidate.side === 'puts' ? 'negative' : 'neutral'}
+          />
+        </div>
+        <div className="grid gap-px border-t border-border bg-border sm:grid-cols-3">
+          <div className="bg-card px-4 py-3"><div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Premium stop plan</div><div className="mt-1 font-mono text-sm font-semibold">{sharedRisk.premium_stop_pct == null ? '—' : `−${Number(sharedRisk.premium_stop_pct).toFixed(0)}%`}</div></div>
+          <div className="bg-card px-4 py-3"><div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Future trim ladder</div><div className="mt-1 font-mono text-sm font-semibold">{Array.isArray(sharedRisk.trim_ladder_pct) ? sharedRisk.trim_ladder_pct.map((value: number) => `+${value}%`).join(' · ') : '—'}</div></div>
+          <div className="bg-card px-4 py-3"><div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Quantity handling</div><div className="mt-1 text-xs font-medium leading-5">{sharedRisk.quantity_aware_ladder || 'Uses configured contract quantity.'}</div></div>
+        </div>
       </section>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(20rem,0.7fr)]">
@@ -279,6 +388,9 @@ export default function StrategyDeskPage() {
               const context = historyContext(setup);
               const grade = context.confluence?.grade;
               const recordedTrendline = setup.trendline_context || setup.option_details?.decision_telemetry?.trendline_context || {};
+              const recordedFamily = historyFamilyContext(setup);
+              const recordedOrb = recordedFamily.orb_index || {};
+              const recordedVwapTrend = recordedFamily.vwap_trend || {};
               const recordedEma = context.ema_vwap?.event || {};
               const recordedRange = context.gex_range || {};
               const recordedWall = context.gex_wall_break || {};
@@ -299,7 +411,7 @@ export default function StrategyDeskPage() {
                     <ChevronDown className="hidden h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180 sm:block" />
                   </summary>
                   <div className="border-t border-border bg-muted/[0.08] px-4 py-4 sm:px-5">
-                    {Object.keys(context).length === 0 ? (
+                    {Object.keys(context).length === 0 && Object.keys(recordedFamily).length === 0 ? (
                       <p className="text-xs text-muted-foreground">This setup predates compact shadow telemetry. Its lifecycle and outcome remain available above.</p>
                     ) : (
                       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
@@ -309,6 +421,8 @@ export default function StrategyDeskPage() {
                         <EvidenceFact label="SPY / QQQ" value={humanize(recordedBreadth.alignment, 'Unavailable')} detail={recordedBreadth.reason || 'Shadow breadth at decision time'} />
                         <EvidenceFact label="Prior session" value={recordedPrior.available ? `${humanize(recordedPrior.nearest_level)} nearest` : 'Unavailable'} detail={recordedPrior.available ? `${money(recordedPrior.support?.price)} / ${money(recordedPrior.resistance?.price)}` : recordedPrior.reason} />
                         <EvidenceFact label="Trendline" value={recordedTrendline.break?.confirmed ? `${humanize(recordedTrendline.break.side)} break` : recordedTrendline.available ? 'No confirmed break' : 'Unavailable'} detail={recordedTrendline.retest?.status ? `Retest ${humanize(recordedTrendline.retest.status)}` : recordedTrendline.reason} />
+                        <EvidenceFact label="ORB_INDEX" value={humanize(recordedOrb.status, 'Unavailable')} detail={recordedOrb.candidate?.side ? `${humanize(recordedOrb.candidate.side)} · ${recordedOrb.candidate.fresh ? 'fresh' : 'expired'}` : recordedOrb.reason} />
+                        <EvidenceFact label="VWAP_TREND" value={humanize(recordedVwapTrend.status, 'Unavailable')} detail={(recordedVwapTrend.candidate || recordedVwapTrend.suppressed_candidate)?.side ? `${humanize((recordedVwapTrend.candidate || recordedVwapTrend.suppressed_candidate).side)} · ${Number(recordedVwapTrend.trend?.slope_bps || 0).toFixed(1)} bps` : recordedVwapTrend.reason} />
                         <EvidenceFact label="Lifecycle events" value={String(setup.lifecycle_events.length)} detail={`Final ${humanize(setup.lifecycle_status)}`} />
                         <EvidenceFact label="Decision authority" value="None" detail="Recorded evidence only; no entry override" />
                       </div>
