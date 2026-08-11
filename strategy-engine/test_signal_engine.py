@@ -1554,6 +1554,38 @@ class ZeroGEXShadowContextTest(unittest.TestCase):
             decision["gates"]["calls"]["warnings"],
         )
 
+    def test_primary_high_confidence_opposing_playbook_is_an_entry_veto(self) -> None:
+        timestamp = datetime.fromtimestamp(
+            self.now - 20, timezone.utc
+        ).isoformat()
+        self.snapshot["composite"] = {
+            "timestamp": timestamp,
+            "score": 74.0,
+        }
+        self.snapshot["playbook"] = {
+            "timestamp": timestamp,
+            "state": "candidate",
+            "pattern": "bearish_continuation",
+            "direction": "bearish",
+            "confidence": 0.75,
+            "near_misses": [],
+        }
+        context = _zerogex_context(
+            self.snapshot,
+            {"source": "zerogex"},
+            741.5,
+            now=self.now,
+            role="primary",
+        )
+        decision = _zerogex_decision_context(context)
+
+        self.assertFalse(decision["gates"]["calls"]["entry_allowed"])
+        self.assertIn(
+            "ZeroGEX playbook strongly opposes calls",
+            decision["gates"]["calls"]["blockers"],
+        )
+        self.assertTrue(decision["gates"]["puts"]["entry_allowed"])
+
     def test_range_break_readiness_without_direction_is_not_a_directional_vote(self) -> None:
         timestamp = datetime.fromtimestamp(
             self.now - 20, timezone.utc
@@ -3202,6 +3234,42 @@ class ContinuationStateTest(unittest.TestCase):
             signal["warnings"],
         )
         self.assertNotIn("ZeroGEX playbook is STAND_DOWN", signal["blockers"])
+
+    def test_primary_opposing_playbook_blocks_confirmed_continuation(self) -> None:
+        now = time.time()
+        provider_time = datetime.fromtimestamp(
+            now - 20, timezone.utc
+        ).isoformat()
+        zerogex = {
+            "fetched_at": now - 2,
+            "source": "zerogex",
+            "symbol": "SPY",
+            "gex_summary": {
+                "timestamp": provider_time,
+                "spot_price": 100.2,
+                "gamma_flip": 99.0,
+                "call_wall": 102.0,
+                "put_wall": 98.0,
+                "net_gex": -1_000_000,
+            },
+            "playbook": {
+                "timestamp": provider_time,
+                "state": "candidate",
+                "pattern": "bearish_continuation",
+                "direction": "bearish",
+                "confidence": 0.75,
+                "near_misses": [],
+            },
+        }
+
+        signal = self.build(zerogex=zerogex, zerogex_role="primary")
+
+        self.assertNotEqual(signal["state"], "ACTIVE")
+        self.assertFalse((signal.get("lifecycle") or {}).get("entry_allowed", False))
+        self.assertIn(
+            "ZeroGEX playbook strongly opposes calls",
+            signal["blockers"],
+        )
 
     def test_zerogex_candidate_cannot_trigger_without_local_structure(self) -> None:
         now = time.time()

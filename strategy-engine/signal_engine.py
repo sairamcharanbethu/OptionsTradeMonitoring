@@ -3377,7 +3377,7 @@ def _zerogex_decision_context(
                     _number(playbook_confidence)
                     and float(playbook_confidence) >= 0.5
                 ):
-                    warnings.append(
+                    blockers.append(
                         f"ZeroGEX playbook strongly opposes {side}"
                     )
                 else:
@@ -3417,7 +3417,7 @@ def _zerogex_decision_context(
             elif meaningful_bias and bias_is_directional and bias_side == side:
                 confirmations.append(f"ZeroGEX Trade Bias aligns {side}")
             elif meaningful_bias and bias_is_directional and bias_side != side:
-                warnings.append(f"ZeroGEX Trade Bias conflicts with {side}")
+                blockers.append(f"ZeroGEX Trade Bias conflicts with {side}")
 
             if decision["positioning_trap"]["strong"]:
                 trap_score = decision["positioning_trap"]["score"]
@@ -5223,6 +5223,7 @@ def build_signal(
             return
         applied_zerogex_context.add(side)
         gate = (zerogex_decision.get("gates") or {}).get(side) or {}
+        result["blockers"].extend(gate.get("blockers") or [])
         result["warnings"].extend(gate.get("warnings") or [])
         result["confirmations"].extend(gate.get("confirmations") or [])
     if (
