@@ -18,10 +18,14 @@ async function testEntrySubmittedStatusMapsOrderTypes() {
 
 async function testStaleEntryDecisionMapsReviewAndStaleStates() {
   const protectedLimit = TradeLifecycleService.staleEntryDecision('PENDING_RECONCILE');
+  const reportedFill = TradeLifecycleService.staleEntryDecision('FILLED');
   const market = TradeLifecycleService.staleEntryDecision('PENDING');
 
   assert(protectedLimit.state === 'REVIEW_REQUIRED', `Expected protected limit to require review, got ${protectedLimit.state}`);
   assert(protectedLimit.executionStatus === 'ENTRY_RECONCILE_REQUIRED', `Expected protected limit execution status ENTRY_RECONCILE_REQUIRED, got ${protectedLimit.executionStatus}`);
+  assert(reportedFill.state === 'REVIEW_REQUIRED', `Expected broker-reported fill to require review, got ${reportedFill.state}`);
+  assert(reportedFill.executionStatus === 'ENTRY_RECONCILE_REQUIRED', `Expected broker-reported fill to require reconciliation, got ${reportedFill.executionStatus}`);
+  assert(reportedFill.message.includes('reports this entry as filled'), `Expected broker-reported fill explanation, got ${reportedFill.message}`);
   assert(market.state === 'STALE', `Expected market pending to become STALE, got ${market.state}`);
   assert(market.executionStatus === 'ENTRY_STALE', `Expected market execution status ENTRY_STALE, got ${market.executionStatus}`);
 }

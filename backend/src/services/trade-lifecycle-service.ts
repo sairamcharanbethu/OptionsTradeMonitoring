@@ -80,12 +80,16 @@ export class TradeLifecycleService {
   }
 
   static staleEntryDecision(currentExecutionStatus?: string | null): EntryOrderDecision {
-    if (currentExecutionStatus === 'PENDING_RECONCILE') {
+    if (currentExecutionStatus === 'PENDING_RECONCILE' || ['FILLED', 'FILLED_FULLY'].includes(String(currentExecutionStatus || '').toUpperCase())) {
       return {
         state: 'REVIEW_REQUIRED',
         executionStatus: 'ENTRY_RECONCILE_REQUIRED',
-        message: 'Protected limit entry is still pending after watchdog timeout; broker reconciliation is required before another entry.',
-        noteLabel: 'protected limit entry reconcile-required'
+        message: currentExecutionStatus === 'PENDING_RECONCILE'
+          ? 'Protected limit entry is still pending after watchdog timeout; broker reconciliation is required before another entry.'
+          : 'Broker reports this entry as filled, but the local position is still pending; reconciliation is required before another entry.',
+        noteLabel: currentExecutionStatus === 'PENDING_RECONCILE'
+          ? 'protected limit entry reconcile-required'
+          : 'broker-reported fill reconcile-required'
       };
     }
     return {

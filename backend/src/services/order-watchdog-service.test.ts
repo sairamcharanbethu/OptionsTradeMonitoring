@@ -7,7 +7,7 @@ function assert(condition: boolean, message: string) {
   }
 }
 
-function createFastifyMock() {
+function createFastifyMock(executionStatus = 'PENDING_RECONCILE') {
   const calls: Array<{ sql: string; params?: any[] }> = [];
   const fastify = {
     log: {
@@ -26,7 +26,7 @@ function createFastifyMock() {
               strike_price: 737,
               expiration_date: '2026-06-22',
               status: 'PENDING_ORDER',
-              execution_status: 'PENDING_RECONCILE',
+              execution_status: executionStatus,
               exit_order_type: null,
               created_at: new Date(Date.now() - 20_000).toISOString(),
               exit_requested_at: null
@@ -35,10 +35,10 @@ function createFastifyMock() {
         }
         if (sql.includes('UPDATE positions')) {
           assert(params?.[0] === 'ENTRY_RECONCILE_REQUIRED', `Expected reconcile-required status, got ${params?.[0]}`);
-          assert(String(params?.[1] || '').includes('Protected limit entry'), 'Expected protected-limit reconciliation error');
-          assert(String(params?.[2] || '').includes('protected limit entry reconcile-required'), 'Expected protected-limit reconciliation note');
+          assert(String(params?.[1] || '').includes(executionStatus === 'FILLED' ? 'reports this entry as filled' : 'Protected limit entry'), 'Expected reconciliation error');
+          assert(String(params?.[2] || '').includes(executionStatus === 'FILLED' ? 'broker-reported fill reconcile-required' : 'protected limit entry reconcile-required'), 'Expected reconciliation note');
           assert(params?.[3] === 704, `Expected position id 704, got ${params?.[3]}`);
-          assert(Array.isArray(params?.[4]) && params?.[4].includes('ENTRY_RECONCILE_REQUIRED'), 'Expected centralized final-entry guard list');
+          assert(Array.isArray(params?.[4]) && !params?.[4].includes('FILLED'), 'A pending FILLED row must not be excluded from watchdog recovery');
           return { rowCount: 1, rows: [] };
         }
         if (sql.includes('FROM settings')) {
@@ -64,9 +64,21 @@ async function testProtectedLimitPendingEntryBecomesReconcileRequired() {
   assert(calls.some((call) => call.sql.includes('INSERT INTO trade_events') && call.params?.[3] === 'ENTRY_STATE_CHANGED'), 'Expected entry state change event to be recorded');
 }
 
+async function testBrokerReportedFillPendingEntryBecomesReconcileRequired() {
+  process.env.ORDER_WATCHDOG_ENTRY_STALE_SECONDS = '10';
+  const { fastify, calls } = createFastifyMock('FILLED');
+  const watchdog = new OrderWatchdogService(fastify);
+
+  const summary = await watchdog.run();
+
+  assert(summary.entryStale === 1, `Expected broker-reported fill to become reconciliation-required, got ${summary.entryStale}`);
+  assert(calls.some((call) => call.sql.includes('UPDATE positions')), 'Expected broker-reported fill to be updated instead of remaining pending forever');
+}
+
 async function runTests() {
   console.log('Running OrderWatchdogService tests...');
   await testProtectedLimitPendingEntryBecomesReconcileRequired();
+  await testBrokerReportedFillPendingEntryBecomesReconcileRequired();
   console.log('All OrderWatchdogService tests passed!');
 }
 

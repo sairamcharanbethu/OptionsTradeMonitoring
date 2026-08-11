@@ -708,6 +708,7 @@ export default function DayTradingTerminal() {
   const [dismissSignal, setDismissSignal] = useState<Signal | null>(null);
   const [executing, setExecuting] = useState(false);
   const [dismissing, setDismissing] = useState(false);
+  const [reconcilingBroker, setReconcilingBroker] = useState(false);
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [browserAlertsEnabled, setBrowserAlertsEnabled] = useState(() => (
     typeof window !== 'undefined'
@@ -864,9 +865,11 @@ export default function DayTradingTerminal() {
     || ['PENDING_RECONCILE', 'ACCEPTED', 'PENDING_ORDER', 'PARTIALLY_FILLED', 'FILLED'].includes(executionStatus);
   const executionSkipped = executionStatus === 'SKIPPED';
   const brokerPositionOpen = linkedPosition?.status === 'OPEN';
+  const brokerReportsFill = ['FILLED', 'FILLED_FULLY'].includes(executionStatus);
   const executionNeedsReview = Boolean(
     linkedPosition?.execution_error
     || (!brokerPositionOpen && currentSignal?.execution_error)
+    || (brokerReportsFill && !brokerPositionOpen)
     || (executionStatus && (
       ['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'STALE'].some(status => executionStatus.includes(status))
       || executionStatus.includes('RECONCILE_REQUIRED')
@@ -1042,6 +1045,31 @@ export default function DayTradingTerminal() {
       fetchHealth()
     ]);
     setRefreshing(false);
+  };
+
+  const reconcileBrokerOrder = async () => {
+    if (reconcilingBroker) return;
+    setReconcilingBroker(true);
+    setActionMessage(null);
+    try {
+      const result = await api.syncSnaptradePendingOrders();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals }),
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions }),
+        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.tradeUsage }),
+        refetchHistory()
+      ]);
+      setActionMessage({
+        tone: 'success',
+        text: result.opened > 0
+          ? 'Broker reconciliation linked the filled position.'
+          : 'Broker reconciliation completed. Review the broker state before taking another action.'
+      });
+    } catch (error: any) {
+      setActionMessage({ tone: 'error', text: error.message || 'Broker reconciliation could not be completed.' });
+    } finally {
+      setReconcilingBroker(false);
+    }
   };
 
   useEffect(() => {
@@ -1621,7 +1649,7 @@ export default function DayTradingTerminal() {
                         ? 'Broker position linked'
                         : executionSkipped
                           ? 'Entry evaluation complete'
-                          : executionSubmitting ? 'Order submission in progress' : 'Broker confirmation pending'}
+                        : executionNeedsReview ? 'Broker-reported fill needs reconciliation' : executionSubmitting ? 'Order submission in progress' : 'Broker confirmation pending'}
                     </div>
                     <div className="mt-1 break-words text-zinc-400">
                       {brokerName} · {executionStatus || (executionStarted ? 'SUBMITTED' : linkedPosition?.status || 'UNKNOWN')}
@@ -1631,6 +1659,19 @@ export default function DayTradingTerminal() {
                   <div className="font-mono text-[10px] text-zinc-500 sm:text-right">
                     Status updated {dateTime(brokerSyncAt)}
                   </div>
+                  {brokerReportsFill && !brokerPositionOpen && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-rose-500/30 bg-rose-950/20 text-rose-100 hover:bg-rose-950/35"
+                      onClick={reconcileBrokerOrder}
+                      disabled={reconcilingBroker}
+                    >
+                      {reconcilingBroker ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+                      Reconcile now
+                    </Button>
+                  )}
                 </div>
               )}
               {currentStrategyCode && (

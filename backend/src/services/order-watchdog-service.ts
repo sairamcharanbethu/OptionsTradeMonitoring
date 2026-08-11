@@ -57,7 +57,7 @@ export class OrderWatchdogService {
                 staleDecision.message,
                 ` [Watchdog marked ${staleDecision.noteLabel} after ${Math.round(this.entryStaleMs / 1000)}s]`,
                 row.id,
-                TradeLifecycleService.FINAL_ENTRY_EXECUTION_STATUSES
+                TradeLifecycleService.FINAL_ENTRY_EXECUTION_STATUSES.filter(status => !['FILLED', 'FILLED_FULLY'].includes(status))
               ]
             );
             if (staleUpdate.rowCount === 0) {
