@@ -338,6 +338,19 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
               execution_status: { type: 'string', nullable: true },
               execution_error: { type: 'string', nullable: true },
               contracts_requested: { type: 'integer', nullable: true },
+              execution: {
+                type: 'object',
+                nullable: true,
+                properties: {
+                  status: { type: 'string', nullable: true },
+                  broker: { type: 'string', nullable: true },
+                  order_id: { type: 'string', nullable: true },
+                  trade_id: { type: 'string', nullable: true },
+                  status_detail: { type: 'string', nullable: true },
+                  error: { type: 'string', nullable: true },
+                  contracts_requested: { type: 'integer', nullable: true }
+                }
+              },
               engine_version: { type: 'string', nullable: true },
               strategy_name: { type: 'string', nullable: true },
               strategy_setup_id: { type: 'string', nullable: true },
@@ -411,7 +424,7 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
           s.target_price::double precision, 
           s.confidence_score, 
           s.setup_grade, 
-          COALESCE(sue.status, s.status) AS status, 
+          s.status AS status,
           s.indicators, 
           s.gex, 
           s.volatility, 
@@ -423,6 +436,7 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
           s.token_usage,
           s.ml_probability::double precision AS ml_probability,
           s.option_details,
+          sue.status AS user_execution_status,
           sue.execution_broker,
           sue.broker_order_id,
           sue.broker_trade_id,
@@ -446,7 +460,25 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
         LIMIT 100
       `;
       const { rows } = await fastify.pg.query(query, [userId]);
-      return rows;
+      return rows.map((row: any) => {
+        const execution = row.user_execution_status
+          || row.execution_broker
+          || row.broker_order_id
+          || row.broker_trade_id
+          || row.execution_status
+          || row.execution_error
+          ? {
+              status: row.user_execution_status || null,
+              broker: row.execution_broker || null,
+              order_id: row.broker_order_id || null,
+              trade_id: row.broker_trade_id || null,
+              status_detail: row.execution_status || null,
+              error: row.execution_error || null,
+              contracts_requested: row.contracts_requested ?? null
+            }
+          : null;
+        return { ...row, execution };
+      });
     } catch (err: any) {
       fastify.log.error(err);
       return (reply as any).code(500).send({ error: 'Failed to fetch trade signals' });

@@ -750,6 +750,23 @@ export default function DayTradingTerminal() {
       && signal.strategy_setup_id === strategySetupId
     )) || null;
   }, [signals, strategySetupId]);
+  const currentExecution = currentSignal?.execution || (
+    currentSignal?.execution_status
+    || currentSignal?.execution_broker
+    || currentSignal?.broker_order_id
+    || currentSignal?.broker_trade_id
+    || currentSignal?.execution_error
+      ? {
+          status: currentSignal.status === 'EXECUTED' || currentSignal.status === 'CANCELLED' ? currentSignal.status : null,
+          broker: currentSignal.execution_broker || null,
+          order_id: currentSignal.broker_order_id || null,
+          trade_id: currentSignal.broker_trade_id || null,
+          status_detail: currentSignal.execution_status || null,
+          error: currentSignal.execution_error || null,
+          contracts_requested: currentSignal.contracts_requested ?? null
+        }
+      : null
+  );
 
   const lifecycle = String(
     strategySignal?.state
@@ -801,7 +818,10 @@ export default function DayTradingTerminal() {
   const entryAllowed = currentSignal?.entry_allowed === true
     && currentSignal.lifecycle_status === 'ACTIVE'
     && lifecycleData.entry_allowed !== false;
-  const signalDismissed = currentSignal?.status === 'CANCELLED';
+  const signalDismissed = currentExecution?.status === 'CANCELLED'
+    && !currentExecution.status_detail
+    && !currentExecution.order_id
+    && !currentExecution.trade_id;
   const dismissedActionableSetup = signalDismissed && ['ARMED', 'ACTIVE'].includes(lifecycle);
   const liveMissing = executionMode.live
     ? [
@@ -819,31 +839,6 @@ export default function DayTradingTerminal() {
   const planQuality = setup?.plan_quality || strategySignal?.plan_quality || {};
   const planRewardRisk = Number(planQuality.reward_risk);
   const sessionPolicy = strategySignal?.session_policy || {};
-  const executionBlockers = [
-    !dayTradingEnabled ? 'Day trading is disabled' : null,
-    sessionPolicy.valid !== true || sessionPolicy.is_trading_day !== true
-      ? 'Strategy session policy is unavailable or the market is closed'
-      : null,
-    signalDismissed
-      ? 'This setup is cancelled for your account'
-      : currentSignal && currentSignal.status !== 'PENDING'
-        ? `Signal is ${currentSignal.status.toLowerCase()}`
-        : null,
-    currentSignal?.execution_status ? `Execution is ${String(currentSignal.execution_status).toLowerCase().replace(/_/g, ' ')}` : null,
-    lifecycle !== 'ACTIVE' ? `Lifecycle is ${lifecycle}` : null,
-    !entryAllowed ? 'Entry window is not open' : null,
-    !freshSnapshot ? 'Strategy snapshot is stale' : null,
-    !Number.isFinite(quoteAge) || quoteAge < 0 || quoteAge > 15 ? 'Selected option quote is stale or missing' : null,
-    !gexFresh ? 'Authoritative GEX snapshot is stale or missing' : null,
-    planQuality.meets_minimum !== true || !Number.isFinite(planRewardRisk) || planRewardRisk < 1.5
-      ? 'Strategy plan does not meet the 1.50:1 minimum reward/risk'
-      : null,
-    usageRemaining <= 0 ? 'Daily trade limit reached' : null,
-    plannedContracts <= 0 ? 'Strategy has no executable contract quantity' : null,
-    ...liveMissing,
-    currentSignal?.execution_error || null
-  ].filter(Boolean) as string[];
-  const canExecute = Boolean(currentSignal && executionBlockers.length === 0);
   const linkedPosition = useMemo(() => positions.find(position => {
     const strategyPosition = position as Position & { signal_id?: number; strategy_setup_id?: string };
     return strategyPosition.status !== 'CLOSED' && strategyPosition.strategy_managed === true && (
@@ -854,21 +849,59 @@ export default function DayTradingTerminal() {
   const executionStatus = String(
     linkedPosition?.execution_status
     || linkedPosition?.last_broker_order_status
-    || currentSignal?.execution_status
+    || currentExecution?.status_detail
     || ''
   ).toUpperCase();
-  const signalExecuted = currentSignal?.status === 'EXECUTED';
+  const brokerPositionOpen = linkedPosition?.status === 'OPEN';
+  const executionAlreadyRequested = Boolean(
+    currentExecution && (
+      currentExecution.status === 'EXECUTED'
+      || currentExecution.order_id
+      || currentExecution.trade_id
+      || currentExecution.status_detail
+    )
+  );
+  const strategyEntryBlockers = [
+    !dayTradingEnabled ? 'Day trading is disabled' : null,
+    sessionPolicy.valid !== true || sessionPolicy.is_trading_day !== true
+      ? 'Strategy session policy is unavailable or the market is closed'
+      : null,
+    signalDismissed
+      ? 'This setup is cancelled for your account'
+      : currentSignal && currentSignal.status !== 'PENDING'
+        ? `Signal is ${currentSignal.status.toLowerCase()}`
+        : null,
+    lifecycle !== 'ACTIVE' ? `Lifecycle is ${lifecycle}` : null,
+    !entryAllowed ? 'Entry window is not open' : null,
+    !freshSnapshot ? 'Strategy snapshot is stale' : null,
+    !Number.isFinite(quoteAge) || quoteAge < 0 || quoteAge > 15 ? 'Selected option quote is stale or missing' : null,
+    !gexFresh ? 'Authoritative GEX snapshot is stale or missing' : null,
+    planQuality.meets_minimum !== true || !Number.isFinite(planRewardRisk) || planRewardRisk < 1.5
+      ? 'Strategy plan does not meet the 1.50:1 minimum reward/risk'
+      : null,
+    usageRemaining <= 0 ? 'Daily trade limit reached' : null,
+    plannedContracts <= 0 ? 'Strategy has no executable contract quantity' : null,
+    ...liveMissing
+  ].filter(Boolean) as string[];
+  const executionSafetyBlocker = executionAlreadyRequested
+    ? 'This setup already has a broker execution'
+    : linkedPosition
+      ? 'A position is already linked to this setup'
+      : null;
+  const executionBlockers = [...strategyEntryBlockers, executionSafetyBlocker].filter(Boolean) as string[];
+  const strategyCanExecute = Boolean(currentSignal && strategyEntryBlockers.length === 0);
+  const canExecute = Boolean(strategyCanExecute && !executionSafetyBlocker);
+  const signalExecuted = currentExecution?.status === 'EXECUTED';
   const executionSubmitting = executionStatus === 'SUBMITTING';
   const executionStarted = signalExecuted
     || executionSubmitting
-    || Boolean(currentSignal?.broker_order_id || currentSignal?.broker_trade_id)
+    || Boolean(currentExecution?.order_id || currentExecution?.trade_id)
     || ['PENDING_RECONCILE', 'ACCEPTED', 'PENDING_ORDER', 'PARTIALLY_FILLED', 'FILLED'].includes(executionStatus);
   const executionSkipped = executionStatus === 'SKIPPED';
-  const brokerPositionOpen = linkedPosition?.status === 'OPEN';
   const brokerReportsFill = ['FILLED', 'FILLED_FULLY'].includes(executionStatus);
   const executionNeedsReview = Boolean(
     linkedPosition?.execution_error
-    || (!brokerPositionOpen && currentSignal?.execution_error)
+    || (!brokerPositionOpen && currentExecution?.error)
     || (brokerReportsFill && !brokerPositionOpen)
     || (executionStatus && (
       ['FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'EXPIRED', 'STALE'].some(status => executionStatus.includes(status))
@@ -876,30 +909,10 @@ export default function DayTradingTerminal() {
     ))
   );
   const entryReviewAvailable = ['ARMED', 'ACTIVE'].includes(lifecycle)
-    && (!currentSignal || (currentSignal.status === 'PENDING' && !currentSignal.execution_status));
-  const displayLifecycle = executionSkipped
-      ? 'ENTRY_SKIPPED'
-      : executionNeedsReview
-        ? 'EXECUTION_REVIEW'
-        : brokerPositionOpen
-          ? 'POSITION_OPEN'
-          : executionSubmitting
-            ? 'ORDER_SUBMITTING'
-            : executionStarted
-              ? 'ORDER_SUBMITTED'
-            : dismissedActionableSetup
-              ? 'DISMISSED'
-              : lifecycle;
+    && (!currentSignal || (!signalDismissed && !executionAlreadyRequested));
+  const displayLifecycle = dismissedActionableSetup ? 'DISMISSED' : lifecycle;
   const lifecycleView = stateCopy(displayLifecycle, side, executionMode.autonomous);
-  const currentTone = executionNeedsReview
-    ? 'blocked'
-    : executionSkipped
-      ? 'idle'
-      : brokerPositionOpen
-        ? 'manage'
-        : executionStarted
-          ? 'armed'
-          : dismissedActionableSetup ? 'blocked' : lifecycleTone(lifecycle);
+  const currentTone = dismissedActionableSetup ? 'blocked' : lifecycleTone(lifecycle);
   const currentStrategyCode = strategySignal?.strategy || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
   const spot = Number(strategySignal?.spot);
@@ -936,67 +949,45 @@ export default function DayTradingTerminal() {
   );
   const rewardRisk = planRewardRisk;
   const spreadPct = optionSpreadPct(option);
-  const rawBrokerName = String(linkedPosition?.execution_broker || currentSignal?.execution_broker || '');
+  const rawBrokerName = String(linkedPosition?.execution_broker || currentExecution?.broker || '');
   const brokerName = rawBrokerName === 'wealthsimple_snaptrade'
     ? 'Wealthsimple / SnapTrade'
     : rawBrokerName || (executionMode.live ? 'Wealthsimple / SnapTrade' : 'Simulation');
-  const brokerOrderId = linkedPosition?.broker_order_id || currentSignal?.broker_order_id || null;
+  const brokerOrderId = linkedPosition?.broker_order_id || currentExecution?.order_id || null;
   const brokerSyncAt = linkedPosition?.last_broker_sync_at || linkedPosition?.updated_at || currentSignal?.created_at || null;
   const autonomousResult = String(strategyState?.autonomousEntry?.lastResult || '').replace(/^User\s+\d+:\s*/i, '');
   const autonomousLastAttemptAt = strategyState?.autonomousEntry?.lastAttemptAt || null;
   const executionMessage = linkedPosition?.execution_error
-    || currentSignal?.execution_error
+    || currentExecution?.error
     || autonomousResult
     || null;
   const spotVsTrigger = Number.isFinite(spot) && Number.isFinite(trigger)
     ? `${money(Math.abs(spot - trigger))} ${spot >= trigger ? 'above' : 'below'} trigger`
     : 'trigger distance unavailable';
-  const heartbeatSummary = executionSkipped
-    ? executionMessage || 'The autonomous evaluation ended without submitting a broker order.'
-    : executionNeedsReview
-      ? executionMessage || `Broker status ${executionStatus || 'unknown'} requires verification before another entry.`
-      : brokerPositionOpen
-        ? `The linked ${side || 'directional'} position is open. Entry is closed while broker and strategy management remain active.`
-        : executionSubmitting
-          ? 'StrikePilot is submitting the protected order. Wait for the broker response and do not retry.'
-          : executionStarted
-            ? `The order was submitted${executionStatus ? ` with broker status ${executionStatus}` : ''}. Wait for broker fill confirmation before taking another action.`
-            : dismissedActionableSetup
-              ? `The strategy engine remains ${lifecycle}, but this setup is closed for your account.`
-              : lifecycle === 'ACTIVE'
-                ? `${canExecute ? '' : `${executionBlockers[0] || 'Entry conditions are incomplete'}. `}SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
-                : lifecycle === 'ARMED'
-                  ? `The setup is forming. SPY is ${spotVsTrigger}; entry remains locked until every confirmation passes.`
-                  : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
-                    ? linkedPosition
-                      ? 'A linked autonomous position is in management. Entry is closed while invalidation and target progression are monitored.'
-                      : 'The setup moved into management without an autonomous position linked to your account. Matching manual positions remain manually managed.'
-                    : side
-                      ? `The strategy currently favors ${side === 'CALL' ? 'calls' : 'puts'}, but no qualified entry exists.${strategyBlockers[0] ? ` Waiting on: ${strategyBlockers[0]}.` : ''} SPY is ${spotVsTrigger}.`
-                      : strategyBlockers.includes('SPY 5m structure and VWAP are not aligned')
-                        ? `Entry session is open; waiting for 5-minute structure and VWAP alignment. Current view: ${fiveMinuteStructure.toLowerCase()} 5-minute structure, SPY ${spotVsVwap} VWAP.`
-                        : 'The strategy is monitoring SPY and has not produced a qualified setup.';
-  const heartbeatLabel = executionSkipped
-    ? 'Entry skipped'
-    : executionNeedsReview
-      ? 'Broker review required'
-      : brokerPositionOpen
-        ? 'Position open'
-        : executionSubmitting
-          ? 'Submitting order'
-          : executionStarted
-            ? 'Order submitted'
-            : dismissedActionableSetup
-              ? 'Closed for your account'
-              : canExecute
-                ? 'Entry conditions live'
-                : lifecycle === 'ACTIVE'
-                  ? 'Entry blocked'
-                  : lifecycle === 'ARMED'
-                    ? 'Setup forming'
-                    : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
-                      ? linkedPosition ? 'Position management' : 'Setup management'
-                      : 'Watching SPY';
+  const heartbeatSummary = dismissedActionableSetup
+    ? `The strategy engine remains ${lifecycle}, but this setup is closed for your account.`
+    : lifecycle === 'ACTIVE'
+      ? `${strategyCanExecute ? 'Strategy entry conditions are live. ' : `${strategyEntryBlockers[0] || 'Entry conditions are incomplete'}. `}SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
+      : lifecycle === 'ARMED'
+        ? `The setup is forming. SPY is ${spotVsTrigger}; entry remains locked until every confirmation passes.`
+        : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
+          ? 'The strategy is monitoring invalidation and target progression.'
+          : side
+            ? `The strategy currently favors ${side === 'CALL' ? 'calls' : 'puts'}, but no qualified entry exists.${strategyBlockers[0] ? ` Waiting on: ${strategyBlockers[0]}.` : ''} SPY is ${spotVsTrigger}.`
+            : strategyBlockers.includes('SPY 5m structure and VWAP are not aligned')
+              ? `Entry session is open; waiting for 5-minute structure and VWAP alignment. Current view: ${fiveMinuteStructure.toLowerCase()} 5-minute structure, SPY ${spotVsVwap} VWAP.`
+              : 'The strategy is monitoring SPY and has not produced a qualified setup.';
+  const heartbeatLabel = dismissedActionableSetup
+    ? 'Closed for your account'
+    : strategyCanExecute
+      ? 'Strategy entry conditions live'
+      : lifecycle === 'ACTIVE'
+        ? 'Strategy entry blocked'
+        : lifecycle === 'ARMED'
+          ? 'Setup forming'
+          : lifecycle === 'MANAGE' || lifecycle === 'EXTENDED'
+            ? 'Setup management'
+            : 'Watching SPY';
   const approvalStillCurrent = !executeSignal || executeSignal.id === currentSignal?.id;
   const dismissStillCurrent = !dismissSignal || dismissSignal.id === currentSignal?.id;
   const approvalWindows = [
@@ -1644,6 +1635,7 @@ export default function DayTradingTerminal() {
                       : 'border-amber-500/20 bg-amber-950/10'
                 }`}>
                   <div className="min-w-0">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Broker execution</div>
                     <div className="font-semibold text-zinc-200">
                       {brokerPositionOpen
                         ? 'Broker position linked'
@@ -1714,27 +1706,17 @@ export default function DayTradingTerminal() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className={`h-2 w-2 shrink-0 rounded-full ${
-                        displayLifecycle === 'DISMISSED' || executionSkipped
+                        displayLifecycle === 'DISMISSED'
                           ? 'bg-zinc-500'
-                          : executionNeedsReview
-                            ? 'bg-rose-400'
-                            : brokerPositionOpen
-                              ? 'bg-sky-400'
-                              : executionStarted
-                                ? 'bg-amber-400'
-                                : lifecycle === 'ACTIVE' && canExecute
-                                  ? 'animate-pulse bg-emerald-400'
-                                  : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'
+                          : lifecycle === 'ACTIVE' && strategyCanExecute
+                            ? 'animate-pulse bg-emerald-400'
+                            : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'
                       }`} />
                       <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Setup heartbeat</span>
                       <span className={`text-[10px] font-semibold ${
-                        executionNeedsReview
-                          ? 'text-rose-300'
-                          : brokerPositionOpen
-                            ? 'text-sky-300'
-                            : dismissedActionableSetup || executionStarted || !canExecute
-                              ? 'text-amber-300'
-                              : 'text-emerald-300'
+                        dismissedActionableSetup || !strategyCanExecute
+                          ? 'text-amber-300'
+                          : 'text-emerald-300'
                       }`}>{heartbeatLabel}</span>
                     </div>
                     <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-zinc-300">{heartbeatSummary}</p>

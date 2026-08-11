@@ -1920,6 +1920,15 @@ export interface Signal {
   execution_status?: string | null;
   execution_error?: string | null;
   contracts_requested?: number | null;
+  execution?: {
+    status: 'PENDING' | 'EXECUTED' | 'CANCELLED' | null;
+    broker: string | null;
+    order_id: string | null;
+    trade_id: string | null;
+    status_detail: string | null;
+    error: string | null;
+    contracts_requested: number | null;
+  } | null;
   news_context?: string | null;
   ai_coach_commentary?: string | null;
   ml_probability?: number | null;

@@ -94,10 +94,55 @@ async function testStrategyFamilyHistoryUsesShadowJournalReader() {
   }
 }
 
+async function testSignalsKeepStrategyStatusSeparateFromExecutionProjection() {
+  let capturedSql = '';
+  const app = Fastify({ logger: false });
+  (app as any).decorate('authenticate', async (request: any) => {
+    request.user = { id: 42 };
+  });
+  (app as any).decorate('pg', {
+    query: async (sql: string) => {
+      if (sql.includes('FROM signals s') && sql.includes('LIMIT 100')) {
+        capturedSql = sql;
+        return {
+          rows: [{
+            id: 1,
+            status: 'PENDING',
+            user_execution_status: 'EXECUTED',
+            execution_broker: 'wealthsimple_snaptrade',
+            broker_order_id: 'order-1',
+            broker_trade_id: null,
+            execution_status: 'FILLED',
+            execution_error: null,
+            contracts_requested: 1
+          }]
+        };
+      }
+      return { rows: [] };
+    }
+  });
+
+  try {
+    await app.register(signalRoutes, { prefix: '/api/signals' });
+    const response = await app.inject({ method: 'GET', url: '/api/signals' });
+
+    assert(response.statusCode === 200, `Expected 200, got ${response.statusCode}: ${response.body}`);
+    assert(capturedSql.includes('s.status AS status'), 'Signal status must come from the strategy signal, not user execution');
+    assert(!capturedSql.includes('COALESCE(sue.status, s.status) AS status'), 'Execution status must not overwrite strategy status');
+    const payload = response.json();
+    assert(payload[0].status === 'PENDING', 'Strategy lifecycle must remain PENDING after execution');
+    assert(payload[0].execution.status === 'EXECUTED', 'Execution state must be exposed separately');
+    assert(payload[0].execution.status_detail === 'FILLED', 'Broker status must remain in the execution projection');
+  } finally {
+    await app.close();
+  }
+}
+
 async function runTests() {
   console.log('Running signal route tests...');
   await testStrategyHistoryIncludesCompactShadowEvidence();
   await testStrategyFamilyHistoryUsesShadowJournalReader();
+  await testSignalsKeepStrategyStatusSeparateFromExecutionProjection();
   console.log('All signal route tests passed!');
 }
 
