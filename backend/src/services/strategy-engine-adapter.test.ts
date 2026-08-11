@@ -10,7 +10,7 @@ function assert(condition: any, message: string): asserts condition {
 function createAdapter() {
   return new StrategyEngineAdapter({
     pg: { query: async () => ({ rows: [] }) },
-    log: { info: () => undefined, warn: () => undefined }
+    log: { info: () => undefined, warn: () => undefined, error: () => undefined }
   } as any) as any;
 }
 
@@ -179,6 +179,29 @@ async function runTests() {
   assert(persistenceAttempts === 2, 'An unchanged snapshot must retry after a transient persistence failure');
   assert(retryAdapter.currentSignal === replacementSignal, 'A successful retry must publish the replacement snapshot');
   assert(retryAdapter.currentSetupId === retrySetupId, 'A persistence retry must not generate a second setup id');
+
+  const lifecycleIsolationAdapter = createAdapter();
+  const lifecycleErrors: string[] = [];
+  lifecycleIsolationAdapter.fastify.log.error = (message: string) => lifecycleErrors.push(message);
+  lifecycleIsolationAdapter.persistEvent = async () => true;
+  lifecycleIsolationAdapter.persistPrimarySignal = async () => 77;
+  lifecycleIsolationAdapter.notifyStrategyLifecycle = async () => undefined;
+  lifecycleIsolationAdapter.retireSupersededSetup = () => new Promise<void>(() => undefined);
+  lifecycleIsolationAdapter.maybeExecuteAutonomousLiveEntries = async () => {
+    throw new Error('simulated autonomous manager failure');
+  };
+  lifecycleIsolationAdapter.laneSetupIds.mtf_trend_break = 'old-setup';
+  lifecycleIsolationAdapter.lanePlanFingerprints.mtf_trend_break = 'old-plan';
+  const isolatedSignal = signal({
+    strategy_lane: 'mtf_trend_break',
+    state: 'ACTIVE',
+    lifecycle: { entry_allowed: true },
+    call_setup: { ...signal().call_setup, trigger: 551 }
+  });
+  await lifecycleIsolationAdapter.processLaneSnapshot('mtf_trend_break', isolatedSignal);
+  assert(lifecycleIsolationAdapter.currentSignals.mtf_trend_break === isolatedSignal, 'Lifecycle-manager failures must not roll back a newly generated strategy signal');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert(lifecycleErrors.length === 1, 'Lifecycle-manager failures must be recorded separately from the signal stream');
 
   const eventOne = adapter.eventFingerprint(signal());
   const eventTwo = adapter.eventFingerprint(signal({ spot: 551, generated_at: 1_786_000_001 }));
@@ -366,7 +389,8 @@ async function runTests() {
   queries.length = 0;
   await persistenceAdapter.retireSupersededSetup('old-setup', signal());
   assert(queries.some((query) => query.sql.includes("lifecycle_status = 'SUPERSEDED'")), 'A replaced setup signal must become terminal');
-  assert(queries.some((query) => query.sql.includes("strategy_exit_reason = 'SUPERSEDED'")), 'A linked open position must receive a superseded exit request');
+  const supersededPositionUpdate = queries.find((query) => query.sql.includes('strategy_exit_reason = $2'));
+  assert(supersededPositionUpdate?.values[1] === 'SUPERSEDED', 'A linked open position must receive a superseded exit request');
 
   const autonomousCalls: any[] = [];
   const autonomousUserIds = [9191, 9192];

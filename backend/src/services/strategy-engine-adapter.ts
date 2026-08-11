@@ -7,6 +7,7 @@ import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/setting
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 import { getNewYorkDateParts, getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { DiscordAlertService } from './discord-alert-service';
+import { StrategyLifecycleManager } from './strategy-lifecycle-manager';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
 
@@ -45,9 +46,11 @@ export class StrategyEngineAdapter {
   private lastZeroGexKeyFingerprint: string | null = null;
   private lastAutonomousEntryAt: string | null = null;
   private lastAutonomousEntryResult: string | null = null;
+  private lifecycleManager: StrategyLifecycleManager;
 
   constructor(private fastify: FastifyInstance) {
     this.dataDir = process.env.STRATEGY_DATA_DIR || '/strategy-data/trade';
+    this.lifecycleManager = new StrategyLifecycleManager(fastify);
   }
 
   public getMode(): StrategyEngineMode {
@@ -485,7 +488,9 @@ export class StrategyEngineAdapter {
       this.laneSetupIds[lane] = setupId;
       this.lanePlanFingerprints[lane] = planFingerprint;
       if (supersededSetupId) {
-        await this.retireSupersededSetup(supersededSetupId, signal);
+        void this.retireSupersededSetup(supersededSetupId, signal).catch((err: any) => {
+          this.fastify.log.error(`[StrategyEngineAdapter:${lane}] Lifecycle manager could not retire superseded setup ${supersededSetupId}: ${err.message || String(err)}`);
+        });
       }
     }
     this.currentSignals[lane] = signal;
@@ -506,7 +511,9 @@ export class StrategyEngineAdapter {
       if (this.mode === 'primary') {
         persistedSignalId = await this.persistPrimarySignal(signal, setupId);
         if (persistedSignalId) {
-          await this.maybeExecuteAutonomousLiveEntries(signal, persistedSignalId);
+          void this.maybeExecuteAutonomousLiveEntries(signal, persistedSignalId).catch((err: any) => {
+            this.fastify.log.error(`[StrategyEngineAdapter:${lane}] Lifecycle manager autonomous entry processing failed: ${err.message || String(err)}`);
+          });
         }
       }
       if (eventInserted) {
@@ -550,26 +557,7 @@ export class StrategyEngineAdapter {
   }
 
   private async retireSupersededSetup(setupId: string, signal: StrategySnapshot): Promise<void> {
-    await (this.fastify as any).pg.query(
-      `UPDATE signals
-       SET lifecycle_status = 'SUPERSEDED',
-           entry_allowed = FALSE,
-           status = CASE WHEN status IN ('PENDING', 'PENDING_TRIGGER') THEN 'CANCELLED' ELSE status END
-       WHERE strategy_setup_id = $1`,
-      [setupId]
-    );
-    await (this.fastify as any).pg.query(
-      `UPDATE positions
-       SET strategy_lifecycle_status = 'SUPERSEDED',
-           strategy_exit_requested_at = COALESCE(strategy_exit_requested_at, CURRENT_TIMESTAMP),
-           strategy_exit_reason = 'SUPERSEDED',
-           notes = COALESCE(notes, '') || ' [Strategy setup superseded by a new frozen plan]',
-           updated_at = CURRENT_TIMESTAMP
-       WHERE strategy_setup_id = $1
-         AND strategy_managed = TRUE
-         AND status = 'OPEN'`,
-      [setupId]
-    );
+    await this.lifecycleManager.retireSupersededSetup(setupId, signal);
     this.fastify.log.info(`[StrategyEngineAdapter] Retired superseded setup ${setupId} before activating the new ${signal.favoring || 'directional'} plan.`);
   }
 
@@ -808,18 +796,9 @@ export class StrategyEngineAdapter {
          WHERE strategy_setup_id = $1`,
         [setupId, terminalState, JSON.stringify(signal)]
       );
-      await (this.fastify as any).pg.query(
-        `UPDATE positions
-         SET strategy_lifecycle_status = $2,
-             strategy_snapshot = $3,
-             strategy_exit_requested_at = COALESCE(strategy_exit_requested_at, CURRENT_TIMESTAMP),
-             strategy_exit_reason = $2,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE strategy_setup_id = $1
-           AND strategy_managed = TRUE
-           AND status = 'OPEN'`,
-        [setupId, terminalState, JSON.stringify(signal)]
-      );
+      void this.lifecycleManager.requestTerminalExit(setupId, terminalState, signal).catch((err: any) => {
+        this.fastify.log.error(`[StrategyEngineAdapter] Lifecycle manager could not request ${terminalState} exit for ${setupId}: ${err.message || String(err)}`);
+      });
       return null;
     }
     if (!ACTIVE_STATES.has(state)) return null;
@@ -964,12 +943,6 @@ export class StrategyEngineAdapter {
     );
     if (!rows?.length) return;
 
-    const scanner = (this.fastify as any).scanner;
-    if (!scanner?.executeSignalForUser) {
-      this.lastAutonomousEntryResult = 'Blocked: scanner execution service unavailable';
-      return;
-    }
-
     const attemptedAt = new Date().toISOString();
     const outcomes = await Promise.all(rows.map(async (row: any) => {
       const userId = Number(row.user_id);
@@ -981,10 +954,11 @@ export class StrategyEngineAdapter {
       }
 
       try {
-        await this.assertSignalExecutable(signalId);
-        const result = await scanner.executeSignalForUser(userId, signalId, {
-          ...settings,
-          contracts_per_trade: '1'
+        const result = await this.lifecycleManager.submitAutonomousEntry({
+          userId,
+          signalId,
+          settings,
+          assertExecutable: (candidateSignalId) => this.assertSignalExecutable(candidateSignalId)
         });
         return {
           userId,
