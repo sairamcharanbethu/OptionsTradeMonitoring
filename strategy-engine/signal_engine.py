@@ -2663,6 +2663,113 @@ def provider_timestamp_freshness(
     }
 
 
+def market_data_readiness(
+    market: dict[str, Any],
+    indicators: dict[str, dict[str, Any]],
+    *,
+    now: float,
+    stale_after: float,
+) -> dict[str, Any]:
+    """Return the precise IBKR prerequisites for an SPY entry decision.
+
+    This contract is deliberately data-only. Strategy qualification may still
+    return WAIT after readiness is healthy.
+    """
+    spy_market = (market.get("symbols") or {}).get("SPY") or {}
+    spy = indicators.get("SPY") or {}
+    transport = market.get("transport") or {}
+    generated_at = market.get("generated_at")
+    snapshot_age = (
+        now - float(generated_at)
+        if _number(generated_at)
+        else None
+    )
+    quote_age = spy_market.get("quote_age_seconds")
+    bars = spy_market.get("bars") or []
+    completed = [
+        bar
+        for bar in _session_bars(bars, now=now)
+        if _number(bar.get("time")) and float(bar["time"]) < int(now // 60) * 60
+    ]
+    completed_bar_age = spy.get("completed_bar_age_seconds")
+    if not _number(completed_bar_age):
+        latest = max(
+            (float(bar.get("time", 0)) for bar in completed if _number(bar.get("time"))),
+            default=None,
+        )
+        completed_bar_age = now - latest if latest else None
+
+    codes: list[str] = []
+    if transport.get("connected") is False:
+        codes.append("IBKR_GATEWAY_DISCONNECTED")
+    if not _number(spy_market.get("spot")) or float(spy_market.get("spot") or 0) <= 0:
+        codes.append("SPY_QUOTE_MISSING")
+    if not _number(quote_age):
+        codes.append("SPY_QUOTE_TIMESTAMP_MISSING")
+    elif float(quote_age) < 0:
+        codes.append("SPY_QUOTE_TIMESTAMP_FUTURE")
+    elif float(quote_age) > stale_after:
+        codes.append("SPY_QUOTE_STALE")
+    if snapshot_age is None:
+        codes.append("STRATEGY_SNAPSHOT_TIMESTAMP_MISSING")
+    elif snapshot_age < 0:
+        codes.append("STRATEGY_SNAPSHOT_CLOCK_SKEW")
+    elif snapshot_age > stale_after:
+        codes.append("STRATEGY_SNAPSHOT_STALE")
+    if not completed:
+        codes.append("SPY_BARS_MISSING")
+    elif not _number(completed_bar_age) or float(completed_bar_age) > 125:
+        codes.append("SPY_BARS_STALE")
+    elif len(completed) < 22:
+        codes.append("SPY_BARS_INSUFFICIENT")
+    if not _number(spy.get("vwap")):
+        codes.append("SPY_VWAP_UNAVAILABLE")
+
+    critical_codes = {
+        "IBKR_GATEWAY_DISCONNECTED",
+        "SPY_QUOTE_MISSING",
+        "SPY_QUOTE_TIMESTAMP_MISSING",
+        "SPY_QUOTE_TIMESTAMP_FUTURE",
+        "SPY_QUOTE_STALE",
+        "STRATEGY_SNAPSHOT_TIMESTAMP_MISSING",
+        "STRATEGY_SNAPSHOT_CLOCK_SKEW",
+        "STRATEGY_SNAPSHOT_STALE",
+        "SPY_BARS_MISSING",
+        "SPY_BARS_STALE",
+    }
+    summary_by_code = {
+        "IBKR_GATEWAY_DISCONNECTED": "IBKR Gateway is disconnected",
+        "SPY_QUOTE_MISSING": "IBKR has not supplied a usable SPY quote",
+        "SPY_QUOTE_TIMESTAMP_MISSING": "IBKR SPY quote timestamp is unavailable",
+        "SPY_QUOTE_TIMESTAMP_FUTURE": "IBKR SPY quote timestamp is ahead of this service clock",
+        "SPY_QUOTE_STALE": "IBKR SPY quote is stale",
+        "STRATEGY_SNAPSHOT_TIMESTAMP_MISSING": "Strategy snapshot timestamp is unavailable",
+        "STRATEGY_SNAPSHOT_CLOCK_SKEW": "Strategy snapshot clock is ahead of this service",
+        "STRATEGY_SNAPSHOT_STALE": "Strategy snapshot is stale",
+        "SPY_BARS_MISSING": "IBKR SPY one-minute bars are unavailable",
+        "SPY_BARS_STALE": "IBKR SPY one-minute bars are stale",
+        "SPY_BARS_INSUFFICIENT": "SPY is still warming up completed intraday bars",
+        "SPY_VWAP_UNAVAILABLE": "SPY VWAP is unavailable from completed IBKR bars",
+    }
+    critical = [code for code in codes if code in critical_codes]
+    return {
+        "status": "BLOCKED" if critical else "DEGRADED" if codes else "READY",
+        "entry_ready": not critical,
+        "codes": codes,
+        "summary": summary_by_code[codes[0]] if codes else "IBKR SPY market data is live",
+        "snapshot_age_seconds": round(snapshot_age, 2) if snapshot_age is not None else None,
+        "quote_age_seconds": round(float(quote_age), 2) if _number(quote_age) else None,
+        "completed_bars": len(completed),
+        "completed_bar_age_seconds": (
+            round(float(completed_bar_age), 2)
+            if _number(completed_bar_age)
+            else None
+        ),
+        "vwap": spy.get("vwap") if _number(spy.get("vwap")) else None,
+        "transport": transport,
+    }
+
+
 def _zerogex_context(
     snapshot: dict[str, Any] | None,
     gex_ctx: dict[str, Any],
@@ -5080,9 +5187,14 @@ def build_signal(
     spy = indicators.get("SPY") or {}
     qqq = indicators.get("QQQ") or {}
     spot = spy_market.get("spot")
-    market_age = now - float(market.get("generated_at", 0))
     quote_age = spy_market.get("quote_age_seconds")
     qqq_quote_age = qqq_market.get("quote_age_seconds")
+    readiness = market_data_readiness(
+        market,
+        indicators,
+        now=now,
+        stale_after=stale_after,
+    )
     entry_structure_context["cross_market"] = calculate_cross_market_context(
         spy,
         qqq,
@@ -5199,6 +5311,7 @@ def build_signal(
         "signal_phase": "NO_TRADE",
         "favoring": "no-trade",
         "spot": spot,
+        "market_data_readiness": readiness,
         "blockers": [],
         "warnings": [],
         "confirmations": [],
@@ -5226,12 +5339,8 @@ def build_signal(
         result["blockers"].extend(gate.get("blockers") or [])
         result["warnings"].extend(gate.get("warnings") or [])
         result["confirmations"].extend(gate.get("confirmations") or [])
-    if (
-        not _number(spot)
-        or market_age > stale_after
-        or (_number(quote_age) and quote_age > stale_after)
-    ):
-        blocker = "stale or missing IBKR market data"
+    if not readiness["entry_ready"]:
+        blocker = readiness["summary"]
         preserved = _preserve_open_tracking_during_data_block(
             previous_signal,
             result,
@@ -5242,6 +5351,7 @@ def build_signal(
             preserved["entry_structure_context"] = entry_structure_context
             preserved["strategy_family_context"] = strategy_family_context
             preserved["trendline_context"] = trendline_context
+            preserved["market_data_readiness"] = readiness
             return _dedupe_messages(preserved)
         result["blockers"].append(blocker)
         return _dedupe_messages(result)
@@ -5285,6 +5395,7 @@ def build_signal(
             entry_structure_context=entry_structure_context,
             strategy_family_context=strategy_family_context,
             trendline_context=trendline_context,
+            market_data_readiness=readiness,
             execution_enabled=False,
             engine_version=ENGINE_VERSION,
         )
@@ -6691,8 +6802,12 @@ def _quick_blocker(reason: Any) -> str:
         return "warming up; more completed bars are required"
     if "structure and vwap are not aligned" in lower:
         return "5m structure and VWAP disagree"
-    if "stale or missing ibkr market data" in lower:
-        return "market data is unavailable or stale"
+    if "ibkr gateway is disconnected" in lower:
+        return "IBKR Gateway is disconnected"
+    if "ibkr has not supplied a usable spy quote" in lower:
+        return "IBKR has no usable SPY quote"
+    if "ibkr spy quote" in lower or "ibkr spy one-minute bars" in lower:
+        return text
     if "gex unavailable or incomplete" in lower:
         return "GEX is unavailable; new entries are blocked"
     if "gex snapshot stale" in lower:
@@ -7034,10 +7149,10 @@ def _render_signal_details(signal: dict[str, Any], *, color: bool = False) -> st
     phase = str(signal.get("signal_phase") or "").upper()
     favored_setup = call if favoring == "calls" else (put if favoring == "puts" else {})
     favored_option = favored_setup.get("option") or {}
-    blockers_text = " ".join(str(item).lower() for item in signal.get("blockers") or [])
+    readiness = signal.get("market_data_readiness") or {}
     data_offline = (
         signal.get("spot") is None
-        and "stale or missing ibkr market data" in blockers_text
+        and readiness.get("status") == "BLOCKED"
     )
     side = "CALL" if favoring == "calls" else "PUT" if favoring == "puts" else None
     action = (

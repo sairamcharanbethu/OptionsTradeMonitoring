@@ -210,6 +210,13 @@ const gexAgeSeconds = (signal: Record<string, any> | null) => {
   return Number.isFinite(timestamp) && timestamp > 0 ? Math.max(0, Date.now() / 1000 - timestamp) : Number.NaN;
 };
 
+const marketDataReadinessCopy = (readiness: Record<string, any> | null) => {
+  const summary = String(readiness?.summary || '').trim();
+  if (summary) return summary;
+  const code = String(readiness?.codes?.[0] || '').trim();
+  return code ? code.replace(/_/g, ' ').toLowerCase() : 'IBKR market-data readiness is unavailable';
+};
+
 const contractName = (option: OptionDetailsJSON | Record<string, any>, side: string | null) => (
   option.ticker || option.local_symbol || (side ? `SPY ${side}` : 'No contract selected')
 );
@@ -814,6 +821,12 @@ export default function DayTradingTerminal() {
     ? baseQuoteAge + Math.max(0, snapshotAge)
     : Number.NaN;
   const freshSnapshot = Number.isFinite(snapshotAge) && snapshotAge >= 0 && snapshotAge <= 20;
+  const marketDataReadiness = strategyState?.marketDataReadiness
+    || strategySignal?.market_data_readiness
+    || strategyState?.health?.market_data_readiness
+    || null;
+  const marketDataBlocked = marketDataReadiness?.status === 'BLOCKED';
+  const marketDataSummary = marketDataReadinessCopy(marketDataReadiness);
   const usageRemaining = Number(tradeUsage?.remaining ?? 0);
   const entryAllowed = currentSignal?.entry_allowed === true
     && currentSignal.lifecycle_status === 'ACTIVE'
@@ -873,6 +886,7 @@ export default function DayTradingTerminal() {
         : null,
     lifecycle !== 'ACTIVE' ? `Lifecycle is ${lifecycle}` : null,
     !entryAllowed ? 'Entry window is not open' : null,
+    marketDataBlocked ? marketDataSummary : null,
     !freshSnapshot ? 'Strategy snapshot is stale' : null,
     !Number.isFinite(quoteAge) || quoteAge < 0 || quoteAge > 15 ? 'Selected option quote is stale or missing' : null,
     !gexFresh ? 'Authoritative GEX snapshot is stale or missing' : null,
@@ -911,8 +925,14 @@ export default function DayTradingTerminal() {
   const entryReviewAvailable = ['ARMED', 'ACTIVE'].includes(lifecycle)
     && (!currentSignal || (!signalDismissed && !executionAlreadyRequested));
   const displayLifecycle = dismissedActionableSetup ? 'DISMISSED' : lifecycle;
-  const lifecycleView = stateCopy(displayLifecycle, side, executionMode.autonomous);
-  const currentTone = dismissedActionableSetup ? 'blocked' : lifecycleTone(lifecycle);
+  const lifecycleView = marketDataBlocked && !['MANAGE', 'EXTENDED'].includes(lifecycle)
+    ? {
+        eyebrow: 'Market data blocked',
+        title: 'SPY market data is not ready',
+        description: `${marketDataSummary}. New entries remain blocked until the strategy receives fresh IBKR data.`
+      }
+    : stateCopy(displayLifecycle, side, executionMode.autonomous);
+  const currentTone = dismissedActionableSetup || marketDataBlocked ? 'blocked' : lifecycleTone(lifecycle);
   const currentStrategyCode = strategySignal?.strategy || null;
   const currentStrategy = strategyDisplay(currentStrategyCode);
   const spot = Number(strategySignal?.spot);
@@ -966,6 +986,8 @@ export default function DayTradingTerminal() {
     : 'trigger distance unavailable';
   const heartbeatSummary = dismissedActionableSetup
     ? `The strategy engine remains ${lifecycle}, but this setup is closed for your account.`
+    : marketDataBlocked
+      ? `${marketDataSummary}. The strategy is preserving its safety gate and will resume setup evaluation after fresh IBKR data arrives.`
     : lifecycle === 'ACTIVE'
       ? `${strategyCanExecute ? 'Strategy entry conditions are live. ' : `${strategyEntryBlockers[0] || 'Entry conditions are incomplete'}. `}SPY is ${spotVsTrigger}; ${money(Math.abs(spot - invalidation))} from invalidation and ${money(Math.abs(targetTwo - spot))} from Target 2.`
       : lifecycle === 'ARMED'
@@ -979,6 +1001,8 @@ export default function DayTradingTerminal() {
               : 'The strategy is monitoring SPY and has not produced a qualified setup.';
   const heartbeatLabel = dismissedActionableSetup
     ? 'Closed for your account'
+    : marketDataBlocked
+      ? 'IBKR data recovery required'
     : strategyCanExecute
       ? 'Strategy entry conditions live'
       : lifecycle === 'ACTIVE'
@@ -1708,6 +1732,8 @@ export default function DayTradingTerminal() {
                       <span className={`h-2 w-2 shrink-0 rounded-full ${
                         displayLifecycle === 'DISMISSED'
                           ? 'bg-zinc-500'
+                        : marketDataBlocked
+                          ? 'bg-rose-400'
                           : lifecycle === 'ACTIVE' && strategyCanExecute
                             ? 'animate-pulse bg-emerald-400'
                             : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'

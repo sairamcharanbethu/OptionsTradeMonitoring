@@ -31,6 +31,7 @@ from signal_engine import (
     calculate_orb_index_context,
     calculate_vwap_trend_context,
     calculate_trendline_context,
+    market_data_readiness,
     render_signal,
 )
 
@@ -2364,12 +2365,13 @@ class OtmOptionSelectionTest(unittest.TestCase):
                 "state": "WAIT",
                 "favoring": "no-trade",
                 "spot": None,
-                "blockers": ["stale or missing IBKR market data"],
+                "blockers": ["IBKR Gateway is disconnected"],
+                "market_data_readiness": {"status": "BLOCKED"},
                 "execution_enabled": False,
             }
         )
         self.assertIn(
-            "NO TRADE | SPY unavailable | market data is unavailable or stale",
+            "NO TRADE | SPY unavailable | IBKR Gateway is disconnected",
             text,
         )
         self.assertIn("SPY unavailable", text)
@@ -3938,6 +3940,53 @@ class ContinuationStateTest(unittest.TestCase):
         self.assertIsNotNone(premium["hit_10_at"])
         self.assertIsNotNone(premium["hit_20_at"])
         self.assertEqual(premium["max_bid"], 1.23)
+
+
+class MarketDataReadinessTest(unittest.TestCase):
+    def test_reports_precise_ibkr_outage_codes(self) -> None:
+        now = TEST_SESSION_NOW
+        readiness = market_data_readiness(
+            {
+                "generated_at": now,
+                "transport": {"connected": False},
+                "symbols": {"SPY": {"spot": None, "quote_age_seconds": None, "bars": []}},
+            },
+            {"SPY": {}},
+            now=now,
+            stale_after=5,
+        )
+        self.assertEqual(readiness["status"], "BLOCKED")
+        self.assertIn("IBKR_GATEWAY_DISCONNECTED", readiness["codes"])
+        self.assertIn("SPY_QUOTE_MISSING", readiness["codes"])
+        self.assertIn("SPY_BARS_MISSING", readiness["codes"])
+        self.assertEqual(readiness["summary"], "IBKR Gateway is disconnected")
+
+    def test_keeps_warming_up_bars_distinct_from_an_ibkr_outage(self) -> None:
+        now = TEST_SESSION_NOW
+        bars = [
+            {
+                "time": now - (index + 1) * 60,
+                "open": 600.0,
+                "high": 600.2,
+                "low": 599.8,
+                "close": 600.1,
+                "volume": 1_000,
+            }
+            for index in range(6)
+        ]
+        readiness = market_data_readiness(
+            {
+                "generated_at": now,
+                "transport": {"connected": True},
+                "symbols": {"SPY": {"spot": 600.1, "quote_age_seconds": 1, "bars": bars}},
+            },
+            {"SPY": {"vwap": 600.0, "completed_bar_age_seconds": 60}},
+            now=now,
+            stale_after=5,
+        )
+        self.assertEqual(readiness["status"], "DEGRADED")
+        self.assertTrue(readiness["entry_ready"])
+        self.assertEqual(readiness["codes"], ["SPY_BARS_INSUFFICIENT"])
 
 
 if __name__ == "__main__":

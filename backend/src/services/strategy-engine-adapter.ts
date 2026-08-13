@@ -107,6 +107,9 @@ export class StrategyEngineAdapter {
       ageSeconds,
       error: this.lastError,
       health: this.currentHealth,
+      marketDataReadiness: this.currentSignal?.market_data_readiness
+        || this.currentHealth?.market_data_readiness
+        || null,
       signal: this.currentSignal,
       strategySignals: Object.entries(this.currentSignals).map(([lane, signal]) => ({
         lane,

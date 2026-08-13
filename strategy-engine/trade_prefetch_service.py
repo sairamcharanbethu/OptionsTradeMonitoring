@@ -37,6 +37,7 @@ from signal_engine import (
     build_signal,
     calculate_indicators,
     compact_signal_for_journal,
+    market_data_readiness,
     provider_timestamp_freshness,
     render_signal,
 )
@@ -567,6 +568,7 @@ class TradePrefetcher:
         self.local_gex: dict[str, Any] | None = None
         self.last_local_gex_at = 0.0
         self.last_journal_at = 0.0
+        self.runtime_ibkr_config: dict[str, Any] = {}
         self.redis_publisher: Any = None
         self.redis_retry_at = 0.0
         self.redis_last_error_at = 0.0
@@ -716,16 +718,34 @@ class TradePrefetcher:
 
     def _apply_runtime_ibkr_policy(self) -> None:
         policy = _read_policy(getattr(self.args, "policy_file", None))
-        host = str(policy.get("ibkr_host") or self.args.host).strip()
-        port = int(policy.get("ibkr_port") or self.args.port)
+        configured_host = str(policy.get("ibkr_host") or "").strip()
+        configured_port = policy.get("ibkr_port")
+        host = configured_host or self.args.host
+        try:
+            port = int(configured_port) if configured_port is not None else self.args.port
+        except (TypeError, ValueError):
+            raise ValueError("Invalid runtime IBKR port in strategy policy")
+        if not host or port <= 0:
+            raise ValueError("Invalid runtime IBKR host or port in strategy policy")
         data_type = str(policy.get("ibkr_data_type") or self.args.data_type).strip()
         if data_type not in DATA_TYPES:
             raise ValueError(f"Unsupported runtime IBKR data type: {data_type}")
-        if (
+        changed = not (
             host == self.args.host
             and port == self.args.port
             and data_type == self.args.data_type
-        ):
+        )
+        self.runtime_ibkr_config = {
+            "source": "backend-policy" if configured_host or configured_port is not None else "container",
+            "configured": {
+                "host": configured_host or self.args.host,
+                "port": configured_port if configured_port is not None else self.args.port,
+                "data_type": policy.get("ibkr_data_type") or self.args.data_type,
+            },
+            "applied": {"host": host, "port": port, "data_type": data_type},
+            "changed_at": time.time() if changed else None,
+        }
+        if not changed:
             return
         if self.ib.isConnected():
             self.ib.disconnect()
@@ -909,8 +929,23 @@ class TradePrefetcher:
             "generated_at": generated_at,
             "source": "IBKR",
             "data_type": self.args.data_type,
+            "transport": {
+                "connected": self.ib.isConnected(),
+                "host": self.args.host,
+                "port": self.args.port,
+                "client_id": self.args.client_id,
+                "data_type": self.args.data_type,
+                "runtime_config": self.runtime_ibkr_config,
+                "last_error": self.last_errors[-1] if self.last_errors else None,
+            },
             "symbols": symbols,
         }
+        market["market_data_readiness"] = market_data_readiness(
+            market,
+            indicators,
+            now=generated_at,
+            stale_after=self.args.stale_after,
+        )
         option_contracts = [
             _option_dict(ticker, now=generated_at)
             for ticker in self.option_tickers
@@ -1143,7 +1178,11 @@ class TradePrefetcher:
         _atomic_json(self.args.output_dir / "indicators.json", {"generated_at": generated_at, "symbols": indicators})
         _atomic_json(
             self.args.output_dir / "strategy-signals.json",
-            {"generated_at": generated_at, "signals": signals},
+            {
+                "generated_at": generated_at,
+                "market_data_readiness": signal.get("market_data_readiness"),
+                "signals": signals,
+            },
         )
         _atomic_json(self.args.output_dir / "signal.json", signal)
         _atomic_text(self.args.output_dir / "signal.txt", render_signal(signal))
@@ -1170,6 +1209,7 @@ class TradePrefetcher:
                 "connected": self.ib.isConnected(),
                 "readonly": True,
                 "execution_enabled": False,
+                "market_data_readiness": signal.get("market_data_readiness"),
                 "paper_exit_target": self.args.paper_exit_target,
                 "session_policy": signal.get("session_policy"),
                 "paper_lifecycle_status": (

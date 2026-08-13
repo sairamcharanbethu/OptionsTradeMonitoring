@@ -75,6 +75,17 @@ async function runTests() {
   }), 'Missing live acknowledgement must block autonomous entry');
   adapter.currentSignal = signal({ generated_at: Date.now() / 1000 + 60 });
   assert(adapter.getCurrentState().ageSeconds < 0, 'A future-dated strategy snapshot must remain visibly invalid instead of appearing fresh');
+  adapter.currentSignal = signal({
+    market_data_readiness: {
+      status: 'BLOCKED',
+      codes: ['SPY_QUOTE_STALE'],
+      summary: 'IBKR SPY quote is stale'
+    }
+  });
+  assert(
+    adapter.getCurrentState().marketDataReadiness?.codes?.[0] === 'SPY_QUOTE_STALE',
+    'The strategy-state API must expose the exact market-data readiness cause'
+  );
   adapter.currentSignal = null;
   const first = adapter.planFingerprint(signal());
   const quoteChurn = adapter.planFingerprint(signal({ spot: 550.1 }));

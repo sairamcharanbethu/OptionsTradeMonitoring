@@ -2064,6 +2064,7 @@ export interface StrategyEngineState {
   ageSeconds: number | null;
   error: string | null;
   health: Record<string, any> | null;
+  marketDataReadiness?: Record<string, any> | null;
   signal: Record<string, any> | null;
   strategySignals?: Array<{
     lane: 'mtf' | 'orb_index' | 'vwap_trend' | string;

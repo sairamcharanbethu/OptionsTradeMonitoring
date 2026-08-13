@@ -636,6 +636,28 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             self.assertEqual(prefetcher.args.host, "ib_gateway")
             self.assertEqual(prefetcher.args.port, 4004)
             self.assertEqual(prefetcher.args.data_type, "delayed")
+            self.assertEqual(
+                prefetcher.runtime_ibkr_config["applied"],
+                {"host": "ib_gateway", "port": 4004, "data_type": "delayed"},
+            )
+
+    def test_runtime_ibkr_policy_rejects_invalid_port_before_connecting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_file = Path(tmp) / "policy.json"
+            policy_file.write_text(json.dumps({"ibkr_port": "not-a-port"}))
+            prefetcher = TradePrefetcher.__new__(TradePrefetcher)
+            prefetcher.args = SimpleNamespace(
+                policy_file=policy_file,
+                host="ib_gateway",
+                port=4003,
+                data_type="live",
+            )
+            prefetcher.ib = Mock()
+
+            with self.assertRaisesRegex(ValueError, "Invalid runtime IBKR port"):
+                prefetcher._apply_runtime_ibkr_policy()
+
+            prefetcher.ib.disconnect.assert_not_called()
 
 
 if __name__ == "__main__":
