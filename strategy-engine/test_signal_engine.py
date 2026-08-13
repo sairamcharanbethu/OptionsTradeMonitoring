@@ -15,6 +15,7 @@ from signal_engine import (
     _mandatory_flatten_due,
     _mtf_reversal_candidate,
     _estimated_option_stop_risk,
+    _invalidation_exit_decision,
     _plan_quality,
     _select_otm_option,
     _new_entry_window_open,
@@ -49,6 +50,47 @@ TEST_SESSION_EXPIRY = datetime.fromtimestamp(
     TEST_SESSION_NOW,
     ET,
 ).strftime("%Y%m%d")
+
+
+class InvalidationExitDecisionTest(unittest.TestCase):
+    def test_shallow_breach_requires_a_new_completed_one_minute_close(self) -> None:
+        first = _invalidation_exit_decision(
+            side="calls", spot=99.96, stop=100.0, atr_1m=0.20,
+            last_completed_at=120.0, last_close=100.02,
+            previous_confirmation=None, now=121.0,
+        )
+        self.assertFalse(first["exit"])
+        self.assertEqual(first["confirmation"]["mode"], "AWAITING_1M_CLOSE")
+        confirmed = _invalidation_exit_decision(
+            side="calls", spot=100.03, stop=100.0, atr_1m=0.20,
+            last_completed_at=180.0, last_close=99.95,
+            previous_confirmation=first["confirmation"], now=181.0,
+        )
+        self.assertTrue(confirmed["exit"])
+        self.assertEqual(confirmed["reason"], "one_minute_close")
+
+    def test_hard_breach_requires_two_fresh_snapshots_unless_extreme(self) -> None:
+        first = _invalidation_exit_decision(
+            side="calls", spot=99.86, stop=100.0, atr_1m=0.20,
+            last_completed_at=120.0, last_close=100.02,
+            previous_confirmation=None, now=121.0,
+        )
+        self.assertFalse(first["exit"])
+        self.assertEqual(first["confirmation"]["mode"], "HARD_BREACH_PENDING")
+        confirmed = _invalidation_exit_decision(
+            side="calls", spot=99.84, stop=100.0, atr_1m=0.20,
+            last_completed_at=120.0, last_close=100.02,
+            previous_confirmation=first["confirmation"], now=122.0,
+        )
+        self.assertTrue(confirmed["exit"])
+        self.assertEqual(confirmed["reason"], "hard_breach")
+        extreme = _invalidation_exit_decision(
+            side="calls", spot=99.79, stop=100.0, atr_1m=0.20,
+            last_completed_at=120.0, last_close=100.02,
+            previous_confirmation=None, now=123.0,
+        )
+        self.assertTrue(extreme["exit"])
+        self.assertEqual(extreme["reason"], "extreme_breach")
 
 
 def et_timestamp(hour: int, minute: int, second: int = 0) -> float:
@@ -3552,9 +3594,14 @@ class ContinuationStateTest(unittest.TestCase):
             managed["lifecycle"]["protected_invalidation"],
             first["call_setup"]["trigger"],
         )
-        protected = self.build(
+        pending = self.build(
             previous=managed,
-            spot=first["call_setup"]["trigger"],
+            spot=first["call_setup"]["trigger"] - 0.11,
+        )
+        self.assertEqual(pending["signal_phase"], "TARGET_1_REACHED")
+        protected = self.build(
+            previous=pending,
+            spot=first["call_setup"]["trigger"] - 0.11,
         )
         self.assertEqual(protected["signal_phase"], "COMPLETED")
         self.assertEqual(
@@ -3682,7 +3729,15 @@ class ContinuationStateTest(unittest.TestCase):
 
     def test_active_continuation_fails_at_frozen_stop(self) -> None:
         first = self.build()
-        stopped = self.build(previous=first, spot=first["call_setup"]["invalidation"])
+        pending = self.build(
+            previous=first,
+            spot=first["call_setup"]["invalidation"] - 0.11,
+        )
+        self.assertEqual(pending["state"], "ACTIVE")
+        stopped = self.build(
+            previous=pending,
+            spot=first["call_setup"]["invalidation"] - 0.11,
+        )
         self.assertEqual(stopped["state"], "FAILED")
         self.assertIn("invalidated", stopped["blockers"][-1])
         self.assertNotIn("reversal_cooldown_until", stopped)
@@ -3763,7 +3818,14 @@ class ContinuationStateTest(unittest.TestCase):
 
     def test_invalidated_continuation_still_blocks_immediate_same_side_reentry(self) -> None:
         first = self.build()
-        stopped = self.build(previous=first, spot=first["call_setup"]["invalidation"])
+        pending = self.build(
+            previous=first,
+            spot=first["call_setup"]["invalidation"] - 0.11,
+        )
+        stopped = self.build(
+            previous=pending,
+            spot=first["call_setup"]["invalidation"] - 0.11,
+        )
         stopped["lifecycle"]["closed_at"] = time.time() - 16
         immediate = self.build(previous=stopped, spot=100.20)
         self.assertNotEqual(immediate["state"], "ACTIVE")

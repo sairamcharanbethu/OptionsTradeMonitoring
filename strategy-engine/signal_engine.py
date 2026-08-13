@@ -54,6 +54,9 @@ DEFAULT_TRENDLINE_STRUCTURE_CONFIG = {
     "slope_multiplier": 1.0,
     "retest_window_bars": 5,
 }
+INVALIDATION_MIN_HARD_BUFFER = 0.10
+INVALIDATION_ATR_HARD_BUFFER_FRACTION = 0.25
+INVALIDATION_EXTREME_BREACH_MULTIPLIER = 2.0
 DEFAULT_STRATEGY_FAMILIES_CONFIG = {
     "enabled": True,
     "mode": "shadow",
@@ -2021,6 +2024,115 @@ def _atr(bars: list[dict[str, Any]], period: int = 14) -> float | None:
     return round(sum(window) / len(window), 4) if window else None
 
 
+def _invalidation_exit_decision(
+    *,
+    side: str,
+    spot: Any,
+    stop: Any,
+    atr_1m: Any,
+    last_completed_at: Any,
+    last_close: Any,
+    previous_confirmation: dict[str, Any] | None,
+    now: float,
+) -> dict[str, Any]:
+    """Decide whether an underlying stop needs an immediate or confirmed exit."""
+    if (
+        side not in {"calls", "puts"}
+        or not _number(spot)
+        or not _number(stop)
+    ):
+        return {"exit": False, "confirmation": None, "reason": None}
+    price = float(spot)
+    invalidation = float(stop)
+    atr_buffer = (
+        float(atr_1m) * INVALIDATION_ATR_HARD_BUFFER_FRACTION
+        if _number(atr_1m) and float(atr_1m) > 0
+        else 0.0
+    )
+    hard_buffer = round(max(INVALIDATION_MIN_HARD_BUFFER, atr_buffer), 4)
+    breached = price <= invalidation if side == "calls" else price >= invalidation
+    breach = round(
+        max(
+            0.0,
+            invalidation - price if side == "calls" else price - invalidation,
+        ),
+        4,
+    )
+    prior = previous_confirmation if isinstance(previous_confirmation, dict) else {}
+    base = {
+        "stop": invalidation,
+        "hard_buffer": hard_buffer,
+        "breach": breach,
+        "detected_at": now,
+    }
+    prior_soft = (
+        prior
+        if prior.get("mode") == "AWAITING_1M_CLOSE"
+        and float(prior.get("stop") or 0) == invalidation
+        else {}
+    )
+    started_after_bar = prior_soft.get("started_after_completed_bar_at")
+    close_confirms = (
+        _number(started_after_bar)
+        and _number(last_completed_at)
+        and float(last_completed_at) > float(started_after_bar)
+        and _number(last_close)
+        and (
+            float(last_close) <= invalidation
+            if side == "calls"
+            else float(last_close) >= invalidation
+        )
+    )
+    if close_confirms:
+        return {
+            "exit": True,
+            "confirmation": {**base, **prior_soft},
+            "reason": "one_minute_close",
+        }
+    if not breached:
+        return {"exit": False, "confirmation": None, "reason": None}
+    if breach >= hard_buffer:
+        prior_hard = (
+            prior
+            if prior.get("mode") == "HARD_BREACH_PENDING"
+            and float(prior.get("stop") or 0) == invalidation
+            else {}
+        )
+        consecutive = (
+            int(prior_hard.get("consecutive_fresh_snapshots", 0) or 0) + 1
+        )
+        extreme = breach >= hard_buffer * INVALIDATION_EXTREME_BREACH_MULTIPLIER
+        confirmation = {
+            **base,
+            "mode": "HARD_BREACH_PENDING",
+            "consecutive_fresh_snapshots": consecutive,
+        }
+        if extreme or consecutive >= 2:
+            return {
+                "exit": True,
+                "confirmation": confirmation,
+                "reason": "hard_breach" if not extreme else "extreme_breach",
+            }
+        return {"exit": False, "confirmation": confirmation, "reason": None}
+
+    confirmation = {
+        **base,
+        "mode": "AWAITING_1M_CLOSE",
+        "started_after_completed_bar_at": (
+            float(started_after_bar)
+            if _number(started_after_bar)
+            else float(last_completed_at)
+            if _number(last_completed_at)
+            else None
+        ),
+    }
+    return {
+        "exit": False,
+        "confirmation": confirmation,
+        "reason": None,
+    }
+
+
 def validate_trendline_structure_config(
     config: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -2516,6 +2628,7 @@ def calculate_indicators(bars: list[dict[str, Any]]) -> dict[str, Any]:
         "last_completed_at": completed[-1]["time"] if completed else None,
         "completed_bar_age_seconds": round(time.time() - float(completed[-1]["time"]), 1) if completed else None,
         "last_close": closes[-1] if closes else None,
+        "atr_1m": _atr(completed),
         "ema9": _ema(closes, 9),
         "ema21": _ema(closes, 21),
         "vwap": round(vwap_numerator / volume_sum, 4) if volume_sum else None,
@@ -5522,6 +5635,9 @@ def build_signal(
         "rvol_reference_samples": spy.get("rvol_reference_samples"),
         "ema9_1m": spy.get("ema9"),
         "ema21_1m": spy.get("ema21"),
+        "atr_1m": spy.get("atr_1m"),
+        "last_completed_1m_at": spy.get("last_completed_at"),
+        "last_close_1m": spy.get("last_close"),
         "atr_5m": spy.get("atr_5m"),
         "ema9_5m": spy.get("ema9_5m"),
         "ema21_5m": spy.get("ema21_5m"),
@@ -5905,13 +6021,18 @@ def build_signal(
                 _number(return_pct)
                 and float(return_pct) <= t1_premium_lock_floor_pct
             )
+    invalidation_exit = _invalidation_exit_decision(
+        side=str(previous_side),
+        spot=spot,
+        stop=protected_invalidation,
+        atr_1m=spy.get("atr_1m"),
+        last_completed_at=spy.get("last_completed_at"),
+        last_close=spy.get("last_close"),
+        previous_confirmation=previous_lifecycle.get("invalidation_confirmation"),
+        now=now,
+    )
     protected_stop_hit = bool(
-        t1_protection_active
-        and _number(protected_invalidation)
-        and (
-            previous_side == "calls" and spot <= protected_invalidation
-            or previous_side == "puts" and spot >= protected_invalidation
-        )
+        t1_protection_active and invalidation_exit["exit"]
     )
     if prior_position_open and (premium_floor_breached or protected_stop_hit):
         protected_setup = (
@@ -5950,6 +6071,7 @@ def build_signal(
                 "protected_invalidation": protected_invalidation,
                 "premium_lock_arm_pct": t1_premium_lock_arm_pct,
                 "premium_lock_floor_pct": t1_premium_lock_floor_pct,
+                "invalidation_exit": invalidation_exit,
                 "closed_at": now,
                 "premium": premium,
             },
@@ -5973,11 +6095,7 @@ def build_signal(
         )
         return _dedupe_messages(result)
     if prior_position_open and _number(protected_invalidation):
-        failed = (
-            previous_side == "calls" and spot <= protected_invalidation
-        ) or (
-            previous_side == "puts" and spot >= protected_invalidation
-        )
+        failed = invalidation_exit["exit"]
         if failed:
             failed_setup = result["call_setup"] if previous_side == "calls" else result["put_setup"]
             failed_setup.update(
@@ -6001,6 +6119,7 @@ def build_signal(
                     "targets_hit": targets_hit,
                     "entry_allowed": False,
                     "paper_position_open": False,
+                    "invalidation_exit": invalidation_exit,
                     "closed_at": now,
                     "premium": premium,
                 },
@@ -6311,6 +6430,7 @@ def build_signal(
                 "premium_lock_armed": premium_lock_armed,
                 "last_trusted_tracking_at": now,
                 "premium": premium,
+                "invalidation_confirmation": invalidation_exit["confirmation"],
             },
         )
         result["confirmations"] = list(previous_signal.get("confirmations") or [])
@@ -6318,6 +6438,16 @@ def build_signal(
             result["confirmations"].append("triggered signal remains inside its frozen risk plan")
         if lifecycle_warning and lifecycle_warning not in result["warnings"]:
             result["warnings"].append(lifecycle_warning)
+        if invalidation_exit["confirmation"]:
+            confirmation = invalidation_exit["confirmation"]
+            if confirmation["mode"] == "AWAITING_1M_CLOSE":
+                result["warnings"].append(
+                    "underlying stop touched; awaiting a completed 1-minute close"
+                )
+            else:
+                result["warnings"].append(
+                    "hard underlying stop breach awaiting a second fresh SPY snapshot"
+                )
         if lifecycle_state == "ACTIVE" and not entry_allowed:
             result["warnings"].append("activation window expired or move extended; track signal only")
     elif reversal and not hard_data_block:

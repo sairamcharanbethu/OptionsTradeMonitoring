@@ -834,6 +834,45 @@ async function run() {
   }, 'premium-stop-setup');
   assert.equal(premiumStopIntent, 'PREMIUM_STOP', 'the stored 20% paper premium stop must be enforced');
 
+  const hybridStopPosition = {
+    ...premiumStopPosition,
+    id: 94,
+    strategy_setup_id: 'hybrid-stop-setup',
+    stop_loss_trigger: 0.5,
+    suggested_stop_loss: 100
+  };
+  let hybridStopClose: any[] | null = null;
+  const hybridStopService = new PaperTradingService({
+    pg: {
+      query: async (sql: string) => sql.includes('JOIN paper_trade_decisions')
+        ? { rows: [hybridStopPosition] }
+        : { rows: [] }
+    },
+    ibkrMarketData: { getOptionQuoteForOsi: async () => null },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  hybridStopService.getLivePosition = async () => null;
+  hybridStopService.setLivePosition = async () => new Date().toISOString();
+  hybridStopService.closePaperQuantity = async (...args: any[]) => { hybridStopClose = args; };
+  const hybridOption = {
+    local_symbol: 'SPY991231C00755000', bid: 0.79, quote_age_seconds: 0.1
+  };
+  await hybridStopService.refreshOpenPositions({
+    spot: 99.99,
+    state: 'ACTIVE',
+    lifecycle: { status: 'ACTIVE' },
+    call_setup: { option: hybridOption }
+  }, 'hybrid-stop-setup');
+  assert.equal(hybridStopClose, null, 'the paper ledger must not bypass the engine\'s shallow-stop confirmation');
+  await hybridStopService.refreshOpenPositions({
+    spot: 99.99,
+    state: 'FAILED',
+    lifecycle: { status: 'FAILED', close_reason: 'invalidation', invalidation_exit: { reason: 'one_minute_close' } },
+    call_setup: { option: hybridOption }
+  }, 'hybrid-stop-setup');
+  assert.equal(hybridStopClose?.[3], 'INVALIDATION', 'a confirmed engine invalidation must retain its auditable exit intent');
+  assert.deepEqual(hybridStopClose?.[4], { invalidationExit: { reason: 'one_minute_close' } }, 'the exit journal must retain the engine confirmation evidence');
+
   console.log('All PaperTradingService tests passed!');
 }
 

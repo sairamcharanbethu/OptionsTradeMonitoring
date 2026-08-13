@@ -1059,7 +1059,10 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const t1 = Number(position.suggested_take_profit_1 || 0);
       const t2 = Number(position.suggested_take_profit_2 || t1 || 0);
       const stop = Number(live?.suggestedStopLoss || position.suggested_stop_loss || 0);
-      const invalidated = stop > 0 && (isCall ? spot <= stop : spot >= stop);
+      // The current setup's engine owns its underlying-stop confirmation.  A
+      // direct ledger stop remains only for an older setup that no longer has
+      // a live engine lifecycle to manage it.
+      const invalidated = !sameSetup && stop > 0 && (isCall ? spot <= stop : spot >= stop);
       const premiumStop = Number(live?.stopLossTrigger || position.stop_loss_trigger || 0);
       const premiumStopped = premiumStop > 0 && bid <= premiumStop;
       const emergency = bid <= Number(position.entry_price) * 0.65;
@@ -1068,6 +1071,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         String(analysis.strategyLifecycleStatus || '').toUpperCase()
       );
       const terminal = currentTerminal || storedTerminal || liveTerminal;
+      const lifecycle = sameSetup ? signal.lifecycle || {} : storedSnapshot.lifecycle || {};
+      const lifecycleInvalidated = terminal && String(lifecycle.close_reason || '').toLowerCase() === 'invalidation';
       const hitT1 = t1 > 0 && (isCall ? spot >= t1 : spot <= t1);
       const hitT2 = t2 > 0 && (isCall ? spot >= t2 : spot <= t2);
       const trailingHighPremium = Math.max(Number(live?.trailingHighPrice || position.trailing_high_price || position.entry_price), Number(analysis.trailingHighPremium || 0), bid);
@@ -1111,7 +1116,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           managedPosition,
           Number(position.quantity),
           bid,
-          invalidated ? 'INVALIDATION' : premiumStopped ? 'PREMIUM_STOP' : emergency ? 'EMERGENCY_PREMIUM_STOP' : 'STRATEGY_TERMINAL'
+          invalidated || lifecycleInvalidated ? 'INVALIDATION' : premiumStopped ? 'PREMIUM_STOP' : emergency ? 'EMERGENCY_PREMIUM_STOP' : 'STRATEGY_TERMINAL',
+          lifecycleInvalidated ? { invalidationExit: lifecycle.invalidation_exit || null } : {}
         );
         continue;
       }
