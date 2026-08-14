@@ -188,6 +188,12 @@ jobs:
             export PORT_REDIS=${{ env.PORT_REDIS }}
             export IMAGE_TAG=${{ github.sha }}
 
+            if [[ -n "${PAPER_LEGACY_DATABASE_URL:-}" ]]; then
+              echo "[Migration] Importing the legacy paper ledger before starting the new backend."
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop trade-staging-backend || true
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} run --rm --no-deps trade-staging-backend npm run migrate:shared-paper -- --apply
+            fi
+
             if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
               docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --wait --wait-timeout 180 --no-build --no-deps trade-staging-backend trade-staging-frontend db trade-staging-redis zerogex-prefetch zerogex-prefetch-qqq strategy-engine
             else

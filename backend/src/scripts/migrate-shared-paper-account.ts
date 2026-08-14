@@ -74,6 +74,26 @@ async function countTargetPaperRows(client: pg.PoolClient): Promise<number> {
   return Number(rows[0]?.total || 0);
 }
 
+async function prepareTargetSchema(client: pg.PoolClient): Promise<void> {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS paper_ledger_migrations (
+      migration_key VARCHAR(100) PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS paper_strategy_controls (
+      strategy_name VARCHAR(50) PRIMARY KEY,
+      automation_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING'`);
+  await client.query(`ALTER TABLE paper_orders ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING'`);
+  await client.query(`ALTER TABLE paper_trade_journal ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING'`);
+  await client.query(`ALTER TABLE positions ADD COLUMN IF NOT EXISTS paper_strategy VARCHAR(50)`);
+}
+
 async function run(): Promise<void> {
   const targetUrl = process.env.DATABASE_URL;
   const sourceUrl = process.env.PAPER_LEGACY_DATABASE_URL;
@@ -137,10 +157,15 @@ async function run(): Promise<void> {
     await target.query('BEGIN');
     try {
       await target.query(`LOCK TABLE paper_accounts IN SHARE ROW EXCLUSIVE MODE`);
+      await prepareTargetSchema(target);
       const existingImport = await target.query(
         `SELECT migration_key FROM paper_ledger_migrations WHERE migration_key='shared-paper-import-v1'`
       );
-      if (existingImport.rows[0]) throw new Error('This destination already has a completed shared-paper import.');
+      if (existingImport.rows[0]) {
+        await target.query('COMMIT');
+        console.log('Shared paper import was already completed; nothing to do.');
+        return;
+      }
       if (await countTargetPaperRows(target) > 0) {
         throw new Error('Destination already has shared paper activity. The importer will not merge or overwrite live ledger rows.');
       }
