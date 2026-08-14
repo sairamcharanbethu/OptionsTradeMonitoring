@@ -389,18 +389,18 @@ const ensureSchema = async (instance: any) => {
       INSERT INTO paper_accounts (
         id, name, initial_equity, cash_balance, equity, high_water_mark,
         start_of_day_equity, start_of_day_date
-      ) VALUES ('strategy-system', 'System Strategy Paper Account', 100000, 100000, 100000, 100000, 100000,
+      ) VALUES ('shared-paper', 'Shared Paper Trading Account', 100000, 100000, 100000, 100000, 100000,
                 (NOW() AT TIME ZONE 'America/New_York')::date)
       ON CONFLICT (id) DO NOTHING;
     `);
     await instance.pg.query(`
-      INSERT INTO paper_accounts (
-        id, name, initial_equity, cash_balance, equity, high_water_mark,
-        start_of_day_equity, start_of_day_date
-      ) VALUES ('wall-reaction-system', 'Wall Reaction Paper Account', 100000, 100000, 100000, 100000, 100000,
-                (NOW() AT TIME ZONE 'America/New_York')::date)
-      ON CONFLICT (id) DO NOTHING;
+      CREATE TABLE IF NOT EXISTS paper_strategy_controls (
+        strategy_name VARCHAR(50) PRIMARY KEY,
+        automation_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
+    await instance.pg.query(`INSERT INTO paper_strategy_controls (strategy_name) VALUES ('DAY_TRADING'), ('WALL_REACTION') ON CONFLICT (strategy_name) DO NOTHING;`);
     await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS paper_trade_decisions (
         id BIGSERIAL PRIMARY KEY,
@@ -439,6 +439,7 @@ const ensureSchema = async (instance: any) => {
     await instance.pg.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS policy_version VARCHAR(50) NOT NULL DEFAULT 'paper-exit-v1-legacy';`);
     await instance.pg.query(`ALTER TABLE paper_trade_decisions ALTER COLUMN policy_version SET DEFAULT 'paper-exit-v2';`);
     await instance.pg.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS trailing_stop_pct NUMERIC(6, 2) NOT NULL DEFAULT 15;`);
+    await instance.pg.query(`ALTER TABLE paper_trade_decisions ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING';`);
     await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS paper_orders (
         id BIGSERIAL PRIMARY KEY,
@@ -543,6 +544,8 @@ const ensureSchema = async (instance: any) => {
     `);
     await instance.pg.query(`CREATE INDEX IF NOT EXISTS idx_paper_journal_account_created ON paper_trade_journal (account_id, created_at DESC);`);
     await instance.pg.query(`CREATE INDEX IF NOT EXISTS idx_paper_baseline_account_status ON paper_baseline_trades (account_id, status, created_at DESC);`);
+    await instance.pg.query(`ALTER TABLE paper_orders ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING';`);
+    await instance.pg.query(`ALTER TABLE paper_trade_journal ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING';`);
 
     // 3. Ensure all extra columns are added to positions table
     const columns = [
@@ -600,7 +603,8 @@ const ensureSchema = async (instance: any) => {
       { name: 'strategy_exit_requested_at', type: 'TIMESTAMPTZ' },
       { name: 'strategy_exit_reason', type: 'VARCHAR(50)' },
       { name: 'paper_account_id', type: 'VARCHAR(50)' },
-      { name: 'paper_decision_id', type: 'BIGINT' }
+      { name: 'paper_decision_id', type: 'BIGINT' },
+      { name: 'paper_strategy', type: 'VARCHAR(50)' }
     ];
 
     for (const col of columns) {
@@ -613,6 +617,77 @@ const ensureSchema = async (instance: any) => {
       CREATE INDEX IF NOT EXISTS idx_positions_paper_account_status
         ON positions (paper_account_id, status, created_at DESC);
     `);
+
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS paper_ledger_migrations (
+        migration_key VARCHAR(100) PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    const ledgerClient = await instance.pg.connect();
+    try {
+      await ledgerClient.query('BEGIN');
+      const applied = await ledgerClient.query(
+        `INSERT INTO paper_ledger_migrations (migration_key) VALUES ('shared-paper-account-v1') ON CONFLICT DO NOTHING RETURNING migration_key`
+      );
+      if (applied.rows[0]) {
+        const legacy = await ledgerClient.query(
+          `SELECT id FROM paper_accounts WHERE id IN ('strategy-system', 'wall-reaction-system') FOR UPDATE`
+        );
+        if (legacy.rows.length) {
+          await ledgerClient.query(`
+            UPDATE positions
+               SET paper_strategy = CASE WHEN paper_account_id='wall-reaction-system' OR execution_broker='wall_reaction_paper'
+                 THEN 'WALL_REACTION' ELSE 'DAY_TRADING' END
+             WHERE paper_account_id IN ('strategy-system', 'wall-reaction-system')
+          `);
+          await ledgerClient.query(`UPDATE paper_trade_decisions SET strategy_name = CASE WHEN account_id='wall-reaction-system' THEN 'WALL_REACTION' ELSE 'DAY_TRADING' END WHERE account_id IN ('strategy-system', 'wall-reaction-system')`);
+          await ledgerClient.query(`UPDATE paper_orders SET strategy_name = CASE WHEN account_id='wall-reaction-system' THEN 'WALL_REACTION' ELSE 'DAY_TRADING' END WHERE account_id IN ('strategy-system', 'wall-reaction-system')`);
+          await ledgerClient.query(`UPDATE paper_trade_journal SET strategy_name = CASE WHEN account_id='wall-reaction-system' THEN 'WALL_REACTION' ELSE 'DAY_TRADING' END WHERE account_id IN ('strategy-system', 'wall-reaction-system')`);
+          await ledgerClient.query(`
+            DELETE FROM paper_monthly_reports legacy
+             USING paper_monthly_reports shared
+             WHERE legacy.account_id='wall-reaction-system'
+               AND shared.account_id='shared-paper'
+               AND legacy.month=shared.month
+          `);
+          for (const table of ['paper_trade_decisions', 'paper_orders', 'paper_equity_snapshots', 'paper_monthly_reports', 'paper_trade_journal', 'paper_baseline_trades', 'positions']) {
+            const column = table === 'positions' ? 'paper_account_id' : 'account_id';
+            await ledgerClient.query(`UPDATE ${table} SET ${column}='shared-paper' WHERE ${column} IN ('strategy-system', 'wall-reaction-system')`);
+          }
+          const totals = await ledgerClient.query(`
+            SELECT
+              COALESCE(SUM(realized_pnl),0)::numeric AS realized_pnl,
+              COALESCE(SUM(entry_price*quantity*100) FILTER (WHERE status='OPEN'),0)::numeric AS open_cost,
+              COALESCE(SUM(current_price*quantity*100) FILTER (WHERE status='OPEN'),0)::numeric AS market_value
+            FROM positions WHERE paper_account_id='shared-paper'
+          `);
+          const pending = await ledgerClient.query(`
+            SELECT COALESCE(SUM(reserved_debit),0)::numeric AS reserved_cash
+              FROM paper_orders
+             WHERE account_id='shared-paper' AND intent='ENTRY' AND status='PENDING'
+          `);
+          const cash = 100000 + Number(totals.rows[0]?.realized_pnl || 0) - Number(totals.rows[0]?.open_cost || 0);
+          const equity = cash + Number(totals.rows[0]?.market_value || 0);
+          await ledgerClient.query(`
+            UPDATE paper_accounts
+               SET name='Shared Paper Trading Account', initial_equity=100000,
+                   cash_balance=$1, reserved_cash=$2, equity=$3,
+                   high_water_mark=GREATEST(100000,$3), start_of_day_equity=$3,
+                   start_of_day_date=(NOW() AT TIME ZONE 'America/New_York')::date,
+                   automation_status='ACTIVE', updated_at=NOW()
+             WHERE id='shared-paper'
+          `, [cash, Number(pending.rows[0]?.reserved_cash || 0), equity]);
+          await ledgerClient.query(`DELETE FROM paper_accounts WHERE id IN ('strategy-system', 'wall-reaction-system')`);
+        }
+      }
+      await ledgerClient.query('COMMIT');
+    } catch (error) {
+      await ledgerClient.query('ROLLBACK');
+      throw error;
+    } finally {
+      ledgerClient.release();
+    }
 
     await instance.pg.query(`
       ALTER TABLE trade_events ADD COLUMN IF NOT EXISTS signal_id INTEGER;

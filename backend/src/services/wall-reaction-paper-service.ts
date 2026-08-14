@@ -2,8 +2,10 @@ import { FastifyInstance } from 'fastify';
 import { getNewYorkDateParts, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
 import { isFreshWallReactionQuote, WallReactionCandidate, WALL_REACTION_POLICY_VERSION } from './wall-reaction-service';
+import { PAPER_STRATEGIES, SHARED_PAPER_ACCOUNT_ID } from './paper-account-constants';
 
-export const WALL_REACTION_ACCOUNT_ID = 'wall-reaction-system';
+export const WALL_REACTION_ACCOUNT_ID = SHARED_PAPER_ACCOUNT_ID;
+const STRATEGY_NAME = PAPER_STRATEGIES.WALL_REACTION;
 const ARM_MS = 5 * 60_000;
 const ORDER_MS = 60_000;
 
@@ -77,9 +79,9 @@ export class WallReactionPaperService {
     if (gateFailure) {
       const error: any = new Error(gateFailure); error.statusCode = 409; throw error;
     }
-    const account = await this.account();
-    if (account.automation_status !== 'ACTIVE') {
-      const error: any = new Error('Wall Reaction paper account is paused'); error.statusCode = 409; throw error;
+    await this.account();
+    if (await this.strategyAutomationStatus() !== 'ACTIVE') {
+      const error: any = new Error('Wall Reaction paper automation is paused'); error.statusCode = 409; throw error;
     }
     const armedUntil = new Date(Date.now() + ARM_MS).toISOString();
     const { rows } = await (this.fastify as any).pg.query(
@@ -93,33 +95,61 @@ export class WallReactionPaperService {
   }
 
   public async setAutomationStatus(status: 'ACTIVE' | 'PAUSED') {
-    const { rows } = await (this.fastify as any).pg.query(
-      `UPDATE paper_accounts SET automation_status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`, [status, WALL_REACTION_ACCOUNT_ID]
-    );
-    return rows[0];
+    const client = await (this.fastify as any).pg.connect();
+    try {
+      await client.query('BEGIN');
+      const account = await client.query(`SELECT id FROM paper_accounts WHERE id=$1 FOR UPDATE`, [WALL_REACTION_ACCOUNT_ID]);
+      if (!account.rows[0]) throw new Error('Shared paper account is unavailable');
+      const control = await client.query(`SELECT strategy_name FROM paper_strategy_controls WHERE strategy_name=$1 FOR UPDATE`, [STRATEGY_NAME]);
+      if (!control.rows[0]) throw new Error('Wall Reaction paper automation control is unavailable');
+      if (status === 'PAUSED') {
+        const pending = await client.query(
+          `UPDATE paper_orders SET status='EXPIRED', failure_reason='Wall Reaction paper automation paused by an administrator', updated_at=NOW()
+           WHERE account_id=$1 AND strategy_name=$2 AND intent='ENTRY' AND status='PENDING'
+           RETURNING reserved_debit`, [WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME]
+        );
+        const released = pending.rows.reduce((sum: number, row: any) => sum + Number(row.reserved_debit || 0), 0);
+        if (released > 0) await client.query(
+          `UPDATE paper_accounts SET reserved_cash=GREATEST(0,reserved_cash-$1), updated_at=NOW() WHERE id=$2`,
+          [released, WALL_REACTION_ACCOUNT_ID]
+        );
+      }
+      const { rows } = await client.query(
+        `UPDATE paper_strategy_controls SET automation_status=$1, updated_at=NOW() WHERE strategy_name=$2 RETURNING *`, [status, STRATEGY_NAME]
+      );
+      if (!rows[0]) throw new Error('Wall Reaction paper automation control is unavailable');
+      await client.query('COMMIT');
+      return rows[0];
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   public async getSummary() {
     const [account, positions, orders, decisions] = await Promise.all([
       this.account(),
-      (this.fastify as any).pg.query(`SELECT * FROM positions WHERE paper_account_id=$1 ORDER BY created_at DESC LIMIT 100`, [WALL_REACTION_ACCOUNT_ID]),
-      (this.fastify as any).pg.query(`SELECT * FROM paper_orders WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100`, [WALL_REACTION_ACCOUNT_ID]),
-      (this.fastify as any).pg.query(`SELECT * FROM paper_trade_decisions WHERE account_id=$1 ORDER BY created_at DESC LIMIT 100`, [WALL_REACTION_ACCOUNT_ID])
+      (this.fastify as any).pg.query(`SELECT * FROM positions WHERE paper_account_id=$1 AND paper_strategy=$2 ORDER BY created_at DESC LIMIT 100`, [WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME]),
+      (this.fastify as any).pg.query(`SELECT * FROM paper_orders WHERE account_id=$1 AND strategy_name=$2 ORDER BY created_at DESC LIMIT 100`, [WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME]),
+      (this.fastify as any).pg.query(`SELECT * FROM paper_trade_decisions WHERE account_id=$1 AND strategy_name=$2 ORDER BY created_at DESC LIMIT 100`, [WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME])
     ]);
-    return { account, positions: positions.rows, orders: orders.rows, decisions: decisions.rows, health: this.health, paperOnly: true };
+    return { account, positions: positions.rows, orders: orders.rows, decisions: decisions.rows, health: this.health, paperOnly: true,
+      strategyAutomationStatus: await this.strategyAutomationStatus() };
   }
 
   public async getJournal(limit = 100, offset = 0) {
     const { rows } = await (this.fastify as any).pg.query(
-      `SELECT * FROM paper_trade_journal WHERE account_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
-      [WALL_REACTION_ACCOUNT_ID, Math.max(1, Math.min(200, limit)), Math.max(0, offset)]
+      `SELECT * FROM paper_trade_journal WHERE account_id=$1 AND strategy_name=$2 ORDER BY created_at DESC LIMIT $3 OFFSET $4`,
+      [WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME, Math.max(1, Math.min(200, limit)), Math.max(0, offset)]
     );
     return rows;
   }
 
   public async closePosition(positionId: number) {
     const { rows } = await (this.fastify as any).pg.query(
-      `SELECT * FROM positions WHERE id=$1 AND paper_account_id=$2 AND status='OPEN'`, [positionId, WALL_REACTION_ACCOUNT_ID]
+      `SELECT * FROM positions WHERE id=$1 AND paper_account_id=$2 AND paper_strategy=$3 AND status='OPEN'`, [positionId, WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME]
     );
     const position = rows[0];
     if (!position) { const error: any = new Error('Open Wall Reaction paper position not found'); error.statusCode = 404; throw error; }
@@ -158,6 +188,15 @@ export class WallReactionPaperService {
     return rows[0];
   }
 
+  private async strategyAutomationStatus(queryable: any = (this.fastify as any).pg, forUpdate = false): Promise<string> {
+    const { rows } = await queryable.query(
+      `SELECT automation_status FROM paper_strategy_controls WHERE strategy_name=$1${forUpdate ? ' FOR UPDATE' : ''}`,
+      [STRATEGY_NAME]
+    );
+    if (!rows[0]) throw new Error('Wall Reaction paper automation control is unavailable');
+    return String(rows[0].automation_status || 'PAUSED');
+  }
+
   private async expireArms(): Promise<void> {
     const { rows } = await (this.fastify as any).pg.query(
       `UPDATE wall_reaction_candidates SET status='EXPIRED', invalidated_at=NOW(), updated_at=NOW()
@@ -189,9 +228,10 @@ export class WallReactionPaperService {
     try {
       await client.query('BEGIN');
       const account = (await client.query(`SELECT * FROM paper_accounts WHERE id=$1 FOR UPDATE`, [WALL_REACTION_ACCOUNT_ID])).rows[0];
+      const automationStatus = await this.strategyAutomationStatus(client, true);
       if (!account) throw new Error('Wall Reaction paper account is unavailable');
       const debit = contract.protectedLimit * contract.quantity * 100;
-      if (account.automation_status !== 'ACTIVE' || Number(account.cash_balance) - Number(account.reserved_cash) < debit) {
+      if (automationStatus !== 'ACTIVE' || Number(account.cash_balance) - Number(account.reserved_cash) < debit) {
         await client.query(`UPDATE wall_reaction_candidates SET status='INVALIDATED', invalidated_at=NOW(), updated_at=NOW() WHERE id=$1`, [candidate.id]);
         await client.query('COMMIT');
         await this.journal('ENTRY_SKIPPED', 'Paper account is paused or has insufficient available cash.', candidate.id, null, null, null, { requiredDebit: debit });
@@ -200,24 +240,24 @@ export class WallReactionPaperService {
       const decision = await client.query(
         `INSERT INTO paper_trade_decisions (
            account_id, setup_id, decision, risk_tier, exit_profile, source, quantity, max_quantity,
-           debit_budget, protected_limit, prompt_version, policy_version, rationale, evidence
-         ) VALUES ($1,$2,'TRADE',$3,$4,'RULES',$5,2,$6,$7,$8,$8,$9,$10)
+           debit_budget, protected_limit, prompt_version, policy_version, rationale, evidence, strategy_name
+         ) VALUES ($1,$2,'TRADE',$3,$4,'RULES',$5,2,$6,$7,$8,$8,$9,$10,$11)
          ON CONFLICT (account_id,setup_id) DO NOTHING RETURNING *`,
         [WALL_REACTION_ACCOUNT_ID, candidate.id, candidate.decision.riskMultiplier === 0.5 ? 'STANDARD' : 'CAUTIOUS',
           contract.quantity === 2 ? 'STRUCTURAL_T2' : 'STRUCTURAL_T1', contract.quantity, plan.debitBudget,
           contract.protectedLimit, WALL_REACTION_POLICY_VERSION, 'Manual arm passed all deterministic Wall Reaction gates. Macro calendar data was recorded as FYI only.',
-          JSON.stringify({ candidateFingerprint: candidate.fingerprint, symbol: candidate.symbol, plan, contract, macroAdvisory: candidate.macro })]
+          JSON.stringify({ candidateFingerprint: candidate.fingerprint, symbol: candidate.symbol, plan, contract, macroAdvisory: candidate.macro }), STRATEGY_NAME]
       );
       const decisionRow = decision.rows[0];
       if (!decisionRow) { await client.query('ROLLBACK'); return; }
       const order = await client.query(
         `INSERT INTO paper_orders (
            account_id, decision_id, setup_id, intent, action, status, osi_ticker, option_type,
-           strike, expiration, quantity, limit_price, reserved_debit, quote_snapshot, expires_at
-         ) VALUES ($1,$2,$3,'ENTRY','BUY_TO_OPEN','PENDING',$4,$5,$6,$7,$8,$9,$10,$11,$12)
+           strike, expiration, quantity, limit_price, reserved_debit, quote_snapshot, expires_at, strategy_name
+         ) VALUES ($1,$2,$3,'ENTRY','BUY_TO_OPEN','PENDING',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (account_id,setup_id,intent) DO NOTHING RETURNING *`,
         [WALL_REACTION_ACCOUNT_ID, decisionRow.id, candidate.id, contract.ticker, contract.right === 'call' ? 'CALL' : 'PUT',
-          contract.strike, contract.expiration, contract.quantity, contract.protectedLimit, debit, JSON.stringify(contract), new Date(now.getTime() + ORDER_MS).toISOString()]
+          contract.strike, contract.expiration, contract.quantity, contract.protectedLimit, debit, JSON.stringify(contract), new Date(now.getTime() + ORDER_MS).toISOString(), STRATEGY_NAME]
       );
       if (!order.rows[0]) { await client.query('ROLLBACK'); return; }
       await client.query(`UPDATE paper_accounts SET reserved_cash=reserved_cash+$1, updated_at=NOW() WHERE id=$2`, [debit, WALL_REACTION_ACCOUNT_ID]);
@@ -232,7 +272,7 @@ export class WallReactionPaperService {
   private async processPendingOrders(now: Date): Promise<void> {
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT po.*, ptd.evidence FROM paper_orders po JOIN paper_trade_decisions ptd ON ptd.id=po.decision_id
-       WHERE po.account_id=$1 AND po.intent='ENTRY' AND po.status='PENDING' ORDER BY po.created_at ASC`, [WALL_REACTION_ACCOUNT_ID]
+       WHERE po.account_id=$1 AND po.strategy_name=$2 AND po.intent='ENTRY' AND po.status='PENDING' ORDER BY po.created_at ASC`, [WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME]
     );
     for (const order of rows) {
       if (new Date(order.expires_at).getTime() <= now.getTime()) { await this.cancelOrder(order, 'Protected paper order expired after 60 seconds'); continue; }
@@ -242,8 +282,8 @@ export class WallReactionPaperService {
         await this.cancelOrder(order, 'Candidate changed or an entry gate failed before fill');
         continue;
       }
-      const account = await this.account();
-      if (account.automation_status !== 'ACTIVE') { await this.cancelOrder(order, 'Wall Reaction paper account is paused'); continue; }
+      await this.account();
+      if (await this.strategyAutomationStatus() !== 'ACTIVE') { await this.cancelOrder(order, 'Wall Reaction paper automation is paused'); continue; }
       const quote = await this.marketData.getOptionQuoteForOsi(null, order.osi_ticker);
       if (!quote || quote.ask <= 0 || !isFreshWallReactionQuote(quote.timestamp, now)) continue;
       if (quote.ask > Number(order.limit_price)) continue;
@@ -260,6 +300,7 @@ export class WallReactionPaperService {
       await client.query('BEGIN');
       const locked = await client.query(`SELECT * FROM paper_orders WHERE id=$1 FOR UPDATE`, [order.id]);
       if (locked.rows[0]?.status !== 'PENDING') { await client.query('ROLLBACK'); return; }
+      if (await this.strategyAutomationStatus(client, true) !== 'ACTIVE') { await client.query('ROLLBACK'); return; }
       const debit = fillPrice * Number(order.quantity) * 100;
       position = (await client.query(
         `INSERT INTO positions (
@@ -268,14 +309,14 @@ export class WallReactionPaperService {
            execution_status, contracts_requested, entry_action, exit_action, suggested_stop_loss,
            suggested_take_profit_1, suggested_take_profit_2, strategy_setup_id, strategy_engine_version,
            strategy_lifecycle_status, strategy_snapshot, strategy_managed, paper_account_id,
-           paper_decision_id, analysis_data, notes
+           paper_decision_id, paper_strategy, analysis_data, notes
          ) VALUES (NULL,$1,$2,$3,$4,$5,$6,$5,$7,'OPEN',TRUE,$8,'wall_reaction_paper','FILLED',$6,
-           'BUY_TO_OPEN','SELL_TO_CLOSE',$9,$10,$11,$12,$13,'ACTIVE',$14,TRUE,$8,$15,$16,$17) RETURNING *`,
+           'BUY_TO_OPEN','SELL_TO_CLOSE',$9,$10,$11,$12,$13,'ACTIVE',$14,TRUE,$8,$15,$18,$16,$17) RETURNING *`,
         [evidence.symbol, order.option_type, Number(order.strike), order.expiration, fillPrice, Number(order.quantity),
           Number(evidence.contract?.underlyingPrice || 0) || null, WALL_REACTION_ACCOUNT_ID, plan.invalidation,
           plan.target1, wallReactionSecondTarget(plan, Number(order.quantity)), order.setup_id, WALL_REACTION_POLICY_VERSION, JSON.stringify(evidence),
           order.decision_id, JSON.stringify({ originalQuantity: Number(order.quantity), t1Reached: false, policyVersion: WALL_REACTION_POLICY_VERSION }),
-          `[Wall Reaction paper entry from candidate ${order.setup_id}]`]
+          `[Wall Reaction paper entry from candidate ${order.setup_id}]`, STRATEGY_NAME]
       )).rows[0];
       await client.query(`UPDATE paper_orders SET status='FILLED', fill_price=$1, position_id=$2, filled_at=NOW(), updated_at=NOW() WHERE id=$3`, [fillPrice, position.id, order.id]);
       await client.query(`UPDATE paper_accounts SET cash_balance=cash_balance-$1, reserved_cash=GREATEST(0,reserved_cash-$2), updated_at=NOW() WHERE id=$3`, [debit, Number(order.reserved_debit), WALL_REACTION_ACCOUNT_ID]);
@@ -299,7 +340,7 @@ export class WallReactionPaperService {
   }
 
   private async monitorPositions(now: Date): Promise<void> {
-    const { rows } = await (this.fastify as any).pg.query(`SELECT * FROM positions WHERE paper_account_id=$1 AND status='OPEN' ORDER BY id`, [WALL_REACTION_ACCOUNT_ID]);
+    const { rows } = await (this.fastify as any).pg.query(`SELECT * FROM positions WHERE paper_account_id=$1 AND paper_strategy=$2 AND status='OPEN' ORDER BY id`, [WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME]);
     const errors: string[] = [];
     for (const position of rows) {
       try {
@@ -337,15 +378,15 @@ export class WallReactionPaperService {
     let closeQty = 0;
     try {
       await client.query('BEGIN');
-      const locked = (await client.query(`SELECT * FROM positions WHERE id=$1 AND paper_account_id=$2 AND status='OPEN' FOR UPDATE`, [position.id, WALL_REACTION_ACCOUNT_ID])).rows[0];
+      const locked = (await client.query(`SELECT * FROM positions WHERE id=$1 AND paper_account_id=$2 AND paper_strategy=$3 AND status='OPEN' FOR UPDATE`, [position.id, WALL_REACTION_ACCOUNT_ID, STRATEGY_NAME])).rows[0];
       if (!locked) { await client.query('ROLLBACK'); return; }
       closeQty = Math.min(Number(locked.quantity), quantity);
       const inserted = await client.query(
-        `INSERT INTO paper_orders (account_id,decision_id,position_id,setup_id,intent,action,status,osi_ticker,option_type,strike,expiration,quantity,fill_price,filled_at)
-         VALUES ($1,$2,$3,$4,$5,'SELL_TO_CLOSE','FILLED',$6,$7,$8,$9,$10,$11,NOW())
+        `INSERT INTO paper_orders (account_id,decision_id,position_id,setup_id,intent,action,status,osi_ticker,option_type,strike,expiration,quantity,fill_price,filled_at,strategy_name)
+         VALUES ($1,$2,$3,$4,$5,'SELL_TO_CLOSE','FILLED',$6,$7,$8,$9,$10,$11,NOW(),$12)
          ON CONFLICT (account_id,setup_id,intent) DO NOTHING RETURNING id`,
         [WALL_REACTION_ACCOUNT_ID, locked.paper_decision_id, locked.id, locked.strategy_setup_id, `EXIT_${intent}`, this.osiTicker(locked), locked.option_type,
-          Number(locked.strike_price), locked.expiration_date, closeQty, fillPrice]
+          Number(locked.strike_price), locked.expiration_date, closeQty, fillPrice, STRATEGY_NAME]
       );
       if (!inserted.rows[0]) { await client.query('ROLLBACK'); return; }
       const proceeds = fillPrice * closeQty * 100;
@@ -380,9 +421,9 @@ export class WallReactionPaperService {
 
   private async journal(eventType: string, message: string, setupId: string | null, decisionId: number | null, positionId: number | null, premium: number | null, metadata: Record<string, any> = {}) {
     await (this.fastify as any).pg.query(
-      `INSERT INTO paper_trade_journal (account_id,setup_id,decision_id,position_id,event_type,policy_version,message,premium,metadata)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [WALL_REACTION_ACCOUNT_ID, setupId, decisionId, positionId, eventType, WALL_REACTION_POLICY_VERSION, message, premium, JSON.stringify(metadata)]
+      `INSERT INTO paper_trade_journal (account_id,setup_id,decision_id,position_id,event_type,policy_version,message,premium,metadata,strategy_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [WALL_REACTION_ACCOUNT_ID, setupId, decisionId, positionId, eventType, WALL_REACTION_POLICY_VERSION, message, premium, JSON.stringify(metadata), STRATEGY_NAME]
     );
   }
 }

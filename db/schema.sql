@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS positions (
     strategy_exit_reason VARCHAR(50),
     paper_account_id VARCHAR(50),
     paper_decision_id BIGINT,
+    paper_strategy VARCHAR(50),
     is_simulated BOOLEAN DEFAULT FALSE,
     account_id VARCHAR(255),
     notes TEXT,
@@ -118,17 +119,19 @@ INSERT INTO paper_accounts (
     id, name, initial_equity, cash_balance, equity, high_water_mark,
     start_of_day_equity, start_of_day_date
 ) VALUES (
-    'strategy-system', 'System Strategy Paper Account', 100000, 100000, 100000, 100000,
+    'shared-paper', 'Shared Paper Trading Account', 100000, 100000, 100000, 100000,
     100000, (NOW() AT TIME ZONE 'America/New_York')::date
 ) ON CONFLICT (id) DO NOTHING;
 
-INSERT INTO paper_accounts (
-    id, name, initial_equity, cash_balance, equity, high_water_mark,
-    start_of_day_equity, start_of_day_date
-) VALUES (
-    'wall-reaction-system', 'Wall Reaction Paper Account', 100000, 100000, 100000, 100000,
-    100000, (NOW() AT TIME ZONE 'America/New_York')::date
-) ON CONFLICT (id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS paper_strategy_controls (
+    strategy_name VARCHAR(50) PRIMARY KEY,
+    automation_status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO paper_strategy_controls (strategy_name) VALUES
+    ('DAY_TRADING'), ('WALL_REACTION')
+ON CONFLICT (strategy_name) DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS paper_trade_decisions (
     id BIGSERIAL PRIMARY KEY,
@@ -155,6 +158,7 @@ CREATE TABLE IF NOT EXISTS paper_trade_decisions (
     rationale TEXT,
     risk_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
     evidence JSONB NOT NULL DEFAULT '{}'::jsonb,
+    strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (account_id, setup_id)
 );
@@ -183,6 +187,7 @@ CREATE TABLE IF NOT EXISTS paper_orders (
     filled_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING',
     UNIQUE (account_id, setup_id, intent)
 );
 
@@ -220,6 +225,7 @@ CREATE TABLE IF NOT EXISTS paper_trade_journal (
     underlying_price NUMERIC(12,4),
     quantity INTEGER,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -87,12 +87,13 @@ import { cn, getDte, getPnL, getRoi } from '@/lib/utils';
 
 const DayTradingTerminal = lazy(() => import('@/pages/DayTradingTerminal'));
 const WallReactionPage = lazy(() => import('@/pages/WallReactionPage'));
+const PaperAccountsPage = lazy(() => import('@/pages/PaperAccountsPage'));
 
 interface DashboardProps {
   user: User;
 }
 
-const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'wall-reaction', 'users'] as const;
+const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'wall-reaction', 'paper-accounts', 'users'] as const;
 const DASHBOARD_TAB_STORAGE_KEY = 'options-monitoring:dashboard-tab';
 
 const getInitialDashboardTab = () => {
@@ -854,6 +855,12 @@ export default function Dashboard({ user }: DashboardProps) {
         <TabsContent value="wall-reaction" className="mt-0">
           <Suspense fallback={<div className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">Loading Wall Reaction workspace...</div>}>
             <WallReactionPage user={user} />
+          </Suspense>
+        </TabsContent>
+
+        <TabsContent value="paper-accounts" className="mt-0">
+          <Suspense fallback={<div className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">Loading shared paper account...</div>}>
+            <PaperAccountsPage />
           </Suspense>
         </TabsContent>
 

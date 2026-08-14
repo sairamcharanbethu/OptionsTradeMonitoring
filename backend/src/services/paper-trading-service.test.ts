@@ -287,7 +287,8 @@ async function run() {
   let concurrentPendingProcessed = false;
   const concurrentEntryClient = {
     query: async (sql: string) => {
-      if (sql.includes('SELECT cash_balance, reserved_cash, automation_status')) {
+      if (sql.includes('FROM paper_strategy_controls')) return { rows: [{ automation_status: 'ACTIVE' }] };
+      if (sql.includes('SELECT cash_balance, reserved_cash FROM paper_accounts')) {
         return { rows: [{ cash_balance: 99_000, reserved_cash: 0, automation_status: 'ACTIVE' }] };
       }
       if (sql.includes('INSERT INTO paper_orders')) {
@@ -301,6 +302,7 @@ async function run() {
   const concurrentEntryService = new PaperTradingService({
     pg: {
       query: async (sql: string) => {
+        if (sql.includes('FROM paper_strategy_controls')) return { rows: [{ automation_status: 'ACTIVE' }] };
         if (sql.includes('COUNT(*) FROM positions')) {
           concurrentCapacityQueries += 1;
           return { rows: [{ count: 1 }] };
@@ -391,6 +393,7 @@ async function run() {
     pg: {
       query: async (sql: string) => {
         if (sql.includes('FROM paper_orders po')) return { rows: [{ ...invalidFillOrder, setup_id: 'missing-fill-age' }] };
+        if (sql.includes('FROM paper_strategy_controls')) return { rows: [{ automation_status: 'ACTIVE' }] };
         if (sql.includes('SELECT * FROM paper_accounts')) return { rows: [{ automation_status: 'ACTIVE' }] };
         return { rows: [] };
       },
@@ -428,6 +431,8 @@ async function run() {
   const entryClient = {
     query: async (sql: string) => {
       entryQueries.push(sql);
+      if (sql.includes('FROM paper_strategy_controls')) return { rows: [{ automation_status: 'ACTIVE' }] };
+      if (sql.includes('SELECT id FROM paper_accounts')) return { rows: [{ id: 'shared-paper' }] };
       if (sql.includes('SELECT automation_status FROM paper_accounts')) return { rows: [{ automation_status: 'ACTIVE' }] };
       if (sql.includes('SELECT status FROM paper_orders')) return { rows: [{ status: 'PENDING' }] };
       if (sql.includes('INSERT INTO positions')) return { rows: [{
@@ -446,6 +451,7 @@ async function run() {
     pg: {
       query: async (sql: string) => {
         if (sql.includes('FROM paper_orders po')) return { rows: [entryOrder] };
+        if (sql.includes('FROM paper_strategy_controls')) return { rows: [{ automation_status: 'ACTIVE' }] };
         if (sql.includes('SELECT * FROM paper_accounts')) return { rows: [{ automation_status: 'ACTIVE' }] };
         return { rows: [] };
       },

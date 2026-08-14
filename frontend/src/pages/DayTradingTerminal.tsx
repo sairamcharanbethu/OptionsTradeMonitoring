@@ -1244,7 +1244,7 @@ export default function DayTradingTerminal() {
 
   const togglePaperAutomation = async () => {
     if (!paperAccount?.canManage || paperUpdating) return;
-    const shouldActivate = paperAccount.account.automation_status !== 'ACTIVE';
+    const shouldActivate = paperAccount.strategyAutomationStatus !== 'ACTIVE';
     setPaperUpdating(true);
     setActionMessage(null);
     try {
@@ -1968,15 +1968,15 @@ export default function DayTradingTerminal() {
           <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5 sm:pb-4">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">Paper Trading Center</span>
+                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">Day Trading paper controls</span>
                 <Badge variant="outline" className={`text-[10px] ${
-                  paperAccount.account.automation_status === 'ACTIVE'
+                  paperAccount.strategyAutomationStatus === 'ACTIVE'
                     ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-300'
                     : 'border-amber-500/30 bg-amber-950/20 text-amber-300'
                 }`}>
-                  {paperAccount.account.automation_status}
+                  {paperAccount.strategyAutomationStatus}
                 </Badge>
-                <Badge variant="outline" className="border-zinc-700 bg-zinc-950 text-[10px] text-zinc-400">Paper only</Badge>
+                <Badge variant="outline" className="border-zinc-700 bg-zinc-950 text-[10px] text-zinc-400">Shared $100k ledger · Paper only</Badge>
               </div>
               <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
@@ -2003,7 +2003,7 @@ export default function DayTradingTerminal() {
                   disabled={paperUpdating}
                 >
                   {paperUpdating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-                  {paperAccount.account.automation_status === 'ACTIVE' ? 'Pause paper entries' : 'Resume paper entries'}
+                  {paperAccount.strategyAutomationStatus === 'ACTIVE' ? 'Pause paper entries' : 'Resume paper entries'}
                 </Button>
               )}
             </div>
@@ -2091,7 +2091,7 @@ export default function DayTradingTerminal() {
                       <div className={`mt-1 font-semibold ${unrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
                         Unrealized {unrealizedPnl >= 0 ? '+' : ''}{money(unrealizedPnl)}
                       </div>
-                      {paperAccount.canManage && (
+                      {paperAccount.canManage && position.paper_strategy !== 'WALL_REACTION' && (
                         <Button
                           variant="outline"
                           size="sm"

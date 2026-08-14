@@ -4,8 +4,10 @@ import { DiscordAlertService } from './discord-alert-service';
 import { getGlobalSettings } from '../lib/settings-utils';
 import { redis as defaultRedis } from '../lib/redis';
 import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
+import { PAPER_STRATEGIES, SHARED_PAPER_ACCOUNT_ID } from './paper-account-constants';
 
-const ACCOUNT_ID = 'strategy-system';
+const ACCOUNT_ID = SHARED_PAPER_ACCOUNT_ID;
+const STRATEGY_NAME = PAPER_STRATEGIES.DAY_TRADING;
 const PROMPT_VERSION = 'paper-risk-v2';
 export const PAPER_POLICY_VERSION = 'paper-exit-v2';
 const MAX_DAILY_AI_CALLS = 3;
@@ -82,10 +84,10 @@ export class PaperTradingService {
   public async getAccountSummary(): Promise<Record<string, any>> {
     const account = await this.account();
     const settings = await getGlobalSettings((this.fastify as any).pg);
-    const [positions, recentPositions, decisions, orders, reports, today, aiUsage, journal, baseline] = await Promise.all([
+    const [positions, recentPositions, decisions, orders, reports, today, aiUsage, journal, baseline, controls] = await Promise.all([
       (this.fastify as any).pg.query(
         `SELECT p.*, ptd.risk_tier, ptd.exit_profile, ptd.source AS decision_source,
-                ptd.policy_version, ptd.trailing_stop_pct AS decision_trailing_stop_pct
+                ptd.strategy_name, ptd.policy_version, ptd.trailing_stop_pct AS decision_trailing_stop_pct
          FROM positions p
          LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
          WHERE p.paper_account_id=$1 AND p.status='OPEN'
@@ -95,6 +97,7 @@ export class PaperTradingService {
         `SELECT p.*,
                 ptd.decision AS paper_decision, ptd.risk_tier, ptd.exit_profile,
                 ptd.source AS decision_source, ptd.policy_version,
+                ptd.strategy_name,
                 ptd.trailing_stop_pct AS decision_trailing_stop_pct,
                 ptd.rationale AS decision_rationale, ptd.risk_flags AS decision_risk_flags,
                 ptd.evidence AS decision_evidence, ptd.ai_requested,
@@ -145,6 +148,9 @@ export class PaperTradingService {
               FROM positions p JOIN paper_baseline_trades paired ON paired.position_id=p.id
              WHERE paired.account_id=$1 AND paired.status='CLOSED') AS managed_realized_pnl
          FROM paper_baseline_trades WHERE account_id=$1`, [ACCOUNT_ID]
+      ),
+      (this.fastify as any).pg.query(
+        `SELECT strategy_name, automation_status FROM paper_strategy_controls ORDER BY strategy_name`
       )
     ]);
     const openPositions = await this.applyLivePositions(positions.rows);
@@ -201,6 +207,8 @@ export class PaperTradingService {
         managedRealizedPnl: Number(baseline.rows[0]?.managed_realized_pnl || 0),
         valueAdded: Number((Number(baseline.rows[0]?.managed_realized_pnl || 0) - Number(baseline.rows[0]?.realized_pnl || 0)).toFixed(2))
       },
+      strategyControls: controls.rows,
+      strategyAutomationStatus: String(controls.rows.find((row: any) => row.strategy_name === STRATEGY_NAME)?.automation_status || 'PAUSED'),
       health: this.getHealth()
     };
   }
@@ -256,8 +264,8 @@ export class PaperTradingService {
               ptd.trailing_stop_pct AS decision_trailing_stop_pct
        FROM positions p
        LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
-       WHERE p.id=$1 AND p.paper_account_id=$2 AND p.status='OPEN'`,
-      [positionId, ACCOUNT_ID]
+       WHERE p.id=$1 AND p.paper_account_id=$2 AND p.paper_strategy=$3 AND p.status='OPEN'`,
+      [positionId, ACCOUNT_ID, STRATEGY_NAME]
     );
     const selectedPosition = rows[0];
     if (!selectedPosition) {
@@ -455,8 +463,8 @@ export class PaperTradingService {
       await client.query(`SELECT id FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]);
       const result = await client.query(
         `UPDATE paper_orders SET status='EXPIRED', failure_reason='Recovered expired entry after service restart', updated_at=NOW()
-         WHERE account_id=$1 AND intent='ENTRY' AND status='PENDING' AND expires_at <= NOW()
-         RETURNING id, decision_id, setup_id, reserved_debit`, [ACCOUNT_ID]
+         WHERE account_id=$1 AND strategy_name=$2 AND intent='ENTRY' AND status='PENDING' AND expires_at <= NOW()
+         RETURNING id, decision_id, setup_id, reserved_debit`, [ACCOUNT_ID, STRATEGY_NAME]
       );
       expired = result.rows;
       await client.query(
@@ -485,8 +493,8 @@ export class PaperTradingService {
               ptd.trailing_stop_pct AS decision_trailing_stop_pct
        FROM positions p
        LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
-       WHERE p.paper_account_id=$1 AND p.status='OPEN'`,
-      [ACCOUNT_ID]
+       WHERE p.paper_account_id=$1 AND p.paper_strategy=$2 AND p.status='OPEN'`,
+      [ACCOUNT_ID, STRATEGY_NAME]
     );
     for (const position of rows) {
       const expirationIntent = this.expirationExitIntent(position, date);
@@ -524,12 +532,14 @@ export class PaperTradingService {
     try {
       await client.query('BEGIN');
       const lockedAccount = await client.query(`SELECT id FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]);
-      if (!lockedAccount.rows[0]) throw new Error('System paper account is unavailable');
+      if (!lockedAccount.rows[0]) throw new Error('Shared paper account is unavailable');
+      const control = await client.query(`SELECT strategy_name FROM paper_strategy_controls WHERE strategy_name=$1 FOR UPDATE`, [STRATEGY_NAME]);
+      if (!control.rows[0]) throw new Error('Day Trading paper automation control is unavailable');
       if (status === 'PAUSED') {
         const pending = await client.query(
           `UPDATE paper_orders SET status='EXPIRED', failure_reason='Paper automation paused by an administrator', updated_at=NOW()
-           WHERE account_id=$1 AND intent='ENTRY' AND status='PENDING'
-           RETURNING reserved_debit`, [ACCOUNT_ID]
+           WHERE account_id=$1 AND strategy_name=$2 AND intent='ENTRY' AND status='PENDING'
+           RETURNING reserved_debit`, [ACCOUNT_ID, STRATEGY_NAME]
         );
         const released = pending.rows.reduce((sum: number, row: any) => sum + Number(row.reserved_debit || 0), 0);
         if (released > 0) {
@@ -540,10 +550,10 @@ export class PaperTradingService {
         }
       }
       const { rows } = await client.query(
-        `UPDATE paper_accounts SET automation_status=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
-        [status, ACCOUNT_ID]
+        `UPDATE paper_strategy_controls SET automation_status=$1, updated_at=NOW() WHERE strategy_name=$2 RETURNING *`,
+        [status, STRATEGY_NAME]
       );
-      if (!rows[0]) throw new Error('System paper account is unavailable');
+      if (!rows[0]) throw new Error('Day Trading paper automation control is unavailable');
       await client.query('COMMIT');
       result = rows[0];
     } catch (error) {
@@ -552,7 +562,7 @@ export class PaperTradingService {
     } finally {
       client.release();
     }
-    await this.journal(`AUTOMATION_${status}`, `Paper automation ${status === 'ACTIVE' ? 'resumed' : 'paused'} by an administrator.`, {}, null, null);
+    await this.journal(`AUTOMATION_${status}`, `Day Trading paper automation ${status === 'ACTIVE' ? 'resumed' : 'paused'} by an administrator.`, {}, null, null);
     return result!;
   }
 
@@ -677,6 +687,15 @@ export class PaperTradingService {
     return rows[0];
   }
 
+  private async strategyAutomationStatus(queryable: any = (this.fastify as any).pg, forUpdate = false): Promise<string> {
+    const { rows } = await queryable.query(
+      `SELECT automation_status FROM paper_strategy_controls WHERE strategy_name=$1${forUpdate ? ' FOR UPDATE' : ''}`,
+      [STRATEGY_NAME]
+    );
+    if (!rows[0]) throw new Error('Day Trading paper automation control is unavailable');
+    return String(rows[0].automation_status || 'PAUSED');
+  }
+
   private async maybeCreateEntry(signal: Record<string, any>, setupId: string): Promise<void> {
     if (String(signal.state).toUpperCase() !== 'ACTIVE' || signal.lifecycle?.entry_allowed !== true) return;
     const generatedAt = Number(signal.generated_at || 0);
@@ -691,7 +710,7 @@ export class PaperTradingService {
       || !Number.isFinite(quoteAgeSeconds) || quoteAgeSeconds < 0 || quoteAgeSeconds > 15
       || !expiry || !option.local_symbol || !Number.isFinite(Number(option.strike)) || Number(option.strike) <= 0) return;
     const account = await this.account();
-    if (account.automation_status !== 'ACTIVE') return;
+    if (await this.strategyAutomationStatus() !== 'ACTIVE') return;
     const existing = await (this.fastify as any).pg.query(
       'SELECT id FROM paper_trade_decisions WHERE account_id = $1 AND setup_id = $2', [ACCOUNT_ID, setupId]
     );
@@ -766,15 +785,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
          quantity, max_quantity, debit_budget, protected_limit, model, prompt_version,
          policy_version, trailing_stop_pct,
          ai_requested, ai_reasons, prompt_tokens, completion_tokens, total_tokens,
-         rationale, risk_flags, evidence
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+         rationale, risk_flags, evidence, strategy_name
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
        ON CONFLICT (account_id, setup_id) DO NOTHING RETURNING *`,
       [ACCOUNT_ID, setupId, signalRow.rows[0]?.id || null, bounded.decision, bounded.riskTier, bounded.exitProfile,
         bounded.source, quantity, sizing.maxAffordable, 0, protectedLimit,
         settings.day_trading_ai_model || settings.ai_model || null, PROMPT_VERSION,
         PAPER_POLICY_VERSION, trailingStopPct,
         aiRequested, JSON.stringify(aiReasons), tokenUsage.promptTokens, tokenUsage.completionTokens, tokenUsage.totalTokens,
-        bounded.rationale, JSON.stringify(bounded.riskFlags), JSON.stringify({ generatedAt, quoteAgeSeconds, bid, ask, mid, strategyState: signal.state })]
+        bounded.rationale, JSON.stringify(bounded.riskFlags), JSON.stringify({ generatedAt, quoteAgeSeconds, bid, ask, mid, strategyState: signal.state }), STRATEGY_NAME]
     );
     const decisionRow = decisionInsert.rows[0];
     if (decisionRow) {
@@ -796,12 +815,13 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     try {
       await client.query('BEGIN');
       const lockedAccount = await client.query(
-        `SELECT cash_balance, reserved_cash, automation_status FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]
+        `SELECT cash_balance, reserved_cash FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]
       );
+      const automationStatus = await this.strategyAutomationStatus(client, true);
       const available = Number(lockedAccount.rows[0]?.cash_balance || 0) - Number(lockedAccount.rows[0]?.reserved_cash || 0);
-      if (lockedAccount.rows[0]?.automation_status !== 'ACTIVE' || available < reservedDebit) {
+      if (automationStatus !== 'ACTIVE' || available < reservedDebit) {
         await client.query('ROLLBACK');
-        const reason = lockedAccount.rows[0]?.automation_status !== 'ACTIVE'
+        const reason = automationStatus !== 'ACTIVE'
           ? 'TRADE skipped because paper automation was paused before reservation.'
           : 'TRADE skipped because available paper cash changed before reservation.';
         await this.journal('DECISION_SKIPPED', reason, decisionRow, null, protectedLimit, { availableCash: available, requiredDebit: reservedDebit });
@@ -810,11 +830,11 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const order = await client.query(
         `INSERT INTO paper_orders (
            account_id, decision_id, setup_id, signal_id, intent, action, status, osi_ticker,
-           option_type, strike, expiration, quantity, limit_price, reserved_debit, quote_snapshot, expires_at
-         ) VALUES ($1,$2,$3,$4,'ENTRY','BUY_TO_OPEN','PENDING',$5,$6,$7,$8,$9,$10,$11,$12,NOW() + INTERVAL '60 seconds')
+           option_type, strike, expiration, quantity, limit_price, reserved_debit, quote_snapshot, expires_at, strategy_name
+         ) VALUES ($1,$2,$3,$4,'ENTRY','BUY_TO_OPEN','PENDING',$5,$6,$7,$8,$9,$10,$11,$12,NOW() + INTERVAL '60 seconds',$13)
          ON CONFLICT (account_id, setup_id, intent) DO NOTHING RETURNING id`,
         [ACCOUNT_ID, decisionRow.id, setupId, decisionRow.signal_id, option.local_symbol, side, Number(option.strike), expiry,
-          quantity, protectedLimit, reservedDebit, JSON.stringify({ bid, ask, mid, quoteAgeSeconds })]
+          quantity, protectedLimit, reservedDebit, JSON.stringify({ bid, ask, mid, quoteAgeSeconds }), STRATEGY_NAME]
       );
       orderCreated = Boolean(order.rows[0]);
       if (orderCreated) {
@@ -843,12 +863,12 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT po.*, ptd.exit_profile, ptd.policy_version, ptd.trailing_stop_pct FROM paper_orders po
        JOIN paper_trade_decisions ptd ON ptd.id = po.decision_id
-       WHERE po.account_id = $1 AND po.setup_id = $2 AND po.intent = 'ENTRY' AND po.status = 'PENDING'`, [ACCOUNT_ID, setupId]
+       WHERE po.account_id = $1 AND po.strategy_name=$2 AND po.setup_id = $3 AND po.intent = 'ENTRY' AND po.status = 'PENDING'`, [ACCOUNT_ID, STRATEGY_NAME, setupId]
     );
     const order = rows[0];
     if (!order) return;
-    const account = await this.account();
-    if (account.automation_status !== 'ACTIVE') {
+    await this.account();
+    if (await this.strategyAutomationStatus() !== 'ACTIVE') {
       await this.cancelPendingOrder(order, 'Paper automation is paused');
       return;
     }
@@ -886,9 +906,10 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     try {
       await client.query('BEGIN');
       const lockedAccount = await client.query(
-        `SELECT automation_status FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]
+        `SELECT id FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]
       );
-      if (lockedAccount.rows[0]?.automation_status !== 'ACTIVE') {
+      const automationStatus = await this.strategyAutomationStatus(client, true);
+      if (!lockedAccount.rows[0] || automationStatus !== 'ACTIVE') {
         await client.query('ROLLBACK');
         await this.cancelPendingOrder(order, 'Paper automation is paused');
         return;
@@ -908,9 +929,9 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            execution_status, contracts_requested, entry_action, exit_action, suggested_stop_loss,
            suggested_take_profit_1, suggested_take_profit_2, signal_id, strategy_setup_id,
            strategy_engine_version, strategy_lifecycle_status, strategy_snapshot, strategy_managed,
-           paper_account_id, paper_decision_id, analysis_data, notes
+           paper_account_id, paper_decision_id, paper_strategy, analysis_data, notes
            ) VALUES (NULL,'SPY',$1,$2,$3,$4,$5,$6,$7,$4,$8,'OPEN',TRUE,$9,'system_paper','FILLED',$5,
-                   'BUY_TO_OPEN','SELL_TO_CLOSE',$10,$11,$12,$13,$14,'signal-only-v2','ACTIVE',$15,TRUE,$9,$16,$17,$18)
+                   'BUY_TO_OPEN','SELL_TO_CLOSE',$10,$11,$12,$13,$14,'signal-only-v2','ACTIVE',$15,TRUE,$9,$16,$19,$17,$18)
          RETURNING *`,
         [side, Number(order.strike), order.expiration, fillPrice, Number(order.quantity), premiumStopPrice, Number(option.bid || fillPrice),
           Number(order.trailing_stop_pct), ACCOUNT_ID, setup.invalidation || null, targets[0] || null, targets[1] || targets[0] || null,
@@ -925,7 +946,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
             premiumStopPct,
             policyVersion: order.policy_version
           }),
-          `[System paper entry from setup ${setupId}]`]
+          `[System paper entry from setup ${setupId}]`, STRATEGY_NAME]
       );
       filledPosition = positionResult.rows[0];
       await client.query(
@@ -1010,7 +1031,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT p.*, ptd.exit_profile, ptd.policy_version, ptd.trailing_stop_pct AS decision_trailing_stop_pct FROM positions p
        LEFT JOIN paper_trade_decisions ptd ON ptd.id = p.paper_decision_id
-       WHERE p.paper_account_id=$1 AND p.status='OPEN'`, [ACCOUNT_ID]
+       WHERE p.paper_account_id=$1 AND p.paper_strategy=$2 AND p.status='OPEN'`, [ACCOUNT_ID, STRATEGY_NAME]
     );
     for (const position of rows) {
       const isCall = position.option_type === 'CALL';
@@ -1193,8 +1214,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       closeStage = 'LOCK_POSITION';
       const lockedPosition = await client.query(
         `SELECT quantity, status, realized_pnl FROM positions
-         WHERE id=$1 AND paper_account_id=$2 FOR UPDATE`,
-        [position.id, ACCOUNT_ID]
+         WHERE id=$1 AND paper_account_id=$2 AND paper_strategy=$3 FOR UPDATE`,
+        [position.id, ACCOUNT_ID, STRATEGY_NAME]
       );
       if (lockedPosition.rows[0]?.status !== 'OPEN') {
         await client.query('ROLLBACK');
@@ -1210,12 +1231,12 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const inserted = await client.query(
         `INSERT INTO paper_orders (
            account_id, decision_id, position_id, setup_id, signal_id, intent, action, status,
-           osi_ticker, option_type, strike, expiration, quantity, fill_price, quote_snapshot, filled_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,'SELL_TO_CLOSE','FILLED',$7,$8,$9,$10,$11,$12,$13,NOW())
+           osi_ticker, option_type, strike, expiration, quantity, fill_price, quote_snapshot, filled_at, strategy_name
+         ) VALUES ($1,$2,$3,$4,$5,$6,'SELL_TO_CLOSE','FILLED',$7,$8,$9,$10,$11,$12,$13,NOW(),$14)
          ON CONFLICT (account_id, setup_id, intent) DO NOTHING RETURNING id`,
         [ACCOUNT_ID, position.paper_decision_id, position.id, setupId, position.signal_id, intent,
           this.osiTicker(position), position.option_type, Number(position.strike_price), this.normalizeExpiry(position.expiration_date), closeQty, bid,
-          JSON.stringify({ bid, underlyingPrice: position.underlying_price, ...exitMetadata })]
+          JSON.stringify({ bid, underlyingPrice: position.underlying_price, ...exitMetadata }), STRATEGY_NAME]
       );
       if (!inserted.rows[0]) {
         await client.query('ROLLBACK');
@@ -1524,10 +1545,10 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     await queryable.query(
       `INSERT INTO paper_trade_journal (
          account_id, setup_id, decision_id, position_id, event_type, policy_version,
-         message, premium, underlying_price, quantity, metadata
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+         message, premium, underlying_price, quantity, metadata, strategy_name
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [ACCOUNT_ID, setupId, decisionId, positionId, eventType, policyVersion, message, premium,
-        source?.underlying_price || null, metadata.quantity ?? source?.quantity ?? null, JSON.stringify(metadata)]
+        source?.underlying_price || null, metadata.quantity ?? source?.quantity ?? null, JSON.stringify(metadata), STRATEGY_NAME]
     );
   }
 

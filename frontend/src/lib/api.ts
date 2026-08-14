@@ -150,6 +150,9 @@ export interface Position {
   suggested_take_profit_2?: number;
   analysis_data?: any;
   is_simulated?: boolean;
+  paper_account_id?: string;
+  paper_decision_id?: number;
+  paper_strategy?: 'DAY_TRADING' | 'WALL_REACTION';
   account_id?: string;
   execution_broker?: string;
   broker_order_id?: string;
@@ -300,6 +303,8 @@ export interface PaperAccountSummary {
   limits: { maxDebitPct: number | null; dailyLossPct: number | null; maxTradesPerDay: number | null; maxOpenPositions: number | null; maxContracts: number | null; trailingStopPct: number; policyVersion: string };
   aiUsage: { dailyCalls: number; dailyCallLimit: number; dailyCallsRemaining: number; dailyTokens: number; monthlyCalls: number; monthlyTokens: number };
   baseline: { name: string; closedTrades: number; openTrades: number; wins: number; winRate: number; realizedPnl: number; managedRealizedPnl: number; valueAdded: number };
+  strategyControls: Array<{ strategy_name: 'DAY_TRADING' | 'WALL_REACTION'; automation_status: 'ACTIVE' | 'PAUSED' }>;
+  strategyAutomationStatus: 'ACTIVE' | 'PAUSED';
   health: { status: string; lastProcessedAt: string | null; lastError: string | null };
   canManage: boolean;
 }
@@ -354,6 +359,7 @@ export interface WallReactionPaperSummary {
   orders: Array<Record<string, any>>;
   decisions: Array<Record<string, any>>;
   health: { status: string; lastRunAt: string | null; lastError: string | null };
+  strategyAutomationStatus: 'ACTIVE' | 'PAUSED';
   paperOnly: true;
 }
 

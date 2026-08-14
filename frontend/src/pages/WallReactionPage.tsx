@@ -259,10 +259,10 @@ export default function WallReactionPage({ user }: { user: User }) {
       {state?.calendar && <CalendarHealthPanel calendar={state.calendar} />}
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card><CardContent className="pt-5"><Metric label="Paper equity" value={paper ? money.format(Number(paper.account.equity)) : '—'} /></CardContent></Card>
+        <Card><CardContent className="pt-5"><Metric label="Shared paper equity" value={paper ? money.format(Number(paper.account.equity)) : '—'} /></CardContent></Card>
         <Card><CardContent className="pt-5"><Metric label="Available cash" value={paper ? money.format(Number(paper.account.cash_balance) - Number(paper.account.reserved_cash)) : '—'} /></CardContent></Card>
         <Card><CardContent className="pt-5"><Metric label="Open positions" value={String(openPositions.length)} /></CardContent></Card>
-        <Card><CardContent className="flex items-center justify-between gap-3 pt-5"><Metric label="Paper automation" value={paper?.account.automation_status || '—'} />{user.role === 'ADMIN' && paper && <Button variant="outline" size="icon" title={paper.account.automation_status === 'ACTIVE' ? 'Pause paper entries' : 'Resume paper entries'} onClick={() => void act('automation', () => api.setWallReactionPaperAutomation(paper.account.automation_status !== 'ACTIVE'))} disabled={busy !== null}>{paper.account.automation_status === 'ACTIVE' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button>}</CardContent></Card>
+        <Card><CardContent className="flex items-center justify-between gap-3 pt-5"><Metric label="Paper automation" value={paper?.strategyAutomationStatus || '—'} />{user.role === 'ADMIN' && paper && <Button variant="outline" size="icon" title={paper.strategyAutomationStatus === 'ACTIVE' ? 'Pause paper entries' : 'Resume paper entries'} onClick={() => void act('automation', () => api.setWallReactionPaperAutomation(paper.strategyAutomationStatus !== 'ACTIVE'))} disabled={busy !== null}>{paper.strategyAutomationStatus === 'ACTIVE' ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</Button>}</CardContent></Card>
       </section>
 
       <section className="grid gap-5 xl:grid-cols-2">
