@@ -1,0 +1,37 @@
+{
+  "environment": "live-shadow",
+  "algorithm-type-name": "LeanShadowAlgorithm",
+  "algorithm-language": "Python",
+  "algorithm-location": "/opt/lean-shadow/LeanShadow.py",
+  "python-additional-paths": ["/opt/lean-shadow", "/opt/strategy-engine"],
+  "data-folder": "/Lean/Data",
+  "log-handler": "QuantConnect.Logging.CompositeLogHandler",
+  "messaging-handler": "QuantConnect.Messaging.Messaging",
+  "job-queue-handler": "QuantConnect.Queues.JobQueue",
+  "api-handler": "QuantConnect.Api.Api",
+  "map-file-provider": "QuantConnect.Data.Auxiliary.LocalDiskMapFileProvider",
+  "factor-file-provider": "QuantConnect.Data.Auxiliary.LocalDiskFactorFileProvider",
+  "data-provider": "QuantConnect.Lean.Engine.DataFeeds.DefaultDataProvider",
+  "data-channel-provider": "DataChannelProvider",
+  "object-store": "QuantConnect.Lean.Engine.Storage.LocalObjectStore",
+  "ib-account": "__LEAN_IB_ACCOUNT__",
+  "ib-user-name": "",
+  "ib-password": "",
+  "ib-host": "__IBKR_HOST__",
+  "ib-port": "__IBKR_PORT__",
+  "ib-trading-mode": "paper",
+  "ib-agent-description": "Individual",
+  "environments": {
+    "live-shadow": {
+      "live-mode": true,
+      "live-mode-brokerage": "InteractiveBrokersBrokerage",
+      "setup-handler": "QuantConnect.Lean.Engine.Setup.BrokerageSetupHandler",
+      "result-handler": "QuantConnect.Lean.Engine.Results.LiveTradingResultHandler",
+      "data-feed-handler": "QuantConnect.Lean.Engine.DataFeeds.LiveTradingDataFeed",
+      "data-queue-handler": ["InteractiveBrokersBrokerage"],
+      "real-time-handler": "QuantConnect.Lean.Engine.RealTime.LiveTradingRealTimeHandler",
+      "transaction-handler": "QuantConnect.Lean.Engine.TransactionHandlers.BrokerageTransactionHandler",
+      "history-provider": ["BrokerageHistoryProvider", "SubscriptionDataReaderHistoryProvider"]
+    }
+  }
+}

@@ -46,6 +46,8 @@ export class StrategyEngineAdapter {
   private lastZeroGexKeyFingerprint: string | null = null;
   private lastAutonomousEntryAt: string | null = null;
   private lastAutonomousEntryResult: string | null = null;
+  private activeSource: 'python' | 'lean' = 'python';
+  private entryBlocked = false;
   private lifecycleManager: StrategyLifecycleManager;
 
   constructor(private fastify: FastifyInstance) {
@@ -55,6 +57,22 @@ export class StrategyEngineAdapter {
 
   public getMode(): StrategyEngineMode {
     return this.mode;
+  }
+
+  // The backend retains all lifecycle, risk, and broker authority. LEAN can
+  // only become the signal input after the shadow service has promoted it.
+  public setSignalSource(source: 'python' | 'lean', entryBlocked = false): void {
+    this.activeSource = source;
+    this.entryBlocked = entryBlocked;
+    this.lastSnapshotFingerprint = null;
+  }
+
+  public async ingestLeanSnapshot(
+    signals: Record<string, StrategySnapshot>,
+    health: StrategySnapshot
+  ): Promise<void> {
+    if (this.activeSource !== 'lean' || this.entryBlocked) return;
+    await this.applySignals(signals, health, 'lean');
   }
 
   public async start(): Promise<void> {
@@ -131,7 +149,9 @@ export class StrategyEngineAdapter {
         filePollFallback: true,
         filePollIntervalMs: Number(process.env.STRATEGY_FILE_POLL_INTERVAL_MS || 2000),
         redisWatchdogIntervalMs: Number(process.env.STRATEGY_REDIS_WATCHDOG_INTERVAL_MS || 30000)
-      }
+      },
+      source: this.activeSource,
+      entryBlocked: this.entryBlocked
     };
   }
 
@@ -279,6 +299,9 @@ export class StrategyEngineAdapter {
   }
 
   public async assertSignalExecutable(signalId: number): Promise<void> {
+    if (this.entryBlocked) {
+      throw this.conflict('Strategy entries are blocked until the active signal source is healthy');
+    }
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT strategy_setup_id, engine_version, lifecycle_status, entry_allowed,
               activated_at, strategy_snapshot
@@ -399,6 +422,9 @@ export class StrategyEngineAdapter {
   }
 
   private async poll(): Promise<void> {
+    // Keep Python warm while LEAN is primary, but never let its file watcher
+    // overwrite a promoted LEAN snapshot.
+    if (this.activeSource !== 'python') return;
     const [bundle, legacySignal, health] = await Promise.all([
       this.readJson(path.join(this.dataDir, 'strategy-signals.json')),
       this.readJson(path.join(this.dataDir, 'signal.json')),
@@ -414,6 +440,14 @@ export class StrategyEngineAdapter {
       : legacySignal
         ? { [this.strategyLane(legacySignal)]: legacySignal }
         : {};
+    await this.applySignals(signals, health, 'python');
+  }
+
+  private async applySignals(
+    signals: Record<string, StrategySnapshot>,
+    health: StrategySnapshot | null,
+    source: 'python' | 'lean'
+  ): Promise<void> {
     if (Object.keys(signals).length === 0) return;
     for (const signal of Object.values(signals)) {
       if (signal.engine_version !== 'signal-only-v2' || signal.execution_enabled !== false) {
@@ -421,7 +455,7 @@ export class StrategyEngineAdapter {
       }
     }
     this.currentHealth = health;
-    const snapshotFingerprint = this.hash(signals);
+    const snapshotFingerprint = this.hash({ source, signals });
     if (snapshotFingerprint === this.lastSnapshotFingerprint) return;
     if (Object.keys(this.currentSignals).length === 0 && this.currentSignal) {
       const legacyLane = this.strategyLane(this.currentSignal);

@@ -24,12 +24,25 @@ jobs:
         include:
           - service: backend
             context: ./backend
+            docker_context: ./backend
+            dockerfile: ./backend/Dockerfile
             runtime: node
           - service: frontend
             context: ./frontend
+            docker_context: ./frontend
+            dockerfile: ./frontend/Dockerfile
             runtime: node
           - service: strategy-engine
             context: ./strategy-engine
+            docker_context: ./strategy-engine
+            dockerfile: ./strategy-engine/Dockerfile
+            test_directory: ./strategy-engine
+            runtime: python
+          - service: lean-shadow
+            context: ./lean-engine
+            docker_context: .
+            dockerfile: ./lean-engine/Dockerfile
+            test_directory: ./lean-engine
             runtime: python
     permissions:
       contents: read
@@ -62,11 +75,11 @@ jobs:
         env:
           VITE_APP_BUILD_SHA: ${{ github.sha }}
 
-      - name: Test strategy engine
+      - name: Test Python strategy services
         if: matrix.runtime == 'python'
         run: |
-          cd ${{ matrix.context }}
-          python -m pip install -r requirements.txt
+          cd ${{ matrix.test_directory }}
+          if [[ -f requirements.txt ]]; then python -m pip install -r requirements.txt; fi
           python -m unittest discover -s . -p 'test_*.py'
 
       - name: Set up Docker Buildx
@@ -97,8 +110,8 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.context }}/Dockerfile
+          context: ${{ matrix.docker_context }}
+          file: ${{ matrix.dockerfile }}
           platforms: linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -169,7 +182,9 @@ jobs:
             
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull trade-staging-backend trade-staging-frontend zerogex-prefetch zerogex-prefetch-qqq strategy-engine
+            services=(trade-staging-backend trade-staging-frontend zerogex-prefetch zerogex-prefetch-qqq strategy-engine)
+            if [[ "${LEAN_SHADOW_ENABLED:-false}" == "true" ]]; then services+=(lean-shadow); fi
+            docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull "${services[@]}"
             
             export PORT_BACKEND=${{ env.PORT_BACKEND }}
             export PORT_FRONTEND=${{ env.PORT_FRONTEND }}
@@ -184,11 +199,11 @@ jobs:
             fi
             
             if [[ "${{ env.ENV_NAME }}" == "Production" ]]; then
-              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --wait --wait-timeout 180 --no-deps trade-staging-backend trade-staging-frontend db trade-staging-redis zerogex-prefetch zerogex-prefetch-qqq strategy-engine
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --wait --wait-timeout 180 --no-deps "${services[@]}" db trade-staging-redis
             else
               docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} stop db || true
               docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} rm -f db || true
-              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --wait --wait-timeout 180 --remove-orphans --no-deps trade-staging-backend trade-staging-frontend trade-staging-redis zerogex-prefetch zerogex-prefetch-qqq strategy-engine
+              docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} up -d --wait --wait-timeout 180 --remove-orphans --no-deps "${services[@]}" trade-staging-redis
             fi
 
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} ps
