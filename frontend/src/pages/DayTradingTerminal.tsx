@@ -1072,6 +1072,7 @@ export default function DayTradingTerminal() {
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals }),
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.positions }),
         queryClient.invalidateQueries({ queryKey: QUERY_KEYS.tradeUsage }),
+        refetchStrategy(),
         refetchHistory()
       ]);
       setActionMessage({

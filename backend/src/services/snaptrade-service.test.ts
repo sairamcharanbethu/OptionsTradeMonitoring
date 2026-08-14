@@ -582,6 +582,34 @@ async function testBrokerSyncSurvivesCacheRefreshFailure() {
   }
 }
 
+async function testReconcileRequiredOpenEntryIsIncludedInBrokerSync() {
+  const originalAcquireLock = TradeRedisService.acquireLock;
+  const originalReleaseLock = TradeRedisService.releaseLock;
+  const originalRebuild = TradeRedisService.rebuildOpenTradesBestEffort;
+  let pendingSelection = '';
+  const service = new SnaptradeService(createFastifyMockWithQueries(async (sql: string) => {
+    if (sql.includes('FROM positions') && sql.includes("execution_broker = 'wealthsimple_snaptrade'")) {
+      pendingSelection = sql;
+      return { rows: [] };
+    }
+    return { rows: [] };
+  }));
+
+  try {
+    (TradeRedisService as any).acquireLock = async () => ({ acquired: true, key: 'test-lock' });
+    (TradeRedisService as any).releaseLock = async () => {};
+    (TradeRedisService as any).rebuildOpenTradesBestEffort = async () => null;
+    const summary = await service.syncPendingBrokerOrders(703);
+    assert(summary.checked === 0, 'The selection probe must complete without attempting a broker request.');
+    assert(pendingSelection.includes("execution_status IN ('PENDING_RECONCILE', 'ENTRY_RECONCILE_REQUIRED', 'ENTRY_STALE')"),
+      'An OPEN entry marked reconcile-required must remain eligible for broker reconciliation.');
+  } finally {
+    (TradeRedisService as any).acquireLock = originalAcquireLock;
+    (TradeRedisService as any).releaseLock = originalReleaseLock;
+    (TradeRedisService as any).rebuildOpenTradesBestEffort = originalRebuild;
+  }
+}
+
 async function testConcurrentBrokerSyncsShareOneReconciliation() {
   const firstService = new SnaptradeService(createFastifyMock()) as any;
   const secondService = new SnaptradeService(createFastifyMock()) as any;
@@ -662,6 +690,7 @@ async function runTests() {
   await testSyntheticManualFillKeepsTakeProfitInsideApp();
   await testSyntheticStrategyFillKeepsFixedTakeProfitDisabled();
   await testBrokerSyncSurvivesCacheRefreshFailure();
+  await testReconcileRequiredOpenEntryIsIncludedInBrokerSync();
   await testConcurrentBrokerSyncsShareOneReconciliation();
   await testBrokerSyncLockContentionHasTypedRetryableError();
   await testAllUserBrokerSyncRunsInParallelAndIsolatesFailures();

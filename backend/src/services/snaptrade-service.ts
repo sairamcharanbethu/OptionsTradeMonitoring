@@ -813,6 +813,7 @@ export class SnaptradeService {
                AND (
                  status = 'PENDING_ORDER'
                  OR (status = 'OPEN' AND execution_status = 'PARTIALLY_FILLED')
+                 OR (status = 'OPEN' AND execution_status IN ('PENDING_RECONCILE', 'ENTRY_RECONCILE_REQUIRED', 'ENTRY_STALE'))
                  OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
                  OR (status = 'OPEN' AND execution_status = 'PENDING_TRIM')
                  OR (status = 'OPEN' AND execution_status LIKE 'EXIT_%')
@@ -1552,6 +1553,7 @@ export class SnaptradeService {
              WHERE execution_broker = 'wealthsimple_snaptrade'
                AND (
                  status = 'PENDING_ORDER'
+                 OR (status = 'OPEN' AND execution_status IN ('PENDING_RECONCILE', 'ENTRY_RECONCILE_REQUIRED', 'ENTRY_STALE'))
                  OR (status = 'OPEN' AND execution_status = 'PENDING_EXIT')
                  OR (status = 'OPEN' AND execution_status = 'PENDING_TRIM')
                  OR (status = 'OPEN' AND execution_status LIKE 'EXIT_%')
