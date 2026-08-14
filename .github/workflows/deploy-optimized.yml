@@ -196,7 +196,7 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
             services=(trade-staging-backend trade-staging-frontend zerogex-prefetch zerogex-prefetch-qqq strategy-engine)
-            if [[ "${LEAN_SHADOW_ENABLED:-false}" == "true" ]]; then services+=(lean-shadow); fi
+            if grep -Eq "^LEAN_SHADOW_ENABLED=['\"]?true['\"]?$" .env; then services+=(lean-shadow); fi
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull "${services[@]}"
             
             export PORT_BACKEND=${{ env.PORT_BACKEND }}
