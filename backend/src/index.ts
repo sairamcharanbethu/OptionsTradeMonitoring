@@ -627,14 +627,14 @@ const ensureSchema = async (instance: any) => {
     const ledgerClient = await instance.pg.connect();
     try {
       await ledgerClient.query('BEGIN');
-      const applied = await ledgerClient.query(
-        `INSERT INTO paper_ledger_migrations (migration_key) VALUES ('shared-paper-account-v1') ON CONFLICT DO NOTHING RETURNING migration_key`
+      const legacy = await ledgerClient.query(
+        `SELECT id FROM paper_accounts WHERE id IN ('strategy-system', 'wall-reaction-system') FOR UPDATE`
       );
-      if (applied.rows[0]) {
-        const legacy = await ledgerClient.query(
-          `SELECT id FROM paper_accounts WHERE id IN ('strategy-system', 'wall-reaction-system') FOR UPDATE`
+      if (legacy.rows.length) {
+        const applied = await ledgerClient.query(
+          `INSERT INTO paper_ledger_migrations (migration_key) VALUES ('shared-paper-account-v1') ON CONFLICT DO NOTHING RETURNING migration_key`
         );
-        if (legacy.rows.length) {
+        if (applied.rows[0]) {
           await ledgerClient.query(`
             UPDATE positions
                SET paper_strategy = CASE WHEN paper_account_id='wall-reaction-system' OR execution_broker='wall_reaction_paper'
@@ -679,7 +679,7 @@ const ensureSchema = async (instance: any) => {
              WHERE id='shared-paper'
           `, [cash, Number(pending.rows[0]?.reserved_cash || 0), equity]);
           await ledgerClient.query(`DELETE FROM paper_accounts WHERE id IN ('strategy-system', 'wall-reaction-system')`);
-        }
+      }
       }
       await ledgerClient.query('COMMIT');
     } catch (error) {

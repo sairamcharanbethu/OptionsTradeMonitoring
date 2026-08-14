@@ -6,6 +6,7 @@
     "dev": "nodemon --exec ts-node src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc && node copy-scripts.js",
+    "migrate:shared-paper": "node dist/scripts/migrate-shared-paper-account.js",
     "test:paper": "NODE_ENV=test ts-node src/services/paper-trading-service.test.ts",
     "test:paper:integration": "NODE_ENV=test ts-node src/services/paper-trading-service.integration.test.ts",
     "test:wall-reaction": "NODE_ENV=test ts-node src/services/wall-reaction-providers.test.ts && NODE_ENV=test ts-node src/services/wall-reaction-engine.test.ts && NODE_ENV=test ts-node src/services/wall-reaction-service.test.ts && NODE_ENV=test ts-node src/services/wall-reaction-paper-service.test.ts && NODE_ENV=test ts-node src/services/wall-reaction-deployment.test.ts && NODE_ENV=test ts-node src/routes/wall-reaction.test.ts",
