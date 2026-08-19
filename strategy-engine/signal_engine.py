@@ -15,6 +15,15 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+try:
+    # Wall-reaction strategy (validated, merged into Day Trading as a native
+    # candidate). Guarded so signal_engine still imports where the module is not
+    # shipped alongside it (e.g. minimal LEAN image copies) — the wall candidate
+    # is simply inactive there.
+    from gex_wall_evaluator import evaluate_gex_wall
+except Exception:  # pragma: no cover - optional strategy module
+    evaluate_gex_wall = None  # type: ignore[assignment]
+
 ET = ZoneInfo("America/New_York")
 ENGINE_VERSION = "signal-only-v2"
 MAX_GEX_ENTRY_AGE_SECONDS = 20
@@ -26,10 +35,17 @@ MAX_OPTION_SPREAD_PCT = 15.0
 MIN_PLAN_REWARD_RISK = 1.5
 MIN_CONTINUATION_CONFIDENCE = 70
 STRATEGY_FAMILY_NAMES = {"ORB_INDEX", "VWAP_TREND"}
+# Wall-reaction setups (merged from the validated GEX wall strategy).
+GEX_WALL_STRATEGY_NAMES = {
+    "GEX_WALL_BOUNCE",
+    "GEX_WALL_REJECTION",
+    "GEX_WALL_BREAK_FAIL",
+}
 FROZEN_SETUP_STRATEGIES = {
     "MTF_REVERSAL",
     "MTF_TREND_BREAK",
     "GEX_REJECTION",
+    *GEX_WALL_STRATEGY_NAMES,
     *STRATEGY_FAMILY_NAMES,
 }
 CONTINUATION_OPEN_STATES = {"ACTIVE", "MANAGE", "EXTENDED"}
@@ -5132,6 +5148,117 @@ def _mtf_reversal_candidate(
     return None
 
 
+def _wall_strike(value: Any) -> float | None:
+    """Normalize a GEX wall (scalar or {"strike": ...} dict) to a number."""
+    if isinstance(value, dict):
+        value = value.get("strike")
+    return float(value) if _number(value) else None
+
+
+_GEX_WALL_STRATEGY_BY_SETUP = {
+    "PUT_WALL_BOUNCE_CALL": "GEX_WALL_BOUNCE",
+    "CALL_WALL_REJECTION_PUT": "GEX_WALL_REJECTION",
+    "CALL_WALL_FAILED_BREAKOUT_PUT": "GEX_WALL_BREAK_FAIL",
+    "PUT_WALL_FAILED_BREAKDOWN_CALL": "GEX_WALL_BREAK_FAIL",
+}
+
+
+def _gex_wall_candidate(
+    spy: dict[str, Any],
+    latest: dict[str, Any],
+    spot: float,
+    gex_ctx: dict[str, Any],
+    completed: list[dict[str, Any]],
+    now: float,
+    previous_walls: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Native Day Trading candidate from the validated GEX wall-reaction engine.
+
+    Only a PARTICIPATE verdict becomes a tradeable candidate; CAUTION/AVOID
+    (micro-scalp or stand-aside in the source strategy) never arms autonomously.
+    The graded verdict maps to the engine's 0–100 score, and the wall/structure
+    anchors an ATR-buffered plan via the shared ``_structure_plan`` path.
+    """
+    if evaluate_gex_wall is None:
+        return None
+    atr_5m = spy.get("atr_5m")
+    if not _number(atr_5m):
+        return None
+    evaluation = evaluate_gex_wall(
+        {
+            "call_wall": _wall_strike(gex_ctx.get("call_wall")),
+            "put_wall": _wall_strike(gex_ctx.get("put_wall")),
+            "flip": _wall_strike(gex_ctx.get("flip")),
+            "regime": gex_ctx.get("regime"),
+        },
+        completed,
+        now=now,
+        previous_walls=previous_walls,
+    )
+    if evaluation.get("verdict") != "PARTICIPATE":
+        return None
+    side = evaluation.get("side")
+    if side not in {"calls", "puts"}:
+        return None
+    confidence = evaluation.get("confidence")
+    score = 85 if confidence == "A+" else 75
+    levels = evaluation.get("levels") or {}
+    call_wall = levels.get("call_wall")
+    put_wall = levels.get("put_wall")
+    atr = float(atr_5m)
+    if side == "calls":
+        entry = round(float(latest["high"]) + 0.01, 2)
+        stop_anchor = (
+            min(float(put_wall) if _number(put_wall) else float(latest["low"]), float(latest["low"]))
+            - atr * 0.15
+        )
+    else:
+        entry = round(float(latest["low"]) - 0.01, 2)
+        stop_anchor = (
+            max(float(call_wall) if _number(call_wall) else float(latest["high"]), float(latest["high"]))
+            + atr * 0.15
+        )
+    strategy_name = _GEX_WALL_STRATEGY_BY_SETUP.get(
+        str(evaluation.get("setup_type")), "GEX_WALL_REJECTION"
+    )
+    return {
+        "strategy": strategy_name,
+        "side": side,
+        "score": score,
+        "base_score": score,
+        "quality": "HIGH" if score >= 80 else "MEDIUM",
+        "timeframes": {"macro_15m": (evaluation.get("macro") or {}).get("trend_15m")},
+        "setup": evaluation.get("reason"),
+        "gex_alignment": {
+            "levels": levels,
+            "regime": evaluation.get("regime"),
+            "heatmap_status": "wall_reaction",
+        },
+        "a_plus": confidence == "A+",
+        "risk_plan": _structure_plan(
+            entry, side, atr, round(stop_anchor, 2), _gex_target_levels(gex_ctx)
+        ),
+        "wall_evaluation": {
+            key: evaluation.get(key)
+            for key in ("setup_type", "verdict", "confidence", "invalidation")
+        },
+    }
+
+
+def _higher_score_candidate(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Pick the higher-conviction reaction candidate; ties keep ``left``."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    left_score = int(left.get("base_score", left.get("score", 0)))
+    right_score = int(right.get("base_score", right.get("score", 0)))
+    return left if left_score >= right_score else right
+
+
 def _frozen_reversal(previous_signal: dict[str, Any], now: float, spot: float) -> dict[str, Any] | None:
     setup = previous_signal.get("reversal_setup") or {}
     plan = setup.get("risk_plan") or {}
@@ -5432,6 +5559,12 @@ def build_signal(
         "strategy_family_context": strategy_family_context,
         "trendline_context": trendline_context,
         "gex": gex_ctx,
+        # Persisted (normalized to numeric strikes) for the wall-reaction
+        # candidate's cross-cycle migration guard.
+        "gex_walls": {
+            "call_wall": _wall_strike(gex_ctx.get("call_wall")),
+            "put_wall": _wall_strike(gex_ctx.get("put_wall")),
+        },
         "zerogex_shadow": zerogex_ctx,
         "zerogex_decision": zerogex_decision,
     }
@@ -5826,7 +5959,15 @@ def build_signal(
     if reversal is None and family_candidate is not None:
         reversal = family_candidate
     if reversal is None and cooldown_until <= now:
-        reversal = _mtf_reversal_candidate(spy, latest, float(spot), gex_ctx)
+        # Cooldown-gated reaction setups: MTF reversal and the merged GEX
+        # wall-reaction engine. Prefer the higher-conviction candidate.
+        reversal = _higher_score_candidate(
+            _mtf_reversal_candidate(spy, latest, float(spot), gex_ctx),
+            _gex_wall_candidate(
+                spy, latest, float(spot), gex_ctx, completed, now,
+                previous_walls=previous_signal.get("gex_walls"),
+            ),
+        )
         if reversal:
             reversal["armed_at"] = now
             reversal["frozen_until"] = now + 15 * 60

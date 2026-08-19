@@ -41,7 +41,6 @@ from signal_engine import (
     provider_timestamp_freshness,
     render_signal,
 )
-from gex_wall_evaluator import evaluate_gex_wall
 
 ET = ZoneInfo("America/New_York")
 NEXT_EXPIRY_ROLLOVER_MINUTE_ET = 13 * 60
@@ -568,8 +567,6 @@ class TradePrefetcher:
         self.last_journal_ats: dict[str, float] = {}
         self.local_gex: dict[str, Any] | None = None
         self.last_local_gex_at = 0.0
-        # Prior-cycle GEX walls, feeding the wall-reaction shadow's migration guard.
-        self._prev_wall_levels: dict[str, Any] | None = None
         self.last_journal_at = 0.0
         self.runtime_ibkr_config: dict[str, Any] = {}
         self.redis_publisher: Any = None
@@ -1087,31 +1084,6 @@ class TradePrefetcher:
                 ],
             }
 
-        # GEX wall-reaction shadow strategy — runs once per cycle (lane- and
-        # option-independent), consuming the same GEX read and SPY bars as the
-        # primary engine. Execution-free; attached to every lane for downstream
-        # journaling and the signal-replay comparison.
-        spy_gex_raw = ((gex or {}).get("data") or {}).get("SPY") or {}
-        gex_wall_shadow = evaluate_gex_wall(
-            {
-                "call_wall": spy_gex_raw.get("call_wall"),
-                "put_wall": spy_gex_raw.get("put_wall"),
-                "flip": spy_gex_raw.get("flip"),
-                "regime": spy_gex_raw.get("regime"),
-                "net_gex": spy_gex_raw.get("net_gex"),
-                "spot": spy_gex_raw.get("spot"),
-            },
-            ((market.get("symbols") or {}).get("SPY") or {}).get("bars") or [],
-            now=generated_at,
-            previous_walls=self._prev_wall_levels,
-        )
-        wall_levels = gex_wall_shadow.get("levels") or {}
-        if wall_levels.get("call_wall") is not None and wall_levels.get("put_wall") is not None:
-            self._prev_wall_levels = {
-                "call_wall": wall_levels.get("call_wall"),
-                "put_wall": wall_levels.get("put_wall"),
-            }
-
         signals: dict[str, dict[str, Any]] = {}
         for lane in STRATEGY_LANES:
             lane_family_policy = _strategy_family_policy_for_lane(
@@ -1175,7 +1147,6 @@ class TradePrefetcher:
             lane_signal = _normalize_strategy_lane(lane_signal, lane)
             lane_signal["provider_roles"] = provider_roles
             lane_signal["gex_shadows"] = gex_shadows
-            lane_signal["gex_wall_shadow"] = gex_wall_shadow
             lane_signal["strategy_policy"] = {
                 "strategy_max_total_debit_dollars": max_total_debit,
                 "strategy_preferred_contracts": preferred_contracts,

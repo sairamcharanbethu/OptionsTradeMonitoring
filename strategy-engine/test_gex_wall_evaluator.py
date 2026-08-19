@@ -3,6 +3,7 @@
 import unittest
 
 from gex_wall_evaluator import evaluate_gex_wall
+from signal_engine import _gex_wall_candidate, _higher_score_candidate
 
 # base aligned to a 900s (15m) boundary so 1-bar-per-5min aggregates cleanly.
 BASE = 1_700_000_100  # 1_700_000_100 % 900 == 0
@@ -82,6 +83,79 @@ class GexWallEvaluatorTest(unittest.TestCase):
         self.assertEqual(result["setup_type"], "CALL_WALL_REJECTION_PUT")
         self.assertEqual(result["verdict"], "AVOID")
         self.assertTrue(result["regime"]["wall_migrated_higher"])
+
+
+class WallMergeIntoDayTradingTest(unittest.TestCase):
+    """The wall engine, merged into build_signal as a native reaction candidate."""
+
+    # Production gex_ctx carries walls as {"strike", "stage"} dicts.
+    def test_participate_produces_native_candidate(self):
+        bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
+        candidate = _gex_wall_candidate(
+            {"atr_5m": 1.0},
+            bars[-1],
+            530.0,
+            {
+                "available": True,
+                "call_wall": {"strike": 535.0, "stage": "Active"},
+                "put_wall": {"strike": 500.0, "stage": "Active"},
+                "flip": None,
+                "regime": "Negative",
+            },
+            bars,
+            NOW,
+        )
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["strategy"], "GEX_WALL_REJECTION")
+        self.assertIn(candidate["strategy"], __import__("signal_engine").FROZEN_SETUP_STRATEGIES)
+        self.assertEqual(candidate["side"], "puts")
+        self.assertEqual(candidate["score"], 85)
+        self.assertEqual(candidate["quality"], "HIGH")
+        self.assertTrue(candidate["a_plus"])
+        self.assertIn("targets", candidate["risk_plan"])
+        self.assertTrue(candidate["risk_plan"]["targets"])
+
+    def test_non_participate_yields_no_candidate(self):
+        flat = _trend_bars(60, 500, 0.0, last_override=(500.0, 500.05, 499.95, 500.0))
+        candidate = _gex_wall_candidate(
+            {"atr_5m": 1.0},
+            flat[-1],
+            500.0,
+            {
+                "available": True,
+                "call_wall": {"strike": 520.0, "stage": "Active"},
+                "put_wall": {"strike": 480.0, "stage": "Active"},
+                "flip": None,
+                "regime": "Positive",
+            },
+            flat,
+            NOW,
+        )
+        self.assertIsNone(candidate)
+
+    def test_missing_atr_yields_no_candidate(self):
+        bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
+        candidate = _gex_wall_candidate(
+            {}, bars[-1], 530.0,
+            {
+                "available": True,
+                "call_wall": {"strike": 535.0, "stage": "Active"},
+                "put_wall": {"strike": 500.0, "stage": "Active"},
+                "flip": None,
+                "regime": "Negative",
+            },
+            bars, NOW,
+        )
+        self.assertIsNone(candidate)
+
+    def test_higher_score_candidate_selection(self):
+        low = {"strategy": "MTF_TREND_BREAK", "base_score": 75}
+        high = {"strategy": "GEX_WALL_REJECTION", "base_score": 85}
+        self.assertIs(_higher_score_candidate(low, high), high)
+        self.assertIs(_higher_score_candidate(high, low), high)  # tie-break keeps left only on equal
+        self.assertIs(_higher_score_candidate(low, None), low)
+        self.assertIs(_higher_score_candidate(None, high), high)
+        self.assertIsNone(_higher_score_candidate(None, None))
 
 
 if __name__ == "__main__":

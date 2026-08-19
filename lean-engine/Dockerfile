@@ -13,6 +13,9 @@ USER root
 # Paths are relative to the repo root (the required build context), not to this file.
 COPY lean-engine/ /opt/lean-shadow/
 COPY strategy-engine/signal_engine.py /opt/strategy-engine/signal_engine.py
+# signal_engine imports the wall-reaction strategy (merged into Day Trading);
+# ship it so `from signal_engine import build_signal` resolves inside the image.
+COPY strategy-engine/gex_wall_evaluator.py /opt/strategy-engine/gex_wall_evaluator.py
 RUN chmod +x /opt/lean-shadow/entrypoint.sh /opt/lean-shadow/entrypoint.py && mkdir -p /state
 
 ENTRYPOINT ["/opt/lean-shadow/entrypoint.sh"]
