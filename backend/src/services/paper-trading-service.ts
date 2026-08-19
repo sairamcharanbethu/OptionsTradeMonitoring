@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { AIService } from './ai-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { getGlobalSettings } from '../lib/settings-utils';
+import { KillSwitchService } from './kill-switch-service';
 import { redis as defaultRedis } from '../lib/redis';
 import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { PAPER_STRATEGIES, SHARED_PAPER_ACCOUNT_ID } from './paper-account-constants';
@@ -711,6 +712,11 @@ export class PaperTradingService {
       || !expiry || !option.local_symbol || !Number.isFinite(Number(option.strike)) || Number(option.strike) <= 0) return;
     const account = await this.account();
     if (await this.strategyAutomationStatus() !== 'ACTIVE') return;
+    const killSwitch = await KillSwitchService.evaluate((this.fastify as any).pg, 'paper');
+    if (killSwitch.halted) {
+      this.fastify.log.warn(`[PaperTrading] Entry halted by daily-loss kill-switch. ${killSwitch.reason}`);
+      return;
+    }
     const existing = await (this.fastify as any).pg.query(
       'SELECT id FROM paper_trade_decisions WHERE account_id = $1 AND setup_id = $2', [ACCOUNT_ID, setupId]
     );
@@ -1189,6 +1195,129 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         const current = await (this.fastify as any).pg.query('SELECT * FROM positions WHERE id=$1', [position.id]);
         if (current.rows[0]?.status === 'OPEN') await this.closePaperQuantity({ ...current.rows[0], ...managedPosition, quantity: current.rows[0].quantity }, Number(current.rows[0].quantity), bid, expirationIntent);
       }
+    }
+  }
+
+  /**
+   * Position Monitor mirror: when a monitored (real/broker) position reaches its
+   * take-profit target, mirror it into the shared paper account and scale out a
+   * fraction so the take-profit is recorded as a simulated trade with P&L. This is
+   * self-contained — it does NOT run through the SPY/AI signal engine — and is
+   * meant to be called fire-and-forget from the market poller alongside signalling.
+   */
+  public async mirrorRealPositionTakeProfit(
+    realPosition: any,
+    exitPremium: number,
+    trimFraction = 0.6
+  ): Promise<void> {
+    const symbol = String(realPosition?.symbol || '').toUpperCase();
+    const optionType = realPosition?.option_type === 'PUT' ? 'PUT' : 'CALL';
+    const strike = Number(realPosition?.strike_price);
+    const expiration = this.normalizeExpiry(realPosition?.expiration_date);
+    const entryPrice = Number(realPosition?.entry_price);
+    const quantity = Math.max(1, Math.floor(Number(realPosition?.quantity || 0)));
+    const bid = Number(exitPremium);
+    if (!symbol || !Number.isFinite(strike) || strike <= 0 || !expiration
+      || !Number.isFinite(entryPrice) || entryPrice <= 0
+      || !Number.isFinite(bid) || bid <= 0 || quantity < 1) {
+      this.fastify.log.warn(`[PaperTrading] Skipping take-profit mirror for position ${realPosition?.id}: incomplete contract or price data`);
+      return;
+    }
+
+    // Only the scaled-out portion is mirrored, and it is then closed in full, so
+    // no partially-open remainder is left behind. The paper exit manager only
+    // manages the live SPY signal contract, so any leftover non-SPY mirror would
+    // otherwise sit open (unmanaged) until expiration and distort paper equity.
+    const trimQty = Math.min(quantity, Math.max(1, Math.round(quantity * trimFraction)));
+
+    // Reuse an existing open mirror for this contract (e.g. after a restart);
+    // otherwise open a fresh, cash-debited mirror sized to the scale-out quantity.
+    let mirror = await this.findOpenMirror(symbol, optionType, strike, expiration);
+    if (!mirror) {
+      mirror = await this.openMirrorPosition(realPosition, { symbol, optionType, strike, expiration, entryPrice, quantity: trimQty });
+      if (!mirror) return; // insufficient cash or open failed (already logged)
+    }
+
+    const closeQty = Math.max(1, Math.floor(Number(mirror.quantity || trimQty)));
+    await this.closePaperQuantity(mirror, closeQty, bid, 'TARGET_1', {
+      source: 'position-monitor-mirror',
+      mirrorOfPositionId: realPosition.id
+    });
+  }
+
+  private async findOpenMirror(symbol: string, optionType: string, strike: number, expiration: string): Promise<any | null> {
+    const { rows } = await (this.fastify as any).pg.query(
+      `SELECT * FROM positions
+        WHERE paper_account_id=$1 AND paper_strategy=$2 AND status='OPEN'
+          AND symbol=$3 AND option_type=$4 AND strike_price=$5 AND expiration_date=$6
+        ORDER BY created_at DESC LIMIT 1`,
+      [ACCOUNT_ID, STRATEGY_NAME, symbol, optionType, strike, expiration]
+    );
+    return rows[0] || null;
+  }
+
+  private async openMirrorPosition(
+    realPosition: any,
+    contract: { symbol: string; optionType: string; strike: number; expiration: string; entryPrice: number; quantity: number }
+  ): Promise<any | null> {
+    const entryDebit = Number((contract.entryPrice * contract.quantity * 100).toFixed(2));
+    const client = await (this.fastify as any).pg.connect();
+    try {
+      await client.query('BEGIN');
+      const locked = await client.query(
+        `SELECT cash_balance, reserved_cash FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]
+      );
+      const available = Number(locked.rows[0]?.cash_balance || 0) - Number(locked.rows[0]?.reserved_cash || 0);
+      if (available < entryDebit) {
+        await client.query('ROLLBACK');
+        this.fastify.log.warn(`[PaperTrading] Skipping take-profit mirror for position ${realPosition.id}: available paper cash $${available.toFixed(2)} < entry cost $${entryDebit.toFixed(2)}`);
+        return null;
+      }
+      const inserted = await client.query(
+        `INSERT INTO positions (
+           user_id, symbol, option_type, strike_price, expiration_date, entry_price, quantity,
+           current_price, underlying_price, status, is_simulated, account_id, execution_broker, execution_status,
+           contracts_requested, entry_action, exit_action,
+           suggested_stop_loss, suggested_take_profit_1, suggested_take_profit_2,
+           paper_account_id, paper_strategy, strategy_managed, analysis_data, notes
+         ) VALUES (NULL,$1,$2,$3,$4,$5,$6,$5,$7,'OPEN',TRUE,$8,'system_paper','FILLED',
+                   $6,'BUY_TO_OPEN','SELL_TO_CLOSE',$9,$10,$11,$8,$12,FALSE,$13,$14)
+         RETURNING *`,
+        [contract.symbol, contract.optionType, contract.strike, contract.expiration, contract.entryPrice, contract.quantity,
+          realPosition.underlying_price != null ? Number(realPosition.underlying_price) : null,
+          ACCOUNT_ID, realPosition.suggested_stop_loss ?? null,
+          realPosition.suggested_take_profit_1 ?? null, realPosition.suggested_take_profit_2 ?? null,
+          STRATEGY_NAME,
+          JSON.stringify({ source: 'position-monitor', mirrorOfPositionId: realPosition.id }),
+          `Mirrored from monitored position #${realPosition.id} on take-profit target hit.`]
+      );
+      const mirror = inserted.rows[0];
+      await client.query(
+        `INSERT INTO paper_orders (
+           account_id, position_id, setup_id, intent, action, status,
+           osi_ticker, option_type, strike, expiration, quantity, fill_price, quote_snapshot, filled_at, strategy_name
+         ) VALUES ($1,$2,$3,'ENTRY','BUY_TO_OPEN','FILLED',$4,$5,$6,$7,$8,$9,$10,NOW(),$11)`,
+        [ACCOUNT_ID, mirror.id, this.paperLedgerSetupId(mirror),
+          this.osiTicker(mirror), contract.optionType, contract.strike, contract.expiration,
+          contract.quantity, contract.entryPrice, JSON.stringify({ source: 'position-monitor-mirror' }), STRATEGY_NAME]
+      );
+      await client.query(`UPDATE paper_accounts SET cash_balance=cash_balance-$1, updated_at=NOW() WHERE id=$2`, [entryDebit, ACCOUNT_ID]);
+      await client.query('COMMIT');
+      await this.journal(
+        'MIRROR_ENTRY_FILLED',
+        `Mirrored paper entry: ${contract.quantity} ${contract.symbol} ${contract.optionType} ${contract.strike} @ $${contract.entryPrice.toFixed(2)} from monitored position #${realPosition.id}.`,
+        { ...mirror, strategy_setup_id: this.paperLedgerSetupId(mirror) },
+        mirror.id, contract.entryPrice,
+        { source: 'position-monitor-mirror', mirrorOfPositionId: realPosition.id, quantity: contract.quantity }
+      );
+      this.broadcast({ type: 'PAPER_ACCOUNT_CHANGED', data: { reason: 'MIRROR_ENTRY', positionId: mirror.id } });
+      return mirror;
+    } catch (error: any) {
+      try { await client.query('ROLLBACK'); } catch { /* ignore */ }
+      this.fastify.log.error({ err: error, positionId: realPosition.id }, '[PaperTrading] Take-profit mirror open failed');
+      return null;
+    } finally {
+      client.release();
     }
   }
 

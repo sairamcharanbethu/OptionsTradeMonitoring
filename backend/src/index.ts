@@ -16,10 +16,11 @@ import { goalRoutes } from './routes/goals';
 import { signalRoutes } from './routes/signals';
 import { tradeRoutes } from './routes/trades';
 import { backtestRoutes } from './routes/backtests';
-import { coveredCallRoutes } from './routes/covered-calls';
 import { manualEntryRoutes } from './routes/manual-entry';
 import { paperAccountRoutes } from './routes/paper-account';
-import { wallReactionRoutes } from './routes/wall-reaction';
+import { positionMonitorRoutes } from './routes/position-monitor';
+import { killSwitchRoutes } from './routes/kill-switch';
+import { metricsRoutes } from './routes/metrics';
 import { mcpRoutes } from './routes/mcp';
 import { leanShadowRoutes } from './routes/lean-shadow';
 import jwt from '@fastify/jwt';
@@ -206,31 +207,6 @@ const ensureSchema = async (instance: any) => {
         no_trade_reasons TEXT[],
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
-    `);
-
-    await instance.pg.query(`
-      CREATE TABLE IF NOT EXISTS wall_reaction_candidates (
-        id UUID PRIMARY KEY,
-        symbol VARCHAR(10) NOT NULL,
-        fingerprint VARCHAR(64) NOT NULL,
-        decision_code VARCHAR(40) NOT NULL,
-        status VARCHAR(20) NOT NULL,
-        context JSONB NOT NULL,
-        plan JSONB NOT NULL DEFAULT '{}'::jsonb,
-        contract JSONB NOT NULL DEFAULT '{}'::jsonb,
-        generated_at TIMESTAMPTZ NOT NULL,
-        armed_at TIMESTAMPTZ,
-        armed_until TIMESTAMPTZ,
-        entered_at TIMESTAMPTZ,
-        invalidated_at TIMESTAMPTZ,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (symbol, fingerprint)
-      );
-    `);
-    await instance.pg.query(`
-      CREATE INDEX IF NOT EXISTS idx_wall_reaction_candidates_symbol_created
-        ON wall_reaction_candidates (symbol, created_at DESC);
     `);
 
     const retiredCalendarSetting = await instance.pg.query(
@@ -1010,13 +986,12 @@ const start = async () => {
     fastify.register(marketRoutes, { prefix: '/api/market' });
     fastify.register(aiRoutes, { prefix: '/api/ai' });
     fastify.register(settingsRoutes, { prefix: '/api/settings' });
-    fastify.register(goalRoutes, { prefix: '/api/goals' });
     fastify.register(snaptradeRoutes, { prefix: '/api/snaptrade' });
     fastify.register(tradeRoutes, { prefix: '/api/trades' });
     fastify.register(signalRoutes, { prefix: '/api/signals' });
     fastify.register(backtestRoutes, { prefix: '/api/backtests' });
-    fastify.register(coveredCallRoutes, { prefix: '/api/covered-calls' });
     fastify.register(manualEntryRoutes, { prefix: '/api/manual-entry' });
+    fastify.register(goalRoutes, { prefix: '/api/goals' });
     fastify.register(mcpRoutes);
 
     fastify.get('/health', async () => {
@@ -1032,16 +1007,9 @@ const start = async () => {
     const ibkrMarketData = new IbkrMarketDataService(fastify);
     fastify.decorate('ibkrMarketData', ibkrMarketData);
 
-    const { WallReactionService } = await import('./services/wall-reaction-service');
-    const wallReaction = new WallReactionService(fastify);
-    fastify.decorate('wallReaction', wallReaction);
-    fastify.addHook('onClose', async () => wallReaction.stop());
-    fastify.register(wallReactionRoutes, { prefix: '/api/wall-reaction' });
-
-    const { WallReactionPaperService } = await import('./services/wall-reaction-paper-service');
-    const wallReactionPaper = new WallReactionPaperService(fastify);
-    fastify.decorate('wallReactionPaper', wallReactionPaper);
-    fastify.addHook('onClose', async () => wallReactionPaper.stop());
+    fastify.register(positionMonitorRoutes, { prefix: '/api/position-monitor' });
+    fastify.register(killSwitchRoutes, { prefix: '/api/kill-switch' });
+    fastify.register(metricsRoutes, { prefix: '/api/metrics' });
 
     // Initialize poller BEFORE listen
     const { MarketPoller } = await import('./services/market-poller');
@@ -1525,8 +1493,6 @@ const start = async () => {
     const startBackgroundServices = async () => {
       fastify.log.info('[System] Starting background services...');
       poller.start();
-      wallReaction.start();
-      wallReactionPaper.start();
       if (strategyEngine.getMode() !== 'primary') {
         scanner.start();
       } else {

@@ -4,6 +4,18 @@ exports.positionRoutes = positionRoutes;
 const zod_1 = require("zod");
 const redis_1 = require("../lib/redis");
 const analysis_service_1 = require("../services/analysis-service");
+const snaptrade_service_1 = require("../services/snaptrade-service");
+const trade_lifecycle_service_1 = require("../services/trade-lifecycle-service");
+const trade_redis_service_1 = require("../services/trade-redis-service");
+const market_data_write_buffer_service_1 = require("../services/market-data-write-buffer-service");
+function constructOSITicker(symbol, strike, type, expiration) {
+    const dateStr = expiration instanceof Date ? expiration.toISOString().split('T')[0] : String(expiration).split('T')[0];
+    const [year, month, day] = dateStr.split('-');
+    const yy = year.slice(-2);
+    const side = type === 'CALL' ? 'C' : 'P';
+    const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
+    return `${symbol.toUpperCase()}${yy}${month}${day}${side}${strikeValue}`;
+}
 const PositionSchema = zod_1.z.object({
     symbol: zod_1.z.string(),
     option_type: zod_1.z.enum(['CALL', 'PUT']),
@@ -47,7 +59,7 @@ const positionResponseSchema = {
         trailing_stop_loss_pct: { type: 'number', nullable: true },
         trailing_high_price: { type: 'number', nullable: true },
         current_price: { type: 'number', nullable: true },
-        status: { type: 'string', enum: ['OPEN', 'CLOSED', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED'] },
+        status: { type: 'string', enum: ['PENDING_ORDER', 'OPEN', 'CLOSED', 'STOP_TRIGGERED', 'PROFIT_TRIGGERED'] },
         realized_pnl: { type: 'number', nullable: true },
         delta: { type: 'number', nullable: true },
         theta: { type: 'number', nullable: true },
@@ -55,6 +67,7 @@ const positionResponseSchema = {
         vega: { type: 'number', nullable: true },
         iv: { type: 'number', nullable: true },
         underlying_price: { type: 'number', nullable: true },
+        underlying_stop_price: { type: 'number', nullable: true },
         created_at: { type: 'string', format: 'date-time' },
         updated_at: { type: 'string', format: 'date-time' },
         analyzed_support: { type: 'number', nullable: true },
@@ -94,6 +107,7 @@ const statsResponseSchema = {
 async function positionRoutes(fastify, options) {
     fastify.addHook('onRequest', fastify.authenticate);
     const analysisService = new analysis_service_1.AnalysisService(fastify);
+    const marketDataBuffer = new market_data_write_buffer_service_1.MarketDataWriteBufferService(fastify);
     // GET all positions (including analytics if closed)
     fastify.get('/', {
         schema: {
@@ -114,11 +128,11 @@ async function positionRoutes(fastify, options) {
         // Try cache
         const cached = await redis_1.redis.get(CACHE_KEY);
         if (cached)
-            return JSON.parse(cached);
+            return marketDataBuffer.applyLatestToPositions(JSON.parse(cached));
         const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
         // Set cache (60 seconds)
         await redis_1.redis.set(CACHE_KEY, JSON.stringify(rows), 60);
-        return rows;
+        return marketDataBuffer.applyLatestToPositions(rows);
     });
     // GET paginated closed positions (history)
     fastify.get('/history', {
@@ -185,8 +199,9 @@ async function positionRoutes(fastify, options) {
       WHERE user_id = $1 AND status != 'CLOSED'
     `;
         const { rows } = await fastify.pg.query(query, [userId]);
+        const latestRows = await marketDataBuffer.applyLatestToPositions(rows);
         // Transform to a map/dictionary for easier frontend patching
-        const updates = rows.reduce((acc, row) => {
+        const updates = latestRows.reduce((acc, row) => {
             acc[row.id] = row;
             return acc;
         }, {});
@@ -293,37 +308,19 @@ async function positionRoutes(fastify, options) {
         const { q } = request.query;
         if (!q)
             return [];
-        const apiKey = process.env.ALPHA_VANTAGE_API_KEY;
-        if (!apiKey) {
-            fastify.log.warn('ALPHA_VANTAGE_API_KEY not set, using mock/limited search');
-            return [
-                { symbol: 'AAPL', name: 'Apple Inc.' },
-                { symbol: 'MSFT', name: 'Microsoft Corporation' },
-                { symbol: 'GOOGL', name: 'Alphabet Inc.' },
-                { symbol: 'AMZN', name: 'Amazon.com Inc.' },
-                { symbol: 'TSLA', name: 'Tesla Inc.' },
-                { symbol: 'NVDA', name: 'NVIDIA Corporation' },
-                { symbol: 'META', name: 'Meta Platforms Inc.' },
-            ].filter(s => s.symbol.toLowerCase().includes(q.toLowerCase()));
-        }
-        try {
-            const url = `https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${q}&apikey=${apiKey}`;
-            const res = await fetch(url);
-            const data = await res.json();
-            if (data.bestMatches) {
-                return data.bestMatches.map((m) => ({
-                    symbol: m['1. symbol'],
-                    name: m['2. name'],
-                    type: m['3. type'],
-                    region: m['4. region']
-                })).filter((m) => m.type === 'Equity' || m.type === 'ETF');
-            }
-            return [];
-        }
-        catch (err) {
-            fastify.log.error(err);
-            return [];
-        }
+        const query = q.toLowerCase();
+        return [
+            { symbol: 'QQQ', name: 'Invesco QQQ Trust' },
+            { symbol: 'SPY', name: 'SPDR S&P 500 ETF Trust' },
+            { symbol: 'AAPL', name: 'Apple Inc.' },
+            { symbol: 'MSFT', name: 'Microsoft Corporation' },
+            { symbol: 'GOOGL', name: 'Alphabet Inc.' },
+            { symbol: 'AMZN', name: 'Amazon.com Inc.' },
+            { symbol: 'TSLA', name: 'Tesla Inc.' },
+            { symbol: 'NVDA', name: 'NVIDIA Corporation' },
+            { symbol: 'META', name: 'Meta Platforms Inc.' },
+        ].filter((s) => (s.symbol.toLowerCase().includes(query) ||
+            s.name.toLowerCase().includes(query)));
     });
     // GET single position
     fastify.get('/:id', {
@@ -350,7 +347,7 @@ async function positionRoutes(fastify, options) {
         if (rows.length === 0) {
             return reply.code(404).send({ error: 'Position not found' });
         }
-        return rows[0];
+        return marketDataBuffer.applyLatestToPosition(rows[0]);
     });
     // GET price history
     fastify.get('/:id/history', {
@@ -387,7 +384,8 @@ async function positionRoutes(fastify, options) {
         if (check.length === 0)
             return reply.code(404).send({ error: 'Position not found' });
         const { rows } = await fastify.pg.query('SELECT price, recorded_at FROM price_history WHERE position_id = $1 ORDER BY recorded_at ASC', [id]);
-        return rows;
+        const bufferedRows = await marketDataBuffer.getBufferedPriceHistory(id);
+        return [...rows, ...bufferedRows].sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
     });
     // CREATE position
     fastify.post('/', {
@@ -448,9 +446,7 @@ async function positionRoutes(fastify, options) {
         catch (err) {
             fastify.log.error({ err }, 'Failed to trigger immediate sync');
         }
-        // Invalidate cache
-        await redis_1.redis.del(`USER_POSITIONS:${userId}`);
-        await redis_1.redis.del(`USER_STATS:${userId}`);
+        await trade_redis_service_1.TradeRedisService.invalidateUser(userId);
         return reply.code(201).send(newPosition);
     });
     // UPDATE position status (CLOSE)
@@ -477,13 +473,31 @@ async function positionRoutes(fastify, options) {
             response: {
                 200: positionResponseSchema,
                 400: errorSchema,
-                404: errorSchema
+                404: errorSchema,
+                409: errorSchema
             }
         }
     }, async (request, reply) => {
         const { id: userId } = request.user;
         const { id } = request.params;
         const body = request.body;
+        const { rows: precheckRows } = await fastify.pg.query(`SELECT status, is_simulated, execution_broker
+       FROM positions
+       WHERE id = $1
+         AND user_id = $2`, [id, userId]);
+        const precheckPosition = precheckRows[0];
+        if (precheckPosition?.status === 'OPEN'
+            && !precheckPosition.is_simulated
+            && String(precheckPosition.execution_broker || '') === 'wealthsimple_snaptrade') {
+            try {
+                const snaptradeService = new snaptrade_service_1.SnaptradeService(fastify);
+                await snaptradeService.syncPendingBrokerOrders(userId);
+            }
+            catch (err) {
+                fastify.log.warn(`[PositionsClose] Wealthsimple status check failed before close for position ${id}: ${err.message}`);
+                return reply.code(409).send({ error: 'Could not verify latest Wealthsimple order status before submitting another close. Try again after sync completes.' });
+            }
+        }
         const client = await fastify.pg.connect();
         try {
             // START TRANSACTION
@@ -503,9 +517,66 @@ async function positionRoutes(fastify, options) {
                 await client.query('ROLLBACK');
                 return reply.code(400).send({ error: 'Invalid quantity' });
             }
+            try {
+                trade_lifecycle_service_1.TradeLifecycleService.assertCanRequestExit(position);
+            }
+            catch (err) {
+                await client.query('ROLLBACK');
+                return reply.code(400).send({ error: err.message });
+            }
+            const executionBroker = String(position.execution_broker || '');
+            const isLiveSnapTrade = !position.is_simulated && executionBroker === 'wealthsimple_snaptrade';
+            if (isLiveSnapTrade) {
+                const accountId = String(position.execution_account_id || position.account_id || '').trim();
+                if (!accountId) {
+                    await client.query('ROLLBACK');
+                    return reply.code(400).send({ error: 'No SnapTrade account id is attached to this position' });
+                }
+                let acceptedOrder = null;
+                try {
+                    const snaptradeService = new snaptrade_service_1.SnaptradeService(fastify);
+                    const osiTicker = constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+                    const exitAction = trade_lifecycle_service_1.TradeLifecycleService.getExitAction(position);
+                    const order = await snaptradeService.placeOptionOrder(userId, accountId, osiTicker, exitAction, closeQty, 'MARKET');
+                    acceptedOrder = order;
+                    const updatedPosition = await trade_lifecycle_service_1.TradeLifecycleService.markExitSubmitted(client, id, order, {
+                        reason: 'MANUAL',
+                        orderType: 'MARKET',
+                        note: ` [Manual SnapTrade MARKET ${exitAction} exit submitted for ${closeQty} contract(s)${order.orderId ? `: ${order.orderId}` : ''}]`
+                    });
+                    await trade_redis_service_1.TradeRedisService.recordEvent(client, {
+                        userId,
+                        positionId: id,
+                        eventType: 'EXIT_REQUESTED',
+                        message: 'Manual SnapTrade close submitted',
+                        metadata: { orderId: order.orderId || null, tradeId: order.tradeId || null, quantity: closeQty, orderType: 'MARKET', action: exitAction }
+                    });
+                    await client.query('COMMIT');
+                    await trade_redis_service_1.TradeRedisService.refreshAfterCommittedMutation(fastify.pg, userId, fastify, 'manual SnapTrade position close');
+                    return updatedPosition;
+                }
+                catch (err) {
+                    await trade_lifecycle_service_1.TradeLifecycleService.markExitSubmissionFailure(client, id, err.message || String(err), 'Manual SnapTrade exit failed', {
+                        ambiguous: Boolean(acceptedOrder) || (0, snaptrade_service_1.isAmbiguousSnapTradeOrderError)(err),
+                        orderId: acceptedOrder?.orderId || null,
+                        tradeId: acceptedOrder?.tradeId || null,
+                        requestedQuantity: closeQty
+                    });
+                    await trade_redis_service_1.TradeRedisService.recordEvent(client, {
+                        userId,
+                        positionId: id,
+                        eventType: 'EXIT_SUBMISSION_FAILED',
+                        message: err.message || String(err),
+                        metadata: { source: 'positions-close-snaptrade' }
+                    });
+                    await client.query('COMMIT');
+                    await trade_redis_service_1.TradeRedisService.refreshAfterCommittedMutation(fastify.pg, userId, fastify, 'failed manual SnapTrade position close reconciliation');
+                    return reply.code(400).send({ error: err.message || 'Failed to submit SnapTrade close order' });
+                }
+            }
             // 3. Calculate Analytics for the closed portion
             const entryPrice = Number(position.entry_price);
-            const realizedPnl = (closePrice - entryPrice) * closeQty * 100;
+            const realizedPnl = trade_lifecycle_service_1.TradeLifecycleService.calculateRealizedPnl(position, closePrice, closeQty);
             let resultPosition;
             if (closeQty < currentQty) {
                 // PARTIAL CLOSE
@@ -545,8 +616,7 @@ async function positionRoutes(fastify, options) {
             }
             // COMMIT
             await client.query('COMMIT');
-            // Invalidate cache
-            await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
+            await trade_redis_service_1.TradeRedisService.invalidateUser(userId);
             return resultPosition;
         }
         catch (err) {
@@ -613,8 +683,7 @@ async function positionRoutes(fastify, options) {
             catch (err) {
                 fastify.log.error({ err }, 'Failed to trigger immediate sync on reopen');
             }
-            // Invalidate cache
-            await redis_1.redis.set(`USER_POSITIONS:${userId}`, '', 1);
+            await trade_redis_service_1.TradeRedisService.invalidateUser(userId);
             return rows[0];
         }
         catch (err) {
@@ -784,10 +853,16 @@ async function positionRoutes(fastify, options) {
         const client = await fastify.pg.connect();
         try {
             await client.query('BEGIN');
-            // Manually clean up dependencies 
+            // Manually clean up dependencies for positions owned by this user only.
             console.log(`[Bulk Delete] Deleting IDs: ${ids.join(', ')} for user ${userId}`);
-            await client.query('DELETE FROM alerts WHERE position_id = ANY($1)', [ids]);
-            await client.query('DELETE FROM price_history WHERE position_id = ANY($1)', [ids]);
+            await client.query(`DELETE FROM alerts
+         WHERE position_id IN (
+           SELECT id FROM positions WHERE id = ANY($1) AND user_id = $2
+         )`, [ids, userId]);
+            await client.query(`DELETE FROM price_history
+         WHERE position_id IN (
+           SELECT id FROM positions WHERE id = ANY($1) AND user_id = $2
+         )`, [ids, userId]);
             const result = await client.query('DELETE FROM positions WHERE id = ANY($1) AND user_id = $2', [ids, userId]);
             await client.query('COMMIT');
             // Invalidate cache

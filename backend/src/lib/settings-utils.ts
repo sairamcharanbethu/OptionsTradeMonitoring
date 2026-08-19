@@ -8,12 +8,11 @@ const GLOBAL_SETTING_KEYS = [
   'ibkr_host',
   'ibkr_port',
   'zerogex_api_key',
-  'wall_reaction_enabled',
-  'wall_reaction_max_risk_dollars',
   'discord_webhook_url',
   'discord_alerts_enabled',
   'market_poll_interval',
   'polling_enabled',
+  'daily_loss_limit_dollars',
   'day_trading_symbols',
   'strategy_max_total_debit_dollars',
   'strategy_preferred_contracts',
@@ -32,12 +31,11 @@ const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
   'paper_trailing_stop_pct',
   'market_poll_interval',
   'polling_enabled',
+  'daily_loss_limit_dollars',
   'ibkr_gateway_mode',
   'ibkr_host',
   'ibkr_port',
   'zerogex_api_key',
-  'wall_reaction_enabled',
-  'wall_reaction_max_risk_dollars',
   'mcp_trading_enabled'
 ];
 const SETTINGS_CACHE_TTL_SECONDS = Number(process.env.SETTINGS_CACHE_TTL_SECONDS || 300);
@@ -136,10 +134,9 @@ export function isPublicGlobalSettingKey(key: string): boolean {
     'strategy_preferred_contracts',
     'strategy_max_contracts',
     'paper_trailing_stop_pct',
-    'wall_reaction_enabled',
-    'wall_reaction_max_risk_dollars',
     'market_poll_interval',
-    'polling_enabled'
+    'polling_enabled',
+    'daily_loss_limit_dollars'
   ].includes(key);
 }
 

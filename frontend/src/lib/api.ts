@@ -309,58 +309,53 @@ export interface PaperAccountSummary {
   canManage: boolean;
 }
 
-export interface WallReactionCandidate {
-  id: string;
-  symbol: 'SPY' | 'QQQ';
-  fingerprint: string;
-  status: 'CANDIDATE' | 'WATCHING' | 'BLOCKED' | 'ARMED' | 'ENTERED' | 'EXPIRED' | 'INVALIDATED';
-  generatedAt: string;
-  context: null | {
-    spot: number; netGex: number; gammaFlip: number; callWall: number; putWall: number; maxPain: number | null;
-    msi: number; gapPct: number | null; gapBasis: string; warnings: string[];
+export interface PositionMonitorRow {
+  positionId: number;
+  symbol: string;
+  optionType: 'CALL' | 'PUT';
+  strike: number;
+  expiration: string;
+  quantity: number;
+  entryPrice: number | null;
+  underlyingPrice: number | null;
+  target: number | null;
+  op: 'ge' | 'le';
+  distancePct: number | null;
+  hit: boolean;
+  hitAt: string | null;
+}
+
+export interface KillSwitchStatus {
+  scope: 'paper' | 'live';
+  enabled: boolean;
+  limit: number;
+  dayRealizedPnl: number;
+  halted: boolean;
+  reason?: string;
+}
+
+export interface KillSwitchResponse {
+  paper: KillSwitchStatus;
+  live: KillSwitchStatus;
+}
+
+export interface PerformanceMetrics {
+  scope: 'paper' | 'live';
+  days: number;
+  overall: {
+    trades: number;
+    wins: number;
+    losses: number;
+    winRate: number;
+    avgWin: number;
+    avgLoss: number;
+    totalPnl: number;
+    profitFactor: number | null;
+    expectancy: number;
   };
-  decision: { code: string; setup: string; direction: string; confidence: number; riskMultiplier: number; action: string; reasons: string[]; warnings: string[] };
-  macro: { blocked: boolean; reason: string; event: null | { name: string; source: string; impact: 'BLOCKING' | 'INFORMATIONAL'; scheduledAt: string } };
-  plan: null | { wall: number; invalidation: number; target1: number; target2: number | null; riskPoints: number; baseRiskDollars: number; debitBudget: number };
-  contract: null | { ticker: string; expiration: string; right: 'call' | 'put'; strike: number; bid: number; ask: number; mark: number; spreadPct: number; delta: number; protectedLimit: number; quantity: number; quoteTimestamp: string };
-}
-
-export interface WallReactionState {
-  policyVersion: string;
-  health: { status: string; lastRunAt: string | null; lastError: string | null };
-  calendar: {
-    status: 'READY' | 'DEGRADED' | 'COVERAGE_MISSING';
-    coverageStart: string;
-    coverageThrough: string;
-    lastRefreshAt: string | null;
-    lastError: string | null;
-    eventCount: number;
-    blockingEventCount: number;
-    informationalEventCount: number;
-    nextEvent: null | WallReactionCalendarEvent;
-    nextBlockingEvent: null | WallReactionCalendarEvent;
-    upcomingEvents: WallReactionCalendarEvent[];
-    sources: Array<{ source: string; mode: 'LIVE' | 'CACHED' | 'BUNDLED'; lastRefreshAt: string | null; lastError: string | null }>;
-  };
-  symbols: Partial<Record<'SPY' | 'QQQ', WallReactionCandidate>>;
-}
-
-export interface WallReactionCalendarEvent {
-  id: string;
-  name: string;
-  source: string;
-  impact: 'BLOCKING' | 'INFORMATIONAL';
-  scheduledAt: string;
-}
-
-export interface WallReactionPaperSummary {
-  account: PaperAccountSummary['account'];
-  positions: Position[];
-  orders: Array<Record<string, any>>;
-  decisions: Array<Record<string, any>>;
-  health: { status: string; lastRunAt: string | null; lastError: string | null };
-  strategyAutomationStatus: 'ACTIVE' | 'PAUSED';
-  paperOnly: true;
+  byHour: Array<{ hourEt: number; trades: number; wins: number; winRate: number; totalPnl: number; avgPnl: number }>;
+  bySymbol: Array<{ symbol: string; optionType: string; trades: number; wins: number; winRate: number; totalPnl: number; avgPnl: number }>;
+  slippage: { fills: number; avgVsMid: number; avgVsLimit: number } | null;
 }
 
 export interface RuntimeConfigItem {
@@ -499,71 +494,6 @@ export interface TradeAlertsResponse {
     createdAt: string;
     metadata?: any;
   }>;
-}
-
-export interface CoveredCallSymbolResult {
-  symbol: string;
-  name: string;
-  exchange?: string | null;
-  quoteType?: string | null;
-}
-
-export interface CoveredCallCandidate {
-  ticker: string;
-  expiration: string;
-  dte: number;
-  strike: number;
-  bid: number | null;
-  ask: number | null;
-  mark: number | null;
-  spreadPct: number | null;
-  volume: number | null;
-  openInterest: number | null;
-  delta: number | null;
-  theta: number | null;
-  impliedVolatility: number | null;
-  premiumPerContract: number;
-  premiumYieldPct: number;
-  annualizedYieldPct: number;
-  otmPct: number;
-  score: number;
-  eligible: boolean;
-  reasons: string[];
-}
-
-export interface CoveredCallAnalysis {
-  symbol: string;
-  generatedAt: string;
-  profile: 'conservative';
-  quote: {
-    price: number;
-    name: string | null;
-    currency: string | null;
-    marketState: string | null;
-  };
-  scan: {
-    minDte: number;
-    maxDte: number;
-    expirationsChecked: string[];
-    contractsReviewed: number;
-  };
-  best: CoveredCallCandidate | null;
-  candidates: CoveredCallCandidate[];
-  news: Array<{
-    title: string;
-    publisher: string | null;
-    link: string | null;
-    publishedAt: string | null;
-  }>;
-  ai: {
-    summary: string;
-    bestContractTicker: string | null;
-    riskNotes: string[];
-    incomeRationale: string;
-    avoidIf: string[];
-    fallback: boolean;
-    error?: string;
-  };
 }
 
 export interface ManualEntrySettings {
@@ -999,24 +929,6 @@ export const api = {
   async searchSymbols(q: string): Promise<{ symbol: string, name: string }[]> {
     const res = await authFetch(`${API_BASE}/positions/search?q=${encodeURIComponent(q)}`);
     if (!res.ok) throw new Error('Failed to search symbols');
-    return res.json();
-  },
-
-  async searchCoveredCallSymbols(q: string): Promise<CoveredCallSymbolResult[]> {
-    const res = await authFetch(`${API_BASE}/covered-calls/search?q=${encodeURIComponent(q)}`);
-    if (!res.ok) throw new Error('Failed to search covered call symbols');
-    return res.json();
-  },
-
-  async analyzeCoveredCalls(symbol: string): Promise<CoveredCallAnalysis> {
-    const res = await authFetch(`${API_BASE}/covered-calls/analyze`, {
-      method: 'POST',
-      body: JSON.stringify({ symbol, profile: 'conservative' })
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to analyze covered calls');
-    }
     return res.json();
   },
 
@@ -1538,48 +1450,21 @@ export const api = {
     };
   },
 
-  async getWallReaction(): Promise<WallReactionState> {
-    const res = await authFetch(`${API_BASE}/wall-reaction`);
-    if (!res.ok) throw new Error('Failed to fetch Wall Reaction state');
+  async getPositionMonitor(): Promise<PositionMonitorRow[]> {
+    const res = await authFetch(`${API_BASE}/position-monitor`);
+    if (!res.ok) throw new Error('Failed to fetch position monitor');
     return res.json();
   },
 
-  async getWallReactionPaperAccount(): Promise<WallReactionPaperSummary> {
-    const res = await authFetch(`${API_BASE}/wall-reaction/paper-account`);
-    if (!res.ok) throw new Error('Failed to fetch Wall Reaction paper account');
+  async getKillSwitch(): Promise<KillSwitchResponse> {
+    const res = await authFetch(`${API_BASE}/kill-switch`);
+    if (!res.ok) throw new Error('Failed to fetch kill-switch status');
     return res.json();
   },
 
-  async getWallReactionJournal(limit = 30): Promise<{ items: Array<Record<string, any>> }> {
-    const res = await authFetch(`${API_BASE}/wall-reaction/paper-account/journal?limit=${limit}`);
-    if (!res.ok) throw new Error('Failed to fetch Wall Reaction ledger');
-    return res.json();
-  },
-
-  async armWallReactionCandidate(candidateId: string): Promise<any> {
-    const res = await authFetch(`${API_BASE}/wall-reaction/candidates/${candidateId}/arm`, { method: 'POST' });
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({}));
-      throw new Error(error.error || 'Candidate could not be armed');
-    }
-    return res.json();
-  },
-
-  async setWallReactionPaperAutomation(active: boolean): Promise<any> {
-    const res = await authFetch(`${API_BASE}/wall-reaction/paper-account/${active ? 'resume' : 'pause'}`, { method: 'POST' });
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({}));
-      throw new Error(error.error || 'Paper account status could not be changed');
-    }
-    return res.json();
-  },
-
-  async closeWallReactionPosition(positionId: number): Promise<any> {
-    const res = await authFetch(`${API_BASE}/wall-reaction/paper-account/positions/${positionId}/close`, { method: 'POST' });
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({}));
-      throw new Error(error.error || 'Paper position could not be closed');
-    }
+  async getPerformanceMetrics(scope: 'paper' | 'live' = 'live', days = 30): Promise<PerformanceMetrics> {
+    const res = await authFetch(`${API_BASE}/metrics/performance?scope=${scope}&days=${days}`);
+    if (!res.ok) throw new Error('Failed to fetch performance metrics');
     return res.json();
   },
 
@@ -2152,3 +2037,4 @@ export interface GoalInsights {
   avgLoss: number;
   profitFactor: number | null;
 }
+

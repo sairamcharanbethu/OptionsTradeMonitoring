@@ -1287,6 +1287,23 @@ export class MarketPoller {
       }
     }
 
+    // --- Position Monitor: advisory take-profit alert (once per position) ---
+    // Fires when the underlying spot crosses the position's derived take-profit
+    // target and the position is NOT already being auto-exited this cycle. Advisory
+    // only — it never closes a position (the trader scales out manually); skipping
+    // it when `triggered` avoids a redundant alert + paper mirror for a position the
+    // auto-exit is closing on the same tick.
+    if (!triggered && underlyingPrice && underlyingTarget && !analysis.positionTargetAlerted
+      && this.isUnderlyingTargetReached(position, underlyingPrice, underlyingTarget)) {
+      analysis.positionTargetAlerted = {
+        target: underlyingTarget,
+        underlyingPrice,
+        triggeredAt: new Date().toISOString()
+      };
+      analysisDirty = true;
+      void this.sendPositionTargetAlert(position, underlyingPrice, underlyingTarget, sellablePremium);
+    }
+
     if (mandatoryFlatten?.triggered
       && syntheticQuoteFresh
       && (!triggered || triggerType === 'TAKE_PROFIT')) {
@@ -1632,6 +1649,59 @@ export class MarketPoller {
       this.fastify.log.error('[MarketPoller] Failed to notify n8n:', err.message);
     }
   }
+  // Position Monitor take-profit alert: pushes to the Position Monitor page over
+  // WebSocket and sends a minimal Discord message via the existing integration.
+  private async sendPositionTargetAlert(position: any, underlyingPrice: number, target: number, exitPremium: number) {
+    const strike = Number(position.strike_price);
+    const label = `${position.symbol} ${position.option_type} ${strike}`;
+    const op = position.option_type === 'CALL' ? '>=' : '<=';
+
+    this.broadcastToFrontend({
+      type: 'POSITION_TARGET_HIT',
+      data: {
+        positionId: position.id,
+        symbol: position.symbol,
+        optionType: position.option_type,
+        strike,
+        quantity: Number(position.quantity || 0),
+        underlyingPrice,
+        target,
+        triggeredAt: new Date().toISOString()
+      }
+    });
+
+    // Place the take-profit scale-out in the paper account asynchronously, so it
+    // runs alongside signalling without blocking the alert.
+    void this.mirrorPaperTakeProfit(position, exitPremium);
+
+    try {
+      await new DiscordAlertService(this.fastify).send({
+        userId: Number(position.user_id),
+        title: '🎯 Take-profit target hit',
+        message: `${label}: spot ${underlyingPrice.toFixed(2)} ${op} target ${target.toFixed(2)} (${Number(position.quantity || 0)} contracts).`,
+        severity: 'info',
+        category: 'position-monitor',
+        tradeId: position.id,
+        dedupeKey: `position-target:${position.id}`,
+        dedupeSeconds: 86400
+      });
+    } catch (err: any) {
+      this.fastify.log.warn(`[MarketPoller] Position target Discord alert failed for position ${position.id}: ${err?.message || err}`);
+    }
+  }
+
+  // Mirror the monitored (real) position's take-profit into the shared paper
+  // account as a partial scale-out. Fire-and-forget: failures are logged only.
+  private async mirrorPaperTakeProfit(position: any, exitPremium: number) {
+    try {
+      const paperTrading = (this.fastify as any).paperTrading;
+      if (!paperTrading?.mirrorRealPositionTakeProfit) return;
+      await paperTrading.mirrorRealPositionTakeProfit(position, exitPremium, 0.6);
+    } catch (err: any) {
+      this.fastify.log.warn(`[MarketPoller] Paper take-profit mirror failed for position ${position.id}: ${err?.message || err}`);
+    }
+  }
+
   private broadcastToFrontend(message: any) {
     const websocketServer = (this.fastify as any).websocketServer;
     if (websocketServer) {

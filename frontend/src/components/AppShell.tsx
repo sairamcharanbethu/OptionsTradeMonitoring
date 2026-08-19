@@ -19,7 +19,6 @@ import {
   Moon,
   PanelTop,
   Radar,
-  ShieldCheck,
   Sun,
   Target,
   Trophy,
@@ -65,7 +64,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'Overview', description: 'Positions and account pulse', to: '/?tab=overview', icon: House },
       { label: 'Portfolio', description: 'Exposure and performance', to: '/?tab=portfolio', icon: BriefcaseBusiness },
       { label: 'Wealthsimple', description: 'Connected account holdings', to: '/?tab=wealthsimple', icon: Landmark },
-      { label: 'Goals', description: 'Trading targets and progress', to: '/?tab=goals', icon: Trophy }
     ]
   },
   {
@@ -73,9 +71,9 @@ const NAV_GROUPS: NavGroup[] = [
     targets: [
       { label: 'Day Trading', description: 'Guarded strategy monitor', to: '/?tab=day-trading', icon: Gauge },
       { label: 'Strategy Desk', description: 'Live context and shadow evidence', to: '/strategy-desk', icon: Radar },
-      { label: 'Wall Reaction', description: 'Paper-only wall fades', to: '/?tab=wall-reaction', icon: Target },
+      { label: 'Position Monitor', description: 'Take-profit target alerts', to: '/?tab=position-monitor', icon: Target },
       { label: 'Paper Account', description: 'Shared cash, orders, and P&L', to: '/?tab=paper-accounts', icon: WalletCards },
-      { label: 'Covered Calls', description: 'Covered-call analysis', to: '/covered-calls', icon: ShieldCheck }
+      { label: 'Goals', description: 'Trading targets and progress', to: '/?tab=goals', icon: Trophy }
     ]
   },
   {

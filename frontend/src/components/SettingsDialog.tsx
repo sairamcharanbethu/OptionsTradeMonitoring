@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw, Server, ShieldCheck, ChevronDown, Target } from 'lucide-react';
+import { Settings, Save, Loader2, User as UserIcon, Sliders, Zap, Key, Lock, AlertTriangle, Link, RefreshCw, Server, ShieldCheck, ChevronDown } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { api } from '@/lib/api';
 
@@ -213,6 +213,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [strategyPreferredContracts, setStrategyPreferredContracts] = useState('1');
     const [strategyMaxContracts, setStrategyMaxContracts] = useState('1');
     const [paperTrailingStopPct, setPaperTrailingStopPct] = useState('15');
+    const [dailyLossLimitDollars, setDailyLossLimitDollars] = useState('');
     const [strikeOffset, setStrikeOffset] = useState('0');
     const [minSignalScore, setMinSignalScore] = useState('70');
     const [tradingStartTime, setTradingStartTime] = useState('09:30');
@@ -239,8 +240,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [autonomousLiveEntryEnabled, setAutonomousLiveEntryEnabled] = useState(false);
     const [liveTradingAcknowledged, setLiveTradingAcknowledged] = useState(false);
     const [mcpTradingEnabled, setMcpTradingEnabled] = useState(false);
-    const [wallReactionEnabled, setWallReactionEnabled] = useState(true);
-    const [wallReactionMaxRiskDollars, setWallReactionMaxRiskDollars] = useState('500');
 
     // Security & Profile State
     const [username, setUsername] = useState(user.username);
@@ -359,8 +358,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setAutonomousLiveEntryEnabled(data.autonomous_live_entry_enabled === 'true');
             setLiveTradingAcknowledged(data.live_trading_acknowledged === 'true');
             setMcpTradingEnabled(data.mcp_trading_enabled === 'true');
-            setWallReactionEnabled(data.wall_reaction_enabled !== 'false');
-            setWallReactionMaxRiskDollars(data.wall_reaction_max_risk_dollars || '500');
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
@@ -369,6 +366,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
             setStrategyMaxContracts(data.strategy_max_contracts || '1');
             setPaperTrailingStopPct(data.paper_trailing_stop_pct || '15');
+            setDailyLossLimitDollars(data.daily_loss_limit_dollars || '');
             setStrikeOffset(data.strike_offset || '0');
             setMinSignalScore(data.min_signal_score || '70');
             setTradingStartTime(data.trading_start_time || '09:30');
@@ -590,11 +588,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             alert('Enable at least one day-trading symbol.');
             return;
         }
-        const wallReactionRisk = Number(wallReactionMaxRiskDollars);
-        if (isAdmin && (!Number.isFinite(wallReactionRisk) || wallReactionRisk < 50 || wallReactionRisk > 10000)) {
-            alert('Wall Reaction base risk must be between $50 and $10,000.');
-            return;
-        }
         setSaving(true);
         try {
             const settingsPayload: Record<string, string> = {
@@ -649,8 +642,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 settingsPayload.strategy_preferred_contracts = strategyPreferredContracts;
                 settingsPayload.strategy_max_contracts = strategyMaxContracts;
                 settingsPayload.paper_trailing_stop_pct = paperTrailingStopPct;
-                settingsPayload.wall_reaction_enabled = wallReactionEnabled ? 'true' : 'false';
-                settingsPayload.wall_reaction_max_risk_dollars = wallReactionMaxRiskDollars;
+                settingsPayload.daily_loss_limit_dollars = dailyLossLimitDollars.trim();
             }
             await api.updateSettings(settingsPayload);
             queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -683,10 +675,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                         <TabsTrigger value="daytrading" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Zap className="h-4 w-4 text-muted-foreground" />
                             Day trading
-                        </TabsTrigger>
-                        <TabsTrigger value="wallreaction" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
-                            <Target className="h-4 w-4 text-muted-foreground" />
-                            Wall Reaction
                         </TabsTrigger>
                         <TabsTrigger value="credentials" className="w-auto md:w-full justify-center md:justify-start px-3 py-2 text-center md:text-left gap-2 data-[state=active]:bg-background shrink-0 whitespace-nowrap">
                             <Key className="h-4 w-4 text-muted-foreground" />
@@ -943,6 +931,22 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 disabled={!isAdmin}
                                             />
                                             <p className="text-[10px] text-muted-foreground">Applied after TP1. The value and paper-exit policy version are frozen on each new paper trade.</p>
+                                        </div>
+
+                                        <div className="grid gap-2 md:col-span-2">
+                                            <Label htmlFor="dailyLossLimitDollars">Daily Loss Kill-Switch ($)</Label>
+                                            <Input
+                                                id="dailyLossLimitDollars"
+                                                type="number"
+                                                min="0"
+                                                max="1000000"
+                                                step="50"
+                                                placeholder="0 = disabled"
+                                                value={dailyLossLimitDollars}
+                                                onChange={(e) => setDailyLossLimitDollars(e.target.value)}
+                                                disabled={!isAdmin}
+                                            />
+                                            <p className="text-[10px] text-muted-foreground">Once realized loss for the ET session reaches this dollar amount, all new entries (paper, manual, and autonomous) are halted until the next session. Blank or 0 disables it.</p>
                                         </div>
 
                                         <div className="grid grid-cols-2 gap-3 md:col-span-2">
@@ -1309,39 +1313,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     )}
                                 </section>
                             </div>
-                        </TabsContent>
-
-                        <TabsContent value="wallreaction" className="m-0 space-y-5">
-                            <div>
-                                <h3 className="text-lg font-semibold">Wall Reaction</h3>
-                                <p className="text-sm text-muted-foreground">Independent SPY/QQQ wall-reaction candidates and a dedicated paper account.</p>
-                            </div>
-                            <section className="rounded-lg border bg-card p-4 space-y-5">
-                                <div className="flex items-start justify-between gap-4">
-                                    <div>
-                                        <div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-semibold">Candidate runtime</h4><Badge variant="outline" className="border-sky-500/40 text-sky-600">Paper only</Badge></div>
-                                        <p className="mt-1 text-xs text-muted-foreground">This switch does not enable, disable, or reconfigure Day Trading.</p>
-                                    </div>
-                                    <Switch id="wallReactionEnabled" checked={wallReactionEnabled} onCheckedChange={setWallReactionEnabled} disabled={!isAdmin} />
-                                </div>
-                                <div className="grid gap-4 md:grid-cols-2">
-                                    <div className="grid gap-2">
-                                        <Label htmlFor="wallReactionRisk">Base risk budget</Label>
-                                        <Input id="wallReactionRisk" type="number" min="50" max="10000" step="50" value={wallReactionMaxRiskDollars} onChange={(event) => setWallReactionMaxRiskDollars(event.target.value)} disabled={!isAdmin} />
-                                        <p className="text-[10px] leading-relaxed text-muted-foreground">The engine applies a 0.25x or 0.50x multiplier, then caps the paper entry at two contracts.</p>
-                                    </div>
-                                    <div className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
-                                        <div className="font-semibold text-foreground">US macro calendar · FYI only</div>
-                                        <p className="mt-1 leading-relaxed">No API key is required. High-impact BLS, BEA, Federal Reserve, ISM, and selected Census events are displayed as context only.</p>
-                                        <p className="mt-2 text-[10px] leading-relaxed">Calendar availability, refresh failures, and high-impact windows do not block or invalidate Wall Reaction candidates or paper entries.</p>
-                                    </div>
-                                </div>
-                                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-muted-foreground">
-                                    <div className="font-semibold text-foreground">Manual approval remains required</div>
-                                    <p className="mt-1">An admin must arm each candidate for five minutes. The system creates only protected paper orders in the Wall Reaction account; it has no live-broker execution path.</p>
-                                </div>
-                                {!isAdmin && <Badge variant="secondary">Admin-managed settings</Badge>}
-                            </section>
                         </TabsContent>
 
                         {/* Tab 3: API Keys & Credentials */}

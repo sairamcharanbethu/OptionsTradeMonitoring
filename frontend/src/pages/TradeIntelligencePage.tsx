@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, BarChart3, Bell, RefreshCw, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react';
-import { api, TradeAlertsResponse, TradeReportResponse } from '../lib/api';
+import { api, TradeAlertsResponse, TradeReportResponse, PerformanceMetrics } from '../lib/api';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
@@ -68,19 +68,31 @@ export default function TradeIntelligencePage() {
   const [range, setRange] = useState('30d');
   const [report, setReport] = useState<TradeReportResponse | null>(null);
   const [alerts, setAlerts] = useState<TradeAlertsResponse | null>(null);
+  const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const daysForRange = (r: string): number => {
+    if (r === 'ytd') {
+      const now = new Date();
+      const jan1 = new Date(now.getFullYear(), 0, 1);
+      return Math.max(1, Math.ceil((now.getTime() - jan1.getTime()) / 86_400_000));
+    }
+    return ({ today: 1, '7d': 7, '30d': 30, '90d': 90, '1y': 365 } as Record<string, number>)[r] || 30;
+  };
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [reportData, alertData] = await Promise.all([
+      const [reportData, alertData, metricsData] = await Promise.all([
         api.getTradeReport(range),
-        api.getTradeAlerts()
+        api.getTradeAlerts(),
+        api.getPerformanceMetrics('paper', daysForRange(range)).catch(() => null)
       ]);
       setReport(reportData);
       setAlerts(alertData);
+      setMetrics(metricsData);
     } catch (err: any) {
       setError(err.message || 'Failed to load trade intelligence');
     } finally {
@@ -141,6 +153,52 @@ export default function TradeIntelligencePage() {
         <MetricTile label="Win rate" value={`${summary?.winRate ?? 0}%`} detail={`Profit factor ${summary?.profitFactor ?? '-'}`} />
         <MetricTile label="Open alerts" value={String(alerts?.summary.total ?? 0)} tone={(alerts?.summary.critical ?? 0) > 0 ? 'red' : (alerts?.summary.warning ?? 0) > 0 ? 'amber' : undefined} detail={`${alerts?.summary.critical ?? 0} critical / ${alerts?.summary.warning ?? 0} warning`} />
       </div>
+
+      {metrics && metrics.overall.trades > 0 && (
+        <div className="mt-4 overflow-hidden rounded-md border border-border bg-card">
+          <SectionHeader icon={BarChart3} title="Edge Analytics" detail={`Paper · last ${metrics.days}d · ${metrics.overall.trades} closed`} />
+          <div className="grid gap-3 p-3 sm:p-4 md:grid-cols-3">
+            <MetricTile
+              label="Expectancy / trade"
+              value={currency(metrics.overall.expectancy)}
+              tone={metrics.overall.expectancy >= 0 ? 'green' : 'red'}
+              detail={`Win ${(metrics.overall.winRate * 100).toFixed(0)}% · PF ${metrics.overall.profitFactor == null ? '-' : metrics.overall.profitFactor.toFixed(2)}`}
+            />
+            <MetricTile
+              label="Avg win / avg loss"
+              value={`${currency(metrics.overall.avgWin)} / ${currency(metrics.overall.avgLoss)}`}
+              detail={`${metrics.overall.wins}W / ${metrics.overall.losses}L`}
+            />
+            {metrics.slippage ? (
+              <MetricTile
+                label="Entry slippage vs mid"
+                value={currency(metrics.slippage.avgVsMid)}
+                tone={metrics.slippage.avgVsMid > 0 ? 'red' : 'green'}
+                detail={`${metrics.slippage.fills} fills · vs limit ${currency(metrics.slippage.avgVsLimit)}`}
+              />
+            ) : (
+              <MetricTile label="Entry slippage" value="-" detail="Paper scope only" />
+            )}
+          </div>
+          {metrics.byHour.length > 0 && (
+            <div className="border-t border-border p-3 sm:p-4">
+              <div className="mb-2 text-xs font-medium uppercase text-muted-foreground">Performance by ET hour</div>
+              <div className="flex flex-wrap gap-2">
+                {metrics.byHour.map((h) => (
+                  <div
+                    key={h.hourEt}
+                    className={`rounded-md border px-2.5 py-1.5 text-xs ${h.totalPnl >= 0 ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}`}
+                    title={`${h.trades} trades, ${(h.winRate * 100).toFixed(0)}% win`}
+                  >
+                    <span className="font-semibold">{String(h.hourEt).padStart(2, '0')}:00</span>{' '}
+                    <span className="text-muted-foreground">{currency(h.totalPnl)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="space-y-4">

@@ -6,6 +6,7 @@ import { IbkrMarketDataService } from './ibkr-market-data-service';
 import { isAmbiguousSnapTradeOrderError, SnaptradeService } from './snaptrade-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { TradeRedisService } from './trade-redis-service';
+import { KillSwitchService } from './kill-switch-service';
 
 export type OptionEntryAction = 'BUY_TO_OPEN' | 'SELL_TO_OPEN';
 export type OptionOrderType = 'MARKET' | 'LIMIT';
@@ -249,6 +250,10 @@ export class ManualOptionOrderService {
 
     if (settings.live_trading_acknowledged !== 'true') {
       throw new Error('Live trading acknowledgement is required before placing manual option orders.');
+    }
+    const killSwitch = await KillSwitchService.evaluate((this.fastify as any).pg, 'live', userId);
+    if (killSwitch.halted) {
+      throw new Error(`Order blocked by daily-loss kill-switch. ${killSwitch.reason}`);
     }
     const accountId = String(settings.snaptrade_trading_account_id || '').trim();
     if (!accountId) throw new Error('No Wealthsimple/SnapTrade trading account selected in settings.');

@@ -3,9 +3,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AIService = void 0;
+exports.AIService = exports.DEFAULT_AI_MODEL = exports.DEFAULT_AI_PROVIDER = void 0;
 const yahoo_finance2_1 = __importDefault(require("yahoo-finance2"));
+const settings_utils_1 = require("../lib/settings-utils");
 const yahooFinance = new yahoo_finance2_1.default({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
+exports.DEFAULT_AI_PROVIDER = 'openrouter';
+exports.DEFAULT_AI_MODEL = 'deepseek/deepseek-chat';
 function toCavemanStyle(text) {
     if (!text)
         return '';
@@ -24,7 +27,7 @@ class AIService {
         this.fastify = fastify;
         // On Windows Docker, host.docker.internal resolves to the host machine
         this.ollamaUrl = process.env.OLLAMA_URL || 'http://host.docker.internal:11434';
-        this.model = process.env.AI_MODEL || 'mistral:7b-instruct-q4_K_M';
+        this.model = process.env.AI_MODEL || exports.DEFAULT_AI_MODEL;
     }
     async generateAlertSummary(data, userId) {
         const prompt = `Option Alert: ${data.symbol} ${data.type} ${data.strike} Exp: ${data.expiration}
@@ -201,42 +204,24 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             analysis: response.analysis
         };
     }
-    async askClaudeForTrading(prompt, userId) {
-        try {
-            const settings = await this.getSettings(userId);
-            if (settings.ai_provider === 'openrouter' && settings.openrouter_key) {
-                // Route trade decisions through the user's selected model (or default to Claude 3.5 Sonnet)
-                const model = settings.ai_model || 'anthropic/claude-3.5-sonnet';
-                const response = await this.callOpenRouter(model, settings.openrouter_key, prompt, 120);
-                return {
-                    verdict: response.verdict,
-                    analysis: response.analysis
-                };
-            }
-            // Fallback to standard selected provider if OpenRouter or key isn't active
-            return this.askAI(prompt, userId);
-        }
-        catch (err) {
-            console.error("[AIService] Failed to invoke configured model for trading, falling back:", err);
-            return this.askAI(prompt, userId);
-        }
+    async askTradingJSON(prompt, userId, maxTokens = 600, timeoutMs) {
+        const parsed = await this.generateJSONInternal(prompt, maxTokens, userId, timeoutMs);
+        const analysis = parsed.analysis || parsed.rationale || parsed.reason || parsed.summary || '';
+        return {
+            verdict: parsed.verdict || parsed.mode || 'UNKNOWN',
+            analysis: typeof analysis === 'object' ? JSON.stringify(analysis) : String(analysis || ''),
+            usage: parsed.usage || null,
+            ...parsed
+        };
     }
     async getSettings(userId) {
-        let currentProvider = 'ollama';
+        let currentProvider = process.env.AI_PROVIDER || exports.DEFAULT_AI_PROVIDER;
         let openRouterKey = '';
         let currentModel = this.model;
         try {
-            let query = 'SELECT key, value FROM settings';
-            const params = [];
-            if (userId !== undefined) {
-                query += ' WHERE user_id = $1';
-                params.push(userId);
-            }
-            const { rows } = await this.fastify.pg.query(query, params);
-            const settings = rows.reduce((acc, row) => {
-                acc[row.key] = row.value;
-                return acc;
-            }, {});
+            const settings = userId !== undefined
+                ? await (0, settings_utils_1.getSettingsWithGlobalFallback)(this.fastify.pg, userId)
+                : await (0, settings_utils_1.getGlobalSettings)(this.fastify.pg);
             if (settings.ai_provider)
                 currentProvider = settings.ai_provider;
             if (settings.openrouter_key)
@@ -293,10 +278,13 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             }
         }
     }
-    async generateJSONInternal(prompt, maxTokens = 600, userId) {
+    async generateJSONInternal(prompt, maxTokens = 600, userId, timeoutMs) {
+        const controller = timeoutMs ? new AbortController() : null;
+        const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
         try {
             const settings = await this.getSettings(userId);
             let text = '';
+            let providerUsage = null;
             if (settings.ai_provider === 'openrouter') {
                 if (!settings.openrouter_key)
                     throw new Error('OpenRouter selected but no API Key found.');
@@ -305,6 +293,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 try {
                     response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                         method: 'POST',
+                        signal: controller?.signal,
                         headers: {
                             'Authorization': `Bearer ${settings.openrouter_key}`,
                             'HTTP-Referer': 'http://localhost:3000',
@@ -340,6 +329,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 if (!useJsonFormat) {
                     response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
                         method: 'POST',
+                        signal: controller?.signal,
                         headers: {
                             'Authorization': `Bearer ${settings.openrouter_key}`,
                             'HTTP-Referer': 'http://localhost:3000',
@@ -364,11 +354,13 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 const data = await response.json();
                 if (data.error)
                     throw new Error(data.error.message || JSON.stringify(data.error));
+                providerUsage = data.usage || null;
                 text = data.choices[0].message?.content;
             }
             else {
                 const response = await fetch(`${this.ollamaUrl}/api/generate`, {
                     method: 'POST',
+                    signal: controller?.signal,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         model: settings.ai_model,
@@ -384,6 +376,11 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 if (!response.ok)
                     throw new Error(`Ollama Error: ${response.statusText}`);
                 const result = await response.json();
+                providerUsage = {
+                    prompt_tokens: Number(result.prompt_eval_count || 0),
+                    completion_tokens: Number(result.eval_count || 0),
+                    total_tokens: Number(result.prompt_eval_count || 0) + Number(result.eval_count || 0)
+                };
                 text = result.response;
             }
             if (text === undefined || text === null || text.trim() === '') {
@@ -399,14 +396,17 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
             cleanText = cleanText.trim();
             // Strip trailing commas from JSON arrays/objects to make parsing more robust
             cleanText = cleanText.replace(/,\s*}/g, '}').replace(/,\s*\]/g, ']');
+            const withUsage = (value) => providerUsage
+                ? { ...value, usage: value?.usage || providerUsage }
+                : value;
             try {
-                return JSON.parse(cleanText);
+                return withUsage(JSON.parse(cleanText));
             }
             catch (e) {
                 // If direct parse fails, try to repair the JSON first (in case it was truncated)
                 try {
                     const repaired = this.repairJson(cleanText);
-                    return JSON.parse(repaired);
+                    return withUsage(JSON.parse(repaired));
                 }
                 catch (repairError) {
                     // If repair fails, fall back to extracting and repairing the JSON block
@@ -414,7 +414,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                     if (jsonMatch) {
                         try {
                             const repairedMatch = this.repairJson(jsonMatch[0]);
-                            return JSON.parse(repairedMatch);
+                            return withUsage(JSON.parse(repairedMatch));
                         }
                         catch (innerError) {
                             // ignore and throw original error
@@ -427,6 +427,10 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
         catch (error) {
             this.fastify.log.error(error);
             throw new Error(`AI JSON Generation Failed: ${error.message}`);
+        }
+        finally {
+            if (timeout)
+                clearTimeout(timeout);
         }
     }
     async generateAnalysisInternal(prompt, maxTokens = 300, userId) {

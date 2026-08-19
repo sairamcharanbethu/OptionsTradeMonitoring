@@ -79,21 +79,21 @@ import {
 import UserManagement from './UserManagement';
 import PositionForm from './PositionForm';
 
-import GoalTracker from './GoalTracker';
 import WealthsimplePortfolio from './WealthsimplePortfolio';
+import GoalTracker from './GoalTracker';
 import { StatsCard } from './StatsCard';
 import { PositionsTable } from './PositionsTable';
 import { cn, getDte, getPnL, getRoi } from '@/lib/utils';
 
 const DayTradingTerminal = lazy(() => import('@/pages/DayTradingTerminal'));
-const WallReactionPage = lazy(() => import('@/pages/WallReactionPage'));
+const PositionMonitorPage = lazy(() => import('@/pages/PositionMonitorPage'));
 const PaperAccountsPage = lazy(() => import('@/pages/PaperAccountsPage'));
 
 interface DashboardProps {
   user: User;
 }
 
-const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'wall-reaction', 'paper-accounts', 'users'] as const;
+const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'position-monitor', 'paper-accounts', 'users'] as const;
 const DASHBOARD_TAB_STORAGE_KEY = 'options-monitoring:dashboard-tab';
 
 const getInitialDashboardTab = () => {
@@ -139,8 +139,8 @@ export default function Dashboard({ user }: DashboardProps) {
   const { lastMessage } = useWebSocket();
 
   const handleTabChange = (tab: string) => {
-    if (tab === 'covered-calls' || tab === 'manual-entry') {
-      navigate(tab === 'manual-entry' ? '/manual-entry' : '/covered-calls');
+    if (tab === 'manual-entry') {
+      navigate('/manual-entry');
       return;
     }
 
@@ -838,12 +838,12 @@ export default function Dashboard({ user }: DashboardProps) {
           </Card>
         </TabsContent>
 
-        <TabsContent value="goals" className="space-y-6 mt-0">
-          <GoalTracker />
-        </TabsContent>
-
         <TabsContent value="wealthsimple" className="space-y-6 mt-0">
           <WealthsimplePortfolio />
+        </TabsContent>
+
+        <TabsContent value="goals" className="space-y-6 mt-0">
+          <GoalTracker />
         </TabsContent>
 
         <TabsContent value="day-trading" className="mt-0">
@@ -852,9 +852,9 @@ export default function Dashboard({ user }: DashboardProps) {
           </Suspense>
         </TabsContent>
 
-        <TabsContent value="wall-reaction" className="mt-0">
-          <Suspense fallback={<div className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">Loading Wall Reaction workspace...</div>}>
-            <WallReactionPage user={user} />
+        <TabsContent value="position-monitor" className="mt-0">
+          <Suspense fallback={<div className="rounded-md border border-border bg-card p-6 text-sm text-muted-foreground">Loading position monitor...</div>}>
+            <PositionMonitorPage />
           </Suspense>
         </TabsContent>
 

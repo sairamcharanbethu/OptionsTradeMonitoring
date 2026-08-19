@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.marketRoutes = marketRoutes;
 const redis_1 = require("../lib/redis");
+const ibkr_market_data_service_1 = require("../services/ibkr-market-data-service");
 async function marketRoutes(fastify, options) {
     fastify.addHook('onRequest', fastify.authenticate);
     fastify.get('/status', async (request, reply) => {
@@ -11,17 +12,15 @@ async function marketRoutes(fastify, options) {
                 return reply.code(500).send({ error: 'Market poller not initialized' });
             }
             const isOpen = poller.isMarketOpen();
-            const questrade = fastify.questrade;
-            // Check if Questrade credentials are configured and valid
+            const ibkr = fastify.ibkrMarketData || new ibkr_market_data_service_1.IbkrMarketDataService(fastify);
+            // Check if IBKR Gateway/API is reachable.
             let connectionStatus = 'DISCONNECTED';
-            if (questrade) {
-                try {
-                    const token = await questrade.getActiveToken();
-                    connectionStatus = token ? 'CONNECTED' : 'DISCONNECTED';
-                }
-                catch (e) {
-                    connectionStatus = 'DISCONNECTED';
-                }
+            try {
+                const health = await ibkr.getHealth();
+                connectionStatus = health.connected ? 'CONNECTED' : 'DISCONNECTED';
+            }
+            catch (e) {
+                connectionStatus = 'DISCONNECTED';
             }
             return {
                 open: isOpen,

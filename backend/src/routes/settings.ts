@@ -322,7 +322,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 for (const [key, value] of Object.entries(updates)) {
                     if (key === 'trading_economics_api_key') {
                         await client.query('ROLLBACK');
-                        return reply.code(400).send({ error: 'Trading Economics is no longer used; Wall Reaction now uses the official US macro calendar' });
+                        return reply.code(400).send({ error: 'Trading Economics is no longer used' });
                     }
                     if (role !== 'ADMIN' && isGlobalSettingKey(key)) {
                         continue;
@@ -333,22 +333,21 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'ZeroGEX API key must be a single line' });
                     }
-                    if (key === 'wall_reaction_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
-                        await client.query('ROLLBACK');
-                        return reply.code(400).send({ error: 'Wall Reaction enabled must be true or false' });
-                    }
-                    if (key === 'wall_reaction_max_risk_dollars') {
-                        const risk = Number(trimmedValue);
-                        if (!Number.isFinite(risk) || risk < 50 || risk > 10000) {
-                            await client.query('ROLLBACK');
-                            return reply.code(400).send({ error: 'Wall Reaction maximum risk must be between $50 and $10,000' });
-                        }
-                    }
                     if (key === 'paper_trailing_stop_pct') {
                         const trailingPct = Number(trimmedValue);
                         if (!Number.isFinite(trailingPct) || trailingPct < 1 || trailingPct > 50) {
                             await client.query('ROLLBACK');
                             return reply.code(400).send({ error: 'Paper trailing stop must be between 1% and 50%' });
+                        }
+                    }
+                    if (key === 'daily_loss_limit_dollars') {
+                        const raw = String(trimmedValue ?? '').trim();
+                        if (raw !== '') {
+                            const limit = Number(raw);
+                            if (!Number.isFinite(limit) || limit < 0 || limit > 1000000) {
+                                await client.query('ROLLBACK');
+                                return reply.code(400).send({ error: 'Daily loss limit must be between $0 (disabled) and $1,000,000' });
+                            }
                         }
                     }
                     if (key === 'take_profit_pct') {

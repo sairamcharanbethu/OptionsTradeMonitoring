@@ -6,6 +6,7 @@ import { TradeRedisService } from './trade-redis-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
+import { KillSwitchService } from './kill-switch-service';
 import { tradingEventBus } from '../lib/trading-events';
 import { RiskDecisionService } from './risk-decision-service';
 import type { PreSubmitRiskAssessment } from './risk-decision-service';
@@ -131,6 +132,12 @@ export class TradeExecutionService {
       const message = 'Day trading is disabled in settings';
       await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
       return { success: false, skipped: true, broker, message };
+    }
+    const killSwitch = await KillSwitchService.evaluate(this.fastify.pg, 'live', input.userId);
+    if (killSwitch.halted) {
+      const message = killSwitch.reason || 'Daily loss limit reached; entries halted';
+      await this.markSignalExecutionFailure(input.userId, input.signalId, message, true);
+      return { success: false, skipped: true, broker, message, riskCode: 'DAILY_LOSS_LIMIT' };
     }
     const signalContract = await this.getSignalExecutionContract(input.signalId);
     const configuredQuantity = this.parsePositiveInt(settings.contracts_per_trade, 1, 100);

@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -41,7 +8,13 @@ const node_cron_1 = __importDefault(require("node-cron"));
 const stop_loss_engine_1 = require("./stop-loss-engine");
 const redis_1 = require("../lib/redis");
 const ai_service_1 = require("./ai-service");
-const ws_1 = __importDefault(require("ws"));
+const snaptrade_service_1 = require("./snaptrade-service");
+const settings_utils_1 = require("../lib/settings-utils");
+const trade_lifecycle_service_1 = require("./trade-lifecycle-service");
+const discord_alert_service_1 = require("./discord-alert-service");
+const ibkr_market_data_service_1 = require("./ibkr-market-data-service");
+const market_data_write_buffer_service_1 = require("./market-data-write-buffer-service");
+const market_calendar_1 = require("../lib/market-calendar");
 class MarketPoller {
     fastify;
     aiService;
@@ -49,29 +22,20 @@ class MarketPoller {
     timerId = null;
     pollingEnabled = true;
     redisClient;
-    // Alpaca WebSocket stream
-    alpacaWs = null;
-    alpacaReconnectAttempts = 0;
-    alpacaReconnectTimer = null;
-    alpacaStreamActive = false;
+    marketDataBuffer;
     constructor(fastify, redisClient) {
         this.fastify = fastify;
         this.aiService = new ai_service_1.AIService(fastify);
         this.redisClient = redisClient || redis_1.redis;
+        this.marketDataBuffer = new market_data_write_buffer_service_1.MarketDataWriteBufferService(fastify, this.redisClient);
     }
     LOCK_KEY = 'MARKET_POLLER_LEADER';
     async start() {
         // 1. Fetch the preferred interval and polling enabled state from settings
         try {
-            const { rows } = await this.fastify.pg.query("SELECT key, value FROM settings WHERE key IN ('market_poll_interval', 'polling_enabled') ORDER BY updated_at DESC");
-            for (const row of rows) {
-                if (row.key === 'market_poll_interval') {
-                    this.currentIntervalSeconds = parseInt(row.value, 10) || 60;
-                }
-                else if (row.key === 'polling_enabled') {
-                    this.pollingEnabled = row.value !== 'false';
-                }
-            }
+            const settings = await (0, settings_utils_1.getGlobalSettings)(this.fastify.pg);
+            this.currentIntervalSeconds = parseInt(settings.market_poll_interval, 10) || 60;
+            this.pollingEnabled = settings.polling_enabled !== 'false';
         }
         catch (err) {
             this.fastify.log.error(`[MarketPoller] Failed to load poll settings from DB: ${err}`);
@@ -80,8 +44,7 @@ class MarketPoller {
         // Start recursive loop
         this.scheduleNextPoll();
         this.startBriefingJob();
-        // Start Alpaca WebSocket stream for instant trade update notifications
-        this.startAlpacaStream();
+        this.marketDataBuffer.startEodFlushJob();
     }
     scheduleNextPoll() {
         if (this.timerId)
@@ -134,22 +97,8 @@ class MarketPoller {
     isRunning() {
         return this.pollingEnabled;
     }
-    // Called by QuestradeStreamService via Index.ts
-    async handlePriceUpdate(quote) {
-        if (!quote || !quote.symbolId)
-            return;
-        // Map SymbolID -> Position(s)
-        // Since we don't store symbolId in DB, we have to look it up or do a reverse check.
-        // Optimization: We can store a local cache of SymbolID -> Symbol string
-        // For now, let's try to match by resolving if needed, but that's slow.
-        // Better approach: If quote has 'symbol', use it. If not, we might skip or broadcast only.
-        // Questrade stream quotes usually imply we know the ID. 
-        // Let's rely on the Poller's cache if possible, or just skip if we can't map.
-        // Actually, for immediate STOP LOSS, we really want to process this.
-        // Let's assume for this iteration we mainly broadcast for UI.
-        // Stop Loss checks are still run by the Poller periodically (1 min).
-        // If we want real-time stop loss, we'd need a robust ID map.
-        // Future TODO: Add symbol_id to positions table.
+    getMarketDataBufferHealth() {
+        return this.marketDataBuffer.getHealth();
     }
     startBriefingJob() {
         // Default to 8:30 AM ET
@@ -182,7 +131,7 @@ class MarketPoller {
                 if (!ignoreFrequency && !this.shouldSendBriefingToday(frequency))
                     continue;
                 // 3. Fetch open positions
-                const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.user_id = $1 AND p.status != 'CLOSED'", [userId]);
+                const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.user_id = $1 AND p.status = 'OPEN'", [userId]);
                 if (positions.length === 0)
                     continue;
                 // 4. Generate AI briefing
@@ -214,6 +163,317 @@ class MarketPoller {
             case 'friday': return weekday === 'Friday';
             case 'weekly': return weekday === 'Monday'; // Default weekly to Monday
             default: return false;
+        }
+    }
+    getNewYorkDateString(date = new Date()) {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/New_York',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        }).formatToParts(date);
+        const getPart = (type) => parts.find(part => part.type === type)?.value || '';
+        return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+    }
+    async markExitSubmissionFailure(position, message, options = {}) {
+        await trade_lifecycle_service_1.TradeLifecycleService.markExitSubmissionFailure(this.fastify.pg, position.id, message, 'Exit submission failed', options);
+        await new discord_alert_service_1.DiscordAlertService(this.fastify).send({
+            userId: Number(position.user_id),
+            title: options.ambiguous ? 'Automated exit requires broker verification' : 'Automated exit failed',
+            message: options.ambiguous
+                ? `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)} may have reached the broker. Do not retry until Wealthsimple reconciliation completes: ${message}`
+                : `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)} exit submission failed and can be retried after verification: ${message}`,
+            severity: 'critical',
+            category: 'exit-failure',
+            tradeId: position.id,
+            dedupeKey: `auto-exit-${options.ambiguous ? 'reconcile' : 'failed'}:${position.id}:${String(message || '').slice(0, 120)}`,
+            dedupeSeconds: 900
+        });
+    }
+    getProfitTrimQuantity(position) {
+        const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
+        if (quantity <= 1)
+            return quantity;
+        if (String(position.profit_trim_status || '').toUpperCase() === 'DONE')
+            return quantity;
+        let syntheticTp1Trim = false;
+        try {
+            const analysis = typeof position.analysis_data === 'string'
+                ? JSON.parse(position.analysis_data)
+                : position.analysis_data;
+            syntheticTp1Trim = Boolean(position.strategy_managed) && analysis?.syntheticTrailing?.tp1TrimPending === true;
+        }
+        catch {
+            syntheticTp1Trim = false;
+        }
+        if (syntheticTp1Trim) {
+            const originalQuantity = Math.max(quantity, Math.floor(Number(position.contracts_requested || quantity)));
+            return Math.min(quantity, Math.ceil(originalQuantity / 2));
+        }
+        return Math.max(1, Math.floor(quantity / 2));
+    }
+    isPartialProfitTrim(position, exitTriggerType) {
+        const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
+        let syntheticTrailing = null;
+        try {
+            const analysis = typeof position.analysis_data === 'string'
+                ? JSON.parse(position.analysis_data)
+                : position.analysis_data;
+            syntheticTrailing = analysis?.syntheticTrailing || null;
+        }
+        catch {
+            syntheticTrailing = null;
+        }
+        const strategySyntheticTrim = Boolean(position.strategy_managed)
+            && syntheticTrailing?.tp1TrimPending === true
+            && syntheticTrailing?.exitAtT2 !== true;
+        return exitTriggerType === 'TAKE_PROFIT'
+            && (!position.strategy_managed || strategySyntheticTrim)
+            && quantity > 1
+            && String(position.profit_trim_status || '').toUpperCase() !== 'DONE';
+    }
+    getThetaStopMaxHoldMinutes(entryTime) {
+        const { minutes } = this.getNewYorkTimeParts(entryTime);
+        if (minutes < 11 * 60 + 30)
+            return 25;
+        if (minutes < 14 * 60)
+            return 15;
+        if (minutes < 15 * 60 + 30)
+            return 10;
+        return null;
+    }
+    getThetaStopStartTime(position, startedAtOverride) {
+        const overrideDate = startedAtOverride ? new Date(startedAtOverride) : null;
+        if (overrideDate && Number.isFinite(overrideDate.getTime()))
+            return overrideDate;
+        const createdAt = position.created_at ? new Date(position.created_at) : null;
+        const updatedAt = position.updated_at ? new Date(position.updated_at) : null;
+        const isLiveBroker = String(position.execution_broker || '').toLowerCase() === 'wealthsimple_snaptrade';
+        if (isLiveBroker
+            && updatedAt
+            && Number.isFinite(updatedAt.getTime())
+            && (!createdAt || !Number.isFinite(createdAt.getTime()) || updatedAt.getTime() > createdAt.getTime())) {
+            return updatedAt;
+        }
+        return createdAt && Number.isFinite(createdAt.getTime()) ? createdAt : null;
+    }
+    getThetaStopAssessment(position, now = new Date(), startedAtOverride) {
+        if (String(position.status || '').toUpperCase() !== 'OPEN')
+            return null;
+        const expirationDate = position.expiration_date instanceof Date
+            ? this.getNewYorkDateString(position.expiration_date)
+            : String(position.expiration_date || '').split('T')[0];
+        if (expirationDate !== this.getNewYorkDateString(now))
+            return null;
+        const enteredAt = this.getThetaStopStartTime(position, startedAtOverride);
+        if (!enteredAt)
+            return null;
+        const maxHoldMinutes = this.getThetaStopMaxHoldMinutes(enteredAt);
+        if (maxHoldMinutes === null)
+            return null;
+        const heldMinutes = Math.max(0, (now.getTime() - enteredAt.getTime()) / 60000);
+        return {
+            triggered: heldMinutes >= maxHoldMinutes,
+            maxHoldMinutes,
+            heldMinutes: Number(heldMinutes.toFixed(2)),
+            enteredAt: enteredAt.toISOString()
+        };
+    }
+    getMandatoryFlattenAssessment(position, now = new Date()) {
+        if (position.is_simulated
+            || String(position.execution_broker || '').toLowerCase() !== 'wealthsimple_snaptrade')
+            return null;
+        const expiration = position.expiration_date instanceof Date
+            ? position.expiration_date.toISOString().slice(0, 10)
+            : String(position.expiration_date || '').split('T')[0];
+        if (expiration !== this.getNewYorkDateString(now))
+            return null;
+        const closeMinutes = (0, market_calendar_1.getUSMarketCloseMinutes)(now);
+        const flattenMinutes = closeMinutes - 40;
+        const market = (0, market_calendar_1.getNewYorkMarketState)(now, 9 * 60 + 30, closeMinutes);
+        return {
+            triggered: !market.isWeekend
+                && !market.isHoliday
+                && market.minutes >= flattenMinutes
+                && market.minutes < closeMinutes,
+            flattenMinutes,
+            closeMinutes
+        };
+    }
+    getTakeProfitOrderPreference(position, price, quote) {
+        const takeProfit = Number(position.take_profit_trigger || 0);
+        const sellablePremium = this.getSellablePremium(price, quote);
+        if (this.isLateDayExitWindow()) {
+            return { orderType: 'MARKET', mode: 'EOD_MARKET' };
+        }
+        if (takeProfit > 0 && sellablePremium >= takeProfit) {
+            return { orderType: 'MARKET', mode: 'PAST_TP' };
+        }
+        if (takeProfit > 0) {
+            return { orderType: 'LIMIT', limitPrice: takeProfit.toFixed(2), mode: 'NEAR_TP' };
+        }
+        return { orderType: 'LIMIT', limitPrice: price.toFixed(2), mode: 'STRUCTURE_TP' };
+    }
+    getTakeProfitReferencePremium(price, quote) {
+        const candidates = [quote?.bid, quote?.last, quote?.mid, price]
+            .map((value) => Number(value || 0))
+            .filter((value) => Number.isFinite(value) && value > 0);
+        return candidates.length > 0 ? Number(Math.max(...candidates).toFixed(2)) : 0;
+    }
+    normalizeQuoteContext(price, quote) {
+        const bid = Number(quote?.bid || 0);
+        const ask = Number(quote?.ask || 0);
+        const last = Number(quote?.last || 0);
+        const mid = bid > 0 && ask > 0 ? Number(((bid + ask) / 2).toFixed(2)) : Number(quote?.mid || price || 0);
+        const spreadPct = bid > 0 && ask > 0 && mid > 0
+            ? Number((((ask - bid) / mid) * 100).toFixed(2))
+            : Number(quote?.spreadPct || 0);
+        return {
+            bid: bid > 0 ? bid : undefined,
+            ask: ask > 0 ? ask : undefined,
+            last: last > 0 ? last : undefined,
+            mid: mid > 0 ? mid : undefined,
+            spreadPct: spreadPct > 0 ? spreadPct : undefined,
+            quoteAgeMs: quote?.quoteAgeMs !== undefined
+                && quote?.quoteAgeMs !== null
+                && Number.isFinite(Number(quote.quoteAgeMs))
+                ? Math.max(0, Number(quote.quoteAgeMs))
+                : undefined,
+            source: quote?.source
+        };
+    }
+    isFreshSyntheticTrailQuote(quote) {
+        return quote?.source === 'ibkr'
+            && quote.quoteAgeMs !== undefined
+            && quote.quoteAgeMs !== null
+            && Number.isFinite(Number(quote.quoteAgeMs))
+            && Number(quote.quoteAgeMs) <= 15_000;
+    }
+    getSellablePremium(price, quote) {
+        return Number((quote?.bid && quote.bid > 0 ? quote.bid : price).toFixed(2));
+    }
+    isWideExitSpread(quote) {
+        return Number(quote?.spreadPct || 0) > 20;
+    }
+    isNoBidQuote(quote) {
+        return Boolean(quote && (!quote.bid || quote.bid <= 0) && ((quote.ask || 0) > 0 || (quote.last || 0) > 0 || (quote.mid || 0) > 0));
+    }
+    isUnderlyingStopBroken(position, underlyingPrice, underlyingStop) {
+        return trade_lifecycle_service_1.TradeLifecycleService.isUnderlyingStopBroken(position, underlyingPrice, underlyingStop);
+    }
+    isUnderlyingTargetReached(position, underlyingPrice, target) {
+        if (!underlyingPrice || !target)
+            return false;
+        return position.option_type === 'CALL' ? underlyingPrice >= target : underlyingPrice <= target;
+    }
+    async isStopLossEngineEnabledForUser(userId) {
+        try {
+            const settings = await (0, settings_utils_1.getSettingsWithGlobalFallback)(this.fastify.pg, userId);
+            return settings.stop_loss_engine_enabled !== 'false';
+        }
+        catch (err) {
+            this.fastify.log.warn(`[MarketPoller] Failed to load stop-loss engine setting for user ${userId}: ${err.message || err}`);
+            return true;
+        }
+    }
+    isLateDayExitWindow(date = new Date()) {
+        const parts = this.getNewYorkTimeParts(date);
+        return parts.minutes >= (0, market_calendar_1.getUSMarketCloseMinutes)(date) - 15;
+    }
+    getNewYorkTimeParts(date = new Date()) {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/New_York',
+            hour: 'numeric',
+            minute: 'numeric',
+            hour12: false
+        });
+        const [hourStr, minuteStr] = formatter.format(date).split(':');
+        const hour = parseInt(hourStr, 10);
+        const minute = parseInt(minuteStr, 10);
+        return { hour, minute, minutes: hour * 60 + minute };
+    }
+    async submitSnapTradeExit(position, orderType, limitPrice, exitTriggerType = 'STOP_LOSS', requestedQuantity) {
+        const accountId = position.account_id;
+        if (!accountId) {
+            await this.markExitSubmissionFailure(position, 'No SnapTrade account id found for live exit');
+            return false;
+        }
+        const partialTrim = this.isPartialProfitTrim(position, exitTriggerType);
+        const exitQuantity = Math.max(1, Math.min(Math.floor(Number(requestedQuantity || (partialTrim ? this.getProfitTrimQuantity(position) : position.quantity) || 1)), Math.floor(Number(position.quantity || 1))));
+        const exitAction = trade_lifecycle_service_1.TradeLifecycleService.getExitAction(position);
+        const nextExecutionStatus = partialTrim ? 'PENDING_TRIM' : 'PENDING_EXIT';
+        const nextExitReason = partialTrim
+            ? 'PROFIT_TRIM'
+            : exitTriggerType === 'TRAILING_STOP'
+                ? 'SYNTHETIC_TRAILING_STOP'
+                : exitTriggerType === 'END_OF_DAY'
+                    ? 'MANDATORY_DAY_TRADE_FLATTEN'
+                    : 'AUTO_EXIT';
+        const claimNote = partialTrim
+            ? ` [Profit trim claim created before SnapTrade ${orderType} ${exitAction} for ${exitQuantity}/${position.quantity} contracts]`
+            : ` [Exit claim created before SnapTrade ${orderType} submission]`;
+        const claimResult = await this.fastify.pg.query(`UPDATE positions
+       SET execution_status = $1::text,
+           execution_error = NULL,
+           exit_reason = COALESCE(exit_reason, $2),
+           exit_order_type = $3,
+           exit_requested_at = CURRENT_TIMESTAMP,
+           profit_trim_status = CASE WHEN $4::boolean THEN 'PENDING' ELSE profit_trim_status END,
+           profit_trim_quantity = CASE WHEN $4::boolean THEN $5 ELSE profit_trim_quantity END,
+           notes = COALESCE(notes, '') || $6,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $7
+         AND status = 'OPEN'
+         AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')
+         AND COALESCE(execution_status, '') NOT LIKE 'EXIT_%'
+         AND broker_exit_order_id IS NULL
+       RETURNING id`, [nextExecutionStatus, nextExitReason, orderType, partialTrim, exitQuantity, claimNote, position.id]);
+        if (claimResult.rowCount === 0) {
+            this.fastify.log.info(`[MarketPoller] Exit/trim already pending or unavailable for position ${position.id}. Skipping duplicate ${exitAction}.`);
+            return false;
+        }
+        let acceptedOrder = null;
+        try {
+            const snaptradeService = new snaptrade_service_1.SnaptradeService(this.fastify);
+            const osiTicker = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
+            const result = await snaptradeService.placeOptionOrder(position.user_id, accountId, osiTicker, exitAction, exitQuantity, orderType, limitPrice);
+            acceptedOrder = result;
+            const persistResult = await this.fastify.pg.query(`UPDATE positions
+         SET execution_status = $1::text,
+             execution_error = NULL,
+             broker_exit_order_id = $2,
+             broker_exit_trade_id = $3,
+             profit_trim_order_id = CASE WHEN $4::boolean THEN $2 ELSE profit_trim_order_id END,
+             profit_trim_trade_id = CASE WHEN $4::boolean THEN $3 ELSE profit_trim_trade_id END,
+             notes = COALESCE(notes, '') || $5,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $6
+           AND status = 'OPEN'
+           AND execution_status = $1::text`, [
+                nextExecutionStatus,
+                result.orderId || null,
+                result.tradeId || null,
+                partialTrim,
+                partialTrim
+                    ? ` [SnapTrade ${orderType} ${exitAction} profit trim submitted for ${exitQuantity}/${position.quantity} contracts${result.orderId ? `: ${result.orderId}` : ''}]`
+                    : ` [SnapTrade ${orderType} ${exitAction} exit submitted${result.orderId ? `: ${result.orderId}` : ''}]`,
+                position.id
+            ]);
+            if ((persistResult.rowCount ?? persistResult.rows?.length ?? 0) === 0) {
+                throw new Error('Broker accepted the exit, but the position state changed before the broker order id was persisted');
+            }
+            return true;
+        }
+        catch (err) {
+            const message = err.message || String(err);
+            this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${message}`);
+            await this.markExitSubmissionFailure(position, message, {
+                ambiguous: Boolean(acceptedOrder) || (0, snaptrade_service_1.isAmbiguousSnapTradeOrderError)(err),
+                orderId: acceptedOrder?.orderId || null,
+                tradeId: acceptedOrder?.tradeId || null,
+                requestedQuantity: exitQuantity
+            });
+            return false;
         }
     }
     async notifyN8nBriefing(userId, username, briefing, discordMessage) {
@@ -267,130 +527,65 @@ class MarketPoller {
         const strikeValue = Math.round(strike * 1000).toString().padStart(8, '0');
         return `${symbol.toUpperCase()}${YY}${MM}${DD}${side}${strikeValue}`;
     }
+    parseCompactOsiTicker(ticker) {
+        const match = String(ticker || '').replace(/\s+/g, '').toUpperCase().match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+        if (!match)
+            return null;
+        const [, root, expiry, side, strikeRaw] = match;
+        return {
+            root,
+            expiration: `20${expiry.slice(0, 2)}-${expiry.slice(2, 4)}-${expiry.slice(4, 6)}`,
+            optionType: side === 'C' ? 'CALL' : 'PUT',
+            strike: Number(strikeRaw) / 1000
+        };
+    }
     async getOptionPremium(userId, symbol, strike, type, expiration, skipCache = false) {
         const ticker = this.constructOSITicker(symbol, strike, type, expiration);
         try {
-            // 0. Check for user-specific Alpaca configuration
-            const { rows: settingsRows } = await this.fastify.pg.query("SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key')", [userId]);
-            const settings = settingsRows.reduce((acc, row) => {
-                acc[row.key] = row.value;
-                return acc;
-            }, {});
-            const alpacaKeyId = settings.alpaca_key_id?.trim();
-            const alpacaSecretKey = settings.alpaca_secret_key?.trim();
-            if (alpacaKeyId && alpacaSecretKey) {
-                this.fastify.log.info(`[MarketPoller] Fetching price for ${ticker} via Alpaca API...`);
-                // 1. Fetch Option Snapshot
-                const optUrl = `https://data.alpaca.markets/v1beta1/options/snapshots?symbols=${ticker}`;
-                const optRes = await fetch(optUrl, {
-                    headers: {
-                        'APCA-API-KEY-ID': alpacaKeyId,
-                        'APCA-API-SECRET-KEY': alpacaSecretKey
-                    }
-                });
-                if (!optRes.ok) {
-                    throw new Error(`Alpaca options snapshot API error: Status ${optRes.status}`);
-                }
-                const optData = await optRes.json();
-                const snapshot = optData.snapshots?.[ticker];
-                if (!snapshot) {
-                    throw new Error(`Alpaca options snapshot not found for ${ticker}`);
-                }
-                // Calculate option price (mid-price of bid/ask if valid, else latest trade price)
-                const bid = snapshot.latestQuote?.bp || 0;
-                const ask = snapshot.latestQuote?.ap || 0;
-                const price = (bid > 0 && ask > 0) ? (bid + ask) / 2 : snapshot.latestTrade?.p || 0;
-                // 2. Fetch Underlying Price
-                let underlyingPrice = 0;
-                const stockUrl = `https://data.alpaca.markets/v2/stocks/snapshots?symbols=${symbol}`;
-                const stockRes = await fetch(stockUrl, {
-                    headers: {
-                        'APCA-API-KEY-ID': alpacaKeyId,
-                        'APCA-API-SECRET-KEY': alpacaSecretKey
-                    }
-                });
-                if (stockRes.ok) {
-                    const stockData = await stockRes.json();
-                    underlyingPrice = stockData[symbol]?.latestTrade?.p || stockData[symbol]?.latestQuote?.ap || 0;
-                }
-                else {
-                    this.fastify.log.warn(`[MarketPoller] Alpaca stock snapshot query failed: Status ${stockRes.status}`);
-                }
-                return {
-                    status: 'ok',
-                    symbol: ticker,
-                    price,
-                    iv: null,
-                    underlying_price: underlyingPrice,
-                    greeks: null,
-                    metadata: {
-                        symbol,
-                        strike,
-                        type,
-                        expiration
-                    }
-                };
-            }
-            // Fallback: Questrade Integration
-            const questrade = this.fastify.questrade;
-            // 1. Get/Resolve Option Symbol ID
-            // We can STILL cache the symbolId for the ticker (it never changes for a specific option)
-            const SYMBOL_ID_CACHE_KEY = `SYMBOL_ID:${ticker}`;
-            let symbolId = null;
-            const cachedId = await this.redisClient.get(SYMBOL_ID_CACHE_KEY);
-            if (cachedId) {
-                symbolId = parseInt(cachedId, 10);
-            }
-            else {
-                this.fastify.log.info(`[MarketPoller] Resolving Questrade Symbol ID for ${ticker}...`);
-                symbolId = await questrade.getSymbolId(ticker);
-                if (symbolId) {
-                    await this.redisClient.set(SYMBOL_ID_CACHE_KEY, symbolId.toString(), 86400); // 24h
-                    await this.redisClient.set(`SYMBOL_NAME:${symbolId}`, ticker, 86400);
-                }
-            }
-            if (!symbolId) {
-                this.fastify.log.warn(`[MarketPoller] Could not resolve symbol ID for ${ticker} on Questrade.`);
-                return null;
-            }
-            // 2. Get Quote from Questrade (FRESH EVERY TIME)
-            const quote = await questrade.getOptionQuote(symbolId);
-            if (!quote)
-                return null;
-            // 3. Fetch Underlying Price (Questrade option quote doesn't include it in JSON)
-            let underlyingPrice = 0;
-            if (quote.underlyingId) {
-                const uQuotes = await questrade.getQuote([quote.underlyingId]);
-                if (uQuotes && uQuotes.length > 0) {
-                    underlyingPrice = uQuotes[0].lastTradePrice || 0;
-                }
-            }
-            // Calculate premium (use Mid price if available, else last)
-            const bid = quote.bidPrice || 0;
-            const ask = quote.askPrice || 0;
-            const price = (bid > 0 && ask > 0) ? (bid + ask) / 2 : quote.lastTradePrice || 0;
-            const result = {
-                status: 'ok',
-                symbol: ticker,
-                price,
-                iv: quote.volatility || 0,
-                underlying_price: underlyingPrice,
-                greeks: {
-                    delta: quote.delta || 0,
-                    gamma: quote.gamma || 0,
-                    theta: quote.theta || 0,
-                    vega: quote.vega || 0,
-                    rho: quote.rho || 0
-                },
-                metadata: {
+            const marketData = new ibkr_market_data_service_1.IbkrMarketDataService(this.fastify);
+            try {
+                const quote = await marketData.getOptionQuote(userId, {
                     symbol,
                     strike,
-                    type,
+                    right: type === 'CALL' ? 'call' : 'put',
                     expiration
+                });
+                if (quote) {
+                    return {
+                        status: 'ok',
+                        symbol: ticker,
+                        price: quote.mark,
+                        quote: this.normalizeQuoteContext(quote.mark, {
+                            bid: quote.bid,
+                            ask: quote.ask,
+                            last: quote.last,
+                            mid: quote.mid,
+                            spreadPct: quote.spreadPct || undefined,
+                            quoteAgeMs: quote.quoteAgeMs ?? undefined,
+                            source: 'ibkr'
+                        }),
+                        iv: 0,
+                        underlying_price: 0,
+                        greeks: {
+                            delta: 0,
+                            gamma: 0,
+                            theta: 0,
+                            vega: 0,
+                            rho: 0
+                        },
+                        metadata: {
+                            symbol,
+                            strike,
+                            type,
+                            expiration
+                        }
+                    };
                 }
-            };
-            // We no longer set PRICE cache in Redis as per user request
-            return result;
+            }
+            catch (err) {
+                this.fastify.log.warn(`[MarketPoller] IBKR option quote unavailable for ${ticker}: ${err.message || String(err)}`);
+            }
+            return null;
         }
         catch (err) {
             this.fastify.log.error(`[MarketPoller] Option fetch failed for ${ticker}:`, err.message);
@@ -399,7 +594,7 @@ class MarketPoller {
     }
     async syncPrice(symbol, skipCache = false) {
         this.fastify.log.info(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
-        const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status != 'CLOSED'", [symbol]);
+        const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.symbol = $1 AND p.status = 'OPEN'", [symbol]);
         if (positions.length === 0) {
             this.fastify.log.info(`[MarketPoller] No active or triggered positions found for ${symbol}.`);
             return null;
@@ -410,7 +605,7 @@ class MarketPoller {
             if (data && data.price !== null) {
                 // this.fastify.log.debug(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
                 this.fastify.log.info(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${data.underlying_price} Greeks:`, data.greeks);
-                await this.processUpdate(position, data.price, data.greeks, data.iv, data.underlying_price);
+                await this.processUpdate(position, data.price, data.greeks, data.iv, data.underlying_price, data.quote);
                 lastFetchedPrice = data.price;
             }
         }
@@ -422,139 +617,48 @@ class MarketPoller {
         }
         return lastFetchedPrice;
     }
-    isMarketOpen() {
-        const now = new Date();
-        // Use Intl to get ET time
-        const formatter = new Intl.DateTimeFormat('en-US', {
-            timeZone: 'America/New_York',
-            hour12: false,
-            weekday: 'short',
-            hour: 'numeric',
-            minute: 'numeric',
-        });
-        const parts = formatter.formatToParts(now);
-        const getPart = (type) => parts.find(p => p.type === type)?.value;
-        const weekday = getPart('weekday');
-        const hour = parseInt(getPart('hour') || '0', 10);
-        const minute = parseInt(getPart('minute') || '0', 10);
-        // Weekend check
-        if (weekday === 'Sat' || weekday === 'Sun')
-            return false;
-        // Market hours: 9:30 AM - 4:15 PM (16:15) ET
-        const currentTimeMinutes = hour * 60 + minute;
-        const marketOpenMinutes = 9 * 60 + 30;
-        const marketCloseMinutes = 16 * 60 + 15;
-        return currentTimeMinutes >= marketOpenMinutes && currentTimeMinutes <= marketCloseMinutes;
+    isMarketOpen(date = new Date()) {
+        return (0, market_calendar_1.getNewYorkMarketState)(date, 9 * 60 + 30, (0, market_calendar_1.getUSMarketCloseMinutes)(date)).isOpen;
     }
     async poll(force = false) {
         this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
-        const { rows: positions } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status != 'CLOSED'");
+        const { rows } = await this.fastify.pg.query("SELECT p.*, u.username FROM positions p JOIN users u ON p.user_id = u.id WHERE p.status = 'OPEN' AND COALESCE(p.execution_broker, '') <> 'system_paper'");
+        const positions = await this.marketDataBuffer.applyLatestToPositions(rows);
         if (positions.length === 0) {
             this.fastify.log.info('[MarketPoller] No active positions to poll.');
             return;
         }
-        // 0. Hard Time-based Day Trading Cutoffs Enforcements
+        // 0. Calendar-aware 0DTE flatten enforcement.
         const now = new Date();
-        const etFormatter = new Intl.DateTimeFormat('en-US', {
-            timeZone: 'America/New_York',
-            hour: 'numeric',
-            minute: 'numeric',
-            hour12: false
-        });
-        const [etHourStr, etMinuteStr] = etFormatter.format(now).split(':');
-        const etHour = parseInt(etHourStr, 10);
-        const etMinute = parseInt(etMinuteStr, 10);
-        const etTimeMinutes = etHour * 60 + etMinute;
-        const todayStr = now.toISOString().split('T')[0];
-        const isEodCutoff = etTimeMinutes >= 15 * 60 + 50; // 3:50 PM ET or later
-        const isMorningCutoff = etTimeMinutes >= 13 * 60; // 1:00 PM ET or later
         for (const pos of positions) {
             let shouldForceClose = false;
             let reason = '';
-            const expDateStr = pos.expiration_date instanceof Date
-                ? pos.expiration_date.toISOString().split('T')[0]
-                : new Date(pos.expiration_date).toISOString().split('T')[0];
-            const is0Dte = expDateStr === todayStr;
-            if (isEodCutoff) {
-                shouldForceClose = true;
-                reason = 'EOD Hard Cutoff (3:50 PM ET)';
+            if (this.hasUnresolvedExit(pos)) {
+                continue;
             }
-            else if (isMorningCutoff && is0Dte) {
+            if (this.isPositionExpired(pos, now)) {
+                continue;
+            }
+            const mandatoryFlatten = this.getMandatoryFlattenAssessment(pos, now);
+            if (mandatoryFlatten?.triggered) {
                 shouldForceClose = true;
-                reason = 'Morning 0 DTE Hard Cutoff (1:00 PM ET)';
+                const hour = Math.floor(mandatoryFlatten.flattenMinutes / 60);
+                const minute = String(mandatoryFlatten.flattenMinutes % 60).padStart(2, '0');
+                reason = `0DTE mandatory flatten (${hour}:${minute} ET)`;
             }
             if (shouldForceClose) {
                 this.fastify.log.info(`[MarketPoller] Force closing position ${pos.id} (${pos.symbol}) due to ${reason}.`);
                 let currentPrice = Number(pos.current_price || pos.entry_price);
                 if (!pos.is_simulated) {
-                    try {
-                        const accountId = pos.account_id;
-                        if (!accountId) {
-                            this.fastify.log.error(`[MarketPoller] No account_id found for Live position ${pos.id}. Cannot force close.`);
-                        }
-                        else {
-                            const snaptradeService = new (await Promise.resolve().then(() => __importStar(require('./snaptrade-service')))).SnaptradeService(this.fastify);
-                            const osiTicker = this.constructOSITicker(pos.symbol, Number(pos.strike_price), pos.option_type, pos.expiration_date);
-                            // Hard cutoffs always use MARKET orders to guarantee exit before bell
-                            let limitPrice = undefined;
-                            let orderType = 'MARKET';
-                            await snaptradeService.placeOptionOrder(pos.user_id, accountId, osiTicker, 'SELL_TO_CLOSE', pos.quantity, orderType, limitPrice);
-                        }
-                    }
-                    catch (err) {
-                        this.fastify.log.error(`[MarketPoller] Failed to execute Live force-close for position ${pos.id}: ${err.message}`);
-                    }
-                }
-                else if (pos.account_id === 'alpaca_paper') {
-                    try {
-                        const { rows: settingsRows } = await this.fastify.pg.query("SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key', 'alpaca_auto_trade')", [pos.user_id]);
-                        const userSettings = settingsRows.reduce((acc, r) => {
-                            acc[r.key] = r.value;
-                            return acc;
-                        }, {});
-                        const alpacaKeyId = userSettings.alpaca_key_id?.trim() || '';
-                        const alpacaSecretKey = userSettings.alpaca_secret_key?.trim() || '';
-                        const alpacaAutoTrade = userSettings.alpaca_auto_trade?.trim() || 'false';
-                        if (alpacaAutoTrade !== 'true') {
-                            this.fastify.log.info(`[MarketPoller] Alpaca auto-trade is disabled for user ${pos.user_id}. Skipping automatic force-close for position ${pos.id}.`);
-                            continue;
-                        }
-                        if (alpacaKeyId && alpacaSecretKey) {
-                            const osiTicker = this.constructOSITicker(pos.symbol, Number(pos.strike_price), pos.option_type, pos.expiration_date);
-                            this.fastify.log.info(`[MarketPoller] Force closing Alpaca paper position ${pos.id} (${osiTicker})...`);
-                            const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
-                                method: 'POST',
-                                headers: {
-                                    'APCA-API-KEY-ID': alpacaKeyId,
-                                    'APCA-API-SECRET-KEY': alpacaSecretKey,
-                                    'Content-Type': 'application/json'
-                                },
-                                body: JSON.stringify({
-                                    symbol: osiTicker,
-                                    qty: pos.quantity || 1,
-                                    side: 'sell',
-                                    type: 'market',
-                                    time_in_force: 'day'
-                                })
-                            });
-                            if (!res.ok) {
-                                const errText = await res.text();
-                                throw new Error(`Alpaca paper force close failed: ${res.status} - ${errText}`);
-                            }
-                        }
-                    }
-                    catch (err) {
-                        this.fastify.log.error(`[MarketPoller] Failed to execute Alpaca force-close for position ${pos.id}: ${err.message}`);
+                    const exitAction = trade_lifecycle_service_1.TradeLifecycleService.getExitAction(pos);
+                    const submitted = await this.submitSnapTradeExit(pos, 'MARKET');
+                    if (!submitted)
                         continue;
-                    }
+                    await this.notifyN8n(pos, currentPrice, 0, 0, 'FORCE_CLOSE', `Exit order submitted due to ${reason}`, `**[FORCE CLOSE SUBMITTED]** ${reason}. Market ${exitAction} was submitted; waiting for broker fill confirmation. Last app price: $${currentPrice}.`);
+                    pos.execution_status = 'PENDING_EXIT';
+                    continue;
                 }
-                const realizedPnl = (currentPrice - Number(pos.entry_price)) * pos.quantity * 100;
-                await this.fastify.pg.query(`UPDATE positions 
-                 SET status = 'CLOSED', 
-                     realized_pnl = $1,
-                     notes = COALESCE(notes, '') || $2,
-                     updated_at = CURRENT_TIMESTAMP 
-                 WHERE id = $3`, [realizedPnl, ` [Force closed: ${reason}]`, pos.id]);
+                const realizedPnl = await this.closePositionLocally(pos, currentPrice, reason);
                 await this.notifyN8n(pos, currentPrice, realizedPnl, 0, 'FORCE_CLOSE', `Position force closed due to ${reason}`, `**[FORCE CLOSE]** Position closed due to ${reason}. Current price: $${currentPrice}. P&L: $${realizedPnl.toFixed(2)}`);
                 pos.status = 'CLOSED';
             }
@@ -582,22 +686,12 @@ class MarketPoller {
             // 1. Auto-Close Expired Logic
             // Check for expired positions for this symbol first
             const symbolPositions = positions.filter((p) => p.symbol === symbol);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
             for (const pos of symbolPositions) {
-                const expDate = new Date(pos.expiration_date);
-                expDate.setHours(0, 0, 0, 0);
-                // Standard comparison: If expiration date is strictly less than today (yesterday or earlier), it's expired.
-                if (expDate < today) {
+                if (pos.status !== 'OPEN' || this.hasUnresolvedExit(pos))
+                    continue;
+                if (this.isPositionExpired(pos)) {
                     this.fastify.log.info(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
-                    // Close with 0 PnL
-                    await this.fastify.pg.query(`UPDATE positions 
-                 SET status = 'CLOSED', 
-                     exit_price = 0, 
-                     realized_pnl = 0, 
-                     notes = COALESCE(notes, '') || ' [Auto-closed as Expired]',
-                     updated_at = CURRENT_TIMESTAMP 
-                 WHERE id = $1`, [pos.id]);
+                    await this.closePositionLocally(pos, 0, 'EXPIRED');
                     // Mark as closed locally so we don't sync it below
                     pos.status = 'CLOSED';
                 }
@@ -612,45 +706,362 @@ class MarketPoller {
             }
         }
     }
-    async processUpdate(position, price, greeks, iv, underlyingPrice) {
-        const engineResult = stop_loss_engine_1.StopLossEngine.evaluate(price, {
-            entry_price: Number(position.entry_price),
-            stop_loss_trigger: Number(position.stop_loss_trigger),
-            take_profit_trigger: position.take_profit_trigger ? Number(position.take_profit_trigger) : undefined,
-            trailing_high_price: Number(position.trailing_high_price || position.entry_price),
-            trailing_stop_loss_pct: position.trailing_stop_loss_pct ? Number(position.trailing_stop_loss_pct) : undefined,
-        });
-        let triggered = engineResult.triggered;
-        let triggerType = engineResult.triggerType;
-        let lossAvoided = engineResult.lossAvoided;
-        // Strategy 1: Underlying-Triggered Stops (Structural Exit Strategy)
-        const underlyingStop = position.suggested_stop_loss ? Number(position.suggested_stop_loss) : null;
-        const underlyingTarget = position.suggested_take_profit_1 ? Number(position.suggested_take_profit_1) : null;
-        if (underlyingPrice && underlyingStop) {
-            if (position.option_type === 'CALL' && underlyingPrice <= underlyingStop) {
-                triggered = true;
-                triggerType = 'STOP_LOSS';
-                lossAvoided = Number(position.entry_price) - price;
-                this.fastify.log.info(`[MarketPoller] Strategy 1 STOP_LOSS triggered via underlying index price: ${underlyingPrice} <= ${underlyingStop}`);
-            }
-            else if (position.option_type === 'PUT' && underlyingPrice >= underlyingStop) {
-                triggered = true;
-                triggerType = 'STOP_LOSS';
-                lossAvoided = Number(position.entry_price) - price;
-                this.fastify.log.info(`[MarketPoller] Strategy 1 STOP_LOSS triggered via underlying index price: ${underlyingPrice} >= ${underlyingStop}`);
+    async processPositionExitUpdate(position, price, greeks, iv, underlyingPrice, quote) {
+        return this.processUpdate(position, price, greeks, iv, underlyingPrice, quote);
+    }
+    hasUnresolvedExit(position) {
+        const executionStatus = String(position?.execution_status || '');
+        return trade_lifecycle_service_1.TradeLifecycleService.isPendingExitStatus(executionStatus)
+            || trade_lifecycle_service_1.TradeLifecycleService.isBrokerExitReviewStatus(executionStatus);
+    }
+    isPositionExpired(position, now = new Date()) {
+        const expiration = position?.expiration_date instanceof Date
+            ? position.expiration_date.toISOString().slice(0, 10)
+            : String(position?.expiration_date || '').slice(0, 10);
+        return /^\d{4}-\d{2}-\d{2}$/.test(expiration)
+            && expiration < this.getNewYorkDateString(now);
+    }
+    async closePositionLocally(position, exitPrice, reason) {
+        const realizedPnl = trade_lifecycle_service_1.TradeLifecycleService.calculateRealizedPnl(position, exitPrice, position.quantity);
+        await this.fastify.pg.query(`UPDATE positions
+       SET status = 'CLOSED',
+           current_price = $1,
+           exit_price = $1,
+           realized_pnl = COALESCE(realized_pnl, 0) + $2,
+           execution_status = 'EXIT_FILLED',
+           exit_reason = $3,
+           max_favorable_price = COALESCE($4, max_favorable_price),
+           max_adverse_price = COALESCE($5, max_adverse_price),
+           mfe_pct = COALESCE($6, mfe_pct),
+           mae_pct = COALESCE($7, mae_pct),
+           trailing_high_price = COALESCE($8, trailing_high_price),
+           stop_loss_trigger = COALESCE($9, stop_loss_trigger),
+           analysis_data = COALESCE($10::jsonb, analysis_data),
+           notes = COALESCE(notes, '') || $11,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $12 AND status = 'OPEN'`, [exitPrice, realizedPnl, reason, position.max_favorable_price ?? null, position.max_adverse_price ?? null,
+            position.mfe_pct ?? null, position.mae_pct ?? null, position.trailing_high_price ?? null,
+            position.stop_loss_trigger ?? null,
+            position.analysis_data == null
+                ? null
+                : (typeof position.analysis_data === 'string' ? position.analysis_data : JSON.stringify(position.analysis_data)),
+            ` [Auto-closed: ${reason}]`, position.id]);
+        return realizedPnl;
+    }
+    async processUpdate(position, price, greeks, iv, underlyingPrice, quote) {
+        // System paper positions are valued and exited exclusively by PaperTradingService.
+        // Keeping them out of the legacy poller prevents duplicate closes and broker calls.
+        if (position.execution_broker === 'system_paper')
+            return;
+        position = await this.marketDataBuffer.applyLatestToPosition(position);
+        let analysis = {};
+        let analysisDirty = false;
+        try {
+            if (position.analysis_data) {
+                analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data;
             }
         }
-        if (underlyingPrice && underlyingTarget && !triggered) {
-            // Parse analysis_data to check for Negative GEX Regime dynamic trailing stop
-            let analysis = {};
-            try {
-                if (position.analysis_data) {
-                    analysis = typeof position.analysis_data === 'string' ? JSON.parse(position.analysis_data) : position.analysis_data;
+        catch (e) {
+            this.fastify.log.warn(`[MarketPoller] Failed to parse analysis_data for position ${position.id}`);
+        }
+        const quoteContext = this.normalizeQuoteContext(price, quote);
+        const sellablePremium = this.getSellablePremium(price, quoteContext);
+        const takeProfitReferencePremium = this.getTakeProfitReferencePremium(price, quoteContext);
+        const noBidQuote = this.isNoBidQuote(quoteContext);
+        const wideExitSpread = this.isWideExitSpread(quoteContext);
+        const isShortPremiumPosition = trade_lifecycle_service_1.TradeLifecycleService.isShortPremiumPosition(position);
+        const configuredSyntheticTrailingPct = Number(position.trailing_stop_loss_pct || 0);
+        const syntheticTrailingConfigured = !position.is_simulated
+            && String(position.execution_broker || '').toLowerCase() === 'wealthsimple_snaptrade'
+            && !isShortPremiumPosition
+            && configuredSyntheticTrailingPct >= 1
+            && configuredSyntheticTrailingPct <= 50;
+        const syntheticQuoteFresh = this.isFreshSyntheticTrailQuote(quoteContext);
+        const mandatoryFlatten = this.getMandatoryFlattenAssessment(position);
+        const syntheticState = analysis.syntheticTrailing && typeof analysis.syntheticTrailing === 'object'
+            ? analysis.syntheticTrailing
+            : {};
+        const syntheticT1 = Number(position.suggested_take_profit_1 || 0) || null;
+        const syntheticT2 = Number(position.suggested_take_profit_2 || 0) || null;
+        const syntheticT1Reached = this.isUnderlyingTargetReached(position, underlyingPrice, syntheticT1);
+        const strategySyntheticTrail = syntheticTrailingConfigured && Boolean(position.strategy_managed);
+        let syntheticTrailingActive = syntheticTrailingConfigured
+            && (!strategySyntheticTrail || syntheticState.active === true || String(position.profit_trim_status || '').toUpperCase() === 'DONE');
+        if (strategySyntheticTrail && !syntheticTrailingActive && syntheticT1Reached && syntheticQuoteFresh) {
+            syntheticTrailingActive = true;
+            analysis.syntheticTrailing = {
+                ...syntheticState,
+                enabled: true,
+                active: true,
+                pct: configuredSyntheticTrailingPct,
+                activation: 'TP1',
+                activatedAt: new Date().toISOString(),
+                t1Underlying: syntheticT1,
+                t2Underlying: syntheticT2
+            };
+            analysisDirty = true;
+            this.fastify.log.info(`[MarketPoller] Synthetic premium trail activated for position ${position.id} at TP1 with ${configuredSyntheticTrailingPct}%.`);
+        }
+        const engineResult = stop_loss_engine_1.StopLossEngine.evaluate(sellablePremium, {
+            entry_price: Number(position.entry_price),
+            stop_loss_trigger: Number(position.stop_loss_trigger),
+            take_profit_trigger: !strategySyntheticTrail && position.take_profit_trigger
+                ? Number(position.take_profit_trigger)
+                : undefined,
+            trailing_high_price: Number(position.trailing_high_price || position.entry_price),
+            trailing_stop_loss_pct: syntheticTrailingActive && syntheticQuoteFresh ? configuredSyntheticTrailingPct : undefined,
+            trailing_floor_price: strategySyntheticTrail && syntheticTrailingActive ? Number(position.entry_price) : undefined,
+        });
+        const priorTrailingHighPrice = Number(position.trailing_high_price || position.entry_price);
+        const bufferedTrailingHighPrice = syntheticTrailingActive && !syntheticQuoteFresh
+            ? priorTrailingHighPrice
+            : engineResult.newHigh ?? priorTrailingHighPrice;
+        const bufferedStopLossTrigger = syntheticTrailingActive && !syntheticQuoteFresh
+            ? (position.stop_loss_trigger == null ? null : Number(position.stop_loss_trigger))
+            : engineResult.newStopLoss ?? (position.stop_loss_trigger == null ? null : Number(position.stop_loss_trigger));
+        if (syntheticTrailingActive && syntheticQuoteFresh) {
+            analysis.syntheticTrailing = {
+                ...syntheticState,
+                ...analysis.syntheticTrailing,
+                enabled: true,
+                active: true,
+                pct: configuredSyntheticTrailingPct,
+                highPremium: bufferedTrailingHighPrice,
+                stopPremium: bufferedStopLossTrigger,
+                quoteAgeMs: quoteContext.quoteAgeMs,
+                updatedAt: new Date().toISOString()
+            };
+            analysisDirty = true;
+        }
+        let triggered = !isShortPremiumPosition
+            && !noBidQuote
+            && engineResult.triggered
+            && engineResult.triggerType === 'TAKE_PROFIT'
+            && (!syntheticTrailingConfigured || syntheticQuoteFresh);
+        let triggerType = triggered ? 'TAKE_PROFIT' : undefined;
+        let lossAvoided = engineResult.lossAvoided;
+        if (position.strategy_managed && position.strategy_exit_requested_at) {
+            triggered = true;
+            triggerType = String(position.strategy_exit_reason || '').toUpperCase() === 'COMPLETED'
+                ? 'TAKE_PROFIT'
+                : 'STOP_LOSS';
+            this.fastify.log.info(`[MarketPoller] Strategy lifecycle exit requested for position ${position.id}: ${position.strategy_exit_reason || 'terminal state'}`);
+        }
+        const entryPrice = Number(position.entry_price);
+        const excursion = this.calculateTradeExcursion(position, price);
+        if (excursion.changed) {
+            position.max_favorable_price = excursion.maxFavorablePrice;
+            position.max_adverse_price = excursion.maxAdversePrice;
+            position.mfe_pct = excursion.mfePct;
+            position.mae_pct = excursion.maePct;
+        }
+        const softPremiumStop = Number(bufferedStopLossTrigger ?? position.stop_loss_trigger);
+        const hardPremiumStop = Number(Math.max(entryPrice * 0.65, softPremiumStop * 0.85).toFixed(2));
+        const softStopConfirmationMs = 10_000;
+        const premiumSoftStopHit = !isShortPremiumPosition
+            && engineResult.triggered
+            && engineResult.triggerType === 'STOP_LOSS'
+            && (!syntheticTrailingActive || syntheticQuoteFresh);
+        const premiumHardStopHit = !isShortPremiumPosition
+            && sellablePremium <= hardPremiumStop
+            && (!syntheticTrailingActive || syntheticQuoteFresh);
+        const premiumTakeProfit = strategySyntheticTrail ? 0 : Number(position.take_profit_trigger || 0);
+        const nearTakeProfitThreshold = premiumTakeProfit > 0 ? Number((premiumTakeProfit * 0.95).toFixed(2)) : null;
+        // Strategy 1: Underlying structure informs stop-loss confirmation.
+        const underlyingStop = position.suggested_stop_loss ? Number(position.suggested_stop_loss) : null;
+        const underlyingTarget = position.suggested_take_profit_2
+            ? Number(position.suggested_take_profit_2)
+            : position.suggested_take_profit_1
+                ? Number(position.suggested_take_profit_1)
+                : null;
+        const underlyingStopBroken = this.isUnderlyingStopBroken(position, underlyingPrice, underlyingStop);
+        const stopLossCandidate = !triggered && (underlyingStopBroken ||
+            (noBidQuote && softPremiumStop > 0 && (!syntheticTrailingActive || syntheticQuoteFresh)) ||
+            premiumHardStopHit ||
+            premiumSoftStopHit);
+        const syntheticTrailCandidate = syntheticTrailingActive && premiumSoftStopHit;
+        const stopLossEngineEnabled = syntheticTrailCandidate
+            ? true
+            : stopLossCandidate
+                ? await this.isStopLossEngineEnabledForUser(Number(position.user_id))
+                : true;
+        if (!triggered && stopLossEngineEnabled) {
+            if (underlyingStopBroken) {
+                triggered = true;
+                triggerType = 'STOP_LOSS';
+                lossAvoided = entryPrice - sellablePremium;
+                analysis.smartStopWarning = {
+                    status: 'UNDERLYING_STOP_BROKEN',
+                    price: sellablePremium,
+                    underlyingPrice: underlyingPrice ?? null,
+                    underlyingStop,
+                    triggeredAt: new Date().toISOString()
+                };
+                analysisDirty = true;
+                this.fastify.log.info(`[MarketPoller] UNDERLYING STOP triggered for position ${position.id}: ${position.symbol} ${underlyingPrice} crossed ${underlyingStop}`);
+            }
+            else if (noBidQuote && softPremiumStop > 0) {
+                triggered = true;
+                triggerType = 'STOP_LOSS';
+                lossAvoided = entryPrice - sellablePremium;
+                analysis.smartStopWarning = {
+                    status: 'NO_BID_EMERGENCY',
+                    price,
+                    sellablePremium,
+                    bid: quoteContext.bid ?? null,
+                    ask: quoteContext.ask ?? null,
+                    triggeredAt: new Date().toISOString()
+                };
+                analysisDirty = true;
+                this.fastify.log.warn(`[MarketPoller] NO-BID emergency stop triggered for position ${position.id}. Quote: bid=${quoteContext.bid ?? 0}, ask=${quoteContext.ask ?? 0}, price=${price}.`);
+            }
+            else if (premiumHardStopHit) {
+                triggered = true;
+                triggerType = 'STOP_LOSS';
+                lossAvoided = entryPrice - sellablePremium;
+                analysis.smartStopWarning = {
+                    status: 'HARD_STOP',
+                    price: sellablePremium,
+                    hardPremiumStop,
+                    triggeredAt: new Date().toISOString()
+                };
+                analysisDirty = true;
+                this.fastify.log.info(`[MarketPoller] HARD STOP triggered for position ${position.id}: premium ${price} <= ${hardPremiumStop}`);
+            }
+            else if (premiumSoftStopHit) {
+                const now = Date.now();
+                const existingArmedAt = analysis.smartStopWarning?.armedAt || analysis.smartStopWarning?.triggeredAt;
+                const armedAtMs = existingArmedAt ? new Date(existingArmedAt).getTime() : NaN;
+                const confirmedByTime = Number.isFinite(armedAtMs) && now - armedAtMs >= softStopConfirmationMs;
+                const belowStopCount = Number(analysis.smartStopWarning?.belowStopCount || 0) + 1;
+                const confirmedByQuotes = belowStopCount >= 2;
+                if (underlyingStopBroken || confirmedByTime || confirmedByQuotes) {
+                    triggered = true;
+                    triggerType = syntheticTrailingActive ? 'TRAILING_STOP' : 'STOP_LOSS';
+                    lossAvoided = entryPrice - sellablePremium;
+                    analysis.smartStopWarning = {
+                        status: syntheticTrailingActive
+                            ? 'SYNTHETIC_TRAILING_STOP_CONFIRMED'
+                            : underlyingStopBroken
+                                ? 'PREMIUM_STOP_STRUCTURE_CONFIRMED'
+                                : confirmedByQuotes
+                                    ? 'PREMIUM_STOP_QUOTE_CONFIRMED'
+                                    : 'PREMIUM_STOP_TIME_CONFIRMED',
+                        price: sellablePremium,
+                        softPremiumStop,
+                        hardPremiumStop,
+                        underlyingPrice: underlyingPrice ?? null,
+                        underlyingStop,
+                        belowStopCount,
+                        armedAt: Number.isFinite(armedAtMs) ? existingArmedAt : new Date(now).toISOString(),
+                        triggeredAt: new Date(now).toISOString()
+                    };
+                    analysisDirty = true;
+                    this.fastify.log.info(`[MarketPoller] Premium STOP confirmed for position ${position.id}: premium ${price} <= displayed stop ${softPremiumStop}.`);
+                }
+                else {
+                    analysis.smartStopWarning = {
+                        status: 'STOP_ARMED',
+                        price: sellablePremium,
+                        softPremiumStop,
+                        hardPremiumStop,
+                        underlyingPrice: underlyingPrice ?? null,
+                        underlyingStop,
+                        belowStopCount,
+                        armedAt: Number.isFinite(armedAtMs) ? existingArmedAt : new Date(now).toISOString(),
+                        confirmationSeconds: softStopConfirmationMs / 1000
+                    };
+                    analysisDirty = true;
+                    this.fastify.log.info(`[MarketPoller] Premium STOP armed for position ${position.id}: premium ${price} <= displayed stop ${softPremiumStop}; waiting ${softStopConfirmationMs / 1000}s or structure break.`);
                 }
             }
-            catch (e) {
-                this.fastify.log.warn(`[MarketPoller] Failed to parse analysis_data for position ${position.id}`);
+            else if (analysis.smartStopWarning) {
+                delete analysis.smartStopWarning;
+                analysisDirty = true;
+                this.fastify.log.info(`[MarketPoller] Smart stop warning cleared for position ${position.id}: premium recovered above ${softPremiumStop}.`);
             }
+        }
+        else if (stopLossCandidate && !stopLossEngineEnabled) {
+            if (analysis.smartStopWarning) {
+                delete analysis.smartStopWarning;
+                analysisDirty = true;
+            }
+            this.fastify.log.info(`[MarketPoller] Stop-loss engine disabled for user ${position.user_id}; skipping automatic stop exit for position ${position.id}.`);
+        }
+        if (!triggered
+            && !isShortPremiumPosition
+            && premiumTakeProfit > 0
+            && nearTakeProfitThreshold !== null
+            && takeProfitReferencePremium >= nearTakeProfitThreshold
+            && (!syntheticTrailingConfigured || syntheticQuoteFresh)
+            && String(position.profit_trim_status || '').toUpperCase() !== 'DONE') {
+            if (wideExitSpread && sellablePremium < premiumTakeProfit && !this.isLateDayExitWindow()) {
+                analysis.takeProfitWarning = {
+                    status: 'NEAR_TP_WIDE_SPREAD_BLOCKED',
+                    price,
+                    sellablePremium,
+                    referencePremium: takeProfitReferencePremium,
+                    bid: quoteContext.bid ?? null,
+                    ask: quoteContext.ask ?? null,
+                    spreadPct: quoteContext.spreadPct ?? null,
+                    premiumTakeProfit,
+                    nearTakeProfitThreshold,
+                    updatedAt: new Date().toISOString()
+                };
+                analysisDirty = true;
+                this.fastify.log.info(`[MarketPoller] Near-TP limit blocked for position ${position.id}: spread ${quoteContext.spreadPct}% is too wide and bid ${sellablePremium} is below TP ${premiumTakeProfit}.`);
+            }
+            else {
+                triggered = true;
+                triggerType = 'TAKE_PROFIT';
+                analysis.takeProfitWarning = {
+                    status: sellablePremium >= premiumTakeProfit ? 'PAST_TP_MARKET_READY' : 'NEAR_TP_LIMIT_READY',
+                    price,
+                    sellablePremium,
+                    referencePremium: takeProfitReferencePremium,
+                    bid: quoteContext.bid ?? null,
+                    ask: quoteContext.ask ?? null,
+                    spreadPct: quoteContext.spreadPct ?? null,
+                    premiumTakeProfit,
+                    nearTakeProfitThreshold,
+                    triggeredAt: new Date().toISOString()
+                };
+                analysisDirty = true;
+                this.fastify.log.info(`[MarketPoller] Premium TAKE_PROFIT ${sellablePremium >= premiumTakeProfit ? 'past target' : 'near target'} for position ${position.id}: sellable premium ${sellablePremium}, reference premium ${takeProfitReferencePremium}, target ${premiumTakeProfit}.`);
+            }
+        }
+        else if (analysis.takeProfitWarning && (!nearTakeProfitThreshold || takeProfitReferencePremium < nearTakeProfitThreshold)) {
+            delete analysis.takeProfitWarning;
+            analysisDirty = true;
+        }
+        if (strategySyntheticTrail && syntheticTrailingActive && !triggered) {
+            const t2Reached = this.isUnderlyingTargetReached(position, underlyingPrice, syntheticT2);
+            const quantity = Math.max(1, Math.floor(Number(position.quantity || 1)));
+            const trimComplete = String(position.profit_trim_status || '').toUpperCase() === 'DONE';
+            if (t2Reached) {
+                analysis.syntheticTrailing = {
+                    ...analysis.syntheticTrailing,
+                    exitAtT2: true,
+                    tp1TrimPending: false,
+                    t2ReachedAt: new Date().toISOString()
+                };
+                analysisDirty = true;
+                triggered = true;
+                triggerType = 'TAKE_PROFIT';
+                this.fastify.log.info(`[MarketPoller] Synthetic trail position ${position.id} reached TP2; closing the remaining position.`);
+            }
+            else if (syntheticT1Reached && quantity > 1 && !trimComplete) {
+                analysis.syntheticTrailing = {
+                    ...analysis.syntheticTrailing,
+                    tp1TrimPending: true
+                };
+                analysisDirty = true;
+                triggered = true;
+                triggerType = 'TAKE_PROFIT';
+                this.fastify.log.info(`[MarketPoller] Synthetic trail position ${position.id} reached TP1; submitting a protected partial trim.`);
+            }
+        }
+        else if (underlyingPrice && underlyingTarget && !triggered && !strategySyntheticTrail) {
             const gexRegime = analysis.gexRegime || 'POSITIVE';
             if (gexRegime === 'NEGATIVE') {
                 // Dynamic Trailing profit target active
@@ -669,8 +1080,7 @@ class MarketPoller {
                             triggerType = 'TAKE_PROFIT';
                             this.fastify.log.info(`[MarketPoller] Dynamic Trailing TAKE_PROFIT triggered for CALL: Spot ${underlyingPrice.toFixed(2)} <= Trailing Stop ${trailingStopPrice.toFixed(2)}`);
                         }
-                        // Save updated analysis data back to the database
-                        await this.fastify.pg.query("UPDATE positions SET analysis_data = $1 WHERE id = $2", [JSON.stringify(analysis), position.id]);
+                        analysisDirty = true;
                     }
                 }
                 else if (position.option_type === 'PUT') {
@@ -687,8 +1097,7 @@ class MarketPoller {
                             triggerType = 'TAKE_PROFIT';
                             this.fastify.log.info(`[MarketPoller] Dynamic Trailing TAKE_PROFIT triggered for PUT: Spot ${underlyingPrice.toFixed(2)} >= Trailing Stop ${trailingStopPrice.toFixed(2)}`);
                         }
-                        // Save updated analysis data
-                        await this.fastify.pg.query("UPDATE positions SET analysis_data = $1 WHERE id = $2", [JSON.stringify(analysis), position.id]);
+                        analysisDirty = true;
                     }
                 }
             }
@@ -706,122 +1115,236 @@ class MarketPoller {
                 }
             }
         }
-        // Update Price AND Greeks
-        await this.fastify.pg.query(`UPDATE positions 
-       SET current_price = $1, 
-           updated_at = CURRENT_TIMESTAMP,
-           delta = $2,
-           theta = $3,
-           gamma = $4,
-           vega = $5,
-           iv = $6,
-           underlying_price = $7
-       WHERE id = $8`, [
+        // --- Position Monitor: advisory take-profit alert (once per position) ---
+        // Fires when the underlying spot crosses the position's derived take-profit
+        // target and the position is NOT already being auto-exited this cycle. Advisory
+        // only — it never closes a position (the trader scales out manually); skipping
+        // it when `triggered` avoids a redundant alert + paper mirror for a position the
+        // auto-exit is closing on the same tick.
+        if (!triggered && underlyingPrice && underlyingTarget && !analysis.positionTargetAlerted
+            && this.isUnderlyingTargetReached(position, underlyingPrice, underlyingTarget)) {
+            analysis.positionTargetAlerted = {
+                target: underlyingTarget,
+                underlyingPrice,
+                triggeredAt: new Date().toISOString()
+            };
+            analysisDirty = true;
+            void this.sendPositionTargetAlert(position, underlyingPrice, underlyingTarget, sellablePremium);
+        }
+        if (mandatoryFlatten?.triggered
+            && syntheticQuoteFresh
+            && (!triggered || triggerType === 'TAKE_PROFIT')) {
+            triggered = true;
+            triggerType = 'END_OF_DAY';
+            lossAvoided = entryPrice - sellablePremium;
+            analysis.mandatoryFlatten = {
+                status: 'TRIGGERED',
+                flattenMinutes: mandatoryFlatten.flattenMinutes,
+                closeMinutes: mandatoryFlatten.closeMinutes,
+                price: sellablePremium,
+                triggeredAt: new Date().toISOString()
+            };
+            analysisDirty = true;
+            this.fastify.log.warn(`[MarketPoller] Mandatory 0DTE flatten triggered for live strategy position ${position.id}.`);
+        }
+        if (!triggered) {
+            const thetaStop = this.getThetaStopAssessment(position, new Date(), analysis.thetaStop?.startedAt);
+            if (thetaStop && !analysis.thetaStop?.startedAt) {
+                analysis.thetaStop = {
+                    status: 'ACTIVE',
+                    startedAt: thetaStop.enteredAt,
+                    maxHoldMinutes: thetaStop.maxHoldMinutes,
+                    heldMinutes: thetaStop.heldMinutes
+                };
+                analysisDirty = true;
+            }
+            if (thetaStop?.triggered) {
+                triggered = true;
+                triggerType = 'THETA_STOP';
+                lossAvoided = entryPrice - sellablePremium;
+                analysis.thetaStop = {
+                    status: 'MAX_HOLD_EXPIRED',
+                    startedAt: thetaStop.enteredAt,
+                    maxHoldMinutes: thetaStop.maxHoldMinutes,
+                    heldMinutes: thetaStop.heldMinutes,
+                    enteredAt: thetaStop.enteredAt,
+                    price: sellablePremium,
+                    triggeredAt: new Date().toISOString()
+                };
+                analysisDirty = true;
+                this.fastify.log.info(`[MarketPoller] THETA_STOP triggered for position ${position.id}: held ${thetaStop.heldMinutes}m >= max ${thetaStop.maxHoldMinutes}m.`);
+            }
+        }
+        const quoteRecorded = await this.marketDataBuffer.recordQuote({
+            positionId: position.id,
             price,
-            greeks?.delta ?? null,
-            greeks?.theta ?? null,
-            greeks?.gamma ?? null,
-            greeks?.vega ?? null,
-            iv ?? null,
-            underlyingPrice ?? null,
-            position.id
-        ]);
-        await this.fastify.pg.query('INSERT INTO price_history (position_id, price) VALUES ($1, $2)', [position.id, price]);
+            delta: greeks?.delta ?? null,
+            theta: greeks?.theta ?? null,
+            gamma: greeks?.gamma ?? null,
+            vega: greeks?.vega ?? null,
+            iv: iv ?? null,
+            underlyingPrice: underlyingPrice ?? null,
+            maxFavorablePrice: excursion.maxFavorablePrice,
+            maxAdversePrice: excursion.maxAdversePrice,
+            mfePct: excursion.mfePct,
+            maePct: excursion.maePct,
+            trailingHighPrice: bufferedTrailingHighPrice,
+            stopLossTrigger: bufferedStopLossTrigger,
+            analysisData: analysisDirty ? analysis : undefined
+        });
+        if (!quoteRecorded) {
+            await this.marketDataBuffer.writeThrough({
+                positionId: position.id,
+                price,
+                delta: greeks?.delta ?? null,
+                theta: greeks?.theta ?? null,
+                gamma: greeks?.gamma ?? null,
+                vega: greeks?.vega ?? null,
+                iv: iv ?? null,
+                underlyingPrice: underlyingPrice ?? null,
+                maxFavorablePrice: excursion.maxFavorablePrice,
+                maxAdversePrice: excursion.maxAdversePrice,
+                mfePct: excursion.mfePct,
+                maePct: excursion.maePct,
+                trailingHighPrice: bufferedTrailingHighPrice,
+                stopLossTrigger: bufferedStopLossTrigger,
+                analysisData: analysisDirty ? analysis : undefined
+            });
+        }
+        if (analysisDirty)
+            position.analysis_data = analysis;
+        const currentExecutionStatus = String(position.execution_status || '');
+        if (currentExecutionStatus.startsWith('EXIT_')) {
+            return;
+        }
+        if (['PENDING_EXIT', 'PENDING_TRIM'].includes(currentExecutionStatus)) {
+            const requestedAtMs = position.exit_requested_at ? new Date(position.exit_requested_at).getTime() : NaN;
+            const staleLimitExit = String(position.exit_order_type || '').toUpperCase() === 'LIMIT'
+                && Number.isFinite(requestedAtMs)
+                && Date.now() - requestedAtMs > 120_000;
+            if (staleLimitExit) {
+                await this.fastify.pg.query(`UPDATE positions
+           SET execution_status = 'EXIT_STALE',
+               execution_error = 'Limit exit order is still pending after 120 seconds; verify/cancel at broker before retrying.',
+               notes = COALESCE(notes, '') || $1,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2 AND execution_status IN ('PENDING_EXIT', 'PENDING_TRIM')`, [' [Limit exit marked stale by market poller]', position.id]);
+            }
+            return;
+        }
         if (triggered) {
             if (position.status === 'OPEN') {
                 const exitTriggerType = triggerType || 'STOP_LOSS';
+                const partialTrim = this.isPartialProfitTrim(position, exitTriggerType);
+                const exitQuantity = partialTrim ? this.getProfitTrimQuantity(position) : Number(position.quantity || 1);
                 const newStatus = 'CLOSED';
-                const realizedPnl = (price - Number(position.entry_price)) * position.quantity * 100;
+                const estimatedExitPrice = sellablePremium;
+                const realizedPnl = trade_lifecycle_service_1.TradeLifecycleService.calculateRealizedPnl(position, estimatedExitPrice, exitQuantity);
                 // Execute Live SnapTrade order if not simulated
                 if (!position.is_simulated) {
-                    this.fastify.log.info(`[MarketPoller] LIVE position exit triggered for position ${position.id} (${position.symbol}). Executing SELL_TO_CLOSE via SnapTrade...`);
-                    try {
-                        const accountId = position.account_id;
-                        if (!accountId) {
-                            this.fastify.log.error(`[MarketPoller] No account_id found for Live position ${position.id}. Cannot close.`);
+                    await this.fastify.pg.query(`UPDATE positions
+               SET current_price = $1,
+                   max_favorable_price = $2,
+                   max_adverse_price = $3,
+                   mfe_pct = $4,
+                   mae_pct = $5,
+                   trailing_high_price = $6,
+                   stop_loss_trigger = $7,
+                   analysis_data = $8,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = $9 AND status = 'OPEN'`, [price, excursion.maxFavorablePrice, excursion.maxAdversePrice, excursion.mfePct, excursion.maePct,
+                        bufferedTrailingHighPrice, bufferedStopLossTrigger, JSON.stringify(analysis), position.id]);
+                    const exitAction = trade_lifecycle_service_1.TradeLifecycleService.getExitAction(position);
+                    this.fastify.log.info(`[MarketPoller] LIVE position ${partialTrim ? 'profit trim' : 'exit'} triggered for position ${position.id} (${position.symbol}). Executing ${exitAction} ${exitQuantity}/${position.quantity} via SnapTrade...`);
+                    let limitPrice = undefined;
+                    let orderType = 'MARKET';
+                    if (exitTriggerType === 'TAKE_PROFIT') {
+                        if (partialTrim && analysis.syntheticTrailing?.tp1TrimPending === true) {
+                            orderType = 'LIMIT';
+                            limitPrice = sellablePremium.toFixed(2);
+                            this.fastify.log.info(`[MarketPoller] Synthetic TP1 trim for position ${position.id}: protected marketable LIMIT @ $${limitPrice}.`);
+                        }
+                        else if (analysis.syntheticTrailing?.exitAtT2 === true) {
+                            orderType = 'LIMIT';
+                            limitPrice = sellablePremium.toFixed(2);
+                            this.fastify.log.info(`[MarketPoller] Synthetic TP2 exit for position ${position.id}: protected marketable LIMIT @ $${limitPrice}.`);
                         }
                         else {
-                            const snaptradeService = new (await Promise.resolve().then(() => __importStar(require('./snaptrade-service')))).SnaptradeService(this.fastify);
-                            const osiTicker = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
-                            let limitPrice = undefined;
-                            let orderType = 'MARKET';
-                            // Only use LIMIT order if taking profit. Stop Loss MUST be MARKET to guarantee exit.
-                            if (exitTriggerType === 'TAKE_PROFIT' && price > 0) {
-                                limitPrice = price.toFixed(2);
-                                orderType = 'LIMIT';
-                            }
-                            await snaptradeService.placeOptionOrder(position.user_id, accountId, osiTicker, 'SELL_TO_CLOSE', position.quantity, orderType, limitPrice);
-                            this.fastify.log.info(`[MarketPoller] Live exit execution successful for position ${position.id} using ${orderType} order at limit price: ${limitPrice}.`);
+                            const takeProfitOrder = this.getTakeProfitOrderPreference(position, price, quoteContext);
+                            limitPrice = takeProfitOrder.limitPrice;
+                            orderType = takeProfitOrder.orderType;
+                            this.fastify.log.info(`[MarketPoller] TAKE_PROFIT order preference for position ${position.id}: ${orderType}${limitPrice ? ` @ $${limitPrice}` : ''} (${takeProfitOrder.mode}).`);
                         }
                     }
-                    catch (err) {
-                        this.fastify.log.error(`[MarketPoller] Live exit execution failed for position ${position.id}: ${err.message}`);
+                    const submitted = await this.submitSnapTradeExit(position, orderType, limitPrice, exitTriggerType, exitQuantity);
+                    if (submitted) {
+                        await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT'
+                                ? (analysis.syntheticTrailing?.exitAtT2 === true
+                                    ? (position.suggested_take_profit_2 || position.suggested_take_profit_1 || position.take_profit_trigger)
+                                    : (position.suggested_take_profit_1 || position.take_profit_trigger))
+                                : exitTriggerType === 'END_OF_DAY'
+                                    ? price
+                                    : (position.suggested_stop_loss || position.stop_loss_trigger), price]);
+                        this.notifyN8n(position, price, realizedPnl, lossAvoided, exitTriggerType, partialTrim
+                            ? `${exitTriggerType} profit trim submitted for ${exitQuantity}/${position.quantity} contracts; waiting for broker fill confirmation.`
+                            : `${exitTriggerType} exit order submitted; waiting for broker fill confirmation.`, partialTrim
+                            ? `**[${exitTriggerType} TRIM SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} ${exitAction} ${exitQuantity}/${position.quantity} submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`
+                            : `**[${exitTriggerType} EXIT SUBMITTED]** ${position.symbol} ${position.option_type} ${position.strike_price}. ${orderType} ${exitAction} submitted; waiting for broker fill. Last app price: $${price.toFixed(2)}.`);
                     }
+                    return;
                 }
-                else if (position.account_id === 'alpaca_paper') {
-                    try {
-                        const { rows: settingsRows } = await this.fastify.pg.query("SELECT key, value FROM settings WHERE user_id = $1 AND key IN ('alpaca_key_id', 'alpaca_secret_key', 'alpaca_auto_trade')", [position.user_id]);
-                        const userSettings = settingsRows.reduce((acc, r) => {
-                            acc[r.key] = r.value;
-                            return acc;
-                        }, {});
-                        const alpacaKeyId = userSettings.alpaca_key_id?.trim() || '';
-                        const alpacaSecretKey = userSettings.alpaca_secret_key?.trim() || '';
-                        const alpacaAutoTrade = userSettings.alpaca_auto_trade?.trim() || 'false';
-                        if (alpacaAutoTrade !== 'true') {
-                            this.fastify.log.info(`[MarketPoller] Alpaca auto-trade is disabled for user ${position.user_id}. Skipping automatic exit closure for position ${position.id}.`);
-                            return;
-                        }
-                        if (alpacaKeyId && alpacaSecretKey) {
-                            this.fastify.log.info(`[MarketPoller] Alpaca paper position exit triggered for position ${position.id} (${position.symbol}). Executing SELL via Alpaca...`);
-                            const osiTicker = this.constructOSITicker(position.symbol, Number(position.strike_price), position.option_type, position.expiration_date);
-                            // Use limit order with 3% slippage floor to prevent terrible exit fills
-                            const useLimitExit = price > 0;
-                            const exitLimitPrice = useLimitExit ? Number((price * 0.97).toFixed(2)) : undefined;
-                            const exitPayload = {
-                                symbol: osiTicker,
-                                qty: position.quantity || 1,
-                                side: 'sell',
-                                type: useLimitExit ? 'limit' : 'market',
-                                time_in_force: 'day'
-                            };
-                            if (exitLimitPrice) {
-                                exitPayload.limit_price = exitLimitPrice.toString();
-                            }
-                            this.fastify.log.info(`[MarketPoller] Placing Alpaca ${exitPayload.type} exit for position ${position.id} (${osiTicker})${exitLimitPrice ? ` @ limit $${exitLimitPrice}` : ''}`);
-                            const res = await fetch('https://paper-api.alpaca.markets/v2/orders', {
-                                method: 'POST',
-                                headers: {
-                                    'APCA-API-KEY-ID': alpacaKeyId,
-                                    'APCA-API-SECRET-KEY': alpacaSecretKey,
-                                    'Content-Type': 'application/json'
-                                },
-                                body: JSON.stringify(exitPayload)
-                            });
-                            if (!res.ok) {
-                                const errText = await res.text();
-                                throw new Error(`Alpaca paper exit failed: ${res.status} - ${errText}`);
-                            }
-                            this.fastify.log.info(`[MarketPoller] Alpaca paper exit execution successful for position ${position.id}.`);
-                        }
-                    }
-                    catch (err) {
-                        this.fastify.log.error(`[MarketPoller] Alpaca paper exit execution failed for position ${position.id}: ${err.message}`);
-                        return;
-                    }
-                }
-                const updateResult = await this.fastify.pg.query(`UPDATE positions 
-              SET status = $1, 
-              loss_avoided = $2,
-              realized_pnl = $3,
-              notes = COALESCE(notes, '') || $4,
-              updated_at = CURRENT_TIMESTAMP 
-              WHERE id = $5 AND status = 'OPEN'`, [newStatus, lossAvoided, realizedPnl, ` [Closed via Underlying-Triggered ${exitTriggerType} Strategy]`, position.id]);
+                const updateResult = partialTrim
+                    ? await this.fastify.pg.query(`UPDATE positions
+               SET quantity = quantity - $1,
+                   realized_pnl = COALESCE(realized_pnl, 0) + $2,
+                   profit_trim_status = 'DONE',
+                   profit_trim_quantity = $1,
+                   profit_trim_price = $3,
+                   profit_trimmed_at = CURRENT_TIMESTAMP,
+                   stop_loss_trigger = GREATEST(COALESCE(stop_loss_trigger, 0), entry_price),
+                   take_profit_trigger = NULL,
+                   current_price = $3,
+                   max_favorable_price = $4,
+                   max_adverse_price = $5,
+                   mfe_pct = $6,
+                   mae_pct = $7,
+                   trailing_high_price = $8,
+                   analysis_data = $9,
+                   notes = COALESCE(notes, '') || $10,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = $11 AND status = 'OPEN' AND quantity > $1`, [exitQuantity, realizedPnl, price, excursion.maxFavorablePrice, excursion.maxAdversePrice,
+                        excursion.mfePct, excursion.maePct, bufferedTrailingHighPrice, JSON.stringify(analysis),
+                        ` [Profit trim simulated: sold ${exitQuantity}/${position.quantity} via ${exitTriggerType}]`, position.id])
+                    : await this.fastify.pg.query(`UPDATE positions
+                  SET status = $1,
+                  loss_avoided = $2,
+                  realized_pnl = COALESCE(realized_pnl, 0) + $3,
+                  current_price = $4,
+                  exit_price = $4,
+                  execution_status = 'EXIT_FILLED',
+                  exit_reason = $5,
+                  max_favorable_price = $6,
+                  max_adverse_price = $7,
+                  mfe_pct = $8,
+                  mae_pct = $9,
+                  trailing_high_price = $10,
+                  stop_loss_trigger = $11,
+                  analysis_data = $12,
+                  notes = COALESCE(notes, '') || $13,
+                  updated_at = CURRENT_TIMESTAMP
+                  WHERE id = $14 AND status = 'OPEN'`, [newStatus, lossAvoided, realizedPnl, price, exitTriggerType,
+                        excursion.maxFavorablePrice, excursion.maxAdversePrice, excursion.mfePct, excursion.maePct,
+                        bufferedTrailingHighPrice, bufferedStopLossTrigger, JSON.stringify(analysis),
+                        ` [Closed via ${exitTriggerType}]`, position.id]);
                 if (updateResult.rowCount === 0) {
                     // Already updated or state mismatch, skip AI alert
                     return;
                 }
-                await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT' ? (position.suggested_take_profit_1 || position.take_profit_trigger) : (position.suggested_stop_loss || position.stop_loss_trigger), price]);
+                await this.fastify.pg.query('INSERT INTO alerts (position_id, trigger_type, trigger_price, actual_price) VALUES ($1, $2, $3, $4)', [position.id, exitTriggerType, exitTriggerType === 'TAKE_PROFIT'
+                        ? (position.suggested_take_profit_1 || position.take_profit_trigger)
+                        : exitTriggerType === 'END_OF_DAY'
+                            ? price
+                            : (position.suggested_stop_loss || position.stop_loss_trigger), price]);
                 // Generate AI Summary for the alert (Discord Message)
                 let aiData = { summary: '', discord_message: '' };
                 try {
@@ -830,7 +1353,13 @@ class MarketPoller {
                         type: position.option_type,
                         strike: position.strike_price,
                         expiration: position.expiration_date,
-                        event: exitTriggerType === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+                        event: exitTriggerType === 'TAKE_PROFIT'
+                            ? 'TAKE_PROFIT_TRIGGERED'
+                            : exitTriggerType === 'THETA_STOP'
+                                ? 'THETA_STOP_TRIGGERED'
+                                : exitTriggerType === 'END_OF_DAY'
+                                    ? 'END_OF_DAY_EXIT_TRIGGERED'
+                                    : 'STOP_LOSS_TRIGGERED',
                         price: price,
                         pnl: ((price - Number(position.entry_price)) / Number(position.entry_price) * 100).toFixed(2),
                         greeks: {
@@ -847,13 +1376,28 @@ class MarketPoller {
                 this.notifyN8n(position, price, realizedPnl, lossAvoided, exitTriggerType, aiData.summary, aiData.discord_message, greeks, iv);
             }
         }
-        else if (engineResult.newHigh || engineResult.newStopLoss) {
-            await this.fastify.pg.query(`UPDATE positions 
-         SET trailing_high_price = COALESCE($1, trailing_high_price),
-             stop_loss_trigger = COALESCE($2, stop_loss_trigger),
-             updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $3`, [engineResult.newHigh, engineResult.newStopLoss, position.id]);
-        }
+    }
+    calculateTradeExcursion(position, price) {
+        const entryPrice = Number(position.entry_price || 0);
+        const observedPrice = Number(price);
+        const shortPremium = trade_lifecycle_service_1.TradeLifecycleService.isShortPremiumPosition(position);
+        const priorFavorable = Number(position.max_favorable_price || entryPrice);
+        const priorAdverse = Number(position.max_adverse_price || entryPrice);
+        const maxFavorablePrice = shortPremium ? Math.min(priorFavorable, observedPrice) : Math.max(priorFavorable, observedPrice);
+        const maxAdversePrice = shortPremium ? Math.max(priorAdverse, observedPrice) : Math.min(priorAdverse, observedPrice);
+        const mfePct = entryPrice > 0
+            ? Number(((shortPremium ? (entryPrice - maxFavorablePrice) : (maxFavorablePrice - entryPrice)) / entryPrice * 100).toFixed(4))
+            : 0;
+        const maePct = entryPrice > 0
+            ? Number(((shortPremium ? (maxAdversePrice - entryPrice) : (entryPrice - maxAdversePrice)) / entryPrice * 100).toFixed(4))
+            : 0;
+        return {
+            maxFavorablePrice,
+            maxAdversePrice,
+            mfePct,
+            maePct,
+            changed: maxFavorablePrice !== priorFavorable || maxAdversePrice !== priorAdverse
+        };
     }
     async notifyN8n(position, price, pnl, lossAvoided, type = 'STOP_LOSS', aiSummary, discordMessage, greeks, iv) {
         const username = position.username || 'Unknown';
@@ -865,7 +1409,13 @@ class MarketPoller {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    event: type === 'TAKE_PROFIT' ? 'TAKE_PROFIT_TRIGGERED' : 'STOP_LOSS_TRIGGERED',
+                    event: type === 'TAKE_PROFIT'
+                        ? 'TAKE_PROFIT_TRIGGERED'
+                        : type === 'THETA_STOP'
+                            ? 'THETA_STOP_TRIGGERED'
+                            : type === 'END_OF_DAY'
+                                ? 'END_OF_DAY_EXIT_TRIGGERED'
+                                : 'STOP_LOSS_TRIGGERED',
                     notification_type: 'alert',
                     username: username,
                     symbol: position.symbol,
@@ -889,174 +1439,62 @@ class MarketPoller {
             this.fastify.log.error('[MarketPoller] Failed to notify n8n:', err.message);
         }
     }
-    // ═══ Alpaca WebSocket Trade Updates Stream ═══════════════════════════════
-    /**
-     * Connects to Alpaca's paper trading WebSocket stream and subscribes
-     * to trade_updates. On fill events, instantly syncs position status
-     * in our database and broadcasts to the frontend.
-     */
-    async startAlpacaStream() {
-        // Find any user with Alpaca credentials configured
-        try {
-            const { rows } = await this.fastify.pg.query(`SELECT s1.user_id, s1.value as key_id, s2.value as secret_key
-         FROM settings s1
-         JOIN settings s2 ON s1.user_id = s2.user_id AND s2.key = 'alpaca_secret_key'
-         WHERE s1.key = 'alpaca_key_id' AND s1.value != '' AND s2.value != ''
-         LIMIT 1`);
-            if (rows.length === 0) {
-                this.fastify.log.info('[AlpacaStream] No Alpaca credentials configured. Stream not started.');
-                return;
+    // Position Monitor take-profit alert: pushes to the Position Monitor page over
+    // WebSocket and sends a minimal Discord message via the existing integration.
+    async sendPositionTargetAlert(position, underlyingPrice, target, exitPremium) {
+        const strike = Number(position.strike_price);
+        const label = `${position.symbol} ${position.option_type} ${strike}`;
+        const op = position.option_type === 'CALL' ? '>=' : '<=';
+        this.broadcastToFrontend({
+            type: 'POSITION_TARGET_HIT',
+            data: {
+                positionId: position.id,
+                symbol: position.symbol,
+                optionType: position.option_type,
+                strike,
+                quantity: Number(position.quantity || 0),
+                underlyingPrice,
+                target,
+                triggeredAt: new Date().toISOString()
             }
-            const { key_id, secret_key } = rows[0];
-            this.connectAlpacaStream(key_id.trim(), secret_key.trim());
+        });
+        // Place the take-profit scale-out in the paper account asynchronously, so it
+        // runs alongside signalling without blocking the alert.
+        void this.mirrorPaperTakeProfit(position, exitPremium);
+        try {
+            await new discord_alert_service_1.DiscordAlertService(this.fastify).send({
+                userId: Number(position.user_id),
+                title: '🎯 Take-profit target hit',
+                message: `${label}: spot ${underlyingPrice.toFixed(2)} ${op} target ${target.toFixed(2)} (${Number(position.quantity || 0)} contracts).`,
+                severity: 'info',
+                category: 'position-monitor',
+                tradeId: position.id,
+                dedupeKey: `position-target:${position.id}`,
+                dedupeSeconds: 86400
+            });
         }
         catch (err) {
-            this.fastify.log.error(`[AlpacaStream] Failed to load Alpaca credentials: ${err.message}`);
+            this.fastify.log.warn(`[MarketPoller] Position target Discord alert failed for position ${position.id}: ${err?.message || err}`);
         }
     }
-    connectAlpacaStream(keyId, secretKey) {
-        if (this.alpacaWs) {
-            try {
-                this.alpacaWs.close();
-            }
-            catch (_) { }
+    // Mirror the monitored (real) position's take-profit into the shared paper
+    // account as a partial scale-out. Fire-and-forget: failures are logged only.
+    async mirrorPaperTakeProfit(position, exitPremium) {
+        try {
+            const paperTrading = this.fastify.paperTrading;
+            if (!paperTrading?.mirrorRealPositionTakeProfit)
+                return;
+            await paperTrading.mirrorRealPositionTakeProfit(position, exitPremium, 0.6);
         }
-        this.fastify.log.info('[AlpacaStream] Connecting to wss://paper-api.alpaca.markets/stream...');
-        const ws = new ws_1.default('wss://paper-api.alpaca.markets/stream');
-        this.alpacaWs = ws;
-        ws.on('open', () => {
-            this.fastify.log.info('[AlpacaStream] Connected. Authenticating...');
-            ws.send(JSON.stringify({
-                action: 'authenticate',
-                data: { key_id: keyId, secret_key: secretKey }
-            }));
-        });
-        ws.on('message', async (data) => {
-            try {
-                const msg = JSON.parse(data.toString());
-                // Authentication response
-                if (msg.stream === 'authorization') {
-                    if (msg.data?.status === 'authorized') {
-                        this.fastify.log.info('[AlpacaStream] Authenticated. Subscribing to trade_updates...');
-                        this.alpacaReconnectAttempts = 0;
-                        this.alpacaStreamActive = true;
-                        ws.send(JSON.stringify({
-                            action: 'listen',
-                            data: { streams: ['trade_updates'] }
-                        }));
-                    }
-                    else {
-                        this.fastify.log.error(`[AlpacaStream] Authentication failed: ${JSON.stringify(msg.data)}`);
-                    }
-                    return;
-                }
-                // Subscription confirmation
-                if (msg.stream === 'listening') {
-                    this.fastify.log.info(`[AlpacaStream] Subscribed to streams: ${JSON.stringify(msg.data?.streams)}`);
-                    return;
-                }
-                // Trade update events
-                if (msg.stream === 'trade_updates') {
-                    await this.handleAlpacaTradeUpdate(msg.data);
-                }
-            }
-            catch (parseErr) {
-                this.fastify.log.error(`[AlpacaStream] Failed to parse message: ${parseErr.message}`);
-            }
-        });
-        ws.on('error', (err) => {
-            this.fastify.log.error(`[AlpacaStream] WebSocket error: ${err.message}`);
-        });
-        ws.on('close', (code, reason) => {
-            this.alpacaStreamActive = false;
-            this.fastify.log.warn(`[AlpacaStream] Connection closed (code: ${code}, reason: ${reason.toString()}). Scheduling reconnect...`);
-            this.scheduleAlpacaReconnect(keyId, secretKey);
-        });
-    }
-    scheduleAlpacaReconnect(keyId, secretKey) {
-        if (this.alpacaReconnectTimer)
-            clearTimeout(this.alpacaReconnectTimer);
-        // Exponential backoff: 2s, 4s, 8s, 16s, 32s, max 60s
-        const delay = Math.min(60000, Math.pow(2, this.alpacaReconnectAttempts + 1) * 1000);
-        this.alpacaReconnectAttempts++;
-        this.fastify.log.info(`[AlpacaStream] Reconnecting in ${delay / 1000}s (attempt ${this.alpacaReconnectAttempts})...`);
-        this.alpacaReconnectTimer = setTimeout(() => {
-            this.connectAlpacaStream(keyId, secretKey);
-        }, delay);
-    }
-    async handleAlpacaTradeUpdate(data) {
-        const event = data?.event;
-        const order = data?.order;
-        if (!event || !order)
-            return;
-        const orderId = order.id;
-        const orderSymbol = order.symbol; // OSI ticker
-        const orderSide = order.side; // 'buy' or 'sell'
-        const filledQty = Number(order.filled_qty || 0);
-        const filledAvgPrice = Number(order.filled_avg_price || 0);
-        const orderStatus = order.status;
-        this.fastify.log.info(`[AlpacaStream] Trade update: ${event} | ${orderSymbol} | Side: ${orderSide} | Status: ${orderStatus} | Filled: ${filledQty} @ $${filledAvgPrice}`);
-        switch (event) {
-            case 'fill': {
-                // Order fully filled
-                if (orderSide === 'buy') {
-                    // Entry fill — update the position's entry price with actual fill price
-                    try {
-                        await this.fastify.pg.query(`UPDATE positions SET entry_price = $1, current_price = $1, trailing_high_price = $1, updated_at = CURRENT_TIMESTAMP
-               WHERE account_id = 'alpaca_paper' AND status = 'OPEN'
-               AND notes LIKE $2`, [filledAvgPrice, `%${orderId}%`]);
-                        this.fastify.log.info(`[AlpacaStream] Entry fill recorded: ${orderSymbol} @ $${filledAvgPrice}`);
-                    }
-                    catch (err) {
-                        this.fastify.log.error(`[AlpacaStream] Failed to update entry fill: ${err.message}`);
-                    }
-                }
-                else if (orderSide === 'sell') {
-                    // Exit fill — close the position with actual exit price
-                    try {
-                        const { rows } = await this.fastify.pg.query(`SELECT id, entry_price, quantity, user_id FROM positions
-               WHERE account_id = 'alpaca_paper' AND status = 'OPEN'
-               AND symbol = $1
-               ORDER BY created_at DESC LIMIT 1`, [orderSymbol.substring(0, 3)] // Extract root symbol (e.g., SPY, QQQ)
-                        );
-                        if (rows.length > 0) {
-                            const pos = rows[0];
-                            const realizedPnl = (filledAvgPrice - Number(pos.entry_price)) * Number(pos.quantity) * 100;
-                            await this.fastify.pg.query(`UPDATE positions SET status = 'CLOSED', current_price = $1, exit_price = $1,
-                 realized_pnl = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`, [filledAvgPrice, realizedPnl, pos.id]);
-                            this.fastify.log.info(`[AlpacaStream] Exit fill recorded: ${orderSymbol} @ $${filledAvgPrice} | P&L: $${realizedPnl.toFixed(2)}`);
-                            // Invalidate frontend caches
-                            await this.redisClient.del(`USER_POSITIONS:${pos.user_id}`);
-                            await this.redisClient.del(`USER_STATS:${pos.user_id}`);
-                        }
-                    }
-                    catch (err) {
-                        this.fastify.log.error(`[AlpacaStream] Failed to update exit fill: ${err.message}`);
-                    }
-                }
-                // Broadcast to frontend
-                this.broadcastToFrontend({ type: 'ALPACA_FILL', data: { event, symbol: orderSymbol, side: orderSide, price: filledAvgPrice, qty: filledQty } });
-                break;
-            }
-            case 'partial_fill': {
-                this.fastify.log.info(`[AlpacaStream] Partial fill: ${orderSymbol} ${filledQty} @ $${filledAvgPrice}`);
-                this.broadcastToFrontend({ type: 'ALPACA_PARTIAL_FILL', data: { event, symbol: orderSymbol, side: orderSide, price: filledAvgPrice, qty: filledQty } });
-                break;
-            }
-            case 'canceled':
-            case 'rejected': {
-                this.fastify.log.warn(`[AlpacaStream] Order ${event}: ${orderSymbol} | ID: ${orderId} | Reason: ${order.reject_reason || 'N/A'}`);
-                this.broadcastToFrontend({ type: 'ALPACA_ORDER_EVENT', data: { event, symbol: orderSymbol, orderId, reason: order.reject_reason } });
-                break;
-            }
-            default:
-                this.fastify.log.debug(`[AlpacaStream] Unhandled event: ${event}`);
+        catch (err) {
+            this.fastify.log.warn(`[MarketPoller] Paper take-profit mirror failed for position ${position.id}: ${err?.message || err}`);
         }
     }
     broadcastToFrontend(message) {
-        if (this.fastify.websocketServer) {
+        const websocketServer = this.fastify.websocketServer;
+        if (websocketServer) {
             const payload = JSON.stringify(message);
-            this.fastify.websocketServer.clients.forEach((client) => {
+            websocketServer.clients.forEach((client) => {
                 if (client.readyState === 1) {
                     client.send(payload);
                 }

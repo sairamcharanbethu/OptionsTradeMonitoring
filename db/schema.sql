@@ -261,28 +261,6 @@ CREATE INDEX IF NOT EXISTS idx_paper_journal_account_created
 CREATE INDEX IF NOT EXISTS idx_paper_baseline_account_status
     ON paper_baseline_trades (account_id, status, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS wall_reaction_candidates (
-    id UUID PRIMARY KEY,
-    symbol VARCHAR(10) NOT NULL,
-    fingerprint VARCHAR(64) NOT NULL,
-    decision_code VARCHAR(40) NOT NULL,
-    status VARCHAR(20) NOT NULL,
-    context JSONB NOT NULL,
-    plan JSONB NOT NULL DEFAULT '{}'::jsonb,
-    contract JSONB NOT NULL DEFAULT '{}'::jsonb,
-    generated_at TIMESTAMPTZ NOT NULL,
-    armed_at TIMESTAMPTZ,
-    armed_until TIMESTAMPTZ,
-    entered_at TIMESTAMPTZ,
-    invalidated_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (symbol, fingerprint)
-);
-
-CREATE INDEX IF NOT EXISTS idx_wall_reaction_candidates_symbol_created
-    ON wall_reaction_candidates (symbol, created_at DESC);
-
 -- Goals Table
 CREATE TABLE IF NOT EXISTS goals (
     id SERIAL PRIMARY KEY,

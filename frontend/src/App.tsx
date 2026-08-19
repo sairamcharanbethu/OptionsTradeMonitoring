@@ -16,7 +16,6 @@ const TradeCommandCenterPage = lazy(() => import('./pages/TradeCommandCenterPage
 const StrategyGuidePage = lazy(() => import('./pages/StrategyGuidePage'));
 const StrategyDeskPage = lazy(() => import('./pages/StrategyDeskPage'));
 const TradeIntelligencePage = lazy(() => import('./pages/TradeIntelligencePage'));
-const CoveredCallsPage = lazy(() => import('./pages/CoveredCallsPage'));
 const ManualEntryPage = lazy(() => import('./pages/ManualEntryPage'));
 const OptionsCalculatorPage = lazy(() => import('./pages/OptionsCalculatorPage'));
 const ResearchPage = lazy(() => import('./pages/ResearchPage'));
@@ -89,7 +88,6 @@ function App() {
                 <Route path="/trades" element={<TradesPage user={user} />} />
                 <Route path="/manual-entry" element={<ManualEntryPage />} />
                 <Route path="/options-calculator" element={<OptionsCalculatorPage />} />
-                <Route path="/covered-calls" element={<CoveredCallsPage />} />
                 <Route path="/trade-intelligence" element={<TradeIntelligencePage />} />
                 <Route path="/research" element={<ResearchPage />} />
                 <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
