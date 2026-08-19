@@ -2729,6 +2729,9 @@ def _gex_context(
         "convexity_risk": spy.get("convexity_risk"),
         "gamma_regime": spy.get("gamma_regime"),
         "regime": spy.get("regime"),
+        # Raw net gamma exposure — lets the wall-reaction strategy gate on the
+        # magnitude threshold (strong negative gamma) rather than sign alone.
+        "net_gex": spy.get("net_gex"),
         "rolling": spy.get("rolling"),
         "call_wall": spy.get("call_wall"),
         "put_wall": spy.get("put_wall"),
@@ -5208,6 +5211,9 @@ def _gex_wall_candidate(
             "put_wall": _wall_strike(gex_ctx.get("put_wall")),
             "flip": _wall_strike(gex_ctx.get("flip")),
             "regime": gex_ctx.get("regime"),
+            # Magnitude gate: strong-negative-gamma threshold matches the source
+            # strategy exactly (falls back to regime sign when net_gex absent).
+            "net_gex": gex_ctx.get("net_gex"),
         },
         completed,
         now=now,

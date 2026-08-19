@@ -124,6 +124,42 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
         self.assertIn("targets", candidate["risk_plan"])
         self.assertTrue(candidate["risk_plan"]["targets"])
 
+    def _rejection_candidate(self, net_gex):
+        # Falling trend (15m down) + shooting star at the call wall.
+        bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
+        return _gex_wall_candidate(
+            {"atr_5m": 1.0},
+            bars[-1],
+            530.0,
+            {
+                "available": True,
+                "call_wall": {"strike": 535.0, "stage": "Active"},
+                "put_wall": {"strike": 500.0, "stage": "Active"},
+                "flip": None,
+                "regime": "Negative",
+                "net_gex": net_gex,
+            },
+            bars,
+            NOW,
+        )
+
+    def test_strong_negative_gamma_grades_a_plus(self):
+        # net_gex below -1.5e9 => strong negative gamma tailwind => A+ (score 85).
+        candidate = self._rejection_candidate(-2.0e9)
+        self.assertEqual(candidate["wall_evaluation"]["confidence"], "A+")
+        self.assertEqual(candidate["score"], 85)
+        self.assertTrue(candidate["a_plus"])
+        self.assertTrue(candidate["gex_alignment"]["regime"]["negative_gamma"])
+
+    def test_mild_negative_gamma_grades_a_not_a_plus(self):
+        # net_gex above the -1.5e9 magnitude gate => NOT strong negative gamma,
+        # so the same rejection grades A (75), matching the source strategy.
+        candidate = self._rejection_candidate(-0.5e9)
+        self.assertEqual(candidate["wall_evaluation"]["confidence"], "A")
+        self.assertEqual(candidate["score"], 75)
+        self.assertFalse(candidate["a_plus"])
+        self.assertFalse(candidate["gex_alignment"]["regime"]["negative_gamma"])
+
     def test_non_participate_yields_no_candidate(self):
         flat = _trend_bars(60, 500, 0.0, last_override=(500.0, 500.05, 499.95, 500.0))
         candidate = _gex_wall_candidate(
