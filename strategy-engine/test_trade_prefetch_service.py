@@ -18,6 +18,7 @@ from trade_prefetch_service import (
     _locked_option_expiry,
     _locked_option_spec,
     _preferred_option_expiry,
+    _wall_option_expiry,
     _previous_strategy_lanes,
     _strategy_family_policy_for_lane,
     _normalize_strategy_lane,
@@ -244,6 +245,21 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             _preferred_option_expiry(["20260724", "20260727"], friday_after),
             ("20260727", "1DTE_NEXT_LISTED"),
         )
+
+    def test_wall_expiry_picks_nearest_at_least_3dte(self) -> None:
+        et = ZoneInfo("America/New_York")
+        # Wed 2026-07-22; Mon 07-27 is the first expiry >= 3 calendar days out.
+        stamp = datetime(2026, 7, 22, 10, 0, tzinfo=et).timestamp()
+        expirations = ["20260722", "20260723", "20260724", "20260727", "20260731"]
+        self.assertEqual(_wall_option_expiry(expirations, stamp, min_dte=3), "20260727")
+
+    def test_wall_expiry_disabled_and_absent(self) -> None:
+        et = ZoneInfo("America/New_York")
+        stamp = datetime(2026, 7, 22, 10, 0, tzinfo=et).timestamp()
+        expirations = ["20260722", "20260723"]
+        # Disabled explicitly, and no expiry reaches 3 DTE -> None either way.
+        self.assertIsNone(_wall_option_expiry(expirations, stamp, min_dte=0))
+        self.assertIsNone(_wall_option_expiry(expirations, stamp, min_dte=3))
 
     def test_active_position_preserves_activation_expiry(self) -> None:
         active = {

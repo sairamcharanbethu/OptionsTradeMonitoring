@@ -5330,6 +5330,7 @@ def build_signal(
     trendline_structure: dict[str, Any] | None = None,
     strategy_families: dict[str, Any] | None = None,
     cross_market_confirmation: str = "required",
+    wall_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     trendline_config = validate_trendline_structure_config(
         trendline_structure
@@ -6521,8 +6522,15 @@ def build_signal(
         # merged strategy trades the higher-delta/tighter-spread option it intends.
         if reversal.get("strategy") in GEX_WALL_STRATEGY_NAMES:
             wall_right = "P" if reversal["side"] == "puts" else "C"
+            # Prefer the dedicated ~3DTE wall chain when supplied (lower theta),
+            # else fall back to the primary (0DTE/next) chain.
+            wall_source = (
+                wall_options
+                if isinstance(wall_options, dict) and wall_options.get("contracts")
+                else options
+            )
             wall_option = _select_signal_option(
-                options,
+                wall_source,
                 wall_right,
                 float(spot),
                 preferred=(

@@ -542,6 +542,29 @@ def _preferred_option_expiry(
     raise RuntimeError("SPY option chain has no current or future expiry")
 
 
+def _wall_option_expiry(
+    expirations: list[str], now: float | None = None, min_dte: int = 3
+) -> str | None:
+    """Nearest listed expiry at least ``min_dte`` calendar days out.
+
+    Wall-reaction setups trade near-the-money multi-day contracts (lower theta)
+    rather than 0DTE. Returns None when disabled (min_dte <= 0) or when no listed
+    expiry reaches ``min_dte`` days — callers then fall back to the primary chain.
+    """
+    if min_dte <= 0:
+        return None
+    stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
+    today = stamp.date()
+    for expiry in sorted({str(value) for value in expirations}):
+        try:
+            expiry_date = datetime.strptime(expiry, "%Y%m%d").date()
+        except ValueError:
+            continue
+        if (expiry_date - today).days >= min_dte:
+            return expiry
+    return None
+
+
 class TradePrefetcher:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -554,6 +577,8 @@ class TradePrefetcher:
         self.option_expiry: str | None = None
         self.option_expiries: set[str] = set()
         self.option_expiry_mode: str | None = None
+        # Nearest ~3DTE expiry for near-the-money wall-reaction contracts (or None).
+        self.wall_option_expiry: str | None = None
         self.option_anchor_spot: float | None = None
         self.last_option_refresh = 0.0
         self.last_bar_refresh = 0.0
@@ -808,7 +833,14 @@ class TradePrefetcher:
             if (expiry := _locked_option_expiry(signal))
             and expiry in chain.expirations
         }
+        wall_expiry = _wall_option_expiry(
+            list(chain.expirations),
+            min_dte=int(getattr(self.args, "wall_option_expiry_dte", 0) or 0),
+        )
+        self.wall_option_expiry = wall_expiry
         desired_expiries = {preferred_expiry, *locked_expiries}
+        if wall_expiry:
+            desired_expiries = {*desired_expiries, wall_expiry}
         strike_count = (
             max(self.args.strikes_per_side, self.args.local_gex_strikes_per_side)
             if self.args.local_gex_fallback
@@ -873,6 +905,12 @@ class TradePrefetcher:
                 and expiry in self.option_chain.expirations
             ),
         }
+        wall_expiry = _wall_option_expiry(
+            list(self.option_chain.expirations),
+            min_dte=int(getattr(self.args, "wall_option_expiry_dte", 0) or 0),
+        )
+        if wall_expiry:
+            desired_expiries = {*desired_expiries, wall_expiry}
         if self.option_expiries != desired_expiries:
             return True
         try:
@@ -950,6 +988,25 @@ class TradePrefetcher:
             _option_dict(ticker, now=generated_at)
             for ticker in self.option_tickers
         ]
+        # Dedicated ~3DTE near-the-money chain for wall-reaction setups (lower
+        # theta than 0DTE). None when disabled or the expiry has no subscribed
+        # contracts — build_signal then falls back to the primary chain.
+        wall_options: dict[str, Any] | None = None
+        if self.wall_option_expiry:
+            wall_contracts = [
+                contract
+                for contract in option_contracts
+                if contract.get("expiry") == self.wall_option_expiry
+            ]
+            if wall_contracts:
+                wall_options = {
+                    "generated_at": generated_at,
+                    "source": "IBKR",
+                    "underlying": "SPY",
+                    "expiry": self.wall_option_expiry,
+                    "expiry_mode": "MULTI_DAY_WALL",
+                    "contracts": wall_contracts,
+                }
         options = {
             "generated_at": generated_at,
             "source": "IBKR",
@@ -1143,6 +1200,7 @@ class TradePrefetcher:
                     "cross_market_confirmation",
                     "required",
                 ),
+                wall_options=wall_options,
             )
             lane_signal = _normalize_strategy_lane(lane_signal, lane)
             lane_signal["provider_roles"] = provider_roles
@@ -1485,6 +1543,17 @@ def main() -> None:
         ),
     )
     parser.add_argument("--strikes-per-side", type=int, default=6)
+    parser.add_argument(
+        "--wall-option-expiry-dte",
+        type=int,
+        default=3,
+        help=(
+            "Minimum calendar days-to-expiry for wall-reaction (near-the-money) "
+            "contracts; the nearest listed expiry at least this many days out is "
+            "subscribed and used for GEX wall setups. 0 disables (wall setups then "
+            "use the primary 0DTE/next chain)."
+        ),
+    )
     parser.add_argument(
         "--option-max-total-debit-dollars",
         type=float,

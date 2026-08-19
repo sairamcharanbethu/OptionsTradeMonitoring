@@ -223,6 +223,8 @@ services:
       - "0.15"
       - --option-max-spread-pct
       - "5"
+      - --wall-option-expiry-dte
+      - ${STRATEGY_WALL_OPTION_EXPIRY_DTE:-3}
       - --paper-exit-target
       - "2"
       - --same-side-reentry-cooldown-seconds
