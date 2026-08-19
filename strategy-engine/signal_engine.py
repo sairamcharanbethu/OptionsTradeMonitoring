@@ -41,6 +41,14 @@ GEX_WALL_STRATEGY_NAMES = {
     "GEX_WALL_REJECTION",
     "GEX_WALL_BREAK_FAIL",
 }
+# The wall strategy trades near-the-money contracts (higher delta, tighter
+# spread, less theta) rather than the default OTM pick — restore that intent
+# when selecting the option for a wall setup.
+GEX_WALL_MIN_OFFSET = -1        # allow one strike ITM ...
+GEX_WALL_MAX_OFFSET = 1         # ... through one strike OTM
+GEX_WALL_PREFERRED_OFFSET = 0   # bias to ATM
+GEX_WALL_TARGET_DELTA = 0.50    # near-the-money delta
+GEX_WALL_MIN_ABS_DELTA = 0.35   # reject anything too far OTM for a wall setup
 FROZEN_SETUP_STRATEGIES = {
     "MTF_REVERSAL",
     "MTF_TREND_BREAK",
@@ -4056,8 +4064,17 @@ def _select_signal_option(
     max_otm_steps: int = 3,
     min_abs_delta: float = 0.15,
     max_spread_pct: float = MAX_OPTION_SPREAD_PCT,
+    min_offset: int = 1,
+    target_delta: float = 0.40,
+    preferred_offset: int = 2,
 ) -> dict[str, Any] | None:
-    """Choose a liquid near-ATM contract using delta, spread, volume, and stability."""
+    """Choose a liquid contract using delta, spread, volume, and stability.
+
+    ``min_offset`` sets the closest strike considered relative to ATM: the
+    default ``1`` keeps the historical OTM-only behavior, while ``<= 0`` lets
+    ATM/ITM strikes in (used by near-the-money setups). ``target_delta`` and
+    ``preferred_offset`` steer the scoring toward the desired moneyness.
+    """
     contracts = [
         contract for contract in options.get("contracts") or []
         if contract.get("right") == right and _number(contract.get("strike"))
@@ -4080,7 +4097,7 @@ def _select_signal_option(
     atm_index = strikes.index(atm)
     candidates: list[tuple[float, int, int, dict[str, Any]]] = []
     budget_blocked: list[tuple[float, int, dict[str, Any]]] = []
-    for offset in range(1, max_otm_steps + 1):
+    for offset in range(min_offset, max_otm_steps + 1):
         index = atm_index + offset if right == "C" else atm_index - offset
         if index < 0 or index >= len(strikes):
             continue
@@ -4088,10 +4105,11 @@ def _select_signal_option(
         contract = next(
             item for item in contracts if float(item["strike"]) == strike
         )
+        moneyness = "ITM" if offset < 0 else "ATM" if offset == 0 else "OTM"
         evaluated = _evaluate_option_contract(
             options,
             contract,
-            selection=f"DELTA/LIQ OTM{offset:+d}",
+            selection=f"DELTA/LIQ {moneyness}{offset:+d}",
             atm_strike=atm,
             target_strike=strike,
             max_total_debit_dollars=max_total_debit_dollars,
@@ -4113,11 +4131,11 @@ def _select_signal_option(
             if _number(evaluated.get("open_interest"))
             else 0
         )
-        delta_penalty = abs(delta - 0.40) * 4 if delta is not None else 1.0
+        delta_penalty = abs(delta - target_delta) * 4 if delta is not None else 1.0
         spread_penalty = spread / max_spread_pct
         volume_credit = min(math.log10(volume + 1) / 4, 1)
         open_interest_credit = min(math.log10(open_interest + 1) / 4, 1)
-        offset_penalty = abs(offset - 2) * 0.05
+        offset_penalty = abs(offset - preferred_offset) * 0.05
         score = (
             delta_penalty + spread_penalty + offset_penalty
             - volume_credit - 0.25 * open_interest_credit
@@ -4167,7 +4185,7 @@ def _select_signal_option(
             min_abs_delta=min_abs_delta,
             max_spread_pct=max_spread_pct,
         )
-    candidates.sort(key=lambda item: (item[0], item[1], abs(item[2] - 2)))
+    candidates.sort(key=lambda item: (item[0], item[1], abs(item[2] - preferred_offset)))
     best_score, _, _, best = candidates[0]
     preferred_strike = (preferred or {}).get("target_strike")
     if _number(preferred_strike):
@@ -6498,6 +6516,47 @@ def build_signal(
     if put_confirmed and not prior_position_open and not prior_continuation_watch and not reversal and not _option_eligible(put_option):
         result["blockers"].append(_option_blocker(put_option, "put"))
     if reversal and not hard_data_block:
+        # Wall-reaction setups trade near-the-money — re-select the contract for
+        # the active side instead of the default OTM pre-entry pick, so the
+        # merged strategy trades the higher-delta/tighter-spread option it intends.
+        if reversal.get("strategy") in GEX_WALL_STRATEGY_NAMES:
+            wall_right = "P" if reversal["side"] == "puts" else "C"
+            wall_option = _select_signal_option(
+                options,
+                wall_right,
+                float(spot),
+                preferred=(
+                    previous_put_option
+                    if reversal["side"] == "puts"
+                    else previous_call_option
+                ),
+                max_total_debit_dollars=option_policy["max_total_debit_dollars"],
+                preferred_contracts=option_policy["preferred_contracts"],
+                limit_price_offset=option_policy["limit_price_offset"],
+                min_abs_delta=max(
+                    option_policy["min_abs_delta"], GEX_WALL_MIN_ABS_DELTA
+                ),
+                max_spread_pct=option_policy["max_spread_pct"],
+                min_offset=GEX_WALL_MIN_OFFSET,
+                max_otm_steps=GEX_WALL_MAX_OFFSET,
+                target_delta=GEX_WALL_TARGET_DELTA,
+                preferred_offset=GEX_WALL_PREFERRED_OFFSET,
+            )
+            # Only adopt a genuine near-ATM pick (not the OTM fallback).
+            if (
+                _option_eligible(wall_option)
+                and _number(wall_option.get("otm_offset"))
+                and int(wall_option["otm_offset"]) <= GEX_WALL_MAX_OFFSET
+            ):
+                target_key = "put_setup" if reversal["side"] == "puts" else "call_setup"
+                result[target_key]["option"] = wall_option
+                _enrich_setup_quality(
+                    result[target_key], reversal["side"], paper_exit_target
+                )
+                if reversal["side"] == "puts":
+                    put_option = wall_option
+                else:
+                    call_option = wall_option
         reversal_option = put_option if reversal["side"] == "puts" else call_option
         reversal_label = "put" if reversal["side"] == "puts" else "call"
         if not _option_eligible(reversal_option):

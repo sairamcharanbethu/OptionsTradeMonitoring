@@ -3,7 +3,16 @@
 import unittest
 
 from gex_wall_evaluator import evaluate_gex_wall
-from signal_engine import _gex_wall_candidate, _higher_score_candidate
+from signal_engine import (
+    GEX_WALL_MAX_OFFSET,
+    GEX_WALL_MIN_ABS_DELTA,
+    GEX_WALL_MIN_OFFSET,
+    GEX_WALL_PREFERRED_OFFSET,
+    GEX_WALL_TARGET_DELTA,
+    _gex_wall_candidate,
+    _higher_score_candidate,
+    _select_signal_option,
+)
 
 # base aligned to a 900s (15m) boundary so 1-bar-per-5min aggregates cleanly.
 BASE = 1_700_000_100  # 1_700_000_100 % 900 == 0
@@ -156,6 +165,55 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
         self.assertIs(_higher_score_candidate(low, None), low)
         self.assertIs(_higher_score_candidate(None, high), high)
         self.assertIsNone(_higher_score_candidate(None, None))
+
+
+def _call_option(strike, delta, mid=1.5):
+    return {
+        "local_symbol": f"SPY {strike}C",
+        "right": "C",
+        "strike": float(strike),
+        "expiry": "20260101",
+        "bid": round(mid - 0.02, 2),
+        "ask": round(mid + 0.02, 2),
+        "mid": mid,
+        "spread_pct": 3.0,
+        "delta": delta,
+        "volume": 800.0,
+        "liquidity": "ok",
+        "quote_age_seconds": 1.0,
+    }
+
+
+class NearAtmContractSelectionTest(unittest.TestCase):
+    """Wall setups must trade a near-the-money contract, not the default OTM pick."""
+
+    OPTIONS = {
+        "expiry": "20260101",
+        "contracts": [
+            _call_option(498, 0.62),
+            _call_option(499, 0.56),
+            _call_option(500, 0.50),  # ATM (spot 500)
+            _call_option(501, 0.42),
+            _call_option(502, 0.34),
+        ],
+    }
+
+    def test_default_selection_stays_otm(self):
+        selected = _select_signal_option(self.OPTIONS, "C", 500.0)
+        self.assertGreater(selected["strike"], 500.0)  # OTM
+
+    def test_wall_near_atm_selection_picks_atm(self):
+        selected = _select_signal_option(
+            self.OPTIONS, "C", 500.0,
+            min_offset=GEX_WALL_MIN_OFFSET,
+            max_otm_steps=GEX_WALL_MAX_OFFSET,
+            target_delta=GEX_WALL_TARGET_DELTA,
+            preferred_offset=GEX_WALL_PREFERRED_OFFSET,
+            min_abs_delta=GEX_WALL_MIN_ABS_DELTA,
+        )
+        self.assertEqual(selected["strike"], 500.0)
+        self.assertGreaterEqual(abs(selected["delta"]), 0.45)
+        self.assertEqual(selected["otm_offset"], 0)
 
 
 if __name__ == "__main__":
