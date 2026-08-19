@@ -49,9 +49,17 @@ BAND_TOUCH_UPPER = 0.998         # high >= upper_band * 0.998 counts as a band t
 WICK_DOMINANCE = 0.40            # wick must be > 40% of the candle range
 RETEST_PROXIMITY = 0.998         # retest bar within 0.2% of the wall
 RECLAIM_PROXIMITY = 1.002
-# Source used a net-gamma magnitude threshold; when only a sign-based regime
-# label is available we fall back to ``regime == "Negative"``.
+# Strong-negative-gamma gate, in priority order:
+#   1. net_gex 30d percentile <= NEGATIVE_GAMMA_PERCENTILE (scale-robust, preferred)
+#   2. raw net_gex < NEGATIVE_GAMMA_NET_THRESHOLD (source strategy's absolute gate)
+#   3. regime == "Negative" (sign only, last resort)
+NEGATIVE_GAMMA_PERCENTILE = 10.0
 NEGATIVE_GAMMA_NET_THRESHOLD = -1.5e9
+# Volume-exhaustion guard for wall *fades* (bounce/rejection): a fade into an
+# expanding-volume touch is usually a break, not a hold — downgrade it.
+FADE_SETUPS = {"PUT_WALL_BOUNCE_CALL", "CALL_WALL_REJECTION_PUT"}
+VOLUME_EXPANSION_MULT = 1.5      # touch-bar volume >= 1.5x recent avg = expansion
+VOLUME_LOOKBACK_BARS = 10
 
 
 def _number(value: Any) -> bool:
@@ -141,6 +149,9 @@ def _log_regression(
 
 
 def _is_negative_gamma(gex: dict[str, Any]) -> bool:
+    percentile = gex.get("net_gex_percentile")
+    if _number(percentile):
+        return float(percentile) <= NEGATIVE_GAMMA_PERCENTILE
     net_gex = gex.get("net_gex")
     if _number(net_gex):
         return float(net_gex) < NEGATIVE_GAMMA_NET_THRESHOLD
@@ -395,6 +406,26 @@ def evaluate_gex_wall(
                 )
             invalidation = f"5m closed bar below retest low ${retest_low:.2f}"
 
+    # --- Volume-exhaustion guard for FADES -----------------------------------
+    # A wall bounce/rejection is a bet the wall holds. If the touch prints on
+    # expanding volume, that is the signature of a break, not a hold — so a
+    # PARTICIPATE fade is downgraded to CAUTION (never upgraded).
+    lookback = closed_5m[-(VOLUME_LOOKBACK_BARS + 1):-1]
+    avg_volume = (
+        sum(float(b.get("volume", 0) or 0) for b in lookback) / len(lookback)
+        if lookback else 0.0
+    )
+    touch_volume = float(last.get("volume", 0) or 0)
+    volume_expanding = bool(
+        avg_volume > 0 and touch_volume >= avg_volume * VOLUME_EXPANSION_MULT
+    )
+    if setup_type in FADE_SETUPS and verdict == "PARTICIPATE" and volume_expanding:
+        verdict, confidence = "CAUTION", "B"
+        reason = (
+            f"{reason} Volume is expanding into the wall "
+            f"({touch_volume:.0f} vs {avg_volume:.0f} avg) — break risk; size down."
+        )
+
     side = "calls" if direction == "CALL" else "puts" if direction == "PUT" else None
 
     return {
@@ -429,8 +460,17 @@ def evaluate_gex_wall(
         "regime": {
             "negative_gamma": is_negative_gamma,
             "net_gex": gex.get("net_gex") if _number(gex.get("net_gex")) else None,
+            "net_gex_percentile": (
+                gex.get("net_gex_percentile")
+                if _number(gex.get("net_gex_percentile")) else None
+            ),
             "label": gex.get("regime"),
             "wall_migrated_higher": wall_migrated_higher,
+        },
+        "volume": {
+            "touch": round(touch_volume, 0),
+            "avg": round(avg_volume, 0),
+            "expanding": volume_expanding,
         },
         # The source strategy trades ~3DTE near-the-money contracts (higher
         # delta, tighter spreads, less theta) — surfaced here as a hint for the

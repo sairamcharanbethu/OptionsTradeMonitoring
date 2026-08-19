@@ -5192,6 +5192,7 @@ def _gex_wall_candidate(
     completed: list[dict[str, Any]],
     now: float,
     previous_walls: dict[str, Any] | None = None,
+    net_gex_percentile: Any = None,
 ) -> dict[str, Any] | None:
     """Native Day Trading candidate from the validated GEX wall-reaction engine.
 
@@ -5211,9 +5212,10 @@ def _gex_wall_candidate(
             "put_wall": _wall_strike(gex_ctx.get("put_wall")),
             "flip": _wall_strike(gex_ctx.get("flip")),
             "regime": gex_ctx.get("regime"),
-            # Magnitude gate: strong-negative-gamma threshold matches the source
-            # strategy exactly (falls back to regime sign when net_gex absent).
+            # Strong-negative-gamma gate: percentile first (scale-robust), then the
+            # source strategy's absolute net_gex threshold, then regime sign.
             "net_gex": gex_ctx.get("net_gex"),
+            "net_gex_percentile": net_gex_percentile,
         },
         completed,
         now=now,
@@ -5230,6 +5232,18 @@ def _gex_wall_candidate(
     call_wall = levels.get("call_wall")
     put_wall = levels.get("put_wall")
     atr = float(atr_5m)
+    # VWAP confluence: a wall coinciding with session VWAP is a higher-conviction
+    # level to trade against — boost an A setup to A+ (never downgrade).
+    vwap = spy.get("vwap")
+    traded_wall = call_wall if side == "puts" else put_wall
+    vwap_confluent = bool(
+        _number(vwap)
+        and _number(traded_wall)
+        and abs(float(traded_wall) - float(vwap)) <= atr * 0.5
+    )
+    if vwap_confluent and score < 85:
+        score = 85
+        confidence = "A+"
     if side == "calls":
         entry = round(float(latest["high"]) + 0.01, 2)
         stop_anchor = (
@@ -5256,6 +5270,7 @@ def _gex_wall_candidate(
         "gex_alignment": {
             "levels": levels,
             "regime": evaluation.get("regime"),
+            "vwap_confluent": vwap_confluent,
             "heatmap_status": "wall_reaction",
         },
         "a_plus": confidence == "A+",
@@ -5991,6 +6006,11 @@ def build_signal(
             _gex_wall_candidate(
                 spy, latest, float(spot), gex_ctx, completed, now,
                 previous_walls=previous_signal.get("gex_walls"),
+                net_gex_percentile=(
+                    (zerogex_decision.get("gex_history") or {}).get(
+                        "net_gex_30d_percentile"
+                    )
+                ),
             ),
         )
         if reversal:
@@ -6523,10 +6543,10 @@ def build_signal(
     if put_confirmed and not prior_position_open and not prior_continuation_watch and not reversal and not _option_eligible(put_option):
         result["blockers"].append(_option_blocker(put_option, "put"))
     if reversal and not hard_data_block:
-        # Wall-reaction setups trade near-the-money — re-select the contract for
-        # the active side instead of the default OTM pre-entry pick, so the
-        # merged strategy trades the higher-delta/tighter-spread option it intends.
-        if reversal.get("strategy") in GEX_WALL_STRATEGY_NAMES:
+        # All reversal setups trade near-the-money (~3DTE when available) — re-select
+        # the contract for the active side instead of the default OTM pre-entry pick,
+        # for higher delta, tighter spreads, and far less theta than 0DTE OTM.
+        if reversal.get("side") in {"calls", "puts"}:
             wall_right = "P" if reversal["side"] == "puts" else "C"
             # Prefer the dedicated ~3DTE wall chain when supplied (lower theta),
             # else fall back to the primary (0DTE/next) chain.

@@ -94,6 +94,37 @@ class GexWallEvaluatorTest(unittest.TestCase):
         self.assertTrue(result["regime"]["wall_migrated_higher"])
 
 
+class RegimePercentileAndVolumeTest(unittest.TestCase):
+    """Tier-2 percentile gate + Tier-3 volume-exhaustion guard."""
+
+    def _rejection(self, gex_extra, last_volume=1000):
+        bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
+        bars[-1]["volume"] = last_volume
+        gex = {"call_wall": 535.0, "put_wall": 500.0, "regime": "Negative"}
+        gex.update(gex_extra)
+        return evaluate_gex_wall(gex, bars, now=NOW)
+
+    def test_percentile_marks_negative_gamma_even_if_regime_positive(self):
+        r = self._rejection({"regime": "Positive", "net_gex_percentile": 5})
+        self.assertTrue(r["regime"]["negative_gamma"])
+
+    def test_high_percentile_wins_over_absolute_net_gex(self):
+        # Percentile (60) takes priority: not strong negative gamma, even at -2e9.
+        r = self._rejection({"net_gex": -2.0e9, "net_gex_percentile": 60})
+        self.assertFalse(r["regime"]["negative_gamma"])
+
+    def test_fade_downgraded_when_volume_expands_into_wall(self):
+        r = self._rejection({"net_gex": -2.0e9}, last_volume=5000)  # 5x the 1000 avg
+        self.assertEqual(r["setup_type"], "CALL_WALL_REJECTION_PUT")
+        self.assertTrue(r["volume"]["expanding"])
+        self.assertEqual(r["verdict"], "CAUTION")
+
+    def test_fade_participates_on_normal_volume(self):
+        r = self._rejection({"net_gex": -2.0e9}, last_volume=1000)
+        self.assertFalse(r["volume"]["expanding"])
+        self.assertEqual(r["verdict"], "PARTICIPATE")
+
+
 class WallMergeIntoDayTradingTest(unittest.TestCase):
     """The wall engine, merged into build_signal as a native reaction candidate."""
 
@@ -159,6 +190,28 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
         self.assertEqual(candidate["score"], 75)
         self.assertFalse(candidate["a_plus"])
         self.assertFalse(candidate["gex_alignment"]["regime"]["negative_gamma"])
+
+    def test_vwap_confluence_boosts_a_to_a_plus(self):
+        # 15m down + Positive gamma => rejection grades A (75). VWAP on the wall
+        # boosts to A+ (85); VWAP away from the wall leaves it at A.
+        bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
+        gex_ctx = {
+            "available": True,
+            "call_wall": {"strike": 535.0, "stage": "Active"},
+            "put_wall": {"strike": 500.0, "stage": "Active"},
+            "flip": None,
+            "regime": "Positive",
+        }
+        confluent = _gex_wall_candidate(
+            {"atr_5m": 1.0, "vwap": 535.0}, bars[-1], 530.0, gex_ctx, bars, NOW
+        )
+        self.assertEqual(confluent["score"], 85)
+        self.assertTrue(confluent["gex_alignment"]["vwap_confluent"])
+        plain = _gex_wall_candidate(
+            {"atr_5m": 1.0, "vwap": 510.0}, bars[-1], 530.0, gex_ctx, bars, NOW
+        )
+        self.assertEqual(plain["score"], 75)
+        self.assertFalse(plain["gex_alignment"]["vwap_confluent"])
 
     def test_non_participate_yields_no_candidate(self):
         flat = _trend_bars(60, 500, 0.0, last_override=(500.0, 500.05, 499.95, 500.0))
