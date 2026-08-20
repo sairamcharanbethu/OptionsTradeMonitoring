@@ -586,6 +586,52 @@ async function testSimulatedExitPersistsFinalCheckpoint() {
   assert(closeParams[3] === 2.1 && closeParams[4] === 'TAKE_PROFIT', `Expected final price and exit reason, got ${JSON.stringify(closeParams)}`);
 }
 
+async function testExpiredPositionWithRejectedExitIsReconciled() {
+  // Regression: a position whose exit order was rejected by the broker stays OPEN with
+  // execution_status EXIT_REJECTED. Once the contract expires it can never fill a live
+  // order, yet it used to be skipped by auto-expiry (hasUnresolvedExit guard) and kept
+  // counting against the correlated-exposure limit, silently blocking all new entries.
+  const closes: Array<{ sql: string; params: any[] }> = [];
+  const stuckExpiredPosition = {
+    id: 773,
+    user_id: 7,
+    username: 'trader',
+    symbol: 'SPY',
+    option_type: 'PUT',
+    strike_price: 776,
+    quantity: 1,
+    status: 'OPEN',
+    execution_status: 'EXIT_REJECTED',
+    execution_broker: 'wealthsimple_snaptrade',
+    entry_price: 1.2,
+    entry_action: 'BUY_TO_OPEN',
+    expiration_date: '2020-01-17'
+  };
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: {
+      query: async (sql: string, params: any[] = []) => {
+        if (sql.includes("p.status = 'OPEN'")) {
+          return { rows: [{ ...stuckExpiredPosition }] };
+        }
+        if (sql.includes("SET status = 'CLOSED'")) {
+          closes.push({ sql, params });
+        }
+        return { rows: [], rowCount: 1 };
+      }
+    }
+  } as any;
+  const poller = new MarketPoller(fastify, createMarketDataRedisMock()) as any;
+  poller.marketDataBuffer.applyLatestToPositions = async (rows: any) => rows;
+  poller.isMarketOpen = () => false;
+
+  await poller.poll();
+
+  const expiredClose = closes.find((c) => c.params[2] === 'EXPIRED');
+  assert(Boolean(expiredClose), 'An expired contract stuck in EXIT_REJECTED must be reconciled to closed, not left counting against exposure limits');
+  assert(expiredClose!.sql.includes("execution_status = 'EXIT_FILLED'"), 'The reconciled expiry close must persist a terminal execution status');
+}
+
 async function runTests() {
   console.log('Running MarketPoller tests...');
   await testUnderlyingStopDirection();
@@ -605,6 +651,7 @@ async function runTests() {
   await testSyntheticTrailRejectsStaleHardStopQuote();
   await testMandatoryFlattenSubmitsOneMarketExit();
   await testSimulatedExitPersistsFinalCheckpoint();
+  await testExpiredPositionWithRejectedExitIsReconciled();
   console.log('All MarketPoller tests passed!');
 }
 

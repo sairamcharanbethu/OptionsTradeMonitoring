@@ -838,13 +838,21 @@ export class MarketPoller {
       // Check for expired positions for this symbol first
       const symbolPositions = positions.filter((p: any) => p.symbol === symbol);
       for (const pos of symbolPositions) {
-        if (pos.status !== 'OPEN' || this.hasUnresolvedExit(pos)) continue;
-        if (this.isPositionExpired(pos)) {
+        if (pos.status !== 'OPEN') continue;
+        if (!this.isPositionExpired(pos)) continue;
+        // Expiry is terminal: the contract no longer exists at the broker, so any
+        // in-flight/rejected/failed exit order can never fill. Reconcile it to closed
+        // regardless of exit state — otherwise a position stuck in a broker-review exit
+        // state (e.g. EXIT_REJECTED) stays OPEN forever and keeps counting against the
+        // correlated-exposure limit, silently blocking all new entries.
+        if (this.hasUnresolvedExit(pos)) {
+          this.fastify.log.warn(`[MarketPoller] Reconciling expired position ${pos.id} (${pos.symbol}) to closed despite unresolved exit state ${pos.execution_status || 'unknown'}; an expired contract cannot fill a live order.`);
+        } else {
           this.fastify.log.info(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
-          await this.closePositionLocally(pos, 0, 'EXPIRED');
-          // Mark as closed locally so we don't sync it below
-          pos.status = 'CLOSED';
         }
+        await this.closePositionLocally(pos, 0, 'EXPIRED');
+        // Mark as closed locally so we don't sync it below
+        pos.status = 'CLOSED';
       }
 
       // 2. Price Sync (Only if Market Open or Forced)
