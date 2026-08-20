@@ -798,6 +798,18 @@ const ensureSchema = async (instance: any) => {
   }
 };
 
+// Last-resort process guards. Without these, an unhandled async error — most
+// notably a pooled Postgres client erroring when the DB restarts — terminates
+// the process; on a trading backend that drops in-flight coordination and
+// existing-position management. Log and stay alive; the container restart
+// policy remains the backstop for a truly wedged process.
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[System] Unhandled promise rejection (kept alive):', reason);
+});
+process.on('uncaughtException', (err: any) => {
+  console.error('[System] Uncaught exception (kept alive):', err?.stack || err);
+});
+
 const start = async () => {
   try {
     let activeDbUrl = process.env.DATABASE_URL || 'postgres://user:password@localhost:5432/options_monitoring';
@@ -834,6 +846,14 @@ const start = async () => {
       query_timeout: dbQueryTimeoutMs,
       statement_timeout: dbQueryTimeoutMs,
       idle_in_transaction_session_timeout: Number(process.env.DB_IDLE_TRANSACTION_TIMEOUT_MS || 10000)
+    });
+
+    // node-postgres re-emits errors from idle pooled clients (exactly what
+    // happens when Postgres restarts and drops idle connections) as a pool-level
+    // 'error' event. With no listener that is an unhandled EventEmitter error →
+    // process crash. Log and let the pool recover its connections.
+    (fastify.pg as any)?.pool?.on?.('error', (err: any) => {
+      fastify.log.error(`[System] Postgres pool error (recovering): ${err?.message || String(err)}`);
     });
 
     // Verify and ensure all required database schema elements exist
@@ -920,6 +940,19 @@ const start = async () => {
       return { status: 'ok' };
     });
 
+    // Readiness (vs the always-200 liveness above): reflects DB reachability so
+    // the container healthcheck can distinguish "process alive" from "actually
+    // serving". Kept cheap and unauthenticated for the healthcheck to call.
+    fastify.get('/ready', async (_request, reply) => {
+      try {
+        await fastify.pg.query('SELECT 1');
+        return { status: 'ready' };
+      } catch (err: any) {
+        reply.code(503);
+        return { status: 'not-ready', error: err?.message || String(err) };
+      }
+    });
+
     // Root route
     fastify.get('/', async () => {
       return { message: 'StrikePilot — Guarded Options Intelligence API' };
@@ -949,6 +982,10 @@ const start = async () => {
     fastify.addHook('onClose', async () => paperTrading.stop());
     const strategyEngine = new StrategyEngineAdapter(fastify);
     fastify.decorate('strategyEngine', strategyEngine);
+    // Tear down the adapter's file-poll/policy/position timers and Redis
+    // subscription on shutdown, so a restart doesn't leak intervals or
+    // double-subscribe.
+    fastify.addHook('onClose', async () => strategyEngine.stop());
 
     fastify.register(paperAccountRoutes, { prefix: '/api/paper-account' });
 
@@ -1399,7 +1436,13 @@ const start = async () => {
     const port = Number(process.env.PORT) || 3001;
     // Publish the settings-derived IBKR policy before the strategy container is
     // allowed to start, so it never opens a session against stale defaults.
-    await strategyEngine.start();
+    try {
+      await strategyEngine.start();
+    } catch (err: any) {
+      // A transient DB/Redis blip during boot must degrade, not exit the whole
+      // process; the adapter's timers retry policy/refresh on their own cadence.
+      fastify.log.error(`[System] strategyEngine.start() failed (continuing): ${err?.message || String(err)}`);
+    }
     paperTrading.start();
     await fastify.listen({ port, host: '0.0.0.0' });
 
@@ -1411,8 +1454,15 @@ const start = async () => {
       } else {
         fastify.log.info('[SignalScannerService] Legacy scanner disabled because signal-only-v2 is primary.');
       }
-      setInterval(runQueuedBrokerSync, 3000);
-      setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000);
+      const brokerSyncTimer = setInterval(() => {
+        runQueuedBrokerSync().catch((err: any) =>
+          fastify.log.warn(`[BrokerSync] queued sync loop error: ${err?.message || String(err)}`));
+      }, 3000);
+      const pendingOrderTimer = setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000);
+      fastify.addHook('onClose', async () => {
+        clearInterval(brokerSyncTimer);
+        clearInterval(pendingOrderTimer);
+      });
       runSnaptradePendingOrderSync().catch((err: any) => {
         fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);
       });

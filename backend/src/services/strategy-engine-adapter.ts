@@ -59,7 +59,13 @@ export class StrategyEngineAdapter {
 
   public async start(): Promise<void> {
     await this.restoreSetupIdentity();
-    await this.publishPolicy();
+    // A boot-time DB blip here must not skip timer setup below — the policyTimer
+    // retries publishPolicy/publishOpenPositions every 5s regardless.
+    try {
+      await this.publishPolicy();
+    } catch (err: any) {
+      this.fastify.log.warn(`[StrategyEngineAdapter] Initial policy publish failed (continuing; timer will retry): ${err?.message || String(err)}`);
+    }
     if (this.mode !== 'legacy') {
       await this.requestRefresh();
       this.startRedisSubscription();
