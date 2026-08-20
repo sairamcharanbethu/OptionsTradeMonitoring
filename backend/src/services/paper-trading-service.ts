@@ -3,6 +3,7 @@ import { AIService } from './ai-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { getGlobalSettings } from '../lib/settings-utils';
 import { KillSwitchService } from './kill-switch-service';
+import { TradeLifecycleService } from './trade-lifecycle-service';
 import { redis as defaultRedis } from '../lib/redis';
 import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { PAPER_STRATEGIES, SHARED_PAPER_ACCOUNT_ID } from './paper-account-constants';
@@ -1150,6 +1151,21 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         ? Number(Math.max(Number(position.entry_price), trailingHighPremium * (1 - trailingStopPct / 100)).toFixed(2))
         : null;
       analysis.trailingStopPremium = trailingStopPremium;
+      // Track max-favorable / max-adverse premium excursion so paper trades are
+      // diagnosable (MFE/MAE). Accumulate the running extremes by persisting on
+      // change; the paper lane previously never recorded this (only the live
+      // market-poller path did), leaving mfe_pct/mae_pct null for every trade.
+      const excursion = bid > 0
+        ? TradeLifecycleService.calculateTradeExcursion(position, bid)
+        : null;
+      if (excursion?.changed) {
+        await (this.fastify as any).pg.query(
+          `UPDATE positions SET max_favorable_price=$2, max_adverse_price=$3, mfe_pct=$4, mae_pct=$5,
+                 updated_at=CURRENT_TIMESTAMP
+           WHERE id=$1 AND status='OPEN'`,
+          [position.id, excursion.maxFavorablePrice, excursion.maxAdversePrice, excursion.mfePct, excursion.maePct]
+        );
+      }
       await this.setLivePosition(position.id, {
         currentPrice: bid,
         underlyingPrice: spot || null,
@@ -1165,6 +1181,10 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         trailing_high_price: trailingHighPremium,
         trailing_stop_loss_pct: trailingStopPct,
         suggested_stop_loss: stop || null,
+        max_favorable_price: excursion?.maxFavorablePrice ?? position.max_favorable_price,
+        max_adverse_price: excursion?.maxAdversePrice ?? position.max_adverse_price,
+        mfe_pct: excursion?.mfePct ?? position.mfe_pct,
+        mae_pct: excursion?.maePct ?? position.mae_pct,
         strategy_snapshot: sameSetup ? signal : storedSnapshot,
         analysis_data: analysis
       };

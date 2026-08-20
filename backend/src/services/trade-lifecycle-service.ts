@@ -70,6 +70,32 @@ export class TradeLifecycleService {
     return (Number(exitPrice || 0) - entryPrice) * Number(quantity || 0) * 100 * multiplier;
   }
 
+  // Running max-favorable / max-adverse excursion (in premium terms) as a new
+  // mark arrives. `changed` is true when either extreme moved, so callers can
+  // persist only on change. Shared by the live (market-poller) and paper
+  // (paper-trading-service) monitor loops so both record MFE/MAE identically.
+  static calculateTradeExcursion(position: any, price: number): {
+    maxFavorablePrice: number; maxAdversePrice: number; mfePct: number; maePct: number; changed: boolean;
+  } {
+    const entryPrice = Number(position?.entry_price || 0);
+    const observedPrice = Number(price);
+    const shortPremium = this.isShortPremiumPosition(position);
+    const priorFavorable = Number(position?.max_favorable_price || entryPrice);
+    const priorAdverse = Number(position?.max_adverse_price || entryPrice);
+    const maxFavorablePrice = shortPremium ? Math.min(priorFavorable, observedPrice) : Math.max(priorFavorable, observedPrice);
+    const maxAdversePrice = shortPremium ? Math.max(priorAdverse, observedPrice) : Math.min(priorAdverse, observedPrice);
+    const mfePct = entryPrice > 0
+      ? Number(((shortPremium ? (entryPrice - maxFavorablePrice) : (maxFavorablePrice - entryPrice)) / entryPrice * 100).toFixed(4))
+      : 0;
+    const maePct = entryPrice > 0
+      ? Number(((shortPremium ? (maxAdversePrice - entryPrice) : (entryPrice - maxAdversePrice)) / entryPrice * 100).toFixed(4))
+      : 0;
+    return {
+      maxFavorablePrice, maxAdversePrice, mfePct, maePct,
+      changed: maxFavorablePrice !== priorFavorable || maxAdversePrice !== priorAdverse
+    };
+  }
+
   static isUnderlyingStopBroken(position: any, underlyingPrice: number | null | undefined, underlyingStop: number | null | undefined): boolean {
     if (!underlyingPrice || !underlyingStop) return false;
     const optionType = String(position?.option_type || '').toUpperCase();

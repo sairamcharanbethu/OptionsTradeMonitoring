@@ -181,7 +181,23 @@ async function runTests() {
   await testExitSubmissionFailureSeparatesRetryableAndAmbiguousOutcomes();
   await testAutonomousExitRetryRequiresFreshTerminalBrokerEvidence();
   await testShortOptionLifecycleHelpers();
+  await testTradeExcursionAccumulatesExtremes();
   console.log('All TradeLifecycleService tests passed!');
+}
+
+async function testTradeExcursionAccumulatesExtremes() {
+  // Long premium: favorable = higher mark, adverse = lower; extremes accumulate.
+  const up = TradeLifecycleService.calculateTradeExcursion({ entry_price: 2 }, 2.5);
+  assert(up.mfePct === 25 && up.maePct === 0 && up.changed, `long up: ${JSON.stringify(up)}`);
+  const down = TradeLifecycleService.calculateTradeExcursion(
+    { entry_price: 2, max_favorable_price: 2.5, max_adverse_price: 2 }, 1.5);
+  assert(down.mfePct === 25 && down.maePct === 25 && down.changed, `long preserves MFE, adds MAE: ${JSON.stringify(down)}`);
+  const flat = TradeLifecycleService.calculateTradeExcursion(
+    { entry_price: 2, max_favorable_price: 2.5, max_adverse_price: 1.5 }, 2.0);
+  assert(flat.changed === false, `no new extreme -> unchanged: ${JSON.stringify(flat)}`);
+  // Short premium: a premium DROP is favorable.
+  const short = TradeLifecycleService.calculateTradeExcursion({ entry_price: 2, entry_action: 'SELL_TO_OPEN' }, 1.5);
+  assert(short.mfePct === 25 && short.maePct === 0, `short favorable on premium drop: ${JSON.stringify(short)}`);
 }
 
 runTests().catch((err) => {
