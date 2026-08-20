@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from trade_prefetch_service import (
     TradePrefetcher,
+    _read_gex,
     _bars_are_stale,
     _compact_shadow_gex,
     _configured_primary_gex,
@@ -28,6 +29,21 @@ from trade_prefetch_service import (
 
 
 class TradePrefetchHelpersTest(unittest.TestCase):
+    def test_read_gex_coerces_non_dict_json_to_none(self):
+        # An external writer emitting a valid-but-non-dict JSON must not crash
+        # downstream `.get(...)` — _read_gex returns None for arrays/scalars.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / "dict.json").write_text(json.dumps({"lanes": {}}))
+            (base / "array.json").write_text(json.dumps([1, 2, 3]))
+            (base / "scalar.json").write_text(json.dumps(42))
+            (base / "corrupt.json").write_text("{not json")
+            self.assertEqual(_read_gex(base / "dict.json"), {"lanes": {}})
+            self.assertIsNone(_read_gex(base / "array.json"))
+            self.assertIsNone(_read_gex(base / "scalar.json"))
+            self.assertIsNone(_read_gex(base / "corrupt.json"))
+            self.assertIsNone(_read_gex(base / "missing.json"))
+
     @patch("trade_prefetch_service.redis_client")
     def test_strategy_snapshot_notification_publishes_small_redis_event(
         self,

@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -250,9 +251,12 @@ def _option_dict(ticker: Ticker, *, now: float | None = None) -> dict[str, Any]:
 
 def _read_gex(path: Path) -> dict[str, Any] | None:
     try:
-        return json.loads(path.read_text())
+        payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+    # Coerce to dict-or-None: a valid-but-non-dict JSON (array/scalar) from an
+    # external writer would otherwise crash downstream `.get(...)` calls.
+    return payload if isinstance(payload, dict) else None
 
 
 def _read_policy(path: Path | None) -> dict[str, Any]:
@@ -1488,10 +1492,43 @@ class TradePrefetcher:
             self.last_log_fingerprint = fingerprint
             self.last_log_at = now
 
+    def _start_watchdog(self) -> None:
+        """Self-restart on a silent hang.
+
+        In-process IBKR reconnect handles dropped sockets, but a blocking
+        ib_insync call on a half-open socket can hang without raising — no
+        exception (so no reconnect) and no exit (so the container's restart
+        policy, which only fires on exit, never triggers). This watchdog turns
+        that stall into an exit: if the main loop makes no progress for
+        ``timeout`` seconds it os._exit(1)s so the container restarts. Progress
+        is stamped at the top of every iteration, so the normal error/reconnect
+        path (which keeps looping during an IBKR outage) never trips it.
+        """
+        timeout = float(os.getenv("STRATEGY_WATCHDOG_TIMEOUT_SECONDS", "90") or 0)
+        if timeout <= 0:
+            return
+
+        def _watch() -> None:
+            while True:
+                time.sleep(min(5.0, timeout / 2))
+                if time.time() - self._last_progress_at > timeout:
+                    print(
+                        f"trade-prefetch watchdog: no loop progress for {timeout:.0f}s; "
+                        "exiting for restart.",
+                        flush=True,
+                    )
+                    os._exit(1)
+
+        threading.Thread(target=_watch, name="prefetch-watchdog", daemon=True).start()
+
     def run(self) -> None:
         self.args.output_dir.mkdir(parents=True, exist_ok=True)
+        self._last_progress_at = time.time()
+        if not self.args.once:
+            self._start_watchdog()
         try:
             while True:
+                self._last_progress_at = time.time()
                 try:
                     self._apply_runtime_ibkr_policy()
                     if not self.ib.isConnected():
