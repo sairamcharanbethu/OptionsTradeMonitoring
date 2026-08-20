@@ -38,12 +38,6 @@ jobs:
             dockerfile: ./strategy-engine/Dockerfile
             test_directory: ./strategy-engine
             runtime: python
-          - service: lean-shadow
-            context: ./lean-engine
-            docker_context: .
-            dockerfile: ./lean-engine/Dockerfile
-            test_directory: ./lean-engine
-            runtime: python
     permissions:
       contents: read
       packages: write
@@ -183,7 +177,6 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
             services=(trade-staging-backend trade-staging-frontend zerogex-prefetch zerogex-prefetch-qqq strategy-engine)
-            if grep -Eq "^LEAN_SHADOW_ENABLED=['\"]?true['\"]?$" .env; then services+=(lean-shadow); fi
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull "${services[@]}"
             
             export PORT_BACKEND=${{ env.PORT_BACKEND }}

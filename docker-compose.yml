@@ -56,9 +56,6 @@ services:
       STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
       STRATEGY_FILE_POLL_INTERVAL_MS: ${STRATEGY_FILE_POLL_INTERVAL_MS:-2000}
       STRATEGY_REDIS_WATCHDOG_INTERVAL_MS: ${STRATEGY_REDIS_WATCHDOG_INTERVAL_MS:-30000}
-      LEAN_SHADOW_ENABLED: ${LEAN_SHADOW_ENABLED:-false}
-      LEAN_SHADOW_INGEST_SECRET: ${LEAN_SHADOW_INGEST_SECRET:-}
-      LEAN_AUTO_PROMOTE: ${LEAN_AUTO_PROMOTE:-true}
       STRIKEPILOT_CALENDAR_CONTACT: ${STRIKEPILOT_CALENDAR_CONTACT:-}
       VIX_TERM_STRUCTURE_MIN_RATIO: ${VIX_TERM_STRUCTURE_MIN_RATIO:-1.05}
     volumes:
@@ -260,44 +257,6 @@ services:
       retries: 24
       start_period: 20s
 
-  lean-shadow:
-    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-lean-shadow:${IMAGE_TAG:-latest}
-    build:
-      context: .
-      dockerfile: lean-engine/Dockerfile
-      args:
-        LEAN_IMAGE: ${LEAN_IMAGE:-quantconnect/lean:latest}
-    restart: unless-stopped
-    environment:
-      LEAN_SHADOW_ENABLED: ${LEAN_SHADOW_ENABLED:-false}
-      LEAN_SHADOW_INGEST_SECRET: ${LEAN_SHADOW_INGEST_SECRET:-}
-      LEAN_SHADOW_BACKEND_URL: http://trade-staging-backend:3001/api/internal/lean-shadow/snapshots
-      LEAN_SHADOW_RUN_ID: ${LEAN_SHADOW_RUN_ID:-lean-shadow-v1}
-      LEAN_SHADOW_REVISION: ${LEAN_SHADOW_REVISION:-unconfigured}
-      LEAN_SHADOW_POLICY_FILE: /strategy-data/trade/policy.json
-      LEAN_ZEROGEX_FILE: /strategy-data/trade/zerogex.json
-      LEAN_SHADOW_STATE_FILE: /state/health.json
-      IBKR_HOST: ${IBKR_HOST:-ib_gateway}
-      IBKR_PORT: ${IBKR_PORT:-4003}
-      LEAN_IB_ACCOUNT: ${LEAN_IB_ACCOUNT:-}
-    volumes:
-      - strategy-data:/strategy-data:ro
-      - lean-shadow-state:/state
-    depends_on:
-      trade-staging-backend:
-        condition: service_healthy
-      zerogex-prefetch:
-        condition: service_started
-    networks:
-      - ssmedia_ssmedia_net
-      - default
-    healthcheck:
-      test: ["CMD-SHELL", "test -s /state/health.json && grep -q '\"connected\":true' /state/health.json && grep -q '\"order_guard\":\"ARMED\"' /state/health.json"]
-      interval: 15s
-      timeout: 5s
-      retries: 12
-      start_period: 45s
-
   trade-staging-frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:${IMAGE_TAG:-latest}
     build:
@@ -329,4 +288,3 @@ networks:
 volumes:
   db-data:
   strategy-data:
-  lean-shadow-state:

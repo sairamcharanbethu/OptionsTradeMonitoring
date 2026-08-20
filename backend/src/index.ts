@@ -22,7 +22,6 @@ import { positionMonitorRoutes } from './routes/position-monitor';
 import { killSwitchRoutes } from './routes/kill-switch';
 import { metricsRoutes } from './routes/metrics';
 import { mcpRoutes } from './routes/mcp';
-import { leanShadowRoutes } from './routes/lean-shadow';
 import jwt from '@fastify/jwt';
 import authRoutes from './routes/auth';
 import { adminRoutes } from './routes/admin';
@@ -252,83 +251,6 @@ const ensureSchema = async (instance: any) => {
     await instance.pg.query(`
       CREATE INDEX IF NOT EXISTS strategy_signal_events_setup_created_idx
       ON strategy_signal_events (setup_id, created_at ASC, id ASC);
-    `);
-
-    // LEAN is intentionally isolated from execution. These records retain the
-    // signed shadow stream and the promotion decision without giving the
-    // sidecar database or broker credentials.
-    await instance.pg.query(`
-      CREATE TABLE IF NOT EXISTS strategy_engine_authority (
-        singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-        source VARCHAR(16) NOT NULL DEFAULT 'python' CHECK (source IN ('python', 'lean')),
-        entry_blocked BOOLEAN NOT NULL DEFAULT FALSE,
-        reason TEXT,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await instance.pg.query(`
-      INSERT INTO strategy_engine_authority (singleton, source, entry_blocked, reason)
-      VALUES (TRUE, 'python', FALSE, 'INITIAL_PYTHON_AUTHORITY')
-      ON CONFLICT (singleton) DO NOTHING;
-    `);
-    await instance.pg.query(`
-      CREATE TABLE IF NOT EXISTS strategy_engine_runs (
-        run_id VARCHAR(128) PRIMARY KEY,
-        source VARCHAR(16) NOT NULL CHECK (source IN ('python', 'lean')),
-        revision VARCHAR(128) NOT NULL,
-        status VARCHAR(32) NOT NULL,
-        started_at TIMESTAMPTZ NOT NULL,
-        last_seen_at TIMESTAMPTZ NOT NULL
-      );
-    `);
-    await instance.pg.query(`
-      CREATE TABLE IF NOT EXISTS lean_shadow_nonces (
-        nonce VARCHAR(128) PRIMARY KEY,
-        expires_at TIMESTAMPTZ NOT NULL
-      );
-    `);
-    await instance.pg.query(`
-      CREATE INDEX IF NOT EXISTS lean_shadow_nonces_expiry_idx
-      ON lean_shadow_nonces (expires_at);
-    `);
-    await instance.pg.query(`
-      CREATE TABLE IF NOT EXISTS lean_shadow_snapshots (
-        id BIGSERIAL PRIMARY KEY,
-        run_id VARCHAR(128) NOT NULL REFERENCES strategy_engine_runs(run_id) ON DELETE CASCADE,
-        sequence BIGINT NOT NULL,
-        generated_at TIMESTAMPTZ NOT NULL,
-        payload JSONB NOT NULL,
-        health JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        UNIQUE (run_id, sequence)
-      );
-    `);
-    await instance.pg.query(`
-      CREATE INDEX IF NOT EXISTS lean_shadow_snapshots_generated_idx
-      ON lean_shadow_snapshots (generated_at DESC);
-    `);
-    await instance.pg.query(`
-      CREATE TABLE IF NOT EXISTS lean_shadow_comparisons (
-        id BIGSERIAL PRIMARY KEY,
-        run_id VARCHAR(128) NOT NULL REFERENCES strategy_engine_runs(run_id) ON DELETE CASCADE,
-        lane VARCHAR(32) NOT NULL,
-        generated_at TIMESTAMPTZ NOT NULL,
-        healthy BOOLEAN NOT NULL,
-        qualified BOOLEAN NOT NULL,
-        matches BOOLEAN NOT NULL,
-        plan_key VARCHAR(64),
-        reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await instance.pg.query(`
-      ALTER TABLE lean_shadow_comparisons
-        ADD COLUMN IF NOT EXISTS healthy BOOLEAN NOT NULL DEFAULT FALSE,
-        ADD COLUMN IF NOT EXISTS plan_key VARCHAR(64);
-    `);
-    await instance.pg.query(`
-      CREATE INDEX IF NOT EXISTS lean_shadow_comparisons_lane_generated_idx
-      ON lean_shadow_comparisons (lane, generated_at DESC);
     `);
 
     await instance.pg.query(`
@@ -1028,12 +950,6 @@ const start = async () => {
     const strategyEngine = new StrategyEngineAdapter(fastify);
     fastify.decorate('strategyEngine', strategyEngine);
 
-    const { LeanShadowService } = await import('./services/lean-shadow-service');
-    const leanShadow = new LeanShadowService(fastify);
-    fastify.decorate('leanShadow', leanShadow);
-    fastify.addHook('onClose', async () => leanShadow.stop());
-    fastify.register(leanShadowRoutes, { prefix: '/api' });
-
     fastify.register(paperAccountRoutes, { prefix: '/api/paper-account' });
 
     // --- WebSocket & Streaming Setup ---
@@ -1214,7 +1130,6 @@ const start = async () => {
       const liveExitHealth = liveExitMonitor.getHealth();
       const optionHistoryHealth = optionMarketHistoryCapture.getHealth();
       const strategyHealth = strategyEngine.getCurrentState();
-      const leanShadowHealth = leanShadow.getHealth();
       const strategyProviderAgeSeconds = strategyHealth.health?.updated_at
         ? Math.max(0, Date.now() / 1000 - Number(strategyHealth.health.updated_at))
         : null;
@@ -1323,7 +1238,6 @@ const start = async () => {
           lastError: strategyHealth.error || strategyHealth.health?.error || strategyHealth.health?.last_error || null,
           transport: strategyHealth.transport
         }, generatedAt),
-        leanShadow: normalizeAdapterHealth('leanShadow', leanShadowHealth, generatedAt),
         paperTrading: normalizeAdapterHealth('paperTrading', paperTrading.getHealth(), generatedAt),
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),
@@ -1485,7 +1399,6 @@ const start = async () => {
     const port = Number(process.env.PORT) || 3001;
     // Publish the settings-derived IBKR policy before the strategy container is
     // allowed to start, so it never opens a session against stale defaults.
-    await leanShadow.start();
     await strategyEngine.start();
     paperTrading.start();
     await fastify.listen({ port, host: '0.0.0.0' });
