@@ -135,6 +135,9 @@ def _enforce_entry_gates(
 def reconcile_open_positions(
     previous_lanes: dict[str, Any] | None,
     reconciliation: dict[str, Any] | None,
+    *,
+    now: float | None = None,
+    max_age_seconds: float = 30.0,
 ) -> dict[str, Any]:
     """Reconcile per-lane previous signals against the execution ledger.
 
@@ -161,6 +164,17 @@ def reconcile_open_positions(
     recon = (reconciliation or {}).get("lanes")
     if not isinstance(recon, dict):
         return lanes
+    # Freshness guard: if the backend stopped writing positions.json (e.g. it
+    # crashed), the file freezes — never drive lifecycle demotions off a stale
+    # ledger. Only act on a reconciliation we can confirm is recent.
+    if now is not None:
+        generated_at = (reconciliation or {}).get("generated_at")
+        fresh = (
+            _number(generated_at)
+            and (float(now) - float(generated_at)) <= max_age_seconds
+        )
+        if not fresh:
+            return lanes
     for lane, signal in list(lanes.items()):
         entry = recon.get(lane)
         if not (

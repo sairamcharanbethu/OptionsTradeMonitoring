@@ -1073,6 +1073,7 @@ class TradePrefetcher:
         previous_lanes = reconcile_open_positions(
             previous_lanes,
             _read_gex(self.args.output_dir / "positions.json"),
+            now=generated_at,
         )
         sscgex_heatmap = (
             _read_gex(self.args.heatmap_file)

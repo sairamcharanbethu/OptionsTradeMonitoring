@@ -66,6 +66,28 @@ class ReconcileOpenPositionsTest(unittest.TestCase):
         self.assertEqual(lanes["mtf"]["state"], "MANAGE")       # original untouched
         self.assertTrue(lanes["mtf"]["lifecycle"]["paper_position_open"])
 
+    def test_stale_reconciliation_is_ignored(self):
+        # Backend died -> positions.json frozen. With `now` supplied, a stale file
+        # (older than max_age) must NOT drive a demotion — leave the engine's state.
+        lanes = {"mtf": _managed_lane("MANAGE")}
+        recon = {"generated_at": 1000.0, "lanes": {"mtf": {"open": False, "confident": True}}}
+        out = reconcile_open_positions(lanes, recon, now=1000.0 + 45, max_age_seconds=30.0)
+        self.assertEqual(out["mtf"]["state"], "MANAGE")
+        self.assertTrue(out["mtf"]["lifecycle"]["paper_position_open"])
+
+    def test_fresh_reconciliation_is_applied(self):
+        lanes = {"mtf": _managed_lane("MANAGE")}
+        recon = {"generated_at": 1000.0, "lanes": {"mtf": {"open": False, "confident": True}}}
+        out = reconcile_open_positions(lanes, recon, now=1000.0 + 5, max_age_seconds=30.0)
+        self.assertEqual(out["mtf"]["state"], "WAIT")
+
+    def test_missing_generated_at_with_now_is_conservative(self):
+        # Can't verify freshness -> do not act (safe default).
+        lanes = {"mtf": _managed_lane("MANAGE")}
+        recon = {"lanes": {"mtf": {"open": False, "confident": True}}}
+        out = reconcile_open_positions(lanes, recon, now=1000.0)
+        self.assertEqual(out["mtf"]["state"], "MANAGE")
+
     def test_malformed_inputs_do_not_crash(self):
         self.assertEqual(reconcile_open_positions(None, None), {})
         self.assertEqual(reconcile_open_positions({"mtf": None}, {"lanes": {"mtf": {"open": False, "confident": True}}}),
