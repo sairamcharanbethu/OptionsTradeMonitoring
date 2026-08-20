@@ -52,6 +52,20 @@ function signal(overrides: Record<string, any> = {}) {
 async function runTests() {
   const adapter = createAdapter();
   assert(adapter.getMode() === 'primary', 'The replacement strategy must remain the active signal source');
+
+  // Ledger reconciliation confidence (safety-critical timing for the phantom-
+  // managed-position fix): only declare a lane confidently position-less once a
+  // fill can no longer be in flight.
+  const NOW = 1_000_000;
+  assert(StrategyEngineAdapter.laneReconciliation(true, NOW - 100, NOW, 30).confident === true,
+    'An open position is always confident');
+  const missed = StrategyEngineAdapter.laneReconciliation(false, NOW - 31, NOW, 30);
+  assert(missed.open === false && missed.confident === true,
+    'A no-fill entry past its window+grace must be confidently missed');
+  assert(StrategyEngineAdapter.laneReconciliation(false, NOW - 10, NOW, 30).confident === false,
+    'An in-flight entry (within window+grace) must not be declared missed');
+  assert(StrategyEngineAdapter.laneReconciliation(false, 0, NOW, 30).confident === false,
+    'Without an entry window, timing alone must not force a demotion');
   assert(adapter.autonomousEntryWindow(new Date('2026-08-03T18:59:00.000Z')).open, 'Regular-session autonomous entry should remain open before 15:00 ET');
   assert(adapter.autonomousEntryWindow(new Date('2026-08-03T19:00:00.000Z')).reason === 'AUTO_ENTRY_CUTOFF', 'Regular-session autonomous entry must stop at 15:00 ET');
   assert(adapter.autonomousEntryWindow(new Date('2026-11-27T16:59:00.000Z')).open, 'Early-close autonomous entry should remain open before 12:00 ET');

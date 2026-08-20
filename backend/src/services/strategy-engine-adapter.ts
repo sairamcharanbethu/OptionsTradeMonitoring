@@ -100,6 +100,9 @@ export class StrategyEngineAdapter {
       this.publishPolicy().catch((err: any) => {
         this.fastify.log.warn(`[StrategyEngineAdapter] Policy publish failed: ${err.message || String(err)}`);
       });
+      this.publishOpenPositions().catch((err: any) => {
+        this.fastify.log.warn(`[StrategyEngineAdapter] Open-position reconciliation publish failed: ${err.message || String(err)}`);
+      });
     }, 5000);
     this.fastify.log.info(`[StrategyEngineAdapter] Started in ${this.mode} mode.`);
   }
@@ -1109,6 +1112,55 @@ export class StrategyEngineAdapter {
     await fs.writeFile(temporary, JSON.stringify(policy));
     await fs.rename(temporary, target);
     this.lastPolicyFingerprint = fingerprint;
+  }
+
+  // Pure per-lane reconciliation decision (see publishOpenPositions). Confident
+  // there is no position once the position exists, or once the engine's entry
+  // window has fully elapsed (plus grace) with no fill — never before, so an
+  // in-flight fill is never mistaken for a phantom.
+  static laneReconciliation(
+    open: boolean, entryWindowUntil: number, nowSec: number, graceSeconds: number
+  ): { open: boolean; confident: boolean } {
+    const windowElapsed = Number.isFinite(entryWindowUntil) && entryWindowUntil > 0
+      && nowSec > entryWindowUntil + graceSeconds;
+    return { open, confident: open || windowElapsed };
+  }
+
+  // Ledger reconciliation feedback for the engine (consumed by
+  // trade_prefetch_service.reconcile_open_positions). Per lane, reports whether
+  // a real OPEN paper position exists for the lane's current setup, and whether
+  // we are CONFIDENT the entry is resolved. Until confident, we leave the flag
+  // off so the engine keeps its own assumption and never sheds protection off a
+  // fill that may be in flight.
+  private async publishOpenPositions(): Promise<void> {
+    const setupIds = Object.values(this.laneSetupIds).filter((value): value is string => Boolean(value));
+    const openSetups = new Set<string>();
+    if (setupIds.length > 0) {
+      const { rows } = await (this.fastify as any).pg.query(
+        `SELECT DISTINCT strategy_setup_id FROM positions
+          WHERE status = 'OPEN' AND strategy_setup_id = ANY($1::text[])`,
+        [setupIds]
+      );
+      for (const row of rows) openSetups.add(String(row.strategy_setup_id));
+    }
+    const laneSignals = (await this.readJson(path.join(this.dataDir, 'strategy-signals.json')))?.signals || {};
+    // Grace past the engine's entry window before declaring an entry missed, so
+    // an in-flight fill (or async ledger write) is never mistaken for a phantom.
+    const graceSeconds = Math.max(0, Number(process.env.STRATEGY_RECONCILE_GRACE_SECONDS || 30));
+    const nowSec = Date.now() / 1000;
+    const lanes: Record<string, { open: boolean; confident: boolean }> = {};
+    for (const [lane, setupId] of Object.entries(this.laneSetupIds)) {
+      if (!setupId) continue;
+      const open = openSetups.has(String(setupId));
+      const entryWindowUntil = Number(laneSignals[lane]?.lifecycle?.entry_window_until || 0);
+      lanes[lane] = StrategyEngineAdapter.laneReconciliation(open, entryWindowUntil, nowSec, graceSeconds);
+    }
+    if (Object.keys(lanes).length === 0) return;
+    await fs.mkdir(this.dataDir, { recursive: true });
+    const target = path.join(this.dataDir, 'positions.json');
+    const temporary = `${target}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify({ generated_at: nowSec, lanes }));
+    await fs.rename(temporary, target);
   }
 
   private async publishZeroGexCredential(apiKey: string): Promise<void> {

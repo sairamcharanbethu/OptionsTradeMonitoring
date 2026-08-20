@@ -39,6 +39,7 @@ from signal_engine import (
     compact_signal_for_journal,
     market_data_readiness,
     provider_timestamp_freshness,
+    reconcile_open_positions,
     render_signal,
 )
 
@@ -1064,6 +1065,14 @@ class TradePrefetcher:
         previous_lanes = _previous_strategy_lanes(
             _read_gex(self.args.output_dir / "strategy-signals.json"),
             previous_signal,
+        )
+        # Reconcile the engine's self-assumed open-position latch against the
+        # backend ledger (positions.json). A lane the backend is confident holds
+        # no position is demoted out of the open lifecycle so the engine re-arms
+        # instead of managing a phantom position it never actually entered.
+        previous_lanes = reconcile_open_positions(
+            previous_lanes,
+            _read_gex(self.args.output_dir / "positions.json"),
         )
         sscgex_heatmap = (
             _read_gex(self.args.heatmap_file)

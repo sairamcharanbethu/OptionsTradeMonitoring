@@ -8,7 +8,7 @@ from pathlib import Path
 import time
 from urllib import request
 
-from signal_engine import build_signal, calculate_indicators, market_data_readiness
+from signal_engine import build_signal, calculate_indicators, market_data_readiness, reconcile_open_positions
 from shadow_support import LANES, lane_strategy_families, normalize_lane, read_json, selected_expiry, signed_headers, zerogex_primary
 
 
@@ -32,6 +32,7 @@ class LeanShadowAlgorithm(QCAlgorithm):
         self._state_file = Path(os.getenv("LEAN_SHADOW_STATE_FILE", "/state/health.json"))
         self._policy_file = os.getenv("LEAN_SHADOW_POLICY_FILE", "/strategy-data/trade/policy.json")
         self._zerogex_file = os.getenv("LEAN_ZEROGEX_FILE", "/strategy-data/trade/zerogex.json")
+        self._positions_file = os.getenv("LEAN_POSITIONS_FILE", "/strategy-data/trade/positions.json")
         self._endpoint = os.getenv("LEAN_SHADOW_BACKEND_URL", "")
         self._secret = os.getenv("LEAN_SHADOW_INGEST_SECRET", "")
         self._run_id = os.getenv("LEAN_SHADOW_RUN_ID", "lean-shadow-v1")
@@ -130,8 +131,12 @@ class LeanShadowAlgorithm(QCAlgorithm):
         preferred = min(max_contracts, int(policy.get("strategy_preferred_contracts", 1)))
         configured_families = policy.get("strategy_families") if isinstance(policy.get("strategy_families"), dict) else None
         signals = {}
+        # Mirror the primary engine's ledger reconciliation so shadow parity holds:
+        # demote lanes the backend confirms hold no position (else LEAN keeps the
+        # phantom-managed latch the primary just shed).
+        reconciled_previous = reconcile_open_positions(self._previous, read_json(self._positions_file))
         for lane in LANES:
-            signal = build_signal(market, indicators, options, gex, 5, previous_signal=self._previous.get(lane), zerogex=gex_raw, zerogex_role="primary", zerogex_features={"structure_context": True, "flow_context": True, "session_levels": True, "late_day_forced_flow": True}, paper_exit_target=2, same_side_reentry_cooldown_seconds=900, max_tracking_gap_seconds=30, option_max_total_debit_dollars=max_debit, option_preferred_contracts=preferred, option_max_otm_steps=6, option_min_abs_delta=0.15, option_max_spread_pct=5, session_policy=policy.get("session"), trendline_structure=policy.get("trendline_structure"), strategy_families=lane_strategy_families(configured_families, lane), cross_market_confirmation="shadow")
+            signal = build_signal(market, indicators, options, gex, 5, previous_signal=reconciled_previous.get(lane), zerogex=gex_raw, zerogex_role="primary", zerogex_features={"structure_context": True, "flow_context": True, "session_levels": True, "late_day_forced_flow": True}, paper_exit_target=2, same_side_reentry_cooldown_seconds=900, max_tracking_gap_seconds=30, option_max_total_debit_dollars=max_debit, option_preferred_contracts=preferred, option_max_otm_steps=6, option_min_abs_delta=0.15, option_max_spread_pct=5, session_policy=policy.get("session"), trendline_structure=policy.get("trendline_structure"), strategy_families=lane_strategy_families(configured_families, lane), cross_market_confirmation="shadow")
             signals[lane] = normalize_lane(signal, lane)
         self._previous = signals
         return signals

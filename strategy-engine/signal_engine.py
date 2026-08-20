@@ -130,6 +130,55 @@ def _enforce_entry_gates(
             result.setdefault("blockers", []).append(gate)
             result.setdefault("warnings", []).append(f"entry gated: {gate}")
     return result
+
+
+def reconcile_open_positions(
+    previous_lanes: dict[str, Any] | None,
+    reconciliation: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Reconcile per-lane previous signals against the execution ledger.
+
+    The engine stamps ``lifecycle.paper_position_open = True`` at activation on
+    its own trigger detection, then latches into MANAGE on the next cycle when
+    it reads that flag back from its own prior output — with no confirmation a
+    paper fill actually happened. A missed entry therefore produces a "phantom
+    managed position." This function folds the backend's ledger truth back in.
+
+    ``reconciliation`` is the backend-written feedback
+    ``{"lanes": {lane: {"open": bool, "confident": bool}}}``. For any lane the
+    backend is CONFIDENT holds no open position — the entry was resolved without
+    a live fill (missed/phantom entry) or a position that has since closed —
+    demote that lane's previous signal out of the open lifecycle so the engine
+    re-arms instead of managing nothing: clear ``lifecycle.paper_position_open``
+    AND coerce ``state`` to ``WAIT`` (``state`` — not just the flag — is what
+    ``prior_position_open`` keys on).
+
+    Lanes reported open, or not-yet-confident (a fill may be in flight), are left
+    UNTOUCHED — the reconciliation is deliberately conservative so it can never
+    strip invalidation protection off a real or pending position.
+    """
+    lanes = dict(previous_lanes or {})
+    recon = (reconciliation or {}).get("lanes")
+    if not isinstance(recon, dict):
+        return lanes
+    for lane, signal in list(lanes.items()):
+        entry = recon.get(lane)
+        if not (
+            isinstance(entry, dict)
+            and entry.get("confident") is True
+            and entry.get("open") is not True
+            and isinstance(signal, dict)
+        ):
+            continue
+        demoted = copy.deepcopy(signal)
+        lifecycle = demoted.get("lifecycle")
+        if isinstance(lifecycle, dict):
+            lifecycle["paper_position_open"] = False
+            lifecycle["reconciled_no_position"] = True
+        demoted["state"] = "WAIT"
+        demoted["reconciled_no_position"] = True
+        lanes[lane] = demoted
+    return lanes
 ARM_ENTER_DISTANCE = 0.08
 ARM_EXIT_DISTANCE = 0.18
 ARM_LIFETIME_SECONDS = 5 * 60
