@@ -850,7 +850,10 @@ export class MarketPoller {
         } else {
           this.fastify.log.info(`[MarketPoller] Auto-closing expired position ${pos.id} (${pos.symbol}) as worthless/expired.`);
         }
-        await this.closePositionLocally(pos, 0, 'EXPIRED');
+        // Record the honest terminal status: the contract expired, it did not
+        // fill a broker exit — so EXIT_EXPIRED, not EXIT_FILLED (the default),
+        // to avoid recording a phantom $0 fill in fill/PnL analytics.
+        await this.closePositionLocally(pos, 0, 'EXPIRED', 'EXIT_EXPIRED');
         // Mark as closed locally so we don't sync it below
         pos.status = 'CLOSED';
       }
@@ -885,7 +888,7 @@ export class MarketPoller {
       && expiration < this.getNewYorkDateString(now);
   }
 
-  private async closePositionLocally(position: any, exitPrice: number, reason: string): Promise<number> {
+  private async closePositionLocally(position: any, exitPrice: number, reason: string, executionStatus: string = 'EXIT_FILLED'): Promise<number> {
     const realizedPnl = TradeLifecycleService.calculateRealizedPnl(position, exitPrice, position.quantity);
     await (this.fastify as any).pg.query(
       `UPDATE positions
@@ -893,7 +896,7 @@ export class MarketPoller {
            current_price = $1,
            exit_price = $1,
            realized_pnl = COALESCE(realized_pnl, 0) + $2,
-           execution_status = 'EXIT_FILLED',
+           execution_status = $13,
            exit_reason = $3,
            max_favorable_price = COALESCE($4, max_favorable_price),
            max_adverse_price = COALESCE($5, max_adverse_price),
@@ -911,7 +914,7 @@ export class MarketPoller {
         position.analysis_data == null
           ? null
           : (typeof position.analysis_data === 'string' ? position.analysis_data : JSON.stringify(position.analysis_data)),
-        ` [Auto-closed: ${reason}]`, position.id]
+        ` [Auto-closed: ${reason}]`, position.id, executionStatus]
     );
     return realizedPnl;
   }

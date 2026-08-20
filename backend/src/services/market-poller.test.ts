@@ -203,18 +203,27 @@ async function testLocalClosePreservesPriorRealizedPnl() {
     }
   } as any;
   const poller = new MarketPoller(fastify, {}) as any;
-  const closePnl = await poller.closePositionLocally({
+  const position = {
     id: 45,
     entry_price: 0.49,
     quantity: 1,
     realized_pnl: 12,
     entry_action: 'BUY_TO_OPEN'
-  }, 0, 'EXPIRED');
+  };
+  const closePnl = await poller.closePositionLocally(position, 0, 'EXPIRED', 'EXIT_EXPIRED');
 
   assert(closePnl === -49, `A worthless $0.49 long contract should realize -$49, got ${closePnl}`);
   assert(updateSql.includes('COALESCE(realized_pnl, 0) + $2'), 'A final close must add to PnL already realized by earlier trims');
   assert(updateParams[0] === 0 && updateParams[1] === -49, `Expected zero exit and -$49 close leg, got ${JSON.stringify(updateParams)}`);
   assert(updateParams[2] === 'EXPIRED', 'The close must preserve its lifecycle reason');
+  // An expired contract never filled a broker exit — it must not be recorded as
+  // a fill, which would poison fill/PnL analytics keyed on EXIT_FILLED.
+  assert(!updateSql.includes("execution_status = 'EXIT_FILLED'"), 'execution_status must not be hardcoded to EXIT_FILLED');
+  assert(updateParams[12] === 'EXIT_EXPIRED', `An expired close must record EXIT_EXPIRED, got ${JSON.stringify(updateParams[12])}`);
+
+  // The default (non-expiry) close still records a genuine fill.
+  await poller.closePositionLocally(position, 0.1, 'STOP_LOSS');
+  assert(updateParams[12] === 'EXIT_FILLED', `A normal local close must default to EXIT_FILLED, got ${JSON.stringify(updateParams[12])}`);
 }
 
 async function testPendingAndReviewExitsStayUnresolved() {
@@ -629,7 +638,10 @@ async function testExpiredPositionWithRejectedExitIsReconciled() {
 
   const expiredClose = closes.find((c) => c.params[2] === 'EXPIRED');
   assert(Boolean(expiredClose), 'An expired contract stuck in EXIT_REJECTED must be reconciled to closed, not left counting against exposure limits');
-  assert(expiredClose!.sql.includes("execution_status = 'EXIT_FILLED'"), 'The reconciled expiry close must persist a terminal execution status');
+  // The reconciliation must record EXIT_EXPIRED, not a phantom EXIT_FILLED — the
+  // contract expired, it never filled a broker exit.
+  assert(!expiredClose!.sql.includes("execution_status = 'EXIT_FILLED'"), 'The reconciled expiry close must not hardcode EXIT_FILLED');
+  assert(expiredClose!.params[12] === 'EXIT_EXPIRED', `The reconciled expiry close must persist EXIT_EXPIRED, got ${JSON.stringify(expiredClose!.params[12])}`);
 }
 
 async function runTests() {
