@@ -426,6 +426,117 @@ def evaluate_gex_wall(
             f"({touch_volume:.0f} vs {avg_volume:.0f} avg) — break risk; size down."
         )
 
+    # --- Tier-A price-structure confluence -----------------------------------
+    # Boosts follow the wrapper's VWAP idiom (upgrade confidence only, capped at
+    # A+); the acceptance guard mirrors the volume-expansion guard above
+    # (downgrade a fade that is actually breaking, never below the base floor).
+    _CONF_ORDER = ["C", "B", "A", "A+"]
+
+    def _bump(conf: str) -> str:
+        try:
+            idx = _CONF_ORDER.index(conf)
+        except ValueError:
+            return conf
+        return _CONF_ORDER[min(idx + 1, len(_CONF_ORDER) - 1)]
+
+    # Defaults for the informational structure block. The price-structure
+    # computation only affects a PARTICIPATE verdict, so it (and its import) is
+    # skipped entirely for the common AVOID/CAUTION outputs.
+    session: dict[str, Any] = {}
+    disp: dict[str, Any] = {}
+    fvgs: list[dict[str, Any]] = []
+    structure_notes: list[str] = []
+    swept: dict[str, Any] | None = None
+    accept: dict[str, Any] | None = None
+    fvg_aligned = False
+
+    if verdict == "PARTICIPATE":
+        # Lazy import (also breaks a module-load cycle: price_structure imports
+        # helpers from this module).
+        from price_structure import (
+            acceptance,
+            detect_sweep,
+            displacement,
+            find_fvgs,
+            reference_levels,
+            session_levels,
+        )
+
+        session = session_levels(bars, now=current)
+        refs = reference_levels(session)
+        disp = displacement(closed_5m)
+        fvgs = find_fvgs(closed_5m)
+        trade_up = direction == "CALL"
+        disp_aligned = bool(
+            disp.get("is_displacement")
+            and disp.get("direction") == ("up" if trade_up else "down")
+        )
+        fvg_aligned = any(
+            (g["type"] == "bullish") == trade_up and not g["inverted"] for g in fvgs
+        )
+
+        # A sweep of a liquidity pool on the trade's origin side (sell-side for a
+        # long, buy-side for a short) that reclaims = a stop-run reversal. In
+        # practice a sweep-and-reclaim of the *wall* is what Check 3/4 already
+        # classify as a failed break — so this boosts the break-fail setups; the
+        # pure wick bounce/rejection (Check 1/2) rarely breaches and stays fade.
+        if trade_up:
+            sweep_levels = [pw] + [r["price"] for r in refs if r["kind"] == "sell_side"]
+            for lvl in sweep_levels:
+                swept = detect_sweep(closed_5m, lvl, side="sell_side")
+                if swept:
+                    break
+            accept = acceptance(closed_5m, pw, side="below")
+        else:
+            sweep_levels = [cw] + [r["price"] for r in refs if r["kind"] == "buy_side"]
+            for lvl in sweep_levels:
+                swept = detect_sweep(closed_5m, lvl, side="buy_side")
+                if swept:
+                    break
+            accept = acceptance(closed_5m, cw, side="above")
+
+        boosted = False
+        if setup_type in FADE_SETUPS:
+            if disp_aligned:
+                structure_notes.append("displacement confirms reversal")
+                boosted = True
+            # Guard: acceptance *through* the defended wall means it is breaking,
+            # not holding — downgrade the fade (mirrors the volume guard).
+            if accept and accept.get("accepted"):
+                verdict, confidence = "CAUTION", "B"
+                reason = (
+                    f"{reason} Price is ACCEPTING through the wall "
+                    f"({accept['dwell_bars']} closes beyond) — break risk; size down."
+                )
+                structure_notes.append("acceptance beyond wall — fade downgraded")
+                boosted = False
+        else:
+            # Break-fail momentum: reward a genuine sweep+reclaim, a wall that is
+            # also an HTF liquidity level, an aligned FVG, or a displacement.
+            traded_wall = cw if direction == "PUT" else pw
+            ref_kind = "buy_side" if direction == "PUT" else "sell_side"
+            htf_confluent = any(
+                r["kind"] == ref_kind
+                and abs(r["price"] - traded_wall) / traded_wall * 100 <= WALL_PROXIMITY_PCT
+                for r in refs
+            )
+            if swept:
+                structure_notes.append(f"liquidity sweep of {swept['level']} reclaimed")
+                boosted = True
+            if htf_confluent:
+                structure_notes.append("wall coincides with HTF liquidity level")
+                boosted = True
+            if fvg_aligned:
+                structure_notes.append("aligned FVG near entry")
+                boosted = True
+            if disp_aligned:
+                structure_notes.append("displacement confirms failure")
+                boosted = True
+
+        if boosted and verdict == "PARTICIPATE" and confidence != "A+":
+            confidence = _bump(confidence)
+            reason = f"{reason} Structure confluence: {'; '.join(structure_notes)}."
+
     side = "calls" if direction == "CALL" else "puts" if direction == "PUT" else None
 
     return {
@@ -471,6 +582,20 @@ def evaluate_gex_wall(
             "touch": round(touch_volume, 0),
             "avg": round(avg_volume, 0),
             "expanding": volume_expanding,
+        },
+        "structure": {
+            "engine_version": "price-structure-v1",
+            "session": {
+                "prior_day": session.get("prior_day") if session.get("available") else None,
+                "today": session.get("today") if session.get("available") else None,
+                "overnight": session.get("overnight") if session.get("available") else None,
+            },
+            "sweep": swept,
+            "acceptance": accept,
+            "displacement": disp,
+            "fvg_count": len(fvgs),
+            "fvg_aligned": fvg_aligned,
+            "notes": structure_notes,
         },
         # The source strategy trades ~3DTE near-the-money contracts (higher
         # delta, tighter spreads, less theta) — surfaced here as a hint for the

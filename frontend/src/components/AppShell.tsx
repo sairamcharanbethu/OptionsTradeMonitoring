@@ -18,7 +18,6 @@ import {
   Menu,
   Moon,
   PanelTop,
-  Radar,
   Sun,
   Target,
   Trophy,
@@ -70,7 +69,6 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Strategies',
     targets: [
       { label: 'Day Trading', description: 'Guarded strategy monitor', to: '/?tab=day-trading', icon: Gauge },
-      { label: 'Strategy Desk', description: 'Live context and shadow evidence', to: '/strategy-desk', icon: Radar },
       { label: 'Position Monitor', description: 'Take-profit target alerts', to: '/?tab=position-monitor', icon: Target },
       { label: 'Paper Account', description: 'Shared cash, orders, and P&L', to: '/?tab=paper-accounts', icon: WalletCards },
       { label: 'Goals', description: 'Trading targets and progress', to: '/?tab=goals', icon: Trophy }

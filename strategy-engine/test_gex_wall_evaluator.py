@@ -305,5 +305,45 @@ class NearAtmContractSelectionTest(unittest.TestCase):
         self.assertEqual(selected["otm_offset"], 0)
 
 
+class StructureConfluenceTest(unittest.TestCase):
+    """Tier-A price-structure confluence layered onto the wall setups."""
+
+    def test_sweep_reclaim_boosts_break_fail_to_a_plus(self):
+        # The final bar sweeps just below the put wall (524.7 < 525, shallow) and
+        # reclaims strongly on the close. A sweep-and-reclaim of the wall *is* the
+        # failed-breakdown setup (Check 4); the sweep confluence boosts A -> A+.
+        bars = _trend_bars(60, 500, 0.5, last_override=(529.8, 530.1, 524.7, 530.0))
+        result = evaluate_gex_wall(
+            {"call_wall": 560, "put_wall": 525.0, "regime": "Positive"}, bars, now=NOW
+        )
+        self.assertEqual(result["setup_type"], "PUT_WALL_FAILED_BREAKDOWN_CALL")
+        self.assertEqual(result["verdict"], "PARTICIPATE")
+        self.assertEqual(result["confidence"], "A+")
+        notes = result["structure"]["notes"]
+        self.assertTrue(any("liquidity sweep" in n for n in notes))
+        self.assertIsNotNone(result["structure"]["sweep"])
+
+    def test_bounce_without_sweep_stays_a(self):
+        # Final low sits exactly at the wall (no pierce) — no sweep, no boost.
+        bars = _trend_bars(60, 500, 0.5, last_override=(529.8, 530.1, 525.0, 530.0))
+        result = evaluate_gex_wall(
+            {"call_wall": 560, "put_wall": 525.0, "regime": "Positive"}, bars, now=NOW
+        )
+        self.assertEqual(result["setup_type"], "PUT_WALL_BOUNCE_CALL")
+        self.assertEqual(result["confidence"], "A")
+        self.assertIsNone(result["structure"]["sweep"])
+
+    def test_structure_block_always_present(self):
+        bars = _trend_bars(60, 500, 0.5, last_override=(529.8, 530.1, 525.0, 530.0))
+        result = evaluate_gex_wall(
+            {"call_wall": 560, "put_wall": 525.0, "regime": "Positive"}, bars, now=NOW
+        )
+        structure = result["structure"]
+        self.assertEqual(structure["engine_version"], "price-structure-v1")
+        self.assertIn("displacement", structure)
+        self.assertIn("acceptance", structure)
+        self.assertIn("fvg_count", structure)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

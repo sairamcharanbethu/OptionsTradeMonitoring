@@ -35,6 +35,14 @@ async function run() {
     ['borderline confidence 74', 'wider spread 9.0%', 'low relative volume 1.10', 'ZeroGEX risk warnings', 'late-session entry']
   );
 
+  // When AI review can't run, edge-degrading reasons force a SKIP (not a blind
+  // one-contract TRADE); fill-cost / timing reasons alone still allow fallback.
+  assert.equal(PaperTradingService.forceSkipWithoutAi(['borderline confidence 75']), true, 'borderline confidence must force skip');
+  assert.equal(PaperTradingService.forceSkipWithoutAi(['low relative volume 1.00']), true, 'low RVOL must force skip');
+  assert.equal(PaperTradingService.forceSkipWithoutAi(['ZeroGEX risk warnings']), true, 'ZeroGEX risk warnings must force skip');
+  assert.equal(PaperTradingService.forceSkipWithoutAi(['wider spread 9.0%', 'late-session entry']), false, 'fill-cost/timing reasons alone do not force skip');
+  assert.equal(PaperTradingService.forceSkipWithoutAi([]), false, 'no reasons never forces skip');
+
   assert.deepEqual(PaperTradingService.normalizeAIDecision({
     decision: 'trade', risk_tier: 'standard', exit_profile: 'balanced_t2',
     rationale: 'Aligned and liquid', risk_flags: ['late entry']

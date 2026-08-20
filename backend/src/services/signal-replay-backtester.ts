@@ -12,6 +12,13 @@ type ReplayBar = {
   volume: number;
 };
 
+// Mirrors the Python late entry-gate in signal_engine.py (_enforce_entry_gates):
+// keep these in sync. Momentum setups die in a gamma pin; the flip band is
+// max(ATR-scaled, %-of-spot).
+const MOMENTUM_STRATEGIES = new Set(['CONTINUATION', 'MTF_TREND_BREAK', 'ORB_INDEX', 'VWAP_TREND']);
+const FLIP_PROXIMITY_ATR = 1.0;
+const FLIP_PROXIMITY_PCT = 0.0020; // 0.20% of spot floor
+
 type ReplaySignal = {
   id: number;
   symbol: string;
@@ -24,6 +31,9 @@ type ReplaySignal = {
   option_details: any;
   volatility: any;
   no_trade_reasons: string[] | null;
+  gex?: any;
+  strategy_name?: string | null;
+  current_price?: number | null;
   blocked?: boolean;
   replayVixTermStructure?: any;
 };
@@ -212,7 +222,7 @@ type ReplaySnapshotDriftReport = {
 };
 
 type ReplayScenario = {
-  name: 'baseline' | 'macro_aligned' | 'macro_strict' | 'vix_contango';
+  name: 'baseline' | 'macro_aligned' | 'macro_strict' | 'vix_contango' | 'structure_gated';
   description: string;
   trades: ReplayTrade[];
   skippedSignals: number;
@@ -404,6 +414,15 @@ export class SignalReplayBacktester {
         skippedReasons: {},
         summary: this.emptySummary(),
         fillRealism: this.emptyFillRealismSummary()
+      },
+      {
+        name: 'structure_gated',
+        description: 'Applies the live late entry-gate: skips directional entries within the gamma-flip band, and momentum setups in a Positive/Range pin.',
+        trades: [],
+        skippedSignals: 0,
+        skippedReasons: {},
+        summary: this.emptySummary(),
+        fillRealism: this.emptyFillRealismSummary()
       }
     ];
 
@@ -513,7 +532,8 @@ export class SignalReplayBacktester {
 
     const { rows: signalRows } = await (this.fastify as any).pg.query(
       `SELECT id, symbol, signal_type, confidence_score, setup_grade, created_at, market_date,
-              option_expiration_date, option_details, volatility, no_trade_reasons
+              option_expiration_date, option_details, volatility, no_trade_reasons,
+              gex, strategy_name, current_price
        FROM signals
        WHERE signal_type IN ('CALL', 'PUT')
          AND COALESCE(market_date, created_at::date::text) >= $1
@@ -1636,8 +1656,37 @@ export class SignalReplayBacktester {
     return Number.isFinite(numeric) ? numeric : null;
   }
 
+  // Mirrors the two *market-structure* gates from the Python late entry-gate
+  // (signal_engine._enforce_entry_gates): gamma-flip no-man's-land and
+  // momentum-in-Positive/Range. It intentionally does NOT replicate that
+  // function's other two gates — completeness and activation-window-expired —
+  // which are live-execution hygiene, not structural filters, and aren't
+  // reconstructable from a stored signal. Keep the FLIP_* thresholds + the
+  // MOMENTUM_STRATEGIES set in sync with Python. Static + pure for unit tests.
+  public static structureGateSkipReason(signal: ReplaySignal): string | null {
+    const gex = signal.gex || {};
+    const spot = Number(signal.current_price);
+    const flip = Number(gex.flip ?? gex.gamma_flip);
+    const regime = String(gex.regime || '');
+    const gammaRegime = String(gex.gamma_regime || '');
+    const strategy = String(signal.strategy_name || '').trim().toUpperCase();
+
+    if (Number.isFinite(spot) && spot > 0 && Number.isFinite(flip)) {
+      const atr = [signal.volatility?.atr_5m, gex.atr_5m, gex.atr]
+        .map((v: any) => Number(v))
+        .find((v: number) => Number.isFinite(v) && v > 0) || 0;
+      const buffer = Math.max(FLIP_PROXIMITY_ATR * atr, FLIP_PROXIMITY_PCT * spot);
+      if (Math.abs(spot - flip) <= buffer) return 'flip_no_mans_land';
+    }
+    if (MOMENTUM_STRATEGIES.has(strategy) && regime === 'Positive' && gammaRegime === 'Range') {
+      return 'momentum_in_positive_range';
+    }
+    return null;
+  }
+
   private getScenarioSkipReason(scenario: ReplayScenario['name'], signal: ReplaySignal): string | null {
     if (scenario === 'baseline') return null;
+    if (scenario === 'structure_gated') return SignalReplayBacktester.structureGateSkipReason(signal);
     if (scenario === 'vix_contango') {
       const termStructure = this.getVixTermStructure(signal);
       if (!termStructure) return 'vix_term_structure_unavailable';

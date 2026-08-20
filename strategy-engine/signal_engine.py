@@ -58,6 +58,78 @@ FROZEN_SETUP_STRATEGIES = {
 }
 CONTINUATION_OPEN_STATES = {"ACTIVE", "MANAGE", "EXTENDED"}
 WATCH_STATES = {"WATCH", "ARMED"}
+
+# --- Late entry gates (see _enforce_entry_gates) ----------------------------
+# Applied once at the single build_signal choke point on the *finalized* signal.
+# MOMENTUM_STRATEGIES are the trend/breakout/continuation family that gets
+# whipsawed in a gamma pin; fades (MTF_REVERSAL, GEX_REJECTION, and the
+# GEX_WALL_* reactions) are deliberately NOT listed — they are meant to trade
+# ranges.
+MOMENTUM_STRATEGIES = {"CONTINUATION", "MTF_TREND_BREAK", "ORB_INDEX", "VWAP_TREND"}
+# No directional entry inside a band around the gamma flip: at the flip dealer
+# gamma changes sign and price whipsaws (the 0/8 pin-day tape all fired within
+# ~0.25% of the flip, 0.3–1.8 pts away). The band is max(ATR-scaled, %-of-spot)
+# so it both adapts to volatility and holds a floor on ultra-low-ATR pins.
+FLIP_PROXIMITY_ATR = 1.0
+FLIP_PROXIMITY_PCT = 0.0020   # 0.20% of spot floor
+
+
+def _enforce_entry_gates(
+    result: dict[str, Any], *, spot: Any, atr_5m: Any
+) -> dict[str, Any]:
+    """Demote an otherwise-executable signal to track-only when a late gate trips.
+
+    Runs on the finalized ``result`` at the end of ``build_signal`` — the one
+    point every executable branch passes through. Only touches signals that are
+    live (``state==ACTIVE`` and ``lifecycle.entry_allowed``); flips
+    ``lifecycle.entry_allowed`` to ``False`` (the actual execution gate consumed
+    by the paper/live layers) and records blockers/warnings. Never promotes.
+
+    Gates:
+      1. Completeness — missing strategy or a non-directional side is malformed.
+      2. Activation-window — a "track only" signal must not be executable.
+      3. Gamma-flip no-man's-land — within ``FLIP_PROXIMITY_ATR`` × ATR of flip.
+      4. Momentum-in-pin — a MOMENTUM_STRATEGIES setup in a Positive/Range regime.
+    """
+    lifecycle = result.get("lifecycle") or {}
+    if not (lifecycle.get("entry_allowed") and str(result.get("state")).upper() == "ACTIVE"):
+        return result
+
+    gex = result.get("gex") or {}
+    strategy = str(result.get("strategy") or "").strip().upper()
+    favoring = str(result.get("favoring") or "").strip()
+    gates: list[str] = []
+
+    if not strategy or favoring not in ("calls", "puts"):
+        gates.append("incomplete signal (missing strategy or side) — not executable")
+
+    if any("activation window expired" in str(w) for w in (result.get("warnings") or [])):
+        gates.append("activation window expired — track only, entry disabled")
+
+    flip = gex.get("flip")
+    if flip is None:
+        flip = gex.get("gamma_flip")
+    if _number(flip) and _number(spot) and _number(atr_5m) and float(atr_5m) > 0:
+        flip_buffer = max(FLIP_PROXIMITY_ATR * float(atr_5m), FLIP_PROXIMITY_PCT * float(spot))
+        if abs(float(spot) - float(flip)) <= flip_buffer:
+            gates.append(
+                f"spot ${float(spot):.2f} within ${flip_buffer:.2f} of gamma flip "
+                f"${float(flip):.2f} — whipsaw no-man's-land"
+            )
+
+    if (
+        strategy in MOMENTUM_STRATEGIES
+        and str(gex.get("regime")) == "Positive"
+        and str(gex.get("gamma_regime")) == "Range"
+    ):
+        gates.append(f"{strategy} momentum setup blocked in Positive/Range pin regime")
+
+    if gates:
+        result.setdefault("lifecycle", {})["entry_allowed"] = False
+        for gate in gates:
+            result.setdefault("blockers", []).append(gate)
+            result.setdefault("warnings", []).append(f"entry gated: {gate}")
+    return result
 ARM_ENTER_DISTANCE = 0.08
 ARM_EXIT_DISTANCE = 0.18
 ARM_LIFETIME_SECONDS = 5 * 60
@@ -7017,6 +7089,7 @@ def build_signal(
         result["blockers"].append(
             f"two same-side invalidations; {failure_side} blocked until a new completed 15m bar realigns"
         )
+    _enforce_entry_gates(result, spot=spot, atr_5m=atr_5m)
     return _dedupe_messages(result)
 
 

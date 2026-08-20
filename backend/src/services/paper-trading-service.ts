@@ -11,9 +11,27 @@ const ACCOUNT_ID = SHARED_PAPER_ACCOUNT_ID;
 const STRATEGY_NAME = PAPER_STRATEGIES.DAY_TRADING;
 const PROMPT_VERSION = 'paper-risk-v2';
 export const PAPER_POLICY_VERSION = 'paper-exit-v2';
-const MAX_DAILY_AI_CALLS = 3;
+// Raised from 3 — a 3-call/day cap was exhausted after the first few signals,
+// silently dropping the AI risk gate for the rest of the session. Still a
+// runaway-cost guardrail, just sized for a normal signal count.
+const MAX_DAILY_AI_CALLS = 12;
 const DEFAULT_PAPER_TRAILING_STOP_PCT = 15;
 const MAX_MANUAL_EXIT_QUOTE_AGE_MS = 15_000;
+// Reason keys emitted by aiReviewReasons. The edge-degrading subset
+// (FORCE_SKIP_REASON_PREFIXES) forces a SKIP when AI review can't run. Shared so
+// the two stay in sync — reword a reason here, in one place, not in two.
+const AI_REVIEW_REASON = {
+  borderlineConfidence: 'borderline confidence',
+  widerSpread: 'wider spread',
+  lowRelativeVolume: 'low relative volume',
+  zeroGexWarnings: 'ZeroGEX risk warnings',
+  lateSession: 'late-session entry'
+} as const;
+const FORCE_SKIP_REASON_PREFIXES: string[] = [
+  AI_REVIEW_REASON.borderlineConfidence,
+  AI_REVIEW_REASON.lowRelativeVolume,
+  AI_REVIEW_REASON.zeroGexWarnings
+];
 const ET_TIME = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false
 });
@@ -659,12 +677,20 @@ export class PaperTradingService {
     const spread = Number(option.spread_pct);
     const rvol = Number(signal.market_context?.rvol_1m);
     const zeroWarnings = signal.zerogex_decision?.gates?.[signal.favoring]?.warnings;
-    if (Number.isFinite(confidence) && confidence < 80) reasons.push(`borderline confidence ${confidence}`);
-    if (Number.isFinite(spread) && spread >= 8) reasons.push(`wider spread ${spread.toFixed(1)}%`);
-    if (Number.isFinite(rvol) && rvol > 0 && rvol < 1.2) reasons.push(`low relative volume ${rvol.toFixed(2)}`);
-    if (Array.isArray(zeroWarnings) && zeroWarnings.length > 0) reasons.push('ZeroGEX risk warnings');
-    if (etMinutes >= 14 * 60 + 30) reasons.push('late-session entry');
+    if (Number.isFinite(confidence) && confidence < 80) reasons.push(`${AI_REVIEW_REASON.borderlineConfidence} ${confidence}`);
+    if (Number.isFinite(spread) && spread >= 8) reasons.push(`${AI_REVIEW_REASON.widerSpread} ${spread.toFixed(1)}%`);
+    if (Number.isFinite(rvol) && rvol > 0 && rvol < 1.2) reasons.push(`${AI_REVIEW_REASON.lowRelativeVolume} ${rvol.toFixed(2)}`);
+    if (Array.isArray(zeroWarnings) && zeroWarnings.length > 0) reasons.push(AI_REVIEW_REASON.zeroGexWarnings);
+    if (etMinutes >= 14 * 60 + 30) reasons.push(AI_REVIEW_REASON.lateSession);
     return reasons;
+  }
+
+  // When an AI review is warranted but unavailable (budget exhausted / disabled
+  // / errored), edge-degrading reasons must NOT default to a one-contract TRADE
+  // — the whole point of the review was to adjudicate them. Force a SKIP for the
+  // reasons that actually erode edge (fill-cost or timing reasons alone don't).
+  public static forceSkipWithoutAi(reasons: string[]): boolean {
+    return (reasons || []).some((r) => FORCE_SKIP_REASON_PREFIXES.some((b) => String(r).startsWith(b)));
   }
 
   private optionFor(signal: Record<string, any>) {
@@ -740,10 +766,24 @@ export class PaperTradingService {
       rationale: 'Clear setup; deterministic paper sizing used without an AI call.',
       riskFlags: []
     };
-    const fallback: PaperDecision = {
-      decision: 'TRADE', riskTier: 'CAUTIOUS', exitProfile: 'BALANCED_T2', source: 'FALLBACK',
-      rationale: 'AI review was unavailable or budget-limited; one-contract fallback applied.', riskFlags: ['AI sizing unavailable']
-    };
+    // Fallback when AI review is warranted but cannot run. If the reasons erode
+    // edge, SKIP rather than trade blind; otherwise a one-contract TRADE stands.
+    const riskyWithoutAi = PaperTradingService.forceSkipWithoutAi(aiReasons);
+    const guardedFallback = (rationale: string, flags: string[]): PaperDecision =>
+      riskyWithoutAi
+        ? {
+            decision: 'SKIP', riskTier: 'CAUTIOUS', exitProfile: 'BALANCED_T2', source: 'FALLBACK',
+            rationale: `${rationale} Unadjudicated risk (${aiReasons.join('; ')}) — skipped.`,
+            riskFlags: [...flags, 'skipped: AI review unavailable']
+          }
+        : {
+            decision: 'TRADE', riskTier: 'CAUTIOUS', exitProfile: 'BALANCED_T2', source: 'FALLBACK',
+            rationale, riskFlags: flags
+          };
+    const fallback = guardedFallback(
+      'AI review was unavailable or budget-limited; one-contract fallback applied.',
+      ['AI sizing unavailable']
+    );
     let bounded = rulesDecision;
     let aiRequested = false;
     let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -769,13 +809,12 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           bounded = fallback;
         }
       } else {
-        bounded = {
-          ...fallback,
-          rationale: underBudget
+        bounded = guardedFallback(
+          underBudget
             ? 'AI review is disabled; one-contract fallback applied.'
             : `Daily AI call budget of ${MAX_DAILY_AI_CALLS} reached; one-contract fallback applied.`,
-          riskFlags: [underBudget ? 'AI review disabled' : 'Daily AI call budget reached']
-        };
+          [underBudget ? 'AI review disabled' : 'Daily AI call budget reached']
+        );
       }
     }
     const availableCash = Number(account.cash_balance) - Number(account.reserved_cash);

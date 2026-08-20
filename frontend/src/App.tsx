@@ -14,7 +14,6 @@ const TradesPage = lazy(() => import('./pages/TradesPage'));
 const SystemHealthPage = lazy(() => import('./pages/SystemHealthPage'));
 const TradeCommandCenterPage = lazy(() => import('./pages/TradeCommandCenterPage'));
 const StrategyGuidePage = lazy(() => import('./pages/StrategyGuidePage'));
-const StrategyDeskPage = lazy(() => import('./pages/StrategyDeskPage'));
 const TradeIntelligencePage = lazy(() => import('./pages/TradeIntelligencePage'));
 const ManualEntryPage = lazy(() => import('./pages/ManualEntryPage'));
 const OptionsCalculatorPage = lazy(() => import('./pages/OptionsCalculatorPage'));
@@ -93,7 +92,6 @@ function App() {
                 <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
                 <Route path="/system-health" element={<SystemHealthPage />} />
                 <Route path="/strategy-guide" element={<StrategyGuidePage />} />
-                <Route path="/strategy-desk" element={<StrategyDeskPage />} />
                 <Route path="/positions/:id" element={<PositionDetailsPage />} />
                 {devTradeTestsEnabled && <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />}
                 <Route path="*" element={<NotFoundPage />} />
