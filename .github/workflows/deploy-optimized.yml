@@ -187,7 +187,7 @@ jobs:
             
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             
-            services=(trade-staging-backend trade-staging-frontend zerogex-prefetch zerogex-prefetch-qqq strategy-engine)
+            services=(trade-staging-backend trade-staging-frontend zerogex-prefetch strategy-engine)
             docker compose -p ${{ env.COMPOSE_PROJECT_NAME }} pull "${services[@]}"
             
             export PORT_BACKEND=${{ env.PORT_BACKEND }}
