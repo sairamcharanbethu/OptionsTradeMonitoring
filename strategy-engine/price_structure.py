@@ -63,11 +63,6 @@ DISPLACEMENT_ATR_MULT = 1.5      # body >= this * ATR = displacement
 DISPLACEMENT_BODY_RATIO = 0.55   # body must be >= this fraction of the range
 FVG_LOOKBACK = 20                # bars scanned for fair-value gaps
 FVG_MIN_GAP_ATR = 0.15           # gap must be >= this * ATR to matter
-VELOCITY_LOOKBACK = 3            # bars over which ROC is measured
-VELOCITY_FAST_MULT = 1.5         # |ROC| >= this * ATR = fast approach
-EFFORT_LOOKBACK = 10             # bars for the volume/range baselines
-EFFORT_HIGH_MULT = 1.5           # volume >= this * avg = high effort
-RESULT_LOW_MULT = 0.7            # range <= this * avg = low result
 
 
 def _et_minute_of_day(epoch: float) -> int:
@@ -413,110 +408,6 @@ def find_fvgs(
     return out
 
 
-def velocity(
-    bars: list[dict[str, Any]] | None,
-    *,
-    lookback: int = VELOCITY_LOOKBACK,
-    atr_len: int = ATR_LEN,
-    fast_mult: float = VELOCITY_FAST_MULT,
-) -> dict[str, Any]:
-    """ATR-normalized rate of change over the last ``lookback`` closed bars."""
-    clean = _clean(bars)
-    empty = {"roc": 0.0, "atr": None, "velocity_atr": None, "fast": False, "direction": "none"}
-    if len(clean) < lookback + 1:
-        return empty
-    atr = _atr(clean, atr_len)
-    roc = clean[-1]["close"] - clean[-1 - lookback]["close"]
-    if not _number(atr) or atr <= 0:
-        return {**empty, "roc": round(roc, 4), "atr": atr}
-    vel = roc / atr
-    return {
-        "roc": round(roc, 4),
-        "atr": round(atr, 4),
-        "velocity_atr": round(vel, 3),
-        "fast": abs(vel) >= fast_mult,
-        "direction": "up" if roc > 0 else "down" if roc < 0 else "none",
-    }
-
-
-def effort_vs_result(
-    bars: list[dict[str, Any]] | None,
-    *,
-    lookback: int = EFFORT_LOOKBACK,
-    effort_mult: float = EFFORT_HIGH_MULT,
-    result_mult: float = RESULT_LOW_MULT,
-) -> dict[str, Any]:
-    """Bar-level Wyckoff effort-vs-result on the last closed bar.
-
-    Effort = volume vs. the recent average; result = bar range vs. the recent
-    average. High effort with low result (``absorption_like``) hints that price
-    is being absorbed. NOTE: this is a *bar-level proxy* — true absorption needs
-    footprint/delta (aggressor-split volume), which this system does not ingest.
-    """
-    clean = _clean(bars)
-    empty = {
-        "effort": None, "result": None, "absorption_like": False,
-        "proxy": True, "note": "bar-level proxy; not footprint delta",
-    }
-    if len(clean) < 2:
-        return empty
-    window = clean[-(lookback + 1):-1]
-    if not window:
-        return empty
-    avg_vol = sum(b["volume"] for b in window) / len(window)
-    avg_range = sum((b["high"] - b["low"]) for b in window) / len(window)
-    last = clean[-1]
-    last_range = last["high"] - last["low"]
-    effort = (last["volume"] / avg_vol) if avg_vol > 0 else None
-    result = (last_range / avg_range) if avg_range > 0 else None
-    absorption = bool(
-        _number(effort) and _number(result)
-        and effort >= effort_mult and result <= result_mult
-    )
-    return {
-        "effort": round(effort, 3) if _number(effort) else None,
-        "result": round(result, 3) if _number(result) else None,
-        "absorption_like": absorption,
-        "proxy": True,
-        "note": "bar-level proxy; not footprint delta",
-    }
-
-
-def structure_context(
-    bars: list[dict[str, Any]] | None,
-    *,
-    now: float | None = None,
-) -> dict[str, Any]:
-    """Assemble all Tier-A features on a basis identical to the wall evaluator.
-
-    Session levels use the raw (finest) bars for truest extremes; pattern
-    features (sweep inputs, displacement, FVG, velocity, effort) run on *closed
-    5m* bars via the shared ``_aggregate`` so they line up with
-    ``evaluate_gex_wall``. ``detect_sweep`` / ``acceptance`` are level-relative
-    and left for the caller to run against a specific wall or reference level.
-    """
-    import time as _time
-
-    current = _time.time() if now is None else now
-    raw = _clean(bars)
-    closed_5m = _aggregate(raw, 5, now=current)
-    session = session_levels(raw, now=current)
-    return {
-        "engine_version": ENGINE_VERSION,
-        "generated_at": current,
-        "bars_5m_used": len(closed_5m),
-        "session": session,
-        "reference_levels": reference_levels(session),
-        "displacement": displacement(closed_5m),
-        "velocity": velocity(closed_5m),
-        "fvgs": find_fvgs(closed_5m),
-        "effort_vs_result": effort_vs_result(closed_5m),
-        # Expose the closed 5m basis so callers can run level-relative features
-        # (detect_sweep / acceptance) against walls without re-aggregating.
-        "_closed_5m": closed_5m,
-    }
-
-
 if __name__ == "__main__":  # pragma: no cover - manual smoke check
     import json
 
@@ -527,6 +418,11 @@ if __name__ == "__main__":  # pragma: no cover - manual smoke check
          "close": 500 + i * 0.1, "volume": 1000}
         for i in range(60)
     ]
-    ctx = structure_context(demo_bars, now=demo_now)
-    ctx.pop("_closed_5m", None)
-    print(json.dumps(ctx, indent=2))
+    session = session_levels(demo_bars, now=demo_now)
+    closed_5m = _aggregate(_clean(demo_bars), 5, now=demo_now)
+    print(json.dumps({
+        "session": session,
+        "reference_levels": reference_levels(session),
+        "displacement": displacement(closed_5m),
+        "fvgs": find_fvgs(closed_5m),
+    }, indent=2))

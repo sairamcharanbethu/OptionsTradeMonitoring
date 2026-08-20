@@ -247,12 +247,6 @@ STRATEGY_FAMILY_RISK_PLAN = {
         "whipsaw_stop",
         "unclassified",
     ],
-    "consecutive_loss_bench": {
-        "losses": 3,
-        "sessions": 5,
-        "status": "future_activation_gate",
-    },
-    "family_circuit_breaker": {"status": "future_activation_gate"},
 }
 
 

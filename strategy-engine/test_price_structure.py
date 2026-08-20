@@ -7,12 +7,9 @@ from price_structure import (
     acceptance,
     detect_sweep,
     displacement,
-    effort_vs_result,
     find_fvgs,
     reference_levels,
     session_levels,
-    structure_context,
-    velocity,
     ET,
 )
 
@@ -188,48 +185,6 @@ class FvgTest(unittest.TestCase):
         bull = [g for g in gaps if g["type"] == "bullish"][0]
         self.assertTrue(bull["filled"])
         self.assertTrue(bull["inverted"])
-
-
-class VelocityTest(unittest.TestCase):
-    def test_fast_move_flagged(self):
-        bars = [_bar(i, 100, 100.2, 99.8, 100) for i in range(1, 9)]
-        # Then a fast 3-bar ramp far exceeding ATR (~0.4).
-        bars += [_bar(9, 100, 101, 100, 101), _bar(10, 101, 102, 101, 102), _bar(11, 102, 103, 102, 103)]
-        r = velocity(bars)
-        self.assertTrue(r["fast"])
-        self.assertEqual(r["direction"], "up")
-
-    def test_slow_move_not_fast(self):
-        bars = [_bar(i, 100, 100.5, 99.5, 100 + i * 0.01) for i in range(1, 12)]
-        self.assertFalse(velocity(bars)["fast"])
-
-
-class EffortVsResultTest(unittest.TestCase):
-    def test_absorption_like(self):
-        # Steady baseline, then a huge-volume tiny-range bar (effort, no result).
-        bars = [_bar(i, 100, 101, 99, 100, v=1000) for i in range(1, 11)]
-        bars.append(_bar(11, 100, 100.2, 99.9, 100.05, v=5000))
-        r = effort_vs_result(bars)
-        self.assertTrue(r["absorption_like"])
-        self.assertTrue(r["proxy"])
-
-    def test_normal_bar_not_absorption(self):
-        bars = [_bar(i, 100, 101, 99, 100, v=1000) for i in range(1, 12)]
-        self.assertFalse(effort_vs_result(bars)["absorption_like"])
-
-
-class StructureContextTest(unittest.TestCase):
-    def test_assembles_without_error(self):
-        base = _et_epoch("2024-01-03", 10, 0)
-        bars = [_bar(base + i * 60, 100 + i * 0.05, 100 + i * 0.05 + 0.2,
-                     100 + i * 0.05 - 0.2, 100 + i * 0.05) for i in range(120)]
-        ctx = structure_context(bars, now=base + 120 * 60 + 30)
-        self.assertEqual(ctx["engine_version"], "price-structure-v1")
-        self.assertTrue(ctx["session"]["available"])
-        self.assertIn("displacement", ctx)
-        self.assertIn("velocity", ctx)
-        self.assertIn("fvgs", ctx)
-        self.assertGreater(ctx["bars_5m_used"], 0)
 
 
 if __name__ == "__main__":
