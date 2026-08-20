@@ -43,6 +43,24 @@ async function run() {
   assert.equal(PaperTradingService.forceSkipWithoutAi(['wider spread 9.0%', 'late-session entry']), false, 'fill-cost/timing reasons alone do not force skip');
   assert.equal(PaperTradingService.forceSkipWithoutAi([]), false, 'no reasons never forces skip');
 
+  // Dollar-risk cap (per-trade max loss). riskPerContract = limit*100*stop%.
+  // Expensive contract: 1 contract's worst loss ($71.80 at 20%) exceeds a $50
+  // budget -> quantity 0 (caller skips).
+  assert.deepEqual(PaperTradingService.riskCappedQuantity(1, 3.59, 20, 50),
+    { quantity: 0, riskPerContract: 71.80, capped: true });
+  // Mid-priced within budget -> unchanged at the tier size.
+  assert.deepEqual(PaperTradingService.riskCappedQuantity(1, 1.20, 20, 50),
+    { quantity: 1, riskPerContract: 24.00, capped: false });
+  // Reduces the tier size when the tier would exceed the budget (3 -> 2).
+  assert.deepEqual(PaperTradingService.riskCappedQuantity(3, 1.20, 20, 50),
+    { quantity: 2, riskPerContract: 24.00, capped: true });
+  // Never scales a cheap contract UP beyond the tier (stays 1, not 12).
+  assert.equal(PaperTradingService.riskCappedQuantity(1, 0.20, 20, 50).quantity, 1,
+    'risk cap must never increase quantity above the tier');
+  // Disabled/invalid budget is a no-op.
+  assert.equal(PaperTradingService.riskCappedQuantity(2, 1.20, 20, 0).capped, false,
+    'a non-positive risk budget must not cap');
+
   assert.deepEqual(PaperTradingService.normalizeAIDecision({
     decision: 'trade', risk_tier: 'standard', exit_profile: 'balanced_t2',
     rationale: 'Aligned and liquid', risk_flags: ['late entry']

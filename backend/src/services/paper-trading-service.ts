@@ -637,6 +637,28 @@ export class PaperTradingService {
     return { quantity: Math.min(desired[tier], maxAffordable), maxAffordable };
   }
 
+  // Per-trade dollar-risk cap. Given the entry limit and the premium-stop
+  // fraction, computes the worst intended $ loss for ONE contract and reduces
+  // the tier-derived quantity so the whole trade's worst-case loss stays within
+  // `maxRiskDollars`. It ONLY ever reduces — never scales a cheap contract up —
+  // and returns quantity 0 when even one contract exceeds the budget (the
+  // caller then skips). This is what stops an expensive near-money contract
+  // from turning a small adverse move into an outsized dollar loss.
+  public static riskCappedQuantity(
+    baseQuantity: number,
+    limitPrice: number,
+    premiumStopPct: number,
+    maxRiskDollars: number
+  ): { quantity: number; riskPerContract: number; capped: boolean } {
+    const riskPerContract = Number((Math.max(0, limitPrice) * 100 * (Math.max(0, premiumStopPct) / 100)).toFixed(2));
+    if (!(riskPerContract > 0) || !(maxRiskDollars > 0)) {
+      return { quantity: baseQuantity, riskPerContract, capped: false };
+    }
+    const maxByRisk = Math.floor(maxRiskDollars / riskPerContract);
+    const quantity = Math.max(0, Math.min(baseQuantity, maxByRisk));
+    return { quantity, riskPerContract, capped: quantity < baseQuantity };
+  }
+
   public static premiumStopPct(signal: Record<string, any>): number {
     const configured = Number(signal.paper_policy?.premium_stop_pct);
     return Number.isFinite(configured) && configured > 0 && configured < 100
@@ -822,6 +844,27 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const sizing = PaperTradingService.quantityForTier(availableCash, protectedLimit, bounded.riskTier);
     let quantity = bounded.source === 'FALLBACK' ? Math.min(1, sizing.maxAffordable) : sizing.quantity;
     if (bounded.decision === 'SKIP') quantity = 0;
+
+    // Dollar-risk cap: a single trade's worst-case (premium-stop) loss must not
+    // exceed the per-trade budget. Only reduces the tier size; skips when even
+    // one contract already exceeds it. Applies to fallback 1-contract entries
+    // too (those produced the largest dollar losses on expensive contracts).
+    const configuredMaxRisk = Number(settings.strategy_max_risk_per_trade_dollars);
+    const maxRiskPerTrade = Number.isFinite(configuredMaxRisk) && configuredMaxRisk > 0 ? configuredMaxRisk : 50;
+    let riskCapSkip = false;
+    if (bounded.decision !== 'SKIP' && quantity >= 1) {
+      const riskCap = PaperTradingService.riskCappedQuantity(
+        quantity, protectedLimit, PaperTradingService.premiumStopPct(signal), maxRiskPerTrade
+      );
+      if (riskCap.capped) {
+        bounded.riskFlags = [
+          ...bounded.riskFlags,
+          `risk-capped: ~$${riskCap.riskPerContract.toFixed(0)}/contract vs $${maxRiskPerTrade} budget`
+        ];
+        quantity = riskCap.quantity;
+        riskCapSkip = quantity < 1;
+      }
+    }
     const signalRow = await (this.fastify as any).pg.query(
       `SELECT id FROM signals WHERE strategy_setup_id = $1 ORDER BY created_at DESC LIMIT 1`, [setupId]
     );
@@ -852,7 +895,10 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     }
     if (!decisionRow || bounded.decision === 'SKIP') return;
     if (quantity < 1) {
-      await this.journal('DECISION_SKIPPED', 'TRADE skipped because available paper cash could not fund one contract.', decisionRow, null, protectedLimit, { availableCash, maxAffordable: sizing.maxAffordable });
+      const skipReason = riskCapSkip
+        ? `TRADE skipped: one contract's worst-case loss exceeds the $${maxRiskPerTrade} per-trade risk budget.`
+        : 'TRADE skipped because available paper cash could not fund one contract.';
+      await this.journal('DECISION_SKIPPED', skipReason, decisionRow, null, protectedLimit, { availableCash, maxAffordable: sizing.maxAffordable, riskCapSkip });
       return;
     }
     const reservedDebit = Number((protectedLimit * quantity * 100).toFixed(2));
