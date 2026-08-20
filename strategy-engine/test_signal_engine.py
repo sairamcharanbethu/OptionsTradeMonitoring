@@ -1538,16 +1538,6 @@ class ZeroGEXShadowContextTest(unittest.TestCase):
                 },
                 "zerogex_shadow": context,
                 "zerogex_decision": _zerogex_decision_context(context),
-                "gex_shadows": {
-                    "sscgex": {
-                        "available": True,
-                        "fresh": True,
-                        "regime": "Positive",
-                        "gamma_regime": "Range",
-                        "put_wall": {"strike": 740.0},
-                        "call_wall": {"strike": 745.0},
-                    }
-                },
                 "execution_enabled": False,
             },
             details=True,
@@ -1560,7 +1550,6 @@ class ZeroGEXShadowContextTest(unittest.TestCase):
         self.assertIn("ZEROGEX BIAS (context; GEX summary is primary)", text)
         self.assertIn("ZEROGEX DECISION: STAND DOWN", text)
         self.assertIn("ZEROGEX NEAR MISS: call_wall_fade", text)
-        self.assertIn("SSCGEX SHADOW (not a trigger)", text)
 
     def test_primary_stand_down_is_context_not_an_entry_veto(self) -> None:
         self.snapshot["composite"] = {

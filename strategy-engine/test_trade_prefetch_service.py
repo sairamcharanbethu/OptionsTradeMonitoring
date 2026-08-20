@@ -13,7 +13,6 @@ from trade_prefetch_service import (
     TradePrefetcher,
     _read_gex,
     _bars_are_stale,
-    _compact_shadow_gex,
     _configured_primary_gex,
     _latest_completed_bar_time,
     _locked_option_expiry,
@@ -215,30 +214,6 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         )
         self.assertEqual(selected["selected_source"], "zerogex")
         self.assertIn("no snapshot", selected["data"]["SPY"]["error"])
-
-    def test_shadow_snapshot_is_explicitly_non_authoritative(self) -> None:
-        now = 1_785_162_000.0
-        snapshot = {
-            "fetched_at": now - 2,
-            "source": "sscgex",
-            "data": {
-                "SPY": {
-                    "regime": "Positive",
-                    "gamma_regime": "Range",
-                    "call_wall": {"strike": 745.0},
-                    "put_wall": {"strike": 740.0},
-                }
-            },
-        }
-        shadow = _compact_shadow_gex(
-            snapshot,
-            source="sscgex",
-            now=now,
-            max_age=20,
-        )
-        self.assertTrue(shadow["fresh"])
-        self.assertFalse(shadow["entry_authority"])
-        self.assertEqual(shadow["mode"], "shadow")
 
     def test_expiry_rolls_from_today_to_next_listed_at_1pm_et(self) -> None:
         et = ZoneInfo("America/New_York")

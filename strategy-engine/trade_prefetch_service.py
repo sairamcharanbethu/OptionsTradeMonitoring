@@ -437,45 +437,6 @@ def _configured_primary_gex(
     return candidate
 
 
-def _compact_shadow_gex(
-    snapshot: dict[str, Any] | None,
-    *,
-    source: str,
-    now: float,
-    max_age: float,
-    heatmap: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    spy = ((snapshot or {}).get("data") or {}).get("SPY") or {}
-    fetched_at = (snapshot or {}).get("fetched_at")
-    age = max(0.0, now - float(fetched_at)) if _valid(fetched_at) else None
-    interpretation = (heatmap or {}).get("interpretation") or {}
-    return {
-        "source": source,
-        "mode": "shadow",
-        "entry_authority": False,
-        "available": bool(snapshot),
-        "fresh": bool(
-            snapshot
-            and age is not None
-            and age <= max_age
-            and not spy.get("error")
-        ),
-        "age_seconds": round(age, 1) if age is not None else None,
-        "regime": spy.get("regime"),
-        "gamma_regime": spy.get("gamma_regime"),
-        "flip": spy.get("flip"),
-        "call_wall": spy.get("call_wall"),
-        "put_wall": spy.get("put_wall"),
-        "net_gex": spy.get("net_gex"),
-        "heatmap": {
-            "api_flip": interpretation.get("api_flip"),
-            "nearest_zero_cross": interpretation.get("nearest_zero_cross"),
-            "status": interpretation.get("status"),
-        } if heatmap else None,
-        "error": spy.get("error"),
-    }
-
-
 def _ticker_time(ticker: Ticker) -> float | None:
     value = getattr(ticker, "time", None)
     if value is None:
@@ -1110,22 +1071,6 @@ class TradePrefetcher:
                 else "disabled"
             ),
         }
-        gex_shadows: dict[str, Any] = {}
-        if provider_roles["sscgex"] == "shadow":
-            gex_shadows["sscgex"] = _compact_shadow_gex(
-                external_gex,
-                source="sscgex",
-                now=generated_at,
-                max_age=self.args.local_gex_max_age,
-                heatmap=sscgex_heatmap,
-            )
-        if provider_roles["ibkr_local_gex"] == "shadow":
-            gex_shadows["ibkr_local_gex"] = _compact_shadow_gex(
-                self.local_gex,
-                source="ibkr-local-oi-model",
-                now=generated_at,
-                max_age=self.args.local_gex_max_age,
-            )
         configured_families = (
             policy.get("strategy_families")
             if isinstance(policy.get("strategy_families"), dict)
@@ -1218,7 +1163,6 @@ class TradePrefetcher:
             )
             lane_signal = _normalize_strategy_lane(lane_signal, lane)
             lane_signal["provider_roles"] = provider_roles
-            lane_signal["gex_shadows"] = gex_shadows
             lane_signal["strategy_policy"] = {
                 "strategy_max_total_debit_dollars": max_total_debit,
                 "strategy_preferred_contracts": preferred_contracts,

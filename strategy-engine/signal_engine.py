@@ -7803,40 +7803,6 @@ def _render_signal_details(signal: dict[str, Any], *, color: bool = False) -> st
             f" | call {call_wall.get('strike') or '-'} {call_wall.get('stage') or '-'}"
             f"{heatmap_text}"
         )
-    for shadow_name, shadow_gex in (signal.get("gex_shadows") or {}).items():
-        if not isinstance(shadow_gex, dict):
-            continue
-        shadow_label = {
-            "sscgex": "SSCGEX",
-            "ibkr_local_gex": "IBKR LOCAL GEX",
-        }.get(str(shadow_name), str(shadow_name).upper())
-        if not shadow_gex.get("available"):
-            lines.append(
-                _style(f"{shadow_label} SHADOW", color, "1", "90")
-                + " (not a trigger): unavailable"
-            )
-            continue
-        shadow_call = shadow_gex.get("call_wall") or {}
-        shadow_put = shadow_gex.get("put_wall") or {}
-        shadow_heatmap = shadow_gex.get("heatmap") or {}
-        shadow_flip = (
-            shadow_gex.get("flip")
-            if _number(shadow_gex.get("flip"))
-            else shadow_heatmap.get("api_flip")
-            if _number(shadow_heatmap.get("api_flip"))
-            else shadow_heatmap.get("nearest_zero_cross")
-        )
-        freshness = "fresh" if shadow_gex.get("fresh") else "stale"
-        lines.append(
-            _style(f"{shadow_label} SHADOW", color, "1", "90")
-            + " (not a trigger): "
-            + f"{shadow_gex.get('regime') or '-'}/"
-            + f"{shadow_gex.get('gamma_regime') or '-'}"
-            + f" | put {shadow_put.get('strike') or '-'}"
-            + f" | call {shadow_call.get('strike') or '-'}"
-            + f" | flip {shadow_flip or '-'}"
-            + f" | {freshness}"
-        )
     shadow = signal.get("zerogex_shadow") or {}
     if shadow:
         role = str(shadow.get("mode") or "shadow").lower()
