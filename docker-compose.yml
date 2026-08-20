@@ -63,8 +63,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # Redis is fail-open at runtime (cache misses / file-poll fallback), so it
+      # need only be started, not healthy, to boot the backend.
       trade-staging-redis:
-        condition: service_healthy
+        condition: service_started
     networks:
       - ssmedia_ssmedia_net
       - default
@@ -243,10 +245,14 @@ services:
     depends_on:
       zerogex-prefetch:
         condition: service_started
+      # The engine is file-decoupled from the backend/redis at runtime (it reads
+      # policy/positions files and degrades gracefully when they are stale), so
+      # it only needs them started, not healthy — lets it boot and self-recover
+      # independently rather than block on backend health.
       trade-staging-redis:
-        condition: service_healthy
+        condition: service_started
       trade-staging-backend:
-        condition: service_healthy
+        condition: service_started
     networks:
       - ssmedia_ssmedia_net
       - default
