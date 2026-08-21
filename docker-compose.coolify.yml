@@ -26,10 +26,9 @@
 # PREREQUISITES in Coolify (one-time):
 #   - Add a Docker Registry credential for ghcr.io (images are private), OR make
 #     the GHCR packages public.
-#   - IB Gateway runs on the HOST machine (not containerized). backend and
-#     strategy-engine reach it via host.docker.internal (extra_hosts mapping).
-#     Set IBKR_HOST=host.docker.internal (or the host LAN IP) in the Coolify env.
-#     No external network and no ib_gateway service are needed.
+#   - The gateway is reachable in-network as ib_gateway:4003 (the backend's
+#     IBKR_HOST default); strategy-engine uses the same name. Override with the
+#     IBKR_HOST env in Coolify only if the gateway moves.
 #   - Only ONE stack may hold the IBKR client IDs (backend 21/22, engine 23) at a
 #     time — stop the old options-monitor-staging stack before running this one.
 #   - Set all environment variables in the Coolify UI (bulk-paste your .env).
@@ -169,11 +168,6 @@ services:
   strategy-engine:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
     restart: unless-stopped
-    extra_hosts:
-      # Reaches the host machine's IB Gateway. Set IBKR_HOST=host.docker.internal
-      # (or the host LAN IP) in the Coolify env; this mapping makes the name
-      # resolve from inside the container, exactly like the backend.
-      - "host.docker.internal:host-gateway"
     environment:
       REDIS_URL: redis://trade-staging-redis:6379
       STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
@@ -183,9 +177,9 @@ services:
       - python3
       - trade_prefetch_service.py
       - --host
-      # Default changed from ib_gateway -> host.docker.internal for the host-run
-      # gateway. Override via IBKR_HOST in the Coolify env if it lives elsewhere.
-      - ${IBKR_HOST:-host.docker.internal}
+      # Same endpoint the backend uses (IBKR_HOST default ib_gateway, which
+      # resolves in-network). Override via IBKR_HOST in the Coolify env if moved.
+      - ${IBKR_HOST:-ib_gateway}
       - --port
       - ${IBKR_PORT:-4003}
       - --client-id
