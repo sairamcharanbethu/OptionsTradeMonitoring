@@ -26,9 +26,11 @@
 # PREREQUISITES in Coolify (one-time):
 #   - Add a Docker Registry credential for ghcr.io (images are private), OR make
 #     the GHCR packages public.
-#   - The gateway is reachable in-network as ib_gateway:4003 (the backend's
-#     IBKR_HOST default); strategy-engine uses the same name. Override with the
-#     IBKR_HOST env in Coolify only if the gateway moves.
+#   - IB Gateway runs on the HOST at 127.0.0.1:4001. Containers reach it via
+#     host.docker.internal:4001 (extra_hosts host-gateway on backend + engine) —
+#     NOT 127.0.0.1, which is the container's own loopback. The host gateway must
+#     accept connections from the docker bridge (uncheck "localhost only" and add
+#     the bridge subnet to Trusted IPs in the IB Gateway API settings).
 #   - Only ONE stack may hold the IBKR client IDs (backend 21/22, engine 23) at a
 #     time — stop the old options-monitor-staging stack before running this one.
 #   - Set all environment variables in the Coolify UI (bulk-paste your .env).
@@ -84,8 +86,8 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       AI_MODEL: ${AI_MODEL:-deepseek/deepseek-chat}
       MORNING_BRIEFING_SCHEDULE: ${MORNING_BRIEFING_SCHEDULE:-30 8 * * *}
-      IBKR_HOST: ${IBKR_HOST:-ib_gateway}
-      IBKR_PORT: ${IBKR_PORT:-4003}
+      IBKR_HOST: ${IBKR_HOST:-host.docker.internal}
+      IBKR_PORT: ${IBKR_PORT:-4001}
       IBKR_CLIENT_ID_MARKET_DATA: ${IBKR_CLIENT_ID_MARKET_DATA:-21}
       IBKR_CLIENT_ID_STREAM: ${IBKR_CLIENT_ID_STREAM:-22}
       IBKR_MARKET_DATA_TYPE: ${IBKR_MARKET_DATA_TYPE:-1}
@@ -168,6 +170,11 @@ services:
   strategy-engine:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    extra_hosts:
+      # Reaches the host-run IB Gateway (127.0.0.1:4001 on the host) via the
+      # docker bridge. 127.0.0.1 from inside a container is the container itself,
+      # so we resolve the host through host.docker.internal instead.
+      - "host.docker.internal:host-gateway"
     environment:
       REDIS_URL: redis://trade-staging-redis:6379
       STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
@@ -177,11 +184,11 @@ services:
       - python3
       - trade_prefetch_service.py
       - --host
-      # Same endpoint the backend uses (IBKR_HOST default ib_gateway, which
-      # resolves in-network). Override via IBKR_HOST in the Coolify env if moved.
-      - ${IBKR_HOST:-ib_gateway}
+      # Host-run IB Gateway, reached via host.docker.internal (see extra_hosts).
+      # Override via IBKR_HOST in the Coolify env if the gateway moves.
+      - ${IBKR_HOST:-host.docker.internal}
       - --port
-      - ${IBKR_PORT:-4003}
+      - ${IBKR_PORT:-4001}
       - --client-id
       - ${IBKR_CLIENT_ID_STRATEGY:-23}
       - --symbols
