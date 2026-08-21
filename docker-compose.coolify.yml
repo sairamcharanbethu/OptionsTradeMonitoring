@@ -1,0 +1,285 @@
+# =============================================================================
+# Coolify deployment compose — Approach B (registry + webhook)
+# =============================================================================
+# Coolify PULLS the images your GitHub Actions CI already builds & pushes to
+# GHCR. It does NOT build here. The GitHub deploy job just hits Coolify's
+# deploy webhook; Coolify re-pulls and restarts.
+#
+# WHAT CHANGED vs docker-compose.yml (and WHY):
+#   1. All `build:` blocks removed        -> Coolify pulls `image:` from GHCR.
+#   2. Host `ports:` removed on db/redis/ -> services talk by name on the
+#      backend                               internal network; also avoids
+#                                            staging<->prod host-port clashes
+#                                            when both run on one Coolify host.
+#   3. frontend exposed via SERVICE_FQDN  -> Coolify assigns a domain + Traefik
+#      instead of a published port           route + Let's Encrypt TLS. Override
+#                                            the domain in the Coolify UI.
+#   4. backend gets extra_hosts           -> keeps OLLAMA_URL host.docker.internal
+#                                            working on a Linux Coolify host.
+#   5. Service NAMES kept identical       -> nginx upstream (trade-staging-backend)
+#                                            and REDIS_URL (trade-staging-redis)
+#                                            must not change.
+#   6. ${VAR} interpolation kept          -> fill these in Coolify's Environment
+#                                            Variables panel (replaces Infisical
+#                                            export). IMAGE_TAG defaults to latest.
+#
+# PREREQUISITES in Coolify (one-time):
+#   - Add a Docker Registry credential for ghcr.io (images are private), OR make
+#     the GHCR packages public.
+#   - The external network `ssmedia_ssmedia_net` must exist on the Coolify host
+#     (it's how strategy-engine/backend reach the shared IB Gateway). If the IB
+#     Gateway is NOT on this host, this compose cannot reach it — see note below.
+#   - Set all environment variables in the Coolify UI (bulk-paste your .env).
+#   - Grab the deploy webhook UUID + an API token for the GitHub Actions step.
+# =============================================================================
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    # No host `ports:` — reached internally as db:5432. Expose via a Coolify
+    # database resource only if you need external access.
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # schema.sql only runs on first init (empty data dir). The repo is checked
+      # out by Coolify, so this relative bind mount resolves. If you'd rather let
+      # Coolify manage Postgres as its own resource (with backups), drop this
+      # service and point DATABASE_URL at that resource instead.
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    networks:
+      - ssmedia_ssmedia_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  trade-staging-backend:
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:${IMAGE_TAG:-latest}
+    restart: always
+    # No host `ports:` — the frontend's nginx proxies /api to
+    # trade-staging-backend:3001 over the internal network.
+    extra_hosts:
+      # Keeps OLLAMA_URL=http://host.docker.internal:11434 reachable on Linux.
+      - "host.docker.internal:host-gateway"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL}
+      BACKUP_DATABASE_URL: ${BACKUP_DATABASE_URL}
+      PAPER_LEGACY_DATABASE_URL: ${PAPER_LEGACY_DATABASE_URL:-}
+      REDIS_URL: redis://trade-staging-redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      PORT: ${PORT}
+      N8N_ALERT_WEBHOOK_URL: ${N8N_ALERT_WEBHOOK_URL}
+      MARKET_DATA_POLL_INTERVAL: ${MARKET_DATA_POLL_INTERVAL}
+      SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS: ${SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS:-60}
+      SMART_STOP_CONFIRMATION_MS: ${SMART_STOP_CONFIRMATION_MS:-45000}
+      ENABLE_DEV_TRADING_TESTS: ${ENABLE_DEV_TRADING_TESTS:-false}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+      AI_MODEL: ${AI_MODEL:-deepseek/deepseek-chat}
+      MORNING_BRIEFING_SCHEDULE: ${MORNING_BRIEFING_SCHEDULE:-30 8 * * *}
+      IBKR_HOST: ${IBKR_HOST:-ib_gateway}
+      IBKR_PORT: ${IBKR_PORT:-4003}
+      IBKR_CLIENT_ID_MARKET_DATA: ${IBKR_CLIENT_ID_MARKET_DATA:-21}
+      IBKR_CLIENT_ID_STREAM: ${IBKR_CLIENT_ID_STREAM:-22}
+      IBKR_MARKET_DATA_TYPE: ${IBKR_MARKET_DATA_TYPE:-1}
+      ZEROGEX_API_KEY: ${ZEROGEX_API_KEY:-}
+      STRATEGY_DATA_DIR: /strategy-data/trade
+      STRATEGY_MAX_TOTAL_DEBIT_DOLLARS: ${STRATEGY_MAX_TOTAL_DEBIT_DOLLARS:-500}
+      STRATEGY_PREFERRED_CONTRACTS: ${STRATEGY_PREFERRED_CONTRACTS:-1}
+      STRATEGY_MAX_CONTRACTS: ${STRATEGY_MAX_CONTRACTS:-1}
+      STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
+      STRATEGY_FILE_POLL_INTERVAL_MS: ${STRATEGY_FILE_POLL_INTERVAL_MS:-2000}
+      STRATEGY_REDIS_WATCHDOG_INTERVAL_MS: ${STRATEGY_REDIS_WATCHDOG_INTERVAL_MS:-30000}
+      STRIKEPILOT_CALENDAR_CONTACT: ${STRIKEPILOT_CALENDAR_CONTACT:-}
+      VIX_TERM_STRUCTURE_MIN_RATIO: ${VIX_TERM_STRUCTURE_MIN_RATIO:-1.05}
+    volumes:
+      - strategy-data:/strategy-data
+    depends_on:
+      db:
+        condition: service_healthy
+      trade-staging-redis:
+        condition: service_started
+    networks:
+      - ssmedia_ssmedia_net
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  trade-staging-redis:
+    image: redis:alpine
+    restart: always
+    # No host `ports:` — reached internally as trade-staging-redis:6379.
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zerogex-prefetch:
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    volumes:
+      - strategy-data:/data
+    command:
+      - python3
+      - zerogex_prefetch_service.py
+      - --symbol
+      - SPY
+      - --mode
+      - primary
+      - --env-file
+      - /data/trade/zerogex.env
+      - --output-file
+      - /data/trade/zerogex.json
+      - --health-file
+      - /data/trade/zerogex-health.json
+      - --interval
+      - "5"
+      - --context-interval
+      - "15"
+      - --deep-interval
+      - "30"
+      - --timeout
+      - "10"
+      - --auth-error-interval
+      - "10"
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') != 'error' and time.time()-float(h['updated_at']) < 45\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  strategy-engine:
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://trade-staging-redis:6379
+      STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
+    volumes:
+      - strategy-data:/data
+    command:
+      - python3
+      - trade_prefetch_service.py
+      - --host
+      - ${IBKR_HOST:-ib_gateway}
+      - --port
+      - ${IBKR_PORT:-4003}
+      - --client-id
+      - ${IBKR_CLIENT_ID_STRATEGY:-23}
+      - --symbols
+      - SPY
+      - QQQ
+      - --cross-market-confirmation
+      - shadow
+      - --data-type
+      - ${STRATEGY_IBKR_DATA_TYPE:-live}
+      - --primary-gex-source
+      - zerogex
+      - --sscgex-enabled
+      - "false"
+      - --zerogex-enabled
+      - "true"
+      - --zerogex-structure-context
+      - "true"
+      - --zerogex-flow-context
+      - "true"
+      - --zerogex-session-levels
+      - "true"
+      - --zerogex-late-day-forced-flow
+      - "true"
+      - --local-gex-fallback
+      - "false"
+      - --option-max-total-debit-dollars
+      - ${STRATEGY_MAX_TOTAL_DEBIT_DOLLARS:-500}
+      - --option-preferred-contracts
+      - ${STRATEGY_PREFERRED_CONTRACTS:-1}
+      - --option-max-otm-steps
+      - "6"
+      - --option-min-abs-delta
+      - "0.15"
+      - --option-max-spread-pct
+      - "5"
+      - --wall-option-expiry-dte
+      - ${STRATEGY_WALL_OPTION_EXPIRY_DTE:-3}
+      - --paper-exit-target
+      - "2"
+      - --same-side-reentry-cooldown-seconds
+      - "900"
+      - --max-tracking-gap-seconds
+      - "30"
+      - --output-dir
+      - /data/trade
+      - --policy-file
+      - /data/trade/policy.json
+      - --gex-file
+      - /data/disabled-sscgex.json
+      - --heatmap-file
+      - /data/disabled-heatmap.json
+      - --zerogex-file
+      - /data/trade/zerogex.json
+      - --interval
+      - "1"
+    depends_on:
+      zerogex-prefetch:
+        condition: service_started
+      trade-staging-redis:
+        condition: service_started
+      trade-staging-backend:
+        condition: service_started
+    networks:
+      - ssmedia_ssmedia_net
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/health.json')); assert h.get('status') != 'error' and h.get('connected') is True and time.time()-float(h['updated_at']) < 10\""]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+
+  trade-staging-frontend:
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:${IMAGE_TAG:-latest}
+    restart: always
+    environment:
+      # Coolify magic var: generates a domain + Traefik route + TLS for the
+      # nginx container's port 80. Leave blank here; set the real domain in the
+      # Coolify UI (Domains). VITE_* values are baked into the image at CI build
+      # time, so they are NOT set here.
+      - SERVICE_FQDN_FRONTEND_80
+    depends_on:
+      trade-staging-backend:
+        condition: service_healthy
+    networks:
+      - ssmedia_ssmedia_net
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+networks:
+  # External shared network — must already exist on the Coolify host. This is
+  # how backend/strategy-engine reach the shared IB Gateway. If the IB Gateway
+  # runs on a DIFFERENT host than Coolify, this won't reach it: either run the
+  # gateway on the Coolify host, or point IBKR_HOST at a routable address.
+  ssmedia_ssmedia_net:
+    external: true
+  default:
+    # Managed by Coolify (per-resource internal network).
+
+volumes:
+  db-data:
+  strategy-data:
