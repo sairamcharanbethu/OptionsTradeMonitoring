@@ -26,11 +26,12 @@
 # PREREQUISITES in Coolify (one-time):
 #   - Add a Docker Registry credential for ghcr.io (images are private), OR make
 #     the GHCR packages public.
-#   - IB Gateway now runs in Coolify too, so there is NO external network: every
-#     service sits on the single Coolify-managed network and resolves each other
-#     by service name. For IBKR_HOST=ib_gateway to resolve, the IB Gateway must
-#     be reachable by that name — either add it as a service in THIS compose, or
-#     set IBKR_HOST to the IB Gateway resource's address in the Coolify UI.
+#   - IB Gateway runs on the HOST machine (not containerized). backend and
+#     strategy-engine reach it via host.docker.internal (extra_hosts mapping).
+#     Set IBKR_HOST=host.docker.internal (or the host LAN IP) in the Coolify env.
+#     No external network and no ib_gateway service are needed.
+#   - Only ONE stack may hold the IBKR client IDs (backend 21/22, engine 23) at a
+#     time — stop the old options-monitor-staging stack before running this one.
 #   - Set all environment variables in the Coolify UI (bulk-paste your .env).
 #   - Grab the deploy webhook UUID + an API token for the GitHub Actions step.
 # =============================================================================
@@ -126,14 +127,137 @@ services:
       timeout: 5s
       retries: 5
 
-  # ---------------------------------------------------------------------------
-  # DEFERRED until IB Gateway is running in Coolify.
-  # `zerogex-prefetch` and `strategy-engine` both need a live market-data feed
-  # (IBKR + zeroGEX), and their healthchecks assert a live connection — so
-  # including them before IB Gateway exists would leave them unhealthy and fail
-  # the Coolify deployment. Restore them here once IB Gateway is up; their full
-  # definitions are preserved in docker-compose.yml.
-  # ---------------------------------------------------------------------------
+  zerogex-prefetch:
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # No IBKR here — this service pulls the external zeroGEX API. It needs its
+    # credentials in /data/trade/zerogex.env (mounted via the strategy-data vol).
+    volumes:
+      - strategy-data:/data
+    command:
+      - python3
+      - zerogex_prefetch_service.py
+      - --symbol
+      - SPY
+      - --mode
+      - primary
+      - --env-file
+      - /data/trade/zerogex.env
+      - --output-file
+      - /data/trade/zerogex.json
+      - --health-file
+      - /data/trade/zerogex-health.json
+      - --interval
+      - "5"
+      - --context-interval
+      - "15"
+      - --deep-interval
+      - "30"
+      - --timeout
+      - "10"
+      - --auth-error-interval
+      - "10"
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') != 'error' and time.time()-float(h['updated_at']) < 45\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  strategy-engine:
+    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    extra_hosts:
+      # Reaches the host machine's IB Gateway. Set IBKR_HOST=host.docker.internal
+      # (or the host LAN IP) in the Coolify env; this mapping makes the name
+      # resolve from inside the container, exactly like the backend.
+      - "host.docker.internal:host-gateway"
+    environment:
+      REDIS_URL: redis://trade-staging-redis:6379
+      STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
+    volumes:
+      - strategy-data:/data
+    command:
+      - python3
+      - trade_prefetch_service.py
+      - --host
+      # Default changed from ib_gateway -> host.docker.internal for the host-run
+      # gateway. Override via IBKR_HOST in the Coolify env if it lives elsewhere.
+      - ${IBKR_HOST:-host.docker.internal}
+      - --port
+      - ${IBKR_PORT:-4003}
+      - --client-id
+      - ${IBKR_CLIENT_ID_STRATEGY:-23}
+      - --symbols
+      - SPY
+      - QQQ
+      - --cross-market-confirmation
+      - shadow
+      - --data-type
+      - ${STRATEGY_IBKR_DATA_TYPE:-live}
+      - --primary-gex-source
+      - zerogex
+      - --sscgex-enabled
+      - "false"
+      - --zerogex-enabled
+      - "true"
+      - --zerogex-structure-context
+      - "true"
+      - --zerogex-flow-context
+      - "true"
+      - --zerogex-session-levels
+      - "true"
+      - --zerogex-late-day-forced-flow
+      - "true"
+      - --local-gex-fallback
+      - "false"
+      - --option-max-total-debit-dollars
+      - ${STRATEGY_MAX_TOTAL_DEBIT_DOLLARS:-500}
+      - --option-preferred-contracts
+      - ${STRATEGY_PREFERRED_CONTRACTS:-1}
+      - --option-max-otm-steps
+      - "6"
+      - --option-min-abs-delta
+      - "0.15"
+      - --option-max-spread-pct
+      - "5"
+      - --wall-option-expiry-dte
+      - ${STRATEGY_WALL_OPTION_EXPIRY_DTE:-3}
+      - --paper-exit-target
+      - "2"
+      - --same-side-reentry-cooldown-seconds
+      - "900"
+      - --max-tracking-gap-seconds
+      - "30"
+      - --output-dir
+      - /data/trade
+      - --policy-file
+      - /data/trade/policy.json
+      - --gex-file
+      - /data/disabled-sscgex.json
+      - --heatmap-file
+      - /data/disabled-heatmap.json
+      - --zerogex-file
+      - /data/trade/zerogex.json
+      - --interval
+      - "1"
+    depends_on:
+      zerogex-prefetch:
+        condition: service_started
+      trade-staging-redis:
+        condition: service_started
+      trade-staging-backend:
+        condition: service_started
+    networks:
+      - default
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/health.json')); assert h.get('status') != 'error' and h.get('connected') is True and time.time()-float(h['updated_at']) < 10\""]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
 
   trade-staging-frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:${IMAGE_TAG:-latest}
