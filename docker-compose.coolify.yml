@@ -26,9 +26,11 @@
 # PREREQUISITES in Coolify (one-time):
 #   - Add a Docker Registry credential for ghcr.io (images are private), OR make
 #     the GHCR packages public.
-#   - The external network `ssmedia_ssmedia_net` must exist on the Coolify host
-#     (it's how strategy-engine/backend reach the shared IB Gateway). If the IB
-#     Gateway is NOT on this host, this compose cannot reach it — see note below.
+#   - IB Gateway now runs in Coolify too, so there is NO external network: every
+#     service sits on the single Coolify-managed network and resolves each other
+#     by service name. For IBKR_HOST=ib_gateway to resolve, the IB Gateway must
+#     be reachable by that name — either add it as a service in THIS compose, or
+#     set IBKR_HOST to the IB Gateway resource's address in the Coolify UI.
 #   - Set all environment variables in the Coolify UI (bulk-paste your .env).
 #   - Grab the deploy webhook UUID + an API token for the GitHub Actions step.
 # =============================================================================
@@ -51,7 +53,7 @@ services:
       # service and point DATABASE_URL at that resource instead.
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     networks:
-      - ssmedia_ssmedia_net
+      - default
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -105,7 +107,6 @@ services:
       trade-staging-redis:
         condition: service_started
     networks:
-      - ssmedia_ssmedia_net
       - default
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
@@ -240,7 +241,6 @@ services:
       trade-staging-backend:
         condition: service_started
     networks:
-      - ssmedia_ssmedia_net
       - default
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/health.json')); assert h.get('status') != 'error' and h.get('connected') is True and time.time()-float(h['updated_at']) < 10\""]
@@ -262,7 +262,6 @@ services:
       trade-staging-backend:
         condition: service_healthy
     networks:
-      - ssmedia_ssmedia_net
       - default
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
@@ -271,14 +270,10 @@ services:
       retries: 5
 
 networks:
-  # External shared network — must already exist on the Coolify host. This is
-  # how backend/strategy-engine reach the shared IB Gateway. If the IB Gateway
-  # runs on a DIFFERENT host than Coolify, this won't reach it: either run the
-  # gateway on the Coolify host, or point IBKR_HOST at a routable address.
-  ssmedia_ssmedia_net:
-    external: true
+  # Single Coolify-managed network. All services join it and resolve each other
+  # by service name. IB Gateway, once added to this stack (or reachable via the
+  # address you set for IBKR_HOST), lives here too — no external network needed.
   default:
-    # Managed by Coolify (per-resource internal network).
 
 volumes:
   db-data:
