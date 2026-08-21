@@ -126,128 +126,14 @@ services:
       timeout: 5s
       retries: 5
 
-  zerogex-prefetch:
-    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    volumes:
-      - strategy-data:/data
-    command:
-      - python3
-      - zerogex_prefetch_service.py
-      - --symbol
-      - SPY
-      - --mode
-      - primary
-      - --env-file
-      - /data/trade/zerogex.env
-      - --output-file
-      - /data/trade/zerogex.json
-      - --health-file
-      - /data/trade/zerogex-health.json
-      - --interval
-      - "5"
-      - --context-interval
-      - "15"
-      - --deep-interval
-      - "30"
-      - --timeout
-      - "10"
-      - --auth-error-interval
-      - "10"
-    networks:
-      - default
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') != 'error' and time.time()-float(h['updated_at']) < 45\""]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-
-  strategy-engine:
-    image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
-    restart: unless-stopped
-    environment:
-      REDIS_URL: redis://trade-staging-redis:6379
-      STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
-    volumes:
-      - strategy-data:/data
-    command:
-      - python3
-      - trade_prefetch_service.py
-      - --host
-      - ${IBKR_HOST:-ib_gateway}
-      - --port
-      - ${IBKR_PORT:-4003}
-      - --client-id
-      - ${IBKR_CLIENT_ID_STRATEGY:-23}
-      - --symbols
-      - SPY
-      - QQQ
-      - --cross-market-confirmation
-      - shadow
-      - --data-type
-      - ${STRATEGY_IBKR_DATA_TYPE:-live}
-      - --primary-gex-source
-      - zerogex
-      - --sscgex-enabled
-      - "false"
-      - --zerogex-enabled
-      - "true"
-      - --zerogex-structure-context
-      - "true"
-      - --zerogex-flow-context
-      - "true"
-      - --zerogex-session-levels
-      - "true"
-      - --zerogex-late-day-forced-flow
-      - "true"
-      - --local-gex-fallback
-      - "false"
-      - --option-max-total-debit-dollars
-      - ${STRATEGY_MAX_TOTAL_DEBIT_DOLLARS:-500}
-      - --option-preferred-contracts
-      - ${STRATEGY_PREFERRED_CONTRACTS:-1}
-      - --option-max-otm-steps
-      - "6"
-      - --option-min-abs-delta
-      - "0.15"
-      - --option-max-spread-pct
-      - "5"
-      - --wall-option-expiry-dte
-      - ${STRATEGY_WALL_OPTION_EXPIRY_DTE:-3}
-      - --paper-exit-target
-      - "2"
-      - --same-side-reentry-cooldown-seconds
-      - "900"
-      - --max-tracking-gap-seconds
-      - "30"
-      - --output-dir
-      - /data/trade
-      - --policy-file
-      - /data/trade/policy.json
-      - --gex-file
-      - /data/disabled-sscgex.json
-      - --heatmap-file
-      - /data/disabled-heatmap.json
-      - --zerogex-file
-      - /data/trade/zerogex.json
-      - --interval
-      - "1"
-    depends_on:
-      zerogex-prefetch:
-        condition: service_started
-      trade-staging-redis:
-        condition: service_started
-      trade-staging-backend:
-        condition: service_started
-    networks:
-      - default
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/health.json')); assert h.get('status') != 'error' and h.get('connected') is True and time.time()-float(h['updated_at']) < 10\""]
-      interval: 5s
-      timeout: 3s
-      retries: 24
-      start_period: 20s
+  # ---------------------------------------------------------------------------
+  # DEFERRED until IB Gateway is running in Coolify.
+  # `zerogex-prefetch` and `strategy-engine` both need a live market-data feed
+  # (IBKR + zeroGEX), and their healthchecks assert a live connection — so
+  # including them before IB Gateway exists would leave them unhealthy and fail
+  # the Coolify deployment. Restore them here once IB Gateway is up; their full
+  # definitions are preserved in docker-compose.yml.
+  # ---------------------------------------------------------------------------
 
   trade-staging-frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:${IMAGE_TAG:-latest}
