@@ -26,7 +26,9 @@
 # PREREQUISITES in Coolify (one-time):
 #   - Add a Docker Registry credential for ghcr.io (images are private), OR make
 #     the GHCR packages public.
-#   - IB Gateway runs on the HOST at 127.0.0.1:4001. Containers reach it via
+#   - IB Gateway runs as a container that PUBLISHES 4001 (live) / 4002 (paper)
+#     to the host. The Coolify stack is on an isolated network and cannot resolve
+#     ib_gateway, so it reaches the gateway via the published host port:
 #     host.docker.internal:4001 (extra_hosts host-gateway on backend + engine) —
 #     NOT 127.0.0.1, which is the container's own loopback. The host gateway must
 #     accept connections from the docker bridge (uncheck "localhost only" and add
@@ -171,7 +173,7 @@ services:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
     restart: unless-stopped
     extra_hosts:
-      # Reaches the host-run IB Gateway (127.0.0.1:4001 on the host) via the
+      # Reaches the IB Gateway container's published host port (4001 live) via the
       # docker bridge. 127.0.0.1 from inside a container is the container itself,
       # so we resolve the host through host.docker.internal instead.
       - "host.docker.internal:host-gateway"
