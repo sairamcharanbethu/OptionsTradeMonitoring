@@ -1,12 +1,16 @@
 # =============================================================================
-# Coolify deployment compose — Approach B (registry + webhook)
+# Coolify deployment compose — Approach A (Coolify builds from Git)
 # =============================================================================
-# Coolify PULLS the images your GitHub Actions CI already builds & pushes to
-# GHCR. It does NOT build here. The GitHub deploy job just hits Coolify's
-# deploy webhook; Coolify re-pulls and restarts.
+# Coolify BUILDS the three service images itself from this repo on each deploy
+# (Docker Compose build pack) and starts them. GitHub Actions is trimmed to a
+# tests-only workflow that, on green, pings Coolify's deploy webhook — so the
+# test gate survives and the self-hosted build runner is no longer needed.
+# (The `image:` tags are just local build tags; nothing is pulled from GHCR.)
 #
 # WHAT CHANGED vs docker-compose.yml (and WHY):
-#   1. All `build:` blocks removed        -> Coolify pulls `image:` from GHCR.
+#   1. `build:` kept, external network/host -> Coolify builds each service from
+#      ports/Infisical dropped                its context; the rest is Coolify-
+#                                             native (see below).
 #   2. Host `ports:` removed on db/redis/ -> services talk by name on the
 #      backend                               internal network; also avoids
 #                                            staging<->prod host-port clashes
@@ -24,8 +28,11 @@
 #                                            export). IMAGE_TAG defaults to latest.
 #
 # PREREQUISITES in Coolify (one-time):
-#   - Add a Docker Registry credential for ghcr.io (images are private), OR make
-#     the GHCR packages public.
+#   - Resource = Docker Compose linked to this Git repo + branch; build pack
+#     builds from this file. Turn OFF Coolify auto-deploy so the GitHub Actions
+#     tests-passed webhook is what triggers the build+deploy (keeps the gate).
+#   - Mark NODE_ENV as RUNTIME-only (not build-time) in the Coolify env, or the
+#     backend/frontend build stages skip devDependencies and the build fails.
 #   - IB Gateway runs as a container that PUBLISHES 4001 (live) / 4002 (paper)
 #     to the host. The Coolify stack is on an isolated network and cannot resolve
 #     ib_gateway, so it reaches the gateway via the published host port:
@@ -66,6 +73,9 @@ services:
 
   trade-staging-backend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:${IMAGE_TAG:-latest}
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     restart: always
     # No host `ports:` — the frontend's nginx proxies /api to
     # trade-staging-backend:3001 over the internal network.
@@ -132,6 +142,9 @@ services:
 
   zerogex-prefetch:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
+    build:
+      context: ./strategy-engine
+      dockerfile: Dockerfile
     restart: unless-stopped
     # No IBKR here — this service pulls the external zeroGEX API. It needs its
     # credentials in /data/trade/zerogex.env (mounted via the strategy-data vol).
@@ -171,6 +184,9 @@ services:
 
   strategy-engine:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-strategy-engine:${IMAGE_TAG:-latest}
+    build:
+      context: ./strategy-engine
+      dockerfile: Dockerfile
     restart: unless-stopped
     extra_hosts:
       # Reaches the IB Gateway container's published host port (4001 live) via the
@@ -264,6 +280,13 @@ services:
 
   trade-staging-frontend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_APP_VERSION: ${VITE_APP_VERSION:-1.4.1}
+        VITE_APP_BUILD_SHA: ${VITE_APP_BUILD_SHA:-}
+        VITE_ENABLE_DEV_TRADING_TESTS: ${VITE_ENABLE_DEV_TRADING_TESTS:-false}
     restart: always
     environment:
       # Coolify magic var: generates a domain + Traefik route + TLS for the
