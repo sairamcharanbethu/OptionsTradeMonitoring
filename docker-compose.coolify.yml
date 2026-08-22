@@ -2,10 +2,10 @@
 # Coolify deployment compose — Approach A (Coolify builds from Git)
 # =============================================================================
 # Coolify BUILDS the three service images itself from this repo on each deploy
-# (Docker Compose build pack) and starts them. GitHub Actions is trimmed to a
-# tests-only workflow that, on green, pings Coolify's deploy webhook — so the
-# test gate survives and the self-hosted build runner is no longer needed.
-# (The `image:` tags are just local build tags; nothing is pulled from GHCR.)
+# (Docker Compose build pack) and starts them. There is NO CI: Coolify's GitHub
+# App auto-deploys on every push to the connected branch — build + deploy happen
+# entirely in Coolify. Tests are run locally before committing. (The `image:`
+# tags are just local build tags; nothing is pulled from GHCR.)
 #
 # WHAT CHANGED vs docker-compose.yml (and WHY):
 #   1. `build:` kept, external network/host -> Coolify builds each service from
@@ -29,8 +29,8 @@
 #
 # PREREQUISITES in Coolify (one-time):
 #   - Resource = Docker Compose linked to this Git repo + branch; build pack
-#     builds from this file. Turn OFF Coolify auto-deploy so the GitHub Actions
-#     tests-passed webhook is what triggers the build+deploy (keeps the gate).
+#     builds from this file. Install the Coolify GitHub App and ENABLE auto-deploy
+#     so every push to the branch triggers a build + deploy (no CI involved).
 #   - Mark NODE_ENV as RUNTIME-only (not build-time) in the Coolify env, or the
 #     backend/frontend build stages skip devDependencies and the build fails.
 #   - IB Gateway runs as a container that PUBLISHES 4001 (live) / 4002 (paper)
