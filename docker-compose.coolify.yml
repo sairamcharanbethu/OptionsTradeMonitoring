@@ -290,10 +290,10 @@ services:
     restart: always
     environment:
       # Coolify magic var: generates a domain + Traefik route + TLS for the
-      # nginx container's port 80. Leave blank here; set the real domain in the
-      # Coolify UI (Domains). VITE_* values are baked into the image at CI build
-      # time, so they are NOT set here.
-      - SERVICE_FQDN_FRONTEND_80
+      # nginx container's port 80. Set the real domain in the Coolify UI (Domains).
+      # MUST be map form (key: value), not list form (- KEY) — Coolify merges its
+      # own map-form env in, and a list here triggers a non-string-key parse error.
+      SERVICE_FQDN_FRONTEND_80: ""
     depends_on:
       trade-staging-backend:
         condition: service_healthy
