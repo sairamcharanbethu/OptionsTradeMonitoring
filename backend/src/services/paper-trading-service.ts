@@ -825,7 +825,7 @@ export class PaperTradingService {
 Allowed risk_tier: CAUTIOUS, STANDARD, FULL. Allowed exit_profile: CONSERVATIVE_T1, BALANCED_T2. You may SKIP.
 ${JSON.stringify({ reasons: aiReasons, strategy: signal.strategy, side, confidence: signal.confidence_score, rvol: signal.market_context?.rvol_1m, gexRegime: signal.gex?.regime || signal.gex?.gamma_regime, zeroGexState: signal.zerogex_decision?.state || signal.zerogex_decision?.regime, spreadPct: option.spread_pct, delta: option.delta })}
 Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL","exit_profile":"CONSERVATIVE_T1|BALANCED_T2","rationale":"short","risk_flags":[]}`;
-          const raw = await new AIService(this.fastify).askTradingJSON(prompt, undefined, 140, 4000);
+          const raw = await new AIService(this.fastify).askTradingJSON(prompt, undefined, 140, 15000);
           tokenUsage = PaperTradingService.normalizeTokenUsage(raw?.usage);
           bounded = PaperTradingService.normalizeAIDecision(raw) || fallback;
         } catch {

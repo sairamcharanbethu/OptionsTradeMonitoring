@@ -644,7 +644,7 @@ export class SignalScannerService {
           headers: { Authorization: `Bearer ${aiSettings.openrouter_key}` },
           timeout: 4000
         });
-      } else if (aiSettings.ai_provider === 'headroom' || aiSettings.ai_provider === 'ollama') {
+      } else if (aiSettings.ai_provider === 'ollama') {
         await this.aiService.checkHealth(targetUserId);
       } else {
         throw new Error('No AI provider key configured');

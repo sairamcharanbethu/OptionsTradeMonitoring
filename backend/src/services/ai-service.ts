@@ -360,6 +360,9 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                         }
                     }
                 } catch (fetchErr: any) {
+                    // An aborted request means the caller's timeout elapsed — honor it
+                    // instead of burning more time on a response_format-free retry.
+                    if (fetchErr?.name === 'AbortError') throw fetchErr;
                     console.warn(`[AIService] OpenRouter JSON fetch failed, retrying without response_format: ${fetchErr.message}`);
                     useJsonFormat = false;
                 }
