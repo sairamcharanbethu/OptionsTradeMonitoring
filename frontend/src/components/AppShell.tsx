@@ -27,7 +27,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { User, api } from '@/lib/api';
-import { useMarketStatus } from '@/hooks/useDashboardData';
+import { useKillSwitch, useMarketStatus, useSettings } from '@/hooks/useDashboardData';
 import { useTheme } from './ThemeProvider';
 import SettingsDialog from './SettingsDialog';
 import { Button } from './ui/button';
@@ -230,7 +230,22 @@ export default function AppShell({ user, onUserUpdate, children }: {
 }) {
   const location = useLocation();
   const { data: marketStatus, isError: marketStatusUnavailable, isLoading: marketStatusLoading } = useMarketStatus();
+  const { data: killSwitch, isError: killSwitchUnavailable } = useKillSwitch(10000);
+  const { data: shellSettings = {} } = useSettings();
   const { theme, setTheme } = useTheme();
+  // One glanceable truth on every page: is this system armed for real money?
+  const liveConfigured = shellSettings.shadow_trading_enabled !== 'true'
+    && shellSettings.execution_broker === 'wealthsimple_snaptrade'
+    && shellSettings.snaptrade_auto_trade === 'true';
+  const liveChip = killSwitchUnavailable
+    ? { label: 'LIVE ?', className: 'border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-300', title: 'Kill-switch status unavailable' }
+    : killSwitch?.live.disarmed
+      ? { label: 'LIVE DISARMED', className: 'border-zinc-500/50 bg-zinc-500/10 text-zinc-500 dark:text-zinc-400', title: killSwitch.live.reason || 'Live trading manually disarmed' }
+      : killSwitch?.live.halted
+        ? { label: 'HALTED', className: 'border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-400', title: killSwitch.live.reason || 'Kill switch halted new entries' }
+        : liveConfigured
+          ? { label: 'LIVE ARMED', className: 'border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-300', title: 'Real-money execution is armed' }
+          : { label: 'PAPER', className: 'border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-300', title: 'No live broker execution configured' };
   const title = currentPageTitle(location.pathname, location.search);
   const strategyTargets = NAV_GROUPS.find(group => group.label === 'Strategies')!.targets;
   const calculatorTarget = NAV_GROUPS.find(group => group.label === 'Trade')!.targets.find(target => target.to === '/options-calculator')!;
@@ -279,6 +294,17 @@ export default function AppShell({ user, onUserUpdate, children }: {
           </nav>
 
           <div className="ml-auto flex items-center gap-1">
+            <Link
+              to="/?tab=day-trading"
+              className={cn(
+                'motion-press flex h-7 items-center rounded-full border px-2.5 text-[10px] font-bold tracking-wide focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                liveChip.className
+              )}
+              title={liveChip.title}
+              aria-label={`Live trading state: ${liveChip.label}. ${liveChip.title}`}
+            >
+              {liveChip.label}
+            </Link>
             <Link
               to="/system-health"
               className="motion-press flex h-11 items-center gap-2 rounded-lg px-2 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-10 sm:px-3"

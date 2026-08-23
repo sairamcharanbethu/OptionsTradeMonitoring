@@ -9,15 +9,29 @@ export const QUERY_KEYS = {
     marketStatus: ['marketStatus'],
     briefing: ['briefing'],
     signals: ['signals'],
-    scannerLogs: ['scannerLogs'],
     liveMacroMetrics: ['liveMacroMetrics'],
     strategyState: ['strategyState'],
     strategyHistory: ['strategyHistory'],
     strategyFamilyHistory: ['strategyFamilyHistory'],
     tradeUsage: ['tradeUsage'],
     paperAccount: ['paperAccount'],
+    killSwitch: ['killSwitch'],
     history: (page: number, limit: number) => ['positionHistory', page, limit],
 };
+
+// Live/paper kill-switch state (halted, disarmed, day P&L vs limit). Polled
+// tightly: this is the operator's authority on whether real-money entries are
+// currently possible. isError must be surfaced — an unreachable kill switch
+// is NOT the same as "not halted".
+export function useKillSwitch(refreshInterval = 5000) {
+    return useQuery({
+        queryKey: QUERY_KEYS.killSwitch,
+        queryFn: () => api.getKillSwitch(),
+        refetchInterval: refreshInterval,
+        staleTime: 2000,
+        retry: 1,
+    });
+}
 
 export function usePositions(refreshInterval = 30000) {
     return useQuery({
@@ -59,15 +73,6 @@ export function useStrategyFamilyHistory(refreshInterval = 15000) {
     return useQuery({
         queryKey: QUERY_KEYS.strategyFamilyHistory,
         queryFn: () => api.getStrategyFamilyHistory(),
-        refetchInterval: refreshInterval,
-        staleTime: 5000,
-    });
-}
-
-export function useScannerLogs(refreshInterval = 10000) {
-    return useQuery({
-        queryKey: QUERY_KEYS.scannerLogs,
-        queryFn: () => api.getScannerLogs(),
         refetchInterval: refreshInterval,
         staleTime: 5000,
     });

@@ -946,7 +946,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 onChange={(e) => setDailyLossLimitDollars(e.target.value)}
                                                 disabled={!isAdmin}
                                             />
-                                            <p className="text-[10px] text-muted-foreground">Once realized loss for the ET session reaches this dollar amount, all new entries (paper, manual, and autonomous) are halted until the next session. Blank or 0 disables it.</p>
+                                            <p className="text-[10px] text-muted-foreground">Once the day's realized loss plus the open (unrealized) loss on positions still held reaches this dollar amount, all new entries (paper, manual, and autonomous) are halted until the next ET session. Blank or 0 disables it.</p>
                                         </div>
 
                                         <div className="grid grid-cols-2 gap-3 md:col-span-2">

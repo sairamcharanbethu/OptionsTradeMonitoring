@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import {
   QUERY_KEYS,
+  useKillSwitch,
   usePositions,
   usePaperAccount,
   useSettings,
@@ -704,6 +705,7 @@ export default function DayTradingTerminal() {
   } = useStrategyState(isConnected ? 10000 : 1000);
   const { data: settings = {} } = useSettings();
   const { data: tradeUsage } = useTradeUsage();
+  const { data: killSwitch, isError: killSwitchUnavailable, refetch: refetchKillSwitch } = useKillSwitch(5000);
   const { data: positions = [] } = usePositions(5000);
   const { data: paperAccount, refetch: refetchPaperAccount } = usePaperAccount(5000);
   const { data: strategyHistory = [], isLoading: historyLoading, error: historyError, refetch: refetchHistory } = useStrategyHistory(15000);
@@ -797,6 +799,40 @@ export default function DayTradingTerminal() {
     : [];
   const strategyBlockers = Array.from(new Set((strategySignal?.blockers || []).filter(Boolean))) as string[];
   const executionMode = getExecutionMode(settings);
+  const liveKillSwitch = killSwitch?.live;
+  const liveHalted = liveKillSwitch?.halted === true;
+  const liveDisarmed = liveKillSwitch?.disarmed === true;
+  const [armToggling, setArmToggling] = useState(false);
+  const [confirmRearm, setConfirmRearm] = useState(false);
+  const handleDisarmLive = async () => {
+    setConfirmRearm(false);
+    setArmToggling(true);
+    try {
+      await api.disarmLiveTrading();
+      await refetchKillSwitch();
+    } catch {
+      // The next 5s poll shows the true state either way.
+    } finally {
+      setArmToggling(false);
+    }
+  };
+  const handleArmLive = async () => {
+    // Disarm is one click; re-arm takes two. The asymmetry is deliberate.
+    if (!confirmRearm) {
+      setConfirmRearm(true);
+      return;
+    }
+    setConfirmRearm(false);
+    setArmToggling(true);
+    try {
+      await api.armLiveTrading();
+      await refetchKillSwitch();
+    } catch {
+      // The next 5s poll shows the true state either way.
+    } finally {
+      setArmToggling(false);
+    }
+  };
   const dayTradingEnabled = settings.day_trading_enabled !== 'false';
   const configuredMaxContracts = executionMode.autonomous ? 1 : Math.max(1, Number(settings.contracts_per_trade || 1));
   const plannedContracts = Math.max(0, Number(option.planned_contracts || 0));
@@ -874,6 +910,16 @@ export default function DayTradingTerminal() {
     )
   );
   const strategyEntryBlockers = [
+    // Kill-switch state leads: it overrides every client-side readiness signal.
+    executionMode.live && killSwitchUnavailable
+      ? 'Kill-switch status is unavailable — treat live entries as blocked'
+      : null,
+    executionMode.live && liveHalted
+      ? (liveKillSwitch?.reason || 'Live trading is halted by the kill switch')
+      : null,
+    executionMode.live && !liveHalted && strategyState?.entryBlocked === true
+      ? (strategyState.entryBlockedReason || 'The backend reports live entry is blocked')
+      : null,
     !dayTradingEnabled ? 'Day trading is disabled' : null,
     sessionPolicy.valid !== true || sessionPolicy.is_trading_day !== true
       ? 'Strategy session policy is unavailable or the market is closed'
@@ -1122,11 +1168,21 @@ export default function DayTradingTerminal() {
 
   useEffect(() => {
     if (!lastMessage) return;
+    // WS pushes carry the adapter's cached entryBlocked (null until an HTTP
+    // status request primes it) — merge so a push never wipes a fresher
+    // kill-switch overlay fetched over HTTP.
+    const mergeStrategyState = (data: any) => {
+      queryClient.setQueryData(QUERY_KEYS.strategyState, (prev: any) => ({
+        ...data,
+        entryBlocked: data.entryBlocked ?? prev?.entryBlocked ?? null,
+        entryBlockedReason: data.entryBlockedReason ?? prev?.entryBlockedReason ?? null
+      }));
+    };
     if (lastMessage.type === 'STRATEGY_SNAPSHOT_UPDATED' && lastMessage.data) {
-      queryClient.setQueryData(QUERY_KEYS.strategyState, lastMessage.data);
+      mergeStrategyState(lastMessage.data);
     }
     if (lastMessage.type === 'STRATEGY_STATE_CHANGED') {
-      if (lastMessage.data) queryClient.setQueryData(QUERY_KEYS.strategyState, lastMessage.data);
+      if (lastMessage.data) mergeStrategyState(lastMessage.data);
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.signals });
       queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyHistory });
     }
@@ -1549,6 +1605,71 @@ export default function DayTradingTerminal() {
           </span>
         </div>
 
+        <div
+          className={`flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2 sm:px-6 ${
+            killSwitchUnavailable
+              ? 'border-amber-500/40 bg-amber-950/25'
+              : liveHalted
+                ? 'border-rose-500/40 bg-rose-950/25'
+                : executionMode.live
+                  ? 'border-amber-500/30 bg-amber-950/15'
+                  : 'border-zinc-800 bg-zinc-950/40'
+          }`}
+          aria-label="Live trading arm state"
+        >
+          <div className="flex min-w-0 items-center gap-2.5">
+            <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${
+              killSwitchUnavailable ? 'bg-amber-400' : liveHalted ? 'bg-rose-400' : executionMode.live ? 'bg-amber-400 animate-pulse' : 'bg-sky-400'
+            }`} />
+            <div className="min-w-0">
+              <div className={`text-[11px] font-semibold tracking-wide ${
+                killSwitchUnavailable ? 'text-amber-200' : liveHalted ? 'text-rose-200' : executionMode.live ? 'text-amber-200' : 'text-sky-200'
+              }`}>
+                {killSwitchUnavailable
+                  ? 'KILL-SWITCH STATUS UNAVAILABLE — TREATING LIVE ENTRIES AS BLOCKED'
+                  : liveDisarmed
+                    ? 'LIVE TRADING DISARMED'
+                    : liveHalted
+                      ? 'LIVE TRADING HALTED'
+                      : executionMode.live
+                        ? `LIVE ARMED · ${executionMode.label.toUpperCase()}`
+                        : 'PAPER / SIMULATION — NO LIVE ORDERS'}
+              </div>
+              {!killSwitchUnavailable && liveHalted && liveKillSwitch?.reason && (
+                <div className="truncate text-[10px] text-rose-300/90">{liveKillSwitch.reason}</div>
+              )}
+              {!killSwitchUnavailable && liveKillSwitch?.enabled && (
+                <div className="font-mono text-[10px] text-zinc-400">
+                  day P&L: realized {money(liveKillSwitch.dayRealizedPnl)} · open {money(liveKillSwitch.dayOpenPnl)} · total {money(liveKillSwitch.dayTotalPnl)} / limit -{money(liveKillSwitch.limit)}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {liveDisarmed ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 border-amber-500/40 text-[11px] text-amber-200 hover:bg-amber-950/40"
+                onClick={handleArmLive}
+                disabled={armToggling || killSwitchUnavailable}
+              >
+                {confirmRearm ? 'Click again to confirm re-arm' : 'Re-arm live'}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 border-rose-500/40 text-[11px] text-rose-200 hover:bg-rose-950/40"
+                onClick={handleDisarmLive}
+                disabled={armToggling || killSwitchUnavailable}
+              >
+                Disarm live
+              </Button>
+            )}
+          </div>
+        </div>
+
         <div className="hidden gap-x-4 border-b border-zinc-800 px-6 sm:grid sm:grid-cols-3 lg:grid-cols-6">
           <Metric
             label="Strategy"
@@ -1871,7 +1992,10 @@ export default function DayTradingTerminal() {
                   />
                   {executionMode.autonomous ? (
                     <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-950/15 px-3 py-2.5 text-xs leading-relaxed text-amber-200">
-                      <div>Autonomous entry is evaluating the live risk gates. No manual order is needed.</div>
+                      <div>
+                        Autonomous entry is evaluating the live risk gates — a passing setup submits a REAL-MONEY broker order
+                        with no further confirmation. Use “Disarm live” in the header to stop new entries.
+                      </div>
                       {autonomousResult && (
                         <div className="mt-1 text-amber-100">
                           Last evaluation: {autonomousResult}

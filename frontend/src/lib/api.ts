@@ -330,6 +330,9 @@ export interface KillSwitchStatus {
   enabled: boolean;
   limit: number;
   dayRealizedPnl: number;
+  dayOpenPnl: number;
+  dayTotalPnl: number;
+  disarmed: boolean;
   halted: boolean;
   reason?: string;
 }
@@ -1462,6 +1465,18 @@ export const api = {
     return res.json();
   },
 
+  async disarmLiveTrading(): Promise<{ live: KillSwitchStatus }> {
+    const res = await authFetch(`${API_BASE}/kill-switch/live/disarm`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to disarm live trading');
+    return res.json();
+  },
+
+  async armLiveTrading(): Promise<{ live: KillSwitchStatus }> {
+    const res = await authFetch(`${API_BASE}/kill-switch/live/arm`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to re-arm live trading');
+    return res.json();
+  },
+
   async getPerformanceMetrics(scope: 'paper' | 'live' = 'live', days = 30): Promise<PerformanceMetrics> {
     const res = await authFetch(`${API_BASE}/metrics/performance?scope=${scope}&days=${days}`);
     if (!res.ok) throw new Error('Failed to fetch performance metrics');
@@ -1523,12 +1538,6 @@ export const api = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to inject dev quote');
     }
-    return res.json();
-  },
-
-  async triggerScan(): Promise<{ success: boolean; message: string }> {
-    const res = await authFetch(`${API_BASE}/signals/trigger`, { method: 'POST' });
-    if (!res.ok) throw new Error('Failed to trigger scan');
     return res.json();
   },
 
@@ -1637,17 +1646,6 @@ export const api = {
     });
     if (!res.ok) throw new Error('Failed to seed signals');
     return res.json();
-  },
-
-  async getScannerLogs(): Promise<ScannerLog[]> {
-    const res = await authFetch(`${API_BASE}/signals/logs?t=${Date.now()}`);
-    if (!res.ok) throw new Error('Failed to fetch scanner logs');
-    const data = await res.json();
-    return data.map((log: any) => ({
-      ...log,
-      spot_price: Number(log.spot_price),
-      vix: log.vix != null ? Number(log.vix) : null
-    }));
   }
 };
 
@@ -1974,19 +1972,9 @@ export interface StrategyEngineState {
     lastRedisEventAt: string | null;
     filePollFallback: boolean;
   };
-}
-
-export interface ScannerLog {
-  id: number;
-  symbol: string;
-  spot_price: number;
-  regime: string;
-  vix?: number | null;
-  gex_available: boolean;
-  indicators?: IndicatorsJSON;
-  outcome: 'SIGNAL_GENERATED' | 'BLOCKED';
-  no_trade_reasons?: string[];
-  created_at: string;
+  // Kill-switch overlay: null = not yet evaluated (e.g. a raw WS push).
+  entryBlocked?: boolean | null;
+  entryBlockedReason?: string | null;
 }
 
 export interface Goal {

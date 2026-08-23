@@ -17,6 +17,7 @@ export default function PositionMonitorPage() {
   // positionId -> timestamp of most recent POSITION_TARGET_HIT (drives the flash highlight)
   const [flashes, setFlashes] = useState<Record<number, number>>({});
   const [killSwitch, setKillSwitch] = useState<KillSwitchResponse | null>(null);
+  const [killSwitchUnavailable, setKillSwitchUnavailable] = useState(false);
   const { lastMessage } = useWebSocket();
 
   const load = useCallback(async (initial = false) => {
@@ -24,10 +25,16 @@ export default function PositionMonitorPage() {
     try {
       const [monitorRows, ks] = await Promise.all([
         api.getPositionMonitor(),
-        api.getKillSwitch().catch(() => null)
+        // Distinguish "not halted" from "could not check": a silent null here
+        // would make a halted system look healthy.
+        api.getKillSwitch().then(
+          (value) => ({ value, failed: false as const }),
+          () => ({ value: null, failed: true as const })
+        )
       ]);
       setRows(monitorRows);
-      setKillSwitch(ks);
+      setKillSwitch(ks.value);
+      setKillSwitchUnavailable(ks.failed);
       setError(null);
     } catch (cause: any) {
       setError(cause?.message || 'Position monitor is unavailable');
@@ -83,14 +90,30 @@ export default function PositionMonitorPage() {
 
       {error && <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
 
+      {killSwitchUnavailable && (
+        <div role="alert" className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-300">
+          ⚠️ Kill-switch status is unavailable — this page cannot confirm whether new entries are halted.
+        </div>
+      )}
+
       {killSwitch && (killSwitch.live.halted || killSwitch.paper.halted) && (
         <div role="alert" className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm">
           <div className="flex items-center gap-2 font-semibold text-destructive">
-            🛑 Daily-loss kill-switch active — new entries halted
+            🛑 {killSwitch.live.disarmed ? 'Live trading manually disarmed' : 'Kill-switch active'} — new entries halted
           </div>
           <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-            {killSwitch.live.halted && <li>Live: realized {killSwitch.live.dayRealizedPnl.toFixed(2)} ≤ −{killSwitch.live.limit.toFixed(2)} today.</li>}
-            {killSwitch.paper.halted && <li>Paper: realized {killSwitch.paper.dayRealizedPnl.toFixed(2)} ≤ −{killSwitch.paper.limit.toFixed(2)} today.</li>}
+            {killSwitch.live.halted && (
+              <li>
+                Live: {killSwitch.live.reason
+                  || `realized ${killSwitch.live.dayRealizedPnl.toFixed(2)} + open ${killSwitch.live.dayOpenPnl.toFixed(2)} = ${killSwitch.live.dayTotalPnl.toFixed(2)} ≤ −${killSwitch.live.limit.toFixed(2)} today.`}
+              </li>
+            )}
+            {killSwitch.paper.halted && (
+              <li>
+                Paper: {killSwitch.paper.reason
+                  || `realized ${killSwitch.paper.dayRealizedPnl.toFixed(2)} + open ${killSwitch.paper.dayOpenPnl.toFixed(2)} = ${killSwitch.paper.dayTotalPnl.toFixed(2)} ≤ −${killSwitch.paper.limit.toFixed(2)} today.`}
+              </li>
+            )}
           </ul>
         </div>
       )}
