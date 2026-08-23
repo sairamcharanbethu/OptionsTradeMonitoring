@@ -1449,11 +1449,6 @@ const start = async () => {
     const startBackgroundServices = async () => {
       fastify.log.info('[System] Starting background services...');
       poller.start();
-      if (strategyEngine.getMode() !== 'primary') {
-        scanner.start();
-      } else {
-        fastify.log.info('[SignalScannerService] Legacy scanner disabled because signal-only-v2 is primary.');
-      }
       const brokerSyncTimer = setInterval(() => {
         runQueuedBrokerSync().catch((err: any) =>
           fastify.log.warn(`[BrokerSync] queued sync loop error: ${err?.message || String(err)}`));
@@ -1483,6 +1478,10 @@ const start = async () => {
       if (!ibkrMarketDataStreamer.getHealth().connected) {
         fastify.log.warn('[Stream] IBKR quote stream is reconnecting; live exit monitor remains attached.');
       }
+
+      // Only now that the poller, exit monitor, watchdog, and broker sync loops
+      // are running may the adapter submit autonomous live entries.
+      strategyEngine.markLiveEntriesReady?.();
     };
 
     const backgroundStartDelayMs = Number(process.env.BACKGROUND_START_DELAY_MS || 15000);

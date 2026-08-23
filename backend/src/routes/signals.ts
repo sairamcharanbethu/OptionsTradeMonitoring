@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { z } from 'zod';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { AIService } from '../services/ai-service';
+import { KillSwitchService } from '../services/kill-switch-service';
 import { redis } from '../lib/redis';
 import { randomUUID } from 'crypto';
 
@@ -591,12 +592,28 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
         }
       }
     }
-  }, async (_request, reply) => {
+  }, async (request, reply) => {
     const strategyEngine = (fastify as any).strategyEngine;
     if (!strategyEngine) {
       return (reply as any).code(503).send({ error: 'Strategy engine adapter not initialized' });
     }
-    return strategyEngine.getCurrentState();
+    const state = strategyEngine.getCurrentState();
+    // Overlay a live kill-switch evaluation so the UI never shows a stale
+    // "not blocked" while entries are actually halted.
+    try {
+      const { id: userId } = (request as any).user || {};
+      if (userId != null) {
+        const live = await KillSwitchService.evaluate((fastify as any).pg, 'live', userId);
+        state.entryBlocked = live.halted;
+        state.entryBlockedReason = live.reason || null;
+        if (typeof strategyEngine.noteEntryBlockState === 'function') {
+          strategyEngine.noteEntryBlockState(live.halted, live.reason || null);
+        }
+      }
+    } catch (err: any) {
+      fastify.log.warn(`[Signals] Kill-switch overlay failed: ${err?.message || err}`);
+    }
+    return state;
   });
 
   // PUT /api/signals/:id/status - Update signal status
@@ -876,39 +893,18 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
     }
   });
 
-  // POST /api/signals/trigger - Manually fire a scan cycle immediately (for testing/dev)
+  // POST /api/signals/trigger - retired along with the legacy in-process scanner.
+  // signal-only-v2 (the Python strategy engine) is the sole signal source.
   fastify.post('/trigger', {
     schema: {
       tags: ['Signals'],
-      summary: 'Manually trigger a scan cycle',
-      description: 'Fires an immediate signal scan for all active symbols. Useful for testing the enrichment pipeline without waiting for the 5-minute scheduler.',
+      summary: 'Manually trigger a scan cycle (retired)',
+      description: 'The legacy scanner has been removed; signal-only-v2 is the sole signal source.',
       security: [{ bearerAuth: [] }]
     }
-  }, async (request, reply) => {
-    try {
-      const { role } = (request as any).user;
-      if (role !== 'ADMIN') {
-        return (reply as any).code(403).send({ error: 'Admin access required' });
-      }
-      const strategyEngine = (fastify as any).strategyEngine;
-      if (!strategyEngine || strategyEngine.getMode?.() === 'primary') {
-        return (reply as any).code(409).send({
-          error: 'The legacy scanner is disabled while signal-only-v2 is the primary strategy.'
-        });
-      }
-      const scanner = (fastify as any).scanner;
-      if (!scanner) {
-        return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
-      }
-      setImmediate(() => {
-        scanner.scanAllActiveUsers(true).catch((err: any) => {
-          fastify.log.error(`[ManualTrigger] Scan failed: ${err.message}`);
-        });
-      });
-      return { success: true, message: 'Scan cycle triggered. Signals will appear within 15–30 seconds.' };
-    } catch (err: any) {
-      fastify.log.error(err);
-      return (reply as any).code(500).send({ error: 'Failed to trigger scan' });
-    }
+  }, async (_request, reply) => {
+    return (reply as any).code(409).send({
+      error: 'The legacy scanner has been retired; signal-only-v2 is the sole signal source.'
+    });
   });
 }

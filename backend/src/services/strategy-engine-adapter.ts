@@ -46,6 +46,12 @@ export class StrategyEngineAdapter {
   private lastZeroGexKeyFingerprint: string | null = null;
   private lastAutonomousEntryAt: string | null = null;
   private lastAutonomousEntryResult: string | null = null;
+  private lastEntryBlock: { halted: boolean; reason: string | null } | null = null;
+  // Live entries stay disabled until the exit monitor, order watchdog, and broker
+  // sync loops are running. The adapter starts before them (to publish IBKR policy
+  // early), and an autonomous 0DTE entry must never fire while nothing is watching
+  // its exit.
+  private liveEntriesReady = false;
   private lifecycleManager: StrategyLifecycleManager;
 
   constructor(private fastify: FastifyInstance) {
@@ -142,8 +148,15 @@ export class StrategyEngineAdapter {
         redisWatchdogIntervalMs: Number(process.env.STRATEGY_REDIS_WATCHDOG_INTERVAL_MS || 30000)
       },
       source: 'python',
-      entryBlocked: false
+      // Last-known halt state from the most recent entry attempt. null = not yet
+      // evaluated this session; the status route overlays a fresh evaluation.
+      entryBlocked: this.lastEntryBlock ? this.lastEntryBlock.halted : null,
+      entryBlockedReason: this.lastEntryBlock?.reason || null
     };
+  }
+
+  public noteEntryBlockState(halted: boolean, reason?: string | null): void {
+    this.lastEntryBlock = { halted, reason: reason || null };
   }
 
   public async getStrategyFamilyHistory(limit = 100): Promise<Array<Record<string, any>>> {
@@ -297,7 +310,12 @@ export class StrategyEngineAdapter {
        WHERE id = $1`,
       [signalId]
     );
-    if (rows.length === 0 || !rows[0].strategy_setup_id) return;
+    if (rows.length === 0) {
+      throw this.conflict('The signal no longer exists');
+    }
+    if (!rows[0].strategy_setup_id) {
+      throw this.conflict('The signal has no strategy setup identity and cannot be executed');
+    }
     if (this.mode !== 'primary') {
       throw this.conflict('The replacement strategy is not in primary mode');
     }
@@ -950,8 +968,19 @@ export class StrategyEngineAdapter {
       && settings.shadow_trading_enabled !== 'true';
   }
 
+  public markLiveEntriesReady(): void {
+    if (!this.liveEntriesReady) {
+      this.liveEntriesReady = true;
+      this.fastify.log.info('[StrategyEngineAdapter] Live entry submission enabled (exit monitoring is up).');
+    }
+  }
+
   private async maybeExecuteAutonomousLiveEntries(signal: StrategySnapshot, signalId: number): Promise<void> {
     if (String(signal.state || '') !== 'ACTIVE' || signal.lifecycle?.entry_allowed !== true) return;
+    if (!this.liveEntriesReady) {
+      this.lastAutonomousEntryResult = 'Blocked: exit-monitoring services are not running yet';
+      return;
+    }
     const entryWindow = this.autonomousEntryWindow();
     if (!entryWindow.open) {
       this.lastAutonomousEntryResult = `Blocked: ${entryWindow.reason}`;
@@ -982,6 +1011,11 @@ export class StrategyEngineAdapter {
           settings,
           assertExecutable: (candidateSignalId) => this.assertSignalExecutable(candidateSignalId)
         });
+        if (result?.riskCode === 'DAILY_LOSS_LIMIT') {
+          this.noteEntryBlockState(true, result?.message || 'Kill switch halted new entries');
+        } else if (result?.success) {
+          this.noteEntryBlockState(false, null);
+        }
         return {
           userId,
           result: result?.success

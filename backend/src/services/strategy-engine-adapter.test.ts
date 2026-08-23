@@ -342,6 +342,18 @@ async function runTests() {
     () => { throw new Error('Missing option quote age must block execution'); },
     (error: Error) => assert(error.message.includes('quote'), 'Execution must report the stale or missing option quote')
   );
+  const savedReviewQuery = reviewAdapter.fastify.pg.query;
+  reviewAdapter.fastify.pg.query = async () => ({ rows: [{ strategy_setup_id: null }] });
+  await reviewAdapter.assertSignalExecutable(7).then(
+    () => { throw new Error('A signal without a strategy setup id must fail closed, not bypass the gates'); },
+    (error: Error) => assert(error.message.includes('setup'), 'Missing setup identity must name the setup in its rejection')
+  );
+  reviewAdapter.fastify.pg.query = async () => ({ rows: [] });
+  await reviewAdapter.assertSignalExecutable(7).then(
+    () => { throw new Error('A missing signal row must fail closed'); },
+    (error: Error) => assert(error.message.includes('exists'), 'A missing signal row must be rejected explicitly')
+  );
+  reviewAdapter.fastify.pg.query = savedReviewQuery;
 
   const queries: Array<{ sql: string; values: any[] }> = [];
   const persistenceAdapter = new StrategyEngineAdapter({
@@ -470,6 +482,10 @@ async function runTests() {
     }
   });
   autonomousAdapter.autonomousEntryWindow = () => ({ open: true, reason: 'OPEN', cutoffMinutes: 900, closeMinutes: 960 });
+  await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 88);
+  const callsBeforeReady = autonomousCalls.length;
+  assert(callsBeforeReady === 0, 'Autonomous entries must stay blocked until exit-monitoring services are running');
+  autonomousAdapter.markLiveEntriesReady();
   await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 88);
   assert(autonomousCalls.length === 2 && autonomousCalls.every(call => call.signalId === 88), 'Every eligible autonomous user must route the active strategy signal');
   assert(maxActiveAutonomousCalls === 2, 'Independent autonomous users must execute concurrently');
