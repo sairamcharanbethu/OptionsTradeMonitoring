@@ -252,7 +252,10 @@ def build_option_contract(entry: dict, candles: dict[float, dict], sim_now: floa
                           spot: float) -> dict | None:
     minute = int(sim_now // 60) * 60
     candle = None
-    for lookback in range(0, 4):
+    # UW candles exist only where trades printed; multi-day contracts trade
+    # thinly, so forward-fill up to 10 minutes (live IBKR streams a quote even
+    # with zero volume).
+    for lookback in range(0, 10):
         candle = candles.get(minute - lookback * 60)
         if candle:
             break
