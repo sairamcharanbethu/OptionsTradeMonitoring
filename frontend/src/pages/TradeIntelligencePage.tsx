@@ -180,6 +180,39 @@ export default function TradeIntelligencePage() {
               <MetricTile label="Entry slippage" value="-" detail="Paper scope only" />
             )}
           </div>
+          {(metrics.byStrategy || []).length > 0 && (
+            <div className="border-t border-border p-3 sm:p-4">
+              <div className="mb-2 text-xs font-medium uppercase text-muted-foreground">Performance by strategy</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-muted-foreground">
+                      <th className="py-1 pr-3 font-medium">Strategy</th>
+                      <th className="py-1 pr-3 font-medium">Trades</th>
+                      <th className="py-1 pr-3 font-medium">Win %</th>
+                      <th className="py-1 pr-3 font-medium">Total P&L</th>
+                      <th className="py-1 font-medium">Avg / trade</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {metrics.byStrategy.map((row) => (
+                      <tr key={row.strategy} className="border-t border-border/50">
+                        <td className="py-1.5 pr-3 font-medium">{row.strategy.replace(/_/g, ' ')}</td>
+                        <td className="py-1.5 pr-3">{row.trades}</td>
+                        <td className="py-1.5 pr-3">{(row.winRate * 100).toFixed(0)}%</td>
+                        <td className={`py-1.5 pr-3 font-semibold ${row.totalPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                          {currency(row.totalPnl)}
+                        </td>
+                        <td className={row.avgPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}>
+                          {currency(row.avgPnl)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
           {metrics.byHour.length > 0 && (
             <div className="border-t border-border p-3 sm:p-4">
               <div className="mb-2 text-xs font-medium uppercase text-muted-foreground">Performance by ET hour</div>

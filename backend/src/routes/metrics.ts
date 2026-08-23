@@ -76,6 +76,23 @@ export async function metricsRoutes(fastify: FastifyInstance, _options: FastifyP
       baseParams
     );
 
+    // Family attribution: paper rows stamp paper_strategy; live rows carry the
+    // frozen engine snapshot. This is the primary lens for comparing the live
+    // track record against replay/backtest results.
+    const byStrategyQ = fastify.pg.query(
+      `SELECT
+         COALESCE(NULLIF(paper_strategy, ''), NULLIF(strategy_snapshot->>'strategy', ''), 'UNKNOWN') AS strategy,
+         COUNT(*)::int AS trades,
+         COUNT(*) FILTER (WHERE realized_pnl > 0)::int AS wins,
+         COALESCE(SUM(realized_pnl), 0)::float8 AS total_pnl,
+         COALESCE(AVG(realized_pnl), 0)::float8 AS avg_pnl
+       FROM positions
+       WHERE ${where} ${windowClause}
+       GROUP BY 1
+       ORDER BY total_pnl ASC`,
+      baseParams
+    );
+
     const bySymbolQ = fastify.pg.query(
       `SELECT
          symbol,
@@ -107,8 +124,8 @@ export async function metricsRoutes(fastify: FastifyInstance, _options: FastifyP
         )
       : null;
 
-    const [overall, byHour, bySymbol, slippage] = await Promise.all([
-      overallQ, byHourQ, bySymbolQ, slippageQ
+    const [overall, byHour, byStrategy, bySymbol, slippage] = await Promise.all([
+      overallQ, byHourQ, byStrategyQ, bySymbolQ, slippageQ
     ]);
 
     const o = overall.rows[0] || {};
@@ -140,6 +157,14 @@ export async function metricsRoutes(fastify: FastifyInstance, _options: FastifyP
       },
       byHour: byHour.rows.map((r: any) => ({
         hourEt: Number(r.hour_et),
+        trades: Number(r.trades),
+        wins: Number(r.wins),
+        winRate: Number(r.trades) > 0 ? Number(r.wins) / Number(r.trades) : 0,
+        totalPnl: Number(r.total_pnl),
+        avgPnl: Number(r.avg_pnl)
+      })),
+      byStrategy: byStrategy.rows.map((r: any) => ({
+        strategy: r.strategy,
         trades: Number(r.trades),
         wins: Number(r.wins),
         winRate: Number(r.trades) > 0 ? Number(r.wins) / Number(r.trades) : 0,

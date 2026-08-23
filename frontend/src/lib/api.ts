@@ -357,6 +357,7 @@ export interface PerformanceMetrics {
     expectancy: number;
   };
   byHour: Array<{ hourEt: number; trades: number; wins: number; winRate: number; totalPnl: number; avgPnl: number }>;
+  byStrategy: Array<{ strategy: string; trades: number; wins: number; winRate: number; totalPnl: number; avgPnl: number }>;
   bySymbol: Array<{ symbol: string; optionType: string; trades: number; wins: number; winRate: number; totalPnl: number; avgPnl: number }>;
   slippage: { fills: number; avgVsMid: number; avgVsLimit: number } | null;
 }
