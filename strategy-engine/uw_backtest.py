@@ -37,8 +37,9 @@ from zoneinfo import ZoneInfo
 
 import signal_engine
 from signal_engine import build_signal
-# The exact per-lane family policy the live loop uses — never approximate it.
-from trade_prefetch_service import _strategy_family_policy_for_lane
+# The exact per-lane family policy and wall-expiry selection the live loop
+# uses — never approximate them.
+from trade_prefetch_service import _strategy_family_policy_for_lane, _wall_option_expiry
 
 ET = ZoneInfo("America/New_York")
 API_BASE = "https://api.unusualwhales.com/api"
@@ -219,9 +220,21 @@ def modeled_spread(mid: float) -> float:
     return max(0.01, round(0.006 * mid + 0.01, 3))
 
 
-def contract_symbols_for_expiry(client: UWClient, date: str, spot: float, width: float) -> list[dict]:
+def listed_expiries(client: UWClient, date: str) -> list[str]:
+    """All expiries (YYYYMMDD) tradable on `date`, ascending."""
     payload = client.get("stock/SPY/option-chains", {"date": date})
-    expiry_tag = datetime.strptime(date, "%Y-%m-%d").strftime("%y%m%d")
+    tags = set()
+    for symbol in payload.get("data") or []:
+        if symbol.startswith("SPY") and len(symbol) >= 15:
+            tags.add("20" + symbol[3:9])
+    return sorted(tags)
+
+
+def contract_symbols_for_expiry(client: UWClient, date: str, expiry_yyyymmdd: str,
+                                spot: float, width: float) -> list[dict]:
+    payload = client.get("stock/SPY/option-chains", {"date": date})
+    expiry_tag = expiry_yyyymmdd[2:]
+    expiry_iso = f"{expiry_yyyymmdd[:4]}-{expiry_yyyymmdd[4:6]}-{expiry_yyyymmdd[6:]}"
     picked = []
     for symbol in payload.get("data") or []:
         if not symbol.startswith(f"SPY{expiry_tag}"):
@@ -229,13 +242,14 @@ def contract_symbols_for_expiry(client: UWClient, date: str, spot: float, width:
         right = symbol[9]
         strike = int(symbol[10:]) / 1000.0
         if abs(strike - spot) <= width:
-            picked.append({"symbol": symbol, "right": right, "strike": strike})
+            picked.append({"symbol": symbol, "right": right, "strike": strike,
+                           "expiry": expiry_iso, "expiry_yyyymmdd": expiry_yyyymmdd})
     picked.sort(key=lambda row: (row["strike"], row["right"]))
     return picked
 
 
 def build_option_contract(entry: dict, candles: dict[float, dict], sim_now: float,
-                          close_at: float, expiry: str, spot: float) -> dict | None:
+                          spot: float) -> dict | None:
     minute = int(sim_now // 60) * 60
     candle = None
     for lookback in range(0, 4):
@@ -249,7 +263,9 @@ def build_option_contract(entry: dict, candles: dict[float, dict], sim_now: floa
     bid = max(0.01, round(mid - half, 2))
     ask = round(mid + half, 2)
     spread_pct = round((ask - bid) / mid * 100, 1)
-    delta = bs_delta(spot, entry["strike"], max(1.0, (close_at - sim_now) / 60), candle["iv"], entry["right"])
+    expiry_close = datetime.strptime(entry["expiry"], "%Y-%m-%d").replace(
+        hour=16, minute=0, tzinfo=ET).timestamp()
+    delta = bs_delta(spot, entry["strike"], max(1.0, (expiry_close - sim_now) / 60), candle["iv"], entry["right"])
     if delta is None:
         # Moneyness fallback keeps the contract judgeable when a candle has no IV.
         moneyness = (spot - entry["strike"]) / max(spot * 0.01, 0.01)
@@ -261,7 +277,7 @@ def build_option_contract(entry: dict, candles: dict[float, dict], sim_now: floa
         "local_symbol": entry["symbol"],
         "right": entry["right"],
         "strike": entry["strike"],
-        "expiry": expiry,
+        "expiry": entry["expiry"],
         "bid": bid,
         "ask": ask,
         "mid": round(mid, 3),
@@ -334,16 +350,23 @@ def symbol_market(bars: list[dict], sim_now: float) -> dict:
 
 def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float, dict],
                   close_at: float, flatten_at: float) -> dict:
-    """Walk forward on 1m bars: stop / T1 (stop-to-trigger) / T2 / flatten.
+    """Walk forward on 1m bars: stop / premium stop / T1 (stop-to-trigger) /
+    T2 / flatten.
 
     Conservative intrabar rule: if a bar spans both stop and target, the stop
-    fills first.
+    fills first. The premium stop mirrors the live exit stack (35% for the
+    ORB/VWAP families, 20% otherwise) and is checked on each minute's option
+    candle close — without it, a 0DTE option can "ride to zero" in ways the
+    live StopLossEngine never allows.
     """
     side = trade["side"]
     stop = trade["stop"]
     targets = trade["targets"]
+    premium_stop_pct = 35.0 if trade["strategy"] in ("ORB_INDEX", "VWAP_TREND") else 20.0
+    premium_floor = trade["entry_price"] * (1 - premium_stop_pct / 100)
     entry_minute = int(trade["entry_time"] // 60) * 60
     t1_hit = False
+    last_premium = None
     exit_reason, exit_time = "SESSION_FLATTEN", flatten_at
     for bar in spy_bars:
         if bar["time"] <= entry_minute or bar["time"] >= flatten_at:
@@ -362,6 +385,13 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
             stop = trade["trigger"]  # live policy: T1 moves the stop to the trigger
         if t2_touch:
             exit_reason = "TARGET_2"
+            exit_time = bar["time"] + 60
+            break
+        candle = option_candles.get(bar["time"])
+        if candle and candle["close"] > 0:
+            last_premium = candle["close"]
+        if not t1_hit and last_premium is not None and last_premium <= premium_floor:
+            exit_reason = "PREMIUM_STOP"
             exit_time = bar["time"] + 60
             break
     minute = int(exit_time // 60) * 60
@@ -397,11 +427,27 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool) -> dict:
     day_low = min(bar["low"] for bar in session_spy)
     day_high = max(bar["high"] for bar in session_spy)
     width = max(6.0, (day_high - day_low) * 1.2)
-    contracts_meta = contract_symbols_for_expiry(client, date, (day_high + day_low) / 2, width)
+    mid_price = (day_high + day_low) / 2
+    session_yyyymmdd = date.replace("-", "")
+    expiries = listed_expiries(client, date)
+
+    # Primary chain: 0DTE before 1 PM ET, next listed expiry after (live
+    # adaptive mode). Wall chain: nearest expiry >= 3 calendar days out —
+    # exactly the live _wall_option_expiry selection.
+    next_expiry = next((expiry for expiry in expiries if expiry > session_yyyymmdd), None)
+    wall_expiry = _wall_option_expiry(expiries, now=open_at, min_dte=3)
+
+    zero_dte_meta = contract_symbols_for_expiry(client, date, session_yyyymmdd, mid_price, width)
+    next_meta = contract_symbols_for_expiry(client, date, next_expiry, mid_price, width) if next_expiry else []
+    wall_meta = (
+        contract_symbols_for_expiry(client, date, wall_expiry, mid_price, max(6.0, width * 0.8))
+        if wall_expiry and wall_expiry not in (session_yyyymmdd,) else []
+    )
     option_data = {
         entry["symbol"]: fetch_option_candles(client, entry["symbol"], date)
-        for entry in contracts_meta
+        for entry in (*zero_dte_meta, *next_meta, *wall_meta)
     }
+    one_pm = datetime.strptime(date, "%Y-%m-%d").replace(hour=13, minute=0, tzinfo=ET).timestamp()
 
     gamma_index = 0
     previous = {lane: None for lane in STRATEGY_LANES}
@@ -425,14 +471,30 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool) -> dict:
             net_gamma = gamma_series[gamma_index][1] if gamma_series and gamma_series[gamma_index][0] <= sim_now else None
             gex = gex_snapshot(sim_now, spy["spot"], net_gamma, flip, call_wall, put_wall)
 
+            if sim_now < one_pm or not next_meta:
+                primary_meta, primary_expiry, expiry_mode = zero_dte_meta, date, "0DTE"
+            else:
+                primary_meta = next_meta
+                primary_expiry = next_meta[0]["expiry"]
+                expiry_mode = "1DTE_NEXT_LISTED"
             chain = []
-            for entry in contracts_meta:
-                quote = build_option_contract(entry, option_data[entry["symbol"]], sim_now,
-                                              close_at, date, spy["spot"])
+            for entry in primary_meta:
+                quote = build_option_contract(entry, option_data[entry["symbol"]], sim_now, spy["spot"])
                 if quote:
                     chain.append(quote)
             options = {"generated_at": sim_now, "source": "UW", "underlying": "SPY",
-                       "expiry": date, "expiry_mode": "0dte", "contracts": chain}
+                       "expiry": primary_expiry, "expiry_mode": expiry_mode, "contracts": chain}
+            wall_options = None
+            if wall_meta:
+                wall_chain = []
+                for entry in wall_meta:
+                    quote = build_option_contract(entry, option_data[entry["symbol"]], sim_now, spy["spot"])
+                    if quote:
+                        wall_chain.append(quote)
+                if wall_chain:
+                    wall_options = {"generated_at": sim_now, "source": "UW", "underlying": "SPY",
+                                    "expiry": wall_meta[0]["expiry"], "expiry_mode": "WALL_3DTE",
+                                    "contracts": wall_chain}
             market = {
                 "generated_at": sim_now,
                 "source": "UW_BACKTEST",
@@ -457,6 +519,7 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool) -> dict:
                     option_preferred_contracts=1,
                     max_tracking_gap_seconds=max(180.0, interval * 3.0),
                     strategy_families=_strategy_family_policy_for_lane(None, lane),
+                    wall_options=wall_options,
                 )
                 previous[lane] = signal
                 state = str(signal.get("state") or "WAIT").upper()
