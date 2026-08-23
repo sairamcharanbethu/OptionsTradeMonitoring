@@ -6,8 +6,13 @@
 #   morning_only    — no entries after 11:00 ET
 #
 # Usage:
-#   ./run_overnight_backtest.sh                 # 2025-09-02 .. 2026-08-20
-#   ./run_overnight_backtest.sh 2026-01-02 2026-08-20
+#   ./run_overnight_backtest.sh                 # 2026-04-14 .. 2026-08-20
+#   ./run_overnight_backtest.sh 2026-05-01 2026-08-20
+#
+# NOTE: this UW plan serves GEX history (spot-exposures, greek-exposure/strike)
+# only inside a rolling ~130-day window — older dates return HTTP 403. The
+# window advances daily, so run promptly: fetched days are cached on disk
+# forever, but un-fetched days age out permanently.
 #
 # Needs UW_TOKEN in the environment or in ../.env. Rough cost: ~60 API calls
 # per uncached session (throttled to ~2/s), ~1-2 min of engine simulation per
@@ -17,7 +22,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-START="${1:-2025-09-02}"
+START="${1:-2026-04-14}"
 END="${2:-2026-08-20}"
 STAMP="$(date +%Y%m%d-%H%M)"
 OUT_DIR="uw_results"
