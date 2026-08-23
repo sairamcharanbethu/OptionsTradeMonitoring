@@ -388,6 +388,13 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
     entry_minute = int(trade["entry_time"] // 60) * 60
     t1_hit = False
     last_premium = None
+    # Live T1 premium profit lock (signal_engine t1_premium_lock_*): after T1,
+    # once the bid has been >= +20% over the entry reference, a +10% floor
+    # arms; falling back to the floor exits. Bid estimated as candle close
+    # minus half the modeled spread, matching exit pricing elsewhere.
+    lock_arm_return = 0.20
+    lock_floor_return = 0.10
+    max_bid_return = None
     exit_reason, exit_time = "SESSION_FLATTEN", flatten_at
     for bar in spy_bars:
         if bar["time"] <= entry_minute or bar["time"] >= flatten_at:
@@ -421,6 +428,14 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
             exit_reason = "PREMIUM_STOP"
             exit_time = bar["time"] + 60
             break
+        if t1_hit and last_premium is not None and trade["entry_price"] > 0:
+            bid_estimate = max(0.01, last_premium - modeled_spread(last_premium) / 2)
+            bid_return = bid_estimate / trade["entry_price"] - 1
+            max_bid_return = bid_return if max_bid_return is None else max(max_bid_return, bid_return)
+            if max_bid_return >= lock_arm_return and bid_return <= lock_floor_return:
+                exit_reason = "PREMIUM_LOCK"
+                exit_time = bar["time"] + 60
+                break
     minute = int(exit_time // 60) * 60
     candle = None
     for lookback in range(0, 15):
