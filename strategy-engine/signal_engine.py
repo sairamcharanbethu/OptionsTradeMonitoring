@@ -5311,6 +5311,16 @@ _GEX_WALL_STRATEGY_BY_SETUP = {
     "CALL_WALL_FAILED_BREAKOUT_PUT": "GEX_WALL_BREAK_FAIL",
     "PUT_WALL_FAILED_BREAKDOWN_CALL": "GEX_WALL_BREAK_FAIL",
 }
+# Wall reactions the engine may arm. GEX_WALL_BOUNCE is excluded on replay
+# evidence (UW replay 2026-04-14..08-20 through this engine: n=12, 17% win,
+# mean -$40.42 ± $13.08 SE per contract — ~3.1 SE below zero, and the single
+# difference between portfolio PF 0.88 and 1.03). Mechanically: the wall gate
+# arms in strong negative gamma, where walls break more often than they hold —
+# a bounce entry fights the regime the gate itself selects for. Rejection and
+# failed-break reactions were positive on the same sample and stay enabled.
+# See docs/uw-backtest-2026-04-14-to-08-20.md; re-test via uw_backtest.py
+# before re-enabling.
+DISABLED_WALL_STRATEGIES = {"GEX_WALL_BOUNCE"}
 
 
 def _gex_wall_candidate(
@@ -5388,6 +5398,8 @@ def _gex_wall_candidate(
     strategy_name = _GEX_WALL_STRATEGY_BY_SETUP.get(
         str(evaluation.get("setup_type")), "GEX_WALL_REJECTION"
     )
+    if strategy_name in DISABLED_WALL_STRATEGIES:
+        return None
     return {
         "strategy": strategy_name,
         "side": side,
