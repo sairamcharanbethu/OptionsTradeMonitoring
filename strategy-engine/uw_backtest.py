@@ -231,6 +231,12 @@ def bs_delta(spot: float, strike: float, minutes_to_expiry: float, iv: float | N
     return cdf if right == "C" else cdf - 1
 
 
+# --mid-fills: price entries and exits at the candle mid instead of crossing
+# the modeled spread. Not a realistic fill assumption — an upper bound that
+# quantifies total spread drag (real limit-order fills land between the two).
+MID_FILLS = False
+
+
 def modeled_spread(mid: float) -> float:
     # SPY 0DTE near-ATM spreads are tight ($0.01-0.03); scale gently with
     # premium and floor at a cent. Deliberately a touch pessimistic.
@@ -445,14 +451,15 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
     if not candle or candle["close"] <= 0:
         return {**trade, "exit_reason": "NO_EXIT_QUOTE", "pnl": None}
     exit_mid = candle["close"]
-    exit_bid = max(0.01, exit_mid - modeled_spread(exit_mid) / 2)
+    exit_bid = exit_mid if MID_FILLS else max(0.01, exit_mid - modeled_spread(exit_mid) / 2)
     pnl = round((exit_bid - trade["entry_price"]) * 100 * trade["contracts"], 2)
     return {**trade, "exit_time": exit_time, "exit_price": round(exit_bid, 2),
             "exit_reason": exit_reason, "t1_hit": t1_hit, "pnl": pnl}
 
 
 def run_day(client: UWClient, date: str, interval: int, verbose: bool,
-            variants_spec: list[dict] | None = None) -> dict:
+            variants_spec: list[dict] | None = None,
+            fetch_only: bool = False) -> dict:
     open_at, close_at = _session_bounds(date)
     flatten_at = close_at - 40 * 60
     entry_cutoff = close_at - 60 * 60
@@ -491,6 +498,9 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
         for entry in (*zero_dte_meta, *next_meta, *wall_meta)
     }
     one_pm = datetime.strptime(date, "%Y-%m-%d").replace(hour=13, minute=0, tzinfo=ET).timestamp()
+    if fetch_only:
+        # All API data for the session is now cached on disk; skip simulation.
+        return {"date": date, "fetched": len(option_data), "variants": {}, "blockers": {}, "states": {}}
 
     gamma_index = 0
     previous = {lane: None for lane in STRATEGY_LANES}
@@ -593,7 +603,7 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
                     "entry_time": sim_now,
                     "entry_et": datetime.fromtimestamp(sim_now, ET).strftime("%H:%M"),
                     "contract": option["local_symbol"],
-                    "entry_price": float(option["ask"]),
+                    "entry_price": float(option["mid"] if MID_FILLS else option["ask"]),
                     "contracts": 1,
                     "trigger": _num((setup or {}).get("trigger")),
                     "stop": _num((setup or {}).get("invalidation")) or _num((setup or {}).get("stop")),
@@ -668,11 +678,18 @@ def main() -> None:
     parser.add_argument("--summary-only", action="store_true")
     parser.add_argument("--variants", action="store_true",
                         help="also simulate no-wall-bounce and morning-only executor variants")
+    parser.add_argument("--fetch-only", action="store_true",
+                        help="fetch and cache the session's UW data without simulating")
+    parser.add_argument("--mid-fills", action="store_true",
+                        help="price fills at candle mid (upper bound: quantifies spread drag)")
     parser.add_argument("--exit-t1-variant", action="store_true",
                         help="also simulate an exit policy that banks the full position at T1")
     parser.add_argument("--trades-out",
                         help="path prefix; writes <prefix>-<variant>.jsonl with every priced trade")
     args = parser.parse_args()
+
+    if args.mid_fills:
+        globals()["MID_FILLS"] = True
 
     variants_spec = [
         {"name": "baseline", "skip_strategies": set(), "latest_entry_minute_et": None},
@@ -709,7 +726,7 @@ def main() -> None:
         print(f"\n=== {date} ===", flush=True)
         try:
             result = run_day(client, date, args.interval, verbose=not args.summary_only,
-                             variants_spec=variants_spec)
+                             variants_spec=variants_spec, fetch_only=args.fetch_only)
         except Exception as exc:
             print(f"  FAILED: {exc}")
             continue
