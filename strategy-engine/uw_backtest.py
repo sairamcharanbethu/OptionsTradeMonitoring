@@ -86,9 +86,26 @@ class UWClient:
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/json",
         })
-        _last_request_at[0] = _REAL_MONOTONIC()
-        with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode())
+        payload = None
+        for attempt in range(3):
+            _last_request_at[0] = _REAL_MONOTONIC()
+            try:
+                with urllib.request.urlopen(request, timeout=30) as response:
+                    payload = json.loads(response.read().decode())
+                break
+            except urllib.error.HTTPError as err:
+                if err.code == 429 and attempt < 2:
+                    time.sleep(15 * (attempt + 1))  # rate-limited: back off
+                    continue
+                if err.code >= 500 and attempt < 2:
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise
+            except (urllib.error.URLError, TimeoutError):
+                if attempt < 2:
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps(payload))
         return payload
@@ -412,7 +429,8 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
             "exit_reason": exit_reason, "t1_hit": t1_hit, "pnl": pnl}
 
 
-def run_day(client: UWClient, date: str, interval: int, verbose: bool) -> dict:
+def run_day(client: UWClient, date: str, interval: int, verbose: bool,
+            variants_spec: list[dict] | None = None) -> dict:
     open_at, close_at = _session_bounds(date)
     flatten_at = close_at - 40 * 60
     entry_cutoff = close_at - 60 * 60
@@ -454,8 +472,15 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool) -> dict:
 
     gamma_index = 0
     previous = {lane: None for lane in STRATEGY_LANES}
-    trades: list[dict] = []
-    open_by_lane: dict[str, dict] = {}
+    # Each variant is an independent executor over the SAME engine run: the
+    # engine's evaluations are identical regardless of which entries get taken
+    # (live executor skips don't feed back into the engine either), so
+    # scenario tests cost nothing extra.
+    variants = [
+        {**spec, "open_by_lane": {}} for spec in (variants_spec or [
+            {"name": "baseline", "skip_strategies": set(), "latest_entry_minute_et": None},
+        ])
+    ]
     blocker_counts: dict[str, int] = {}
     state_minutes: dict[str, int] = {}
 
@@ -532,55 +557,66 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool) -> dict:
                     blocker_counts[key] = blocker_counts.get(key, 0) + 1
 
                 lifecycle = signal.get("lifecycle") or {}
-                if lane in open_by_lane:
+                if state != "ACTIVE" or lifecycle.get("entry_allowed") is not True:
                     continue
-                # Mirror the live executor's portfolio caps: max 2 entries/day,
-                # and never stack the identical contract+side from another lane.
-                if len(open_by_lane) + len(trades) >= 2:
+                setup = signal.get("put_setup") if signal.get("favoring") == "puts" else signal.get("call_setup")
+                option = (setup or {}).get("option") or {}
+                if not option.get("local_symbol") or not _num(option.get("ask")):
                     continue
-                if state == "ACTIVE" and lifecycle.get("entry_allowed") is True:
-                    setup = signal.get("put_setup") if signal.get("favoring") == "puts" else signal.get("call_setup")
-                    option = (setup or {}).get("option") or {}
-                    if not option.get("local_symbol") or not _num(option.get("ask")):
+                trade = {
+                    "date": date, "lane": lane,
+                    "strategy": signal.get("strategy"),
+                    "side": "PUT" if signal.get("favoring") == "puts" else "CALL",
+                    "entry_time": sim_now,
+                    "entry_et": datetime.fromtimestamp(sim_now, ET).strftime("%H:%M"),
+                    "contract": option["local_symbol"],
+                    "entry_price": float(option["ask"]),
+                    "contracts": 1,
+                    "trigger": _num((setup or {}).get("trigger")),
+                    "stop": _num((setup or {}).get("invalidation")) or _num((setup or {}).get("stop")),
+                    "targets": [t for t in ((setup or {}).get("targets") or []) if _num(t) is not None][:3],
+                }
+                if trade["stop"] is None or not trade["targets"] or trade["trigger"] is None:
+                    continue
+                entry_stamp = datetime.fromtimestamp(sim_now, ET)
+                entry_minutes_et = entry_stamp.hour * 60 + entry_stamp.minute
+                for variant in variants:
+                    v_open = variant["open_by_lane"]
+                    if lane in v_open:
                         continue
-                    trade = {
-                        "date": date, "lane": lane,
-                        "strategy": signal.get("strategy"),
-                        "side": "PUT" if signal.get("favoring") == "puts" else "CALL",
-                        "entry_time": sim_now,
-                        "entry_et": datetime.fromtimestamp(sim_now, ET).strftime("%H:%M"),
-                        "contract": option["local_symbol"],
-                        "entry_price": float(option["ask"]),
-                        "contracts": 1,
-                        "trigger": _num((setup or {}).get("trigger")),
-                        "stop": _num((setup or {}).get("invalidation")) or _num((setup or {}).get("stop")),
-                        "targets": [t for t in ((setup or {}).get("targets") or []) if _num(t) is not None][:3],
-                    }
-                    if trade["stop"] is None or not trade["targets"] or trade["trigger"] is None:
+                    # Mirror the live executor's caps: max 2 entries/day, no
+                    # duplicate contract+side stacking across lanes.
+                    if len(v_open) >= 2:
                         continue
-                    duplicate = any(
-                        existing["contract"] == trade["contract"] and existing["side"] == trade["side"]
-                        for existing in open_by_lane.values()
-                    )
-                    if duplicate:
+                    if str(trade["strategy"]) in variant["skip_strategies"]:
                         continue
-                    open_by_lane[lane] = trade
+                    latest = variant["latest_entry_minute_et"]
+                    if latest is not None and entry_minutes_et > latest:
+                        continue
+                    if any(existing["contract"] == trade["contract"] and existing["side"] == trade["side"]
+                           for existing in v_open.values()):
+                        continue
+                    v_open[lane] = dict(trade)
                     if verbose:
-                        print(f"  ENTRY {trade['entry_et']} {lane} {trade['strategy']} {trade['side']} "
+                        print(f"  ENTRY[{variant['name']}] {trade['entry_et']} {lane} {trade['strategy']} {trade['side']} "
                               f"{trade['contract']} @ ${trade['entry_price']:.2f} stop {trade['stop']} targets {trade['targets']}")
     finally:
         time.time = real_time
 
-    for lane, trade in open_by_lane.items():
-        candles = option_data.get(trade["contract"], {})
-        trades.append(simulate_exit(trade, spy_bars, candles, close_at, flatten_at))
+    variant_trades: dict[str, list[dict]] = {}
+    for variant in variants:
+        rows = []
+        for trade in variant["open_by_lane"].values():
+            candles = option_data.get(trade["contract"], {})
+            rows.append(simulate_exit(trade, spy_bars, candles, close_at, flatten_at))
+        variant_trades[variant["name"]] = rows
 
-    return {"date": date, "trades": trades, "blockers": blocker_counts, "states": state_minutes}
+    return {"date": date, "variants": variant_trades, "blockers": blocker_counts, "states": state_minutes}
 
 
-def summarize(all_trades: list[dict]) -> None:
+def summarize(all_trades: list[dict], label: str = "") -> None:
     priced = [trade for trade in all_trades if trade.get("pnl") is not None]
-    print(f"\n{'=' * 64}\nTRADES: {len(all_trades)} ({len(priced)} priced)")
+    print(f"\n{'=' * 64}\n{label + ': ' if label else ''}TRADES: {len(all_trades)} ({len(priced)} priced)")
     if not priced:
         return
     wins = [trade for trade in priced if trade["pnl"] > 0]
@@ -606,7 +642,22 @@ def main() -> None:
     parser.add_argument("--end")
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--summary-only", action="store_true")
+    parser.add_argument("--variants", action="store_true",
+                        help="also simulate no-wall-bounce and morning-only executor variants")
+    parser.add_argument("--trades-out",
+                        help="path prefix; writes <prefix>-<variant>.jsonl with every priced trade")
     args = parser.parse_args()
+
+    variants_spec = [
+        {"name": "baseline", "skip_strategies": set(), "latest_entry_minute_et": None},
+    ]
+    if args.variants:
+        variants_spec += [
+            {"name": "no_wall_bounce", "skip_strategies": {"GEX_WALL_BOUNCE"},
+             "latest_entry_minute_et": None},
+            {"name": "morning_only", "skip_strategies": set(),
+             "latest_entry_minute_et": 11 * 60},
+        ]
 
     client = UWClient(_load_token())
     if args.date:
@@ -622,29 +673,39 @@ def main() -> None:
     else:
         raise SystemExit("pass --date or --start/--end")
 
-    all_trades: list[dict] = []
+    all_by_variant: dict[str, list[dict]] = {spec["name"]: [] for spec in variants_spec}
     for date in dates:
-        print(f"\n=== {date} ===")
+        print(f"\n=== {date} ===", flush=True)
         try:
-            result = run_day(client, date, args.interval, verbose=not args.summary_only)
+            result = run_day(client, date, args.interval, verbose=not args.summary_only,
+                             variants_spec=variants_spec)
         except Exception as exc:
             print(f"  FAILED: {exc}")
             continue
         if result.get("skipped"):
             print(f"  skipped: {result['skipped']}")
             continue
-        day_trades = result["trades"]
-        all_trades.extend(day_trades)
-        for trade in day_trades:
-            print(f"  {trade['entry_et']} {trade['lane']:<10} {str(trade['strategy']):<20} {trade['side']} "
-                  f"{trade['contract']} in ${trade['entry_price']:.2f} -> "
-                  f"{trade.get('exit_reason')} ${trade.get('exit_price', 0) or 0:.2f}  P&L ${trade.get('pnl')}")
+        for name, day_trades in result["variants"].items():
+            all_by_variant[name].extend(day_trades)
+            tag = "" if name == "baseline" else f" [{name}]"
+            for trade in day_trades:
+                print(f"  {trade['entry_et']} {trade['lane']:<10} {str(trade['strategy']):<20} {trade['side']} "
+                      f"{trade['contract']} in ${trade['entry_price']:.2f} -> "
+                      f"{trade.get('exit_reason')} ${trade.get('exit_price', 0) or 0:.2f}  P&L ${trade.get('pnl')}{tag}")
         if not args.summary_only:
             top = sorted(result["blockers"].items(), key=lambda item: -item[1])[:6]
             print(f"  states: {result['states']}")
             for blocker, count in top:
                 print(f"    blocker x{count}: {blocker}")
-    summarize(all_trades)
+    for name, rows in all_by_variant.items():
+        summarize(rows, label=name)
+        if args.trades_out:
+            out_path = Path(f"{args.trades_out}-{name}.jsonl")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with out_path.open("w") as handle:
+                for trade in rows:
+                    handle.write(json.dumps(trade) + "\n")
+            print(f"  wrote {len(rows)} trades to {out_path}")
 
 
 if __name__ == "__main__":
