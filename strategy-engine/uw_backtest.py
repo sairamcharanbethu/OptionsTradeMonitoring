@@ -369,7 +369,8 @@ def symbol_market(bars: list[dict], sim_now: float) -> dict:
 
 
 def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float, dict],
-                  close_at: float, flatten_at: float) -> dict:
+                  close_at: float, flatten_at: float,
+                  exit_at_target: int | None = None) -> dict:
     """Walk forward on 1m bars: stop / premium stop / T1 (stop-to-trigger) /
     T2 / flatten.
 
@@ -401,6 +402,12 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
             exit_time = bar["time"] + 60
             break
         if t1_touch and not t1_hit:
+            # Exit-policy variant: bank the whole position at T1 instead of the
+            # live policy (move stop to trigger, hold for T2).
+            if exit_at_target == 1:
+                exit_reason = "TARGET_1"
+                exit_time = bar["time"] + 60
+                break
             t1_hit = True
             stop = trade["trigger"]  # live policy: T1 moves the stop to the trigger
         if t2_touch:
@@ -608,7 +615,8 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
         rows = []
         for trade in variant["open_by_lane"].values():
             candles = option_data.get(trade["contract"], {})
-            rows.append(simulate_exit(trade, spy_bars, candles, close_at, flatten_at))
+            rows.append(simulate_exit(trade, spy_bars, candles, close_at, flatten_at,
+                                      exit_at_target=variant.get("exit_at_target")))
         variant_trades[variant["name"]] = rows
 
     return {"date": date, "variants": variant_trades, "blockers": blocker_counts, "states": state_minutes}
@@ -644,6 +652,8 @@ def main() -> None:
     parser.add_argument("--summary-only", action="store_true")
     parser.add_argument("--variants", action="store_true",
                         help="also simulate no-wall-bounce and morning-only executor variants")
+    parser.add_argument("--exit-t1-variant", action="store_true",
+                        help="also simulate an exit policy that banks the full position at T1")
     parser.add_argument("--trades-out",
                         help="path prefix; writes <prefix>-<variant>.jsonl with every priced trade")
     args = parser.parse_args()
@@ -658,6 +668,11 @@ def main() -> None:
             {"name": "morning_only", "skip_strategies": set(),
              "latest_entry_minute_et": 11 * 60},
         ]
+    if args.exit_t1_variant:
+        variants_spec.append({
+            "name": "exit_at_t1", "skip_strategies": set(),
+            "latest_entry_minute_et": None, "exit_at_target": 1,
+        })
 
     client = UWClient(_load_token())
     if args.date:
