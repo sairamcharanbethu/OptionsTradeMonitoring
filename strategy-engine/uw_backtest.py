@@ -588,6 +588,7 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
                 trade = {
                     "date": date, "lane": lane,
                     "strategy": signal.get("strategy"),
+                    "confidence": _num(signal.get("confidence_score")),
                     "side": "PUT" if signal.get("favoring") == "puts" else "CALL",
                     "entry_time": sim_now,
                     "entry_et": datetime.fromtimestamp(sim_now, ET).strftime("%H:%M"),
