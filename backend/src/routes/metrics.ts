@@ -108,7 +108,10 @@ export async function metricsRoutes(fastify: FastifyInstance, _options: FastifyP
       baseParams
     );
 
-    // Entry slippage vs mid and vs limit (paper only — live has no paper_orders).
+    // Entry slippage vs mid and vs limit. Paper reads paper_orders; live reads
+    // the submit-time quote persisted in analysis_data.entry_execution against
+    // the broker-reconciled fill in entry_price. Spread capture is the largest
+    // measured cost lever, so this is the number that tracks it on real fills.
     const slippageQ = scope === 'paper'
       ? fastify.pg.query(
           `SELECT
@@ -122,7 +125,21 @@ export async function metricsRoutes(fastify: FastifyInstance, _options: FastifyP
              AND created_at >= (NOW() - ($2 || ' days')::interval)`,
           [SHARED_PAPER_ACCOUNT_ID, String(days)]
         )
-      : null;
+      : fastify.pg.query(
+          `SELECT
+             COUNT(*)::int AS fills,
+             COALESCE(AVG(entry_price - NULLIF(analysis_data->'entry_execution'->>'submit_mid','')::float8), 0)::float8 AS avg_vs_mid,
+             COALESCE(AVG(entry_price - NULLIF(analysis_data->'entry_execution'->>'limit_price','')::float8)
+               FILTER (WHERE (analysis_data->'entry_execution'->>'limit_price') IS NOT NULL), 0)::float8 AS avg_vs_limit
+           FROM positions
+           WHERE user_id = $1
+             AND COALESCE(is_simulated, false) = false
+             AND COALESCE(execution_broker,'') <> 'system_paper'
+             AND analysis_data->'entry_execution'->>'submit_mid' IS NOT NULL
+             AND status IN ('OPEN','CLOSED','PENDING_EXIT','PENDING_TRIM','PARTIALLY_FILLED')
+             AND created_at >= (NOW() - ($2 || ' days')::interval)`,
+          [userId, String(days)]
+        );
 
     const [overall, byHour, byStrategy, bySymbol, slippage] = await Promise.all([
       overallQ, byHourQ, byStrategyQ, bySymbolQ, slippageQ

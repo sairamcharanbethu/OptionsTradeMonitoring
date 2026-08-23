@@ -733,6 +733,9 @@ def main() -> None:
         if result.get("skipped"):
             print(f"  skipped: {result['skipped']}")
             continue
+        if args.fetch_only:
+            print(f"  cached {result.get('fetched', 0)} option contracts + bars/GEX")
+            continue
         for name, day_trades in result["variants"].items():
             all_by_variant[name].extend(day_trades)
             tag = "" if name == "baseline" else f" [{name}]"

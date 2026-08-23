@@ -1190,7 +1190,10 @@ export class TradeExecutionService {
         takeProfitPct: settings.take_profit_pct,
         syntheticTrailingEnabled: settings.synthetic_trailing_stop_enabled === 'true',
         syntheticTrailingPct: settings.synthetic_trailing_stop_pct,
-        notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId};${protectedLimitNote}]`
+        notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId};${protectedLimitNote}]`,
+        entryQuote: entryQuoteValidation?.quote || null,
+        limitPrice: limitPrice ?? null,
+        orderType
       });
 
       await this.recordTradeEventBestEffort({
@@ -1305,6 +1308,13 @@ export class TradeExecutionService {
     syntheticTrailingEnabled?: boolean;
     syntheticTrailingPct?: string;
     notes: string;
+    // Submit-time quote, persisted so live fill-vs-mid slippage is measurable
+    // once the broker sync writes the actual fill into entry_price. Spread
+    // capture is the largest measured lever (~$3/trade modeled) — this is the
+    // instrumentation that turns it from a model into a live number.
+    entryQuote?: { bid?: number | null; ask?: number | null; mark?: number | null; spreadPct?: number | null; quoteAgeMs?: number | null } | null;
+    limitPrice?: string | number | null;
+    orderType?: string;
   }) {
     const { rows: signalRows } = await this.fastify.pg.query(
       `SELECT strategy_setup_id, engine_version, lifecycle_status, policy_fingerprint,
@@ -1365,14 +1375,14 @@ export class TradeExecutionService {
         suggested_stop_loss, suggested_take_profit_1, suggested_take_profit_2,
         signal_id, strategy_setup_id, strategy_engine_version,
         strategy_lifecycle_status, strategy_policy_fingerprint,
-        strategy_snapshot, strategy_managed,
+        strategy_snapshot, strategy_managed, analysis_data,
         created_at, updated_at
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
         $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
         $23, $24,
         $25, $26, $27,
-        $28, $29, $30, $31, $32, $33, $34,
+        $28, $29, $30, $31, $32, $33, $34, $35,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       RETURNING *`,
@@ -1410,7 +1420,21 @@ export class TradeExecutionService {
         signal.lifecycle_status || null,
         signal.policy_fingerprint || null,
         strategySnapshot,
-        strategyManaged
+        strategyManaged,
+        execution.entryQuote
+          ? JSON.stringify({
+              entry_execution: {
+                submit_bid: execution.entryQuote.bid ?? null,
+                submit_ask: execution.entryQuote.ask ?? null,
+                submit_mid: execution.entryQuote.mark ?? null,
+                spread_pct: execution.entryQuote.spreadPct ?? null,
+                quote_age_ms: execution.entryQuote.quoteAgeMs ?? null,
+                limit_price: execution.limitPrice != null ? Number(execution.limitPrice) : null,
+                order_type: execution.orderType || null,
+                submitted_at: new Date().toISOString()
+              }
+            })
+          : null
       ]
     );
 
