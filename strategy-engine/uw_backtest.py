@@ -712,6 +712,30 @@ def main() -> None:
             print(f"  states: {result['states']}")
             for blocker, count in top:
                 print(f"    blocker x{count}: {blocker}")
+    # Paired comparison against baseline for every variant: on shared entries
+    # the per-trade delta (mean ± SE) is the honest test statistic — raw
+    # variant totals differ by noise-sized amounts that read as sign flips.
+    baseline_rows = all_by_variant.get("baseline") or []
+    trade_key = lambda r: (r["date"], r["lane"], r["entry_et"], r["contract"])
+    baseline_by_key = {trade_key(r): r for r in baseline_rows if r.get("pnl") is not None}
+    for name, rows in all_by_variant.items():
+        if name == "baseline" or not baseline_by_key:
+            continue
+        deltas = [
+            r["pnl"] - baseline_by_key[trade_key(r)]["pnl"]
+            for r in rows
+            if r.get("pnl") is not None and trade_key(r) in baseline_by_key
+        ]
+        if len(deltas) < 2:
+            continue
+        mean = sum(deltas) / len(deltas)
+        variance = sum((d - mean) ** 2 for d in deltas) / (len(deltas) - 1)
+        se = (variance / len(deltas)) ** 0.5
+        z = mean / se if se > 0 else 0.0
+        print(f"\npaired vs baseline [{name}]: n={len(deltas)} shared trades, "
+              f"mean delta ${mean:+.2f}/trade ± {se:.2f} SE ({z:+.2f} SE from zero)"
+              f"{'  — NOT statistically distinguishable' if abs(z) < 2 else ''}")
+
     for name, rows in all_by_variant.items():
         summarize(rows, label=name)
         if args.trades_out:
