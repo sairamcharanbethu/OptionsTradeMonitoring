@@ -312,37 +312,56 @@ async function testMacroStrictSkipsWeakMacroScore() {
   assert(backtester.getScenarioSkipReason('macro_strict', signal) === 'macro_score_below_62', 'Strict macro should require score >= 62');
 }
 
-async function testStructureGateMirrorsLiveEntryGate() {
-  const gate = (s: any): string | null => SignalReplayBacktester.structureGateSkipReason(s);
+// End-to-end through the REAL Python gate: spawns python3 replay_gates.py,
+// which imports signal_engine._enforce_entry_gates — the code that trades live.
+async function testStructureGateUsesLivePythonEngineGate() {
+  const backtester = createBacktester();
 
-  // Flip no-man's-land: spot 770.14 within the 0.20%-of-spot floor (~1.54) of flip 770.37 (trade #796).
+  // Flip no-man's-land: spot 770.14 within max(1×ATR, 0.20% of spot)≈1.54 of flip 770.37 (trade #796).
   const nearFlip = createSignal({ current_price: 770.14, strategy_name: 'GEX_WALL_BREAK_FAIL',
+    volatility: { atr_5m: 1.0 },
     gex: { flip: 770.37, regime: 'Negative', gamma_regime: 'Trend' } });
-  assert(gate(nearFlip) === 'flip_no_mans_land',
-    'A directional entry hugging the gamma flip must be gated');
-
   // Momentum setup in a Positive/Range pin, far from flip (trades #793/#794).
   const pinMomentum = createSignal({ current_price: 771.24, strategy_name: 'CONTINUATION',
+    volatility: { atr_5m: 1.0 },
     gex: { flip: 760.0, regime: 'Positive', gamma_regime: 'Range' } });
-  assert(gate(pinMomentum) === 'momentum_in_positive_range',
-    'A momentum setup in a Positive/Range pin must be gated');
-
   // A fade in the same pin, far from flip, is exempt (meant to trade ranges).
   const pinFade = createSignal({ current_price: 771.24, strategy_name: 'GEX_WALL_BOUNCE',
+    volatility: { atr_5m: 1.0 },
     gex: { flip: 760.0, regime: 'Positive', gamma_regime: 'Range' } });
-  assert(gate(pinFade) === null,
-    'A fade in a Positive/Range pin is not gated');
-
   // A clean momentum trade far from flip in a trend regime passes.
   const cleanTrend = createSignal({ current_price: 780.0, strategy_name: 'CONTINUATION',
+    volatility: { atr_5m: 1.0 },
     gex: { flip: 760.0, regime: 'Negative', gamma_regime: 'Trend' } });
+  // No strategy at all: the real engine's completeness gate refuses it.
+  const noContext = createSignal({ current_price: null, strategy_name: null, gex: null, volatility: null });
+
+  const signals = [nearFlip, pinMomentum, pinFade, cleanTrend, noContext];
+  const status = await backtester.evaluateEngineGates(signals);
+  assert(status.available === true, `The Python gate harness must run in tests (error: ${status.error})`);
+  assert(status.evaluated === signals.length, `Every signal must receive an engine verdict (${status.evaluated}/${signals.length})`);
+
+  const gate = (s: any): string | null => backtester.getScenarioSkipReason('structure_gated', s);
+  assert(gate(nearFlip) === 'flip_no_mans_land',
+    'A directional entry hugging the gamma flip must be gated by the engine');
+  assert(gate(pinMomentum) === 'momentum_in_positive_range',
+    'A momentum setup in a Positive/Range pin must be gated by the engine');
+  assert(gate(pinFade) === null,
+    'A fade in a Positive/Range pin is not gated');
   assert(gate(cleanTrend) === null,
     'A clean trend-aligned momentum trade far from the flip is allowed');
+  assert(gate(noContext) === 'engine_incomplete_signal',
+    'The engine gates a signal without a strategy — it would not be executable live');
 
-  // Missing gex context must not skip (baseline behavior preserved).
-  const noContext = createSignal({ current_price: null, strategy_name: null, gex: null });
-  assert(gate(noContext) === null,
-    'Signals without gex/price context are not gated');
+  // When the harness cannot run, the scenario fails loud instead of
+  // approximating the gates in TypeScript.
+  const offline = createBacktester();
+  offline.engineGateRunner = async () => { throw new Error('python3 missing'); };
+  const freshSignal = createSignal({});
+  const offlineStatus = await offline.evaluateEngineGates([freshSignal]);
+  assert(offlineStatus.available === false, 'A failed harness must report unavailable');
+  assert(offline.getScenarioSkipReason('structure_gated', freshSignal) === 'engine_gate_unavailable',
+    'Signals without an engine verdict must be skipped as engine_gate_unavailable, never re-judged in TS');
 }
 
 async function testVixContangoScenarioRequiresStoredTermStructure() {
@@ -1042,7 +1061,7 @@ async function runTests() {
   await testQuoteQualityBuckets();
   await testNaiveIbkrBarsParseAsEasternTime();
   await testEasternDateHelperHandlesStandardTime();
-  await testStructureGateMirrorsLiveEntryGate();
+  await testStructureGateUsesLivePythonEngineGate();
   console.log('All SignalReplayBacktester tests passed!');
 }
 

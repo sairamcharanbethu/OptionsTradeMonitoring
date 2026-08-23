@@ -70,6 +70,11 @@ async function main() {
   console.log('============================================================');
   console.log(`signals loaded:     ${res.signalsLoaded}  (generated ${res.generatedSignalsLoaded}, blocked ${res.blockedSignalsLoaded})`);
   console.log(`usable (had option data): ${res.signalsUsable}    missing option data: ${res.missingOptionData}`);
+  if (res.engineGate.available) {
+    console.log(`engine gate (python signal_engine): evaluated ${res.engineGate.evaluated}/${res.engineGate.total} signals`);
+  } else {
+    console.log(`engine gate UNAVAILABLE (${res.engineGate.error}) — structure_gated skipped every signal; nothing was approximated in TS`);
+  }
 
   const pct = (n: number) => (Number.isFinite(n) ? `${n.toFixed(1)}%` : '—');
   const money = (n: number) => (Number.isFinite(n) ? `$${n.toFixed(2)}` : '—');

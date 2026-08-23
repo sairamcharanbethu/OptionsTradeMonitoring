@@ -1,4 +1,7 @@
 import { FastifyInstance } from 'fastify';
+import { execFile } from 'child_process';
+import path from 'path';
+import fs from 'fs';
 import { SignalDecision } from '../lib/trading-events';
 import { AIService } from './ai-service';
 import { IbkrMarketDataService, IbkrOptionContract } from './ibkr-market-data-service';
@@ -12,12 +15,21 @@ type ReplayBar = {
   volume: number;
 };
 
-// Mirrors the Python late entry-gate in signal_engine.py (_enforce_entry_gates):
-// keep these in sync. Momentum setups die in a gamma pin; the flip band is
-// max(ATR-scaled, %-of-spot).
-const MOMENTUM_STRATEGIES = new Set(['CONTINUATION', 'MTF_TREND_BREAK', 'ORB_INDEX', 'VWAP_TREND']);
-const FLIP_PROXIMITY_ATR = 1.0;
-const FLIP_PROXIMITY_PCT = 0.0020; // 0.20% of spot floor
+// The structure_gated scenario runs each replayed signal through the LIVE
+// Python entry-gate (signal_engine._enforce_entry_gates) via
+// strategy-engine/replay_gates.py. No gate threshold or strategy set is
+// mirrored here — the engine is the single source of truth.
+type ReplayEngineGateVerdict =
+  | { entryAllowed: boolean; gates: string[]; error?: undefined }
+  | { error: string };
+
+type ReplayEngineGateStatus = {
+  available: boolean;
+  evaluated: number;
+  total: number;
+  engineDir: string;
+  error: string | null;
+};
 
 type ReplaySignal = {
   id: number;
@@ -36,6 +48,9 @@ type ReplaySignal = {
   current_price?: number | null;
   blocked?: boolean;
   replayVixTermStructure?: any;
+  strategy_snapshot?: any;
+  engine_version?: string | null;
+  engineGate?: ReplayEngineGateVerdict | null;
 };
 
 type BlockedReplayAttribution = {
@@ -366,6 +381,7 @@ export class SignalReplayBacktester {
     calibration: ReplayCalibrationReport;
     attribution: ReplayAttributionReport;
     research: ReplayResearchReport;
+    engineGate: ReplayEngineGateStatus;
     scenarios: ReplayScenario[];
   }> {
     const config = this.normalizeConfig(input);
@@ -373,6 +389,10 @@ export class SignalReplayBacktester {
     const blockedSignals = signals.filter((signal) => signal.blocked === true);
     const generatedSignals = signals.filter((signal) => signal.blocked !== true);
     const usableSignals = generatedSignals.filter((signal) => this.resolveContract(signal) !== null);
+    const engineGate = await this.evaluateEngineGates(usableSignals);
+    if (!engineGate.available) {
+      this.fastify.log.warn(`[SignalReplayBacktester] Python entry-gate harness unavailable (${engineGate.error}); the structure_gated scenario will skip every signal as engine_gate_unavailable rather than approximate the gates.`);
+    }
     const historicalVixBackfill = await this.backfillHistoricalVixTermStructure(usableSignals);
     const missingOptionData = generatedSignals.length - usableSignals.length;
     const parity = this.buildParitySummary(signals);
@@ -417,7 +437,7 @@ export class SignalReplayBacktester {
       },
       {
         name: 'structure_gated',
-        description: 'Applies the live late entry-gate: skips directional entries within the gamma-flip band, and momentum setups in a Positive/Range pin.',
+        description: 'Runs each signal through the live Python entry-gate (signal_engine._enforce_entry_gates via replay_gates.py); skips whatever the engine itself would gate.',
         trades: [],
         skippedSignals: 0,
         skippedReasons: {},
@@ -487,6 +507,7 @@ export class SignalReplayBacktester {
       calibration,
       attribution,
       research,
+      engineGate,
       scenarios
     };
   }
@@ -533,7 +554,7 @@ export class SignalReplayBacktester {
     const { rows: signalRows } = await (this.fastify as any).pg.query(
       `SELECT id, symbol, signal_type, confidence_score, setup_grade, created_at, market_date,
               option_expiration_date, option_details, volatility, no_trade_reasons,
-              gex, strategy_name, current_price
+              gex, strategy_name, current_price, strategy_snapshot, engine_version
        FROM signals
        WHERE signal_type IN ('CALL', 'PUT')
          AND COALESCE(market_date, created_at::date::text) >= $1
@@ -1656,37 +1677,135 @@ export class SignalReplayBacktester {
     return Number.isFinite(numeric) ? numeric : null;
   }
 
-  // Mirrors the two *market-structure* gates from the Python late entry-gate
-  // (signal_engine._enforce_entry_gates): gamma-flip no-man's-land and
-  // momentum-in-Positive/Range. It intentionally does NOT replicate that
-  // function's other two gates — completeness and activation-window-expired —
-  // which are live-execution hygiene, not structural filters, and aren't
-  // reconstructable from a stored signal. Keep the FLIP_* thresholds + the
-  // MOMENTUM_STRATEGIES set in sync with Python. Static + pure for unit tests.
-  public static structureGateSkipReason(signal: ReplaySignal): string | null {
-    const gex = signal.gex || {};
-    const spot = Number(signal.current_price);
-    const flip = Number(gex.flip ?? gex.gamma_flip);
-    const regime = String(gex.regime || '');
-    const gammaRegime = String(gex.gamma_regime || '');
-    const strategy = String(signal.strategy_name || '').trim().toUpperCase();
+  // --- Engine entry-gate harness -------------------------------------------
+  // The structure_gated scenario is judged by the LIVE Python gate code
+  // (signal_engine._enforce_entry_gates) via strategy-engine/replay_gates.py.
+  // When the harness cannot run (no python3, no strategy-engine checkout —
+  // e.g. inside the backend container), every signal is skipped as
+  // engine_gate_unavailable: the replay refuses to approximate the gates.
 
-    if (Number.isFinite(spot) && spot > 0 && Number.isFinite(flip)) {
-      const atr = [signal.volatility?.atr_5m, gex.atr_5m, gex.atr]
-        .map((v: any) => Number(v))
-        .find((v: number) => Number.isFinite(v) && v > 0) || 0;
-      const buffer = Math.max(FLIP_PROXIMITY_ATR * atr, FLIP_PROXIMITY_PCT * spot);
-      if (Math.abs(spot - flip) <= buffer) return 'flip_no_mans_land';
+  // Test seam: inject a fake harness instead of spawning python3.
+  public engineGateRunner: ((lines: string[]) => Promise<string[]>) | null = null;
+
+  private engineDir(): string {
+    return process.env.STRATEGY_ENGINE_DIR || path.resolve(__dirname, '../../../strategy-engine');
+  }
+
+  // Full engine snapshot when the signal has one (signal-only-v2 rows);
+  // otherwise a minimal snapshot synthesized from the stored row so legacy
+  // signals still get judged by the real gate code.
+  private engineGateSnapshot(signal: ReplaySignal): Record<string, any> {
+    const stored = typeof signal.strategy_snapshot === 'string'
+      ? this.parseJsonObject(signal.strategy_snapshot)
+      : signal.strategy_snapshot;
+    if (stored && typeof stored === 'object' && !Array.isArray(stored) && Object.keys(stored).length > 0) {
+      return stored;
     }
-    if (MOMENTUM_STRATEGIES.has(strategy) && regime === 'Positive' && gammaRegime === 'Range') {
-      return 'momentum_in_positive_range';
+    return {
+      strategy: signal.strategy_name || null,
+      favoring: signal.signal_type === 'PUT' ? 'puts' : 'calls',
+      gex: signal.gex || {},
+      warnings: [],
+      blockers: [],
+      spot: this.finiteNumber(signal.current_price),
+      market_context: { atr_5m: this.finiteNumber(signal.volatility?.atr_5m) }
+    };
+  }
+
+  private async evaluateEngineGates(signals: ReplaySignal[]): Promise<ReplayEngineGateStatus> {
+    const lines = signals.map((signal, index) => JSON.stringify({
+      id: index,
+      snapshot: this.engineGateSnapshot(signal),
+      spot: this.finiteNumber(signal.current_price),
+      atr_5m: [signal.volatility?.atr_5m, signal.gex?.atr_5m, signal.gex?.atr]
+        .map((value: any) => Number(value))
+        .find((value: number) => Number.isFinite(value) && value > 0) ?? null
+    }));
+    if (lines.length === 0) {
+      return { available: true, evaluated: 0, total: 0, engineDir: this.engineDir(), error: null };
     }
-    return null;
+    try {
+      const runner = this.engineGateRunner || ((input: string[]) => this.runEngineGateHarness(input));
+      const output = await runner(lines);
+      let evaluated = 0;
+      for (const line of output) {
+        let parsed: any;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const index = Number(parsed?.id);
+        const signal = Number.isInteger(index) ? signals[index] : undefined;
+        if (!signal) continue;
+        if (parsed.error) {
+          signal.engineGate = { error: String(parsed.error) };
+          continue;
+        }
+        signal.engineGate = {
+          entryAllowed: parsed.entry_allowed === true,
+          gates: Array.isArray(parsed.gates) ? parsed.gates.map(String) : []
+        };
+        evaluated += 1;
+      }
+      return { available: true, evaluated, total: signals.length, engineDir: this.engineDir(), error: null };
+    } catch (err: any) {
+      return {
+        available: false,
+        evaluated: 0,
+        total: signals.length,
+        engineDir: this.engineDir(),
+        error: err?.message || String(err)
+      };
+    }
+  }
+
+  private async runEngineGateHarness(lines: string[]): Promise<string[]> {
+    const engineDir = this.engineDir();
+    const script = path.join(engineDir, 'replay_gates.py');
+    if (!fs.existsSync(script)) {
+      throw new Error(`replay_gates.py not found at ${script} (set STRATEGY_ENGINE_DIR to the strategy-engine checkout)`);
+    }
+    return await new Promise<string[]>((resolve, reject) => {
+      const child = execFile(
+        'python3',
+        [script],
+        { cwd: engineDir, maxBuffer: 64 * 1024 * 1024, timeout: 120_000 },
+        (error, stdout, stderr) => {
+          if (error) {
+            const detail = String(stderr || '').trim().slice(0, 400);
+            reject(new Error(`${error.message}${detail ? ` — ${detail}` : ''}`));
+            return;
+          }
+          resolve(String(stdout).split('\n').filter(Boolean));
+        }
+      );
+      child.stdin?.write(lines.join('\n') + '\n');
+      child.stdin?.end();
+    });
+  }
+
+  // Compact category for scenario skip accounting. The first gate the engine
+  // reports wins; the flip/pin categories keep their historical names so
+  // reports remain comparable across runs.
+  private engineGateCategory(gates: string[]): string {
+    const first = String(gates[0] || '');
+    if (first.includes('gamma flip')) return 'flip_no_mans_land';
+    if (first.includes('Positive/Range pin')) return 'momentum_in_positive_range';
+    if (first.includes('incomplete signal')) return 'engine_incomplete_signal';
+    if (first.includes('activation window')) return 'engine_activation_window_expired';
+    return 'engine_gate';
   }
 
   private getScenarioSkipReason(scenario: ReplayScenario['name'], signal: ReplaySignal): string | null {
     if (scenario === 'baseline') return null;
-    if (scenario === 'structure_gated') return SignalReplayBacktester.structureGateSkipReason(signal);
+    if (scenario === 'structure_gated') {
+      const verdict = signal.engineGate;
+      if (!verdict) return 'engine_gate_unavailable';
+      if ('error' in verdict && verdict.error !== undefined) return 'engine_gate_error';
+      if (verdict.entryAllowed) return null;
+      return this.engineGateCategory(verdict.gates);
+    }
     if (scenario === 'vix_contango') {
       const termStructure = this.getVixTermStructure(signal);
       if (!termStructure) return 'vix_term_structure_unavailable';
