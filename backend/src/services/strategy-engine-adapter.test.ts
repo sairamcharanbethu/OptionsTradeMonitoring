@@ -105,6 +105,17 @@ async function runTests() {
   const quoteChurn = adapter.planFingerprint(signal({ spot: 550.1 }));
   assert(first === quoteChurn, 'Plan identity must ignore spot churn');
 
+  // Observed 2026-08-24: strike re-centering flip-flopped 763P/764P on an
+  // unchanged plan, superseding the setup every few minutes. Contract
+  // selection must not mint a new identity.
+  const strikeRecenter = adapter.planFingerprint(signal({
+    call_setup: {
+      ...signal().call_setup,
+      option: { ...signal().call_setup.option, local_symbol: 'SPY260827C00764000', strike: 764 }
+    }
+  }));
+  assert(first === strikeRecenter, 'Plan identity must survive option strike re-centering');
+
   const changedPlan = adapter.planFingerprint(signal({
     call_setup: {
       ...signal().call_setup,

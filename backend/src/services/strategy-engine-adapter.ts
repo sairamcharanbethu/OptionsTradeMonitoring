@@ -606,6 +606,12 @@ export class StrategyEngineAdapter {
     if (!['calls', 'puts'].includes(side)) return null;
     const setup = side === 'calls' ? signal.call_setup : signal.put_setup;
     if (!setup || !setup.trigger || !ACTIVE_STATES.has(String(signal.state || ''))) return null;
+    // Identity = the PLAN (levels + provenance), deliberately NOT the option
+    // contract. Strike re-centering as spot wiggles used to change the
+    // fingerprint, superseding the setup every few minutes in chop (observed
+    // 2026-08-24: six identity churns in 20 minutes flip-flopping 763P/764P
+    // on an unchanged plan) — and each supersede rejects in-flight entries.
+    // Contract updates still reach the signal row via the per-snapshot upsert.
     return this.hash({
       engine: signal.engine_version,
       marketDate: new Date(Number(signal.generated_at || 0) * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }),
@@ -614,12 +620,7 @@ export class StrategyEngineAdapter {
       side,
       trigger: setup.trigger,
       invalidation: setup.invalidation,
-      targets: setup.targets,
-      option: {
-        symbol: setup.option?.local_symbol,
-        strike: setup.option?.strike,
-        expiry: setup.option?.expiry
-      }
+      targets: setup.targets
     });
   }
 
