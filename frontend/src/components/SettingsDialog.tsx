@@ -211,6 +211,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [dayTradingSymbols, setDayTradingSymbols] = useState('SPY');
     const [strategyMaxTotalDebitDollars, setStrategyMaxTotalDebitDollars] = useState('500');
     const [strategyPreferredContracts, setStrategyPreferredContracts] = useState('1');
+    const [strategyMaxRiskPerTradeDollars, setStrategyMaxRiskPerTradeDollars] = useState('50');
     const [strategyMaxContracts, setStrategyMaxContracts] = useState('1');
     const [paperTrailingStopPct, setPaperTrailingStopPct] = useState('15');
     const [dailyLossLimitDollars, setDailyLossLimitDollars] = useState('');
@@ -364,6 +365,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setDayTradingSymbols(data.day_trading_symbols || 'SPY');
             setStrategyMaxTotalDebitDollars(data.strategy_max_total_debit_dollars || '500');
             setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
+            setStrategyMaxRiskPerTradeDollars(data.strategy_max_risk_per_trade_dollars || '50');
             setStrategyMaxContracts(data.strategy_max_contracts || '1');
             setPaperTrailingStopPct(data.paper_trailing_stop_pct || '15');
             setDailyLossLimitDollars(data.daily_loss_limit_dollars || '');
@@ -640,6 +642,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 if (zeroGexApiKey.trim()) settingsPayload.zerogex_api_key = zeroGexApiKey.trim();
                 settingsPayload.strategy_max_total_debit_dollars = strategyMaxTotalDebitDollars;
                 settingsPayload.strategy_preferred_contracts = strategyPreferredContracts;
+                settingsPayload.strategy_max_risk_per_trade_dollars = strategyMaxRiskPerTradeDollars.trim();
                 settingsPayload.strategy_max_contracts = strategyMaxContracts;
                 settingsPayload.paper_trailing_stop_pct = paperTrailingStopPct;
                 settingsPayload.daily_loss_limit_dollars = dailyLossLimitDollars.trim();
@@ -961,6 +964,19 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setStrategyPreferredContracts(e.target.value)}
                                                     disabled={!isAdmin}
                                                 />
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="strategyMaxRiskPerTradeDollars">Paper Risk / Trade ($)</Label>
+                                                <Input
+                                                    id="strategyMaxRiskPerTradeDollars"
+                                                    type="number"
+                                                    min="0"
+                                                    step="25"
+                                                    value={strategyMaxRiskPerTradeDollars}
+                                                    onChange={(e) => setStrategyMaxRiskPerTradeDollars(e.target.value)}
+                                                    disabled={!isAdmin}
+                                                />
+                                                <p className="text-[10px] text-muted-foreground">Worst-case (premium-stop) loss allowed per paper trade. Trades whose one-contract risk exceeds this are SKIPPED — size it above ~$160 so ~3DTE setups can trade. Blank/0 falls back to $50.</p>
                                             </div>
                                             <div className="grid gap-2">
                                                 <Label htmlFor="strategyMaxContracts">Contract Ceiling</Label>
