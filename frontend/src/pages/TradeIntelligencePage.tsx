@@ -6,6 +6,24 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 
+// Frozen out-of-sample benchmark (90 sessions, 2026-04-14..08-20, live exit
+// policy simulated; docs/uw-backtest-2026-04-14-to-08-20.md). Deliberately
+// hardcoded: it is the fixed reference the paper proving period is judged
+// against — it must not drift with live data.
+const BENCHMARK_BY_STRATEGY: Record<string, { trades: number; winRate: number; avgPnl: number }> = {
+  CONTINUATION: { trades: 31, winRate: 0.48, avgPnl: 9.84 },
+  GEX_WALL_REJECTION: { trades: 9, winRate: 0.56, avgPnl: 35.0 },
+  GEX_WALL_BREAK_FAIL: { trades: 14, winRate: 0.57, avgPnl: 3.03 },
+  MTF_TREND_BREAK: { trades: 39, winRate: 0.41, avgPnl: -5.21 },
+  ORB_INDEX: { trades: 9, winRate: 0.22, avgPnl: -57.28 },
+  VWAP_TREND: { trades: 25, winRate: 0.36, avgPnl: -2.99 },
+};
+
+const SCOPE_OPTIONS = [
+  { value: 'paper', label: 'Paper account' },
+  { value: 'live', label: 'Live account' },
+];
+
 const RANGE_OPTIONS = [
   { value: 'today', label: 'Today' },
   { value: '7d', label: 'Past week' },
@@ -66,6 +84,7 @@ function SectionHeader({ icon: Icon, title, detail }: { icon: any; title: string
 
 export default function TradeIntelligencePage() {
   const [range, setRange] = useState('30d');
+  const [scope, setScope] = useState<'paper' | 'live'>('paper');
   const [report, setReport] = useState<TradeReportResponse | null>(null);
   const [alerts, setAlerts] = useState<TradeAlertsResponse | null>(null);
   const [metrics, setMetrics] = useState<PerformanceMetrics | null>(null);
@@ -88,7 +107,7 @@ export default function TradeIntelligencePage() {
       const [reportData, alertData, metricsData] = await Promise.all([
         api.getTradeReport(range),
         api.getTradeAlerts(),
-        api.getPerformanceMetrics('paper', daysForRange(range)).catch(() => null)
+        api.getPerformanceMetrics(scope, daysForRange(range)).catch(() => null)
       ]);
       setReport(reportData);
       setAlerts(alertData);
@@ -102,7 +121,7 @@ export default function TradeIntelligencePage() {
 
   useEffect(() => {
     load();
-  }, [range]);
+  }, [range, scope]);
 
   const summary = report?.summary;
   const netTone = (summary?.totalPnl ?? 0) >= 0 ? 'green' : 'red';
@@ -124,6 +143,16 @@ export default function TradeIntelligencePage() {
           </div>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Select value={scope} onValueChange={(value) => setScope(value as 'paper' | 'live')}>
+            <SelectTrigger className="w-full sm:w-[150px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SCOPE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={range} onValueChange={setRange}>
             <SelectTrigger className="w-full sm:w-[170px]">
               <SelectValue />
@@ -156,7 +185,7 @@ export default function TradeIntelligencePage() {
 
       {metrics && metrics.overall.trades > 0 && (
         <div className="mt-4 overflow-hidden rounded-md border border-border bg-card">
-          <SectionHeader icon={BarChart3} title="Edge Analytics" detail={`Paper · last ${metrics.days}d · ${metrics.overall.trades} closed`} />
+          <SectionHeader icon={BarChart3} title="Edge Analytics" detail={`${scope === 'paper' ? 'Paper' : 'Live'} · last ${metrics.days}d · ${metrics.overall.trades} closed`} />
           <div className="grid gap-3 p-3 sm:p-4 md:grid-cols-3">
             <MetricTile
               label="Expectancy / trade"
@@ -191,7 +220,8 @@ export default function TradeIntelligencePage() {
                       <th className="py-1 pr-3 font-medium">Trades</th>
                       <th className="py-1 pr-3 font-medium">Win %</th>
                       <th className="py-1 pr-3 font-medium">Total P&L</th>
-                      <th className="py-1 font-medium">Avg / trade</th>
+                      <th className="py-1 pr-3 font-medium">Avg / trade</th>
+                      <th className="py-1 font-medium text-muted-foreground" title="Frozen 90-session out-of-sample benchmark (Apr 14 - Aug 20). Fixed reference; does not update.">Benchmark avg (n)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -203,8 +233,13 @@ export default function TradeIntelligencePage() {
                         <td className={`py-1.5 pr-3 font-semibold ${row.totalPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                           {currency(row.totalPnl)}
                         </td>
-                        <td className={row.avgPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}>
+                        <td className={`pr-3 ${row.avgPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                           {currency(row.avgPnl)}
+                        </td>
+                        <td className="text-muted-foreground">
+                          {BENCHMARK_BY_STRATEGY[row.strategy]
+                            ? `${currency(BENCHMARK_BY_STRATEGY[row.strategy].avgPnl)} (${BENCHMARK_BY_STRATEGY[row.strategy].trades})`
+                            : '—'}
                         </td>
                       </tr>
                     ))}
