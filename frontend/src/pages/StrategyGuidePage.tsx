@@ -108,7 +108,7 @@ export default function StrategyGuidePage() {
               'Completed 3-minute and 5-minute candles can record EMA9 or VWAP wick-through and close-back rejections. An unfinished candle never creates an event.',
               'GEX range location, completed-close wall breaks, volume confirmation, and retests are tracked without changing the authoritative ZeroGEX gates.',
               'The desk grades GEX location, VWAP rejection, and EMA9 timing as a 0-to-3 confluence read. This grade is evidence, not a confidence-score input.',
-              'Prior-session rejection clusters, ATR pivot trendlines, and SPY/QQQ 5-minute and 15-minute breadth provide replay context. QQQ is read-only and is never used for contract selection.',
+              'SPY/QQQ 5-minute and 15-minute breadth provide replay context. QQQ is read-only and is never used for contract selection.',
               'Compact context is saved with strategy setup and lifecycle history. Raw intraday bar history is not copied into each journal event.'
             ]}
           />

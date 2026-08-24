@@ -532,18 +532,6 @@ class TradePrefetchHelpersTest(unittest.TestCase):
                     },
                     "raw_bar_history": [{"close": 741.25}] * 100,
                 },
-                "trendline_context": {
-                    "version": "trendline-structure-v1",
-                    "available": True,
-                    "mode": "shadow",
-                    "upper_line": 741.25,
-                    "raw_bar_history": [{"close": 741.25}] * 100,
-                    "break": {
-                        "side": "bullish",
-                        "confirmed": True,
-                        "event_id": "stable-event",
-                    },
-                },
                 "strategy_family_context": {
                     "version": "strategy-family-lab-v1",
                     "mode": "shadow",
@@ -586,11 +574,6 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             "raw_bar_history",
             record["entry_structure_context"],
         )
-        self.assertEqual(
-            record["trendline_context"]["break"]["event_id"],
-            "stable-event",
-        )
-        self.assertNotIn("raw_bar_history", record["trendline_context"])
         self.assertEqual(
             record["strategy_family_context"]["orb_index"]["candidate"]["event_id"],
             "orb-index:test",

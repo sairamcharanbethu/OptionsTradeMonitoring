@@ -486,60 +486,6 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
     }
   });
 
-  // GET /api/signals/logs - Fetch latest 100 scanner logs
-  fastify.get('/logs', {
-    schema: {
-      tags: ['Signals'],
-      summary: 'Get scanner logs',
-      description: 'Retrieve latest day trading scanner runs and execution logs.',
-      security: [{ bearerAuth: [] }],
-      response: {
-        200: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'integer' },
-              symbol: { type: 'string' },
-              spot_price: { type: 'number' },
-              regime: { type: 'string' },
-              vix: { type: 'number', nullable: true },
-              gex_available: { type: 'boolean' },
-              indicators: { type: 'object', nullable: true, additionalProperties: true },
-              outcome: { type: 'string' },
-              no_trade_reasons: { type: 'array', items: { type: 'string' }, nullable: true },
-              created_at: { type: 'string', format: 'date-time' }
-            }
-          }
-        }
-      }
-    }
-  }, async (request, reply) => {
-    try {
-      const query = `
-        SELECT 
-          id, 
-          symbol, 
-          spot_price::double precision, 
-          regime, 
-          vix::double precision, 
-          gex_available, 
-          indicators, 
-          outcome, 
-          no_trade_reasons, 
-          created_at 
-        FROM scanner_logs 
-        ORDER BY created_at DESC 
-        LIMIT 100
-      `;
-      const { rows } = await fastify.pg.query(query);
-      return rows;
-    } catch (err: any) {
-      fastify.log.error(err);
-      return (reply as any).code(500).send({ error: 'Failed to fetch scanner logs' });
-    }
-  });
-
   fastify.get('/macro', {
     schema: {
       tags: ['Signals'],

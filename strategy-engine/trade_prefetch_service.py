@@ -1148,11 +1148,6 @@ class TradePrefetcher:
                     if isinstance(policy.get("session"), dict)
                     else None
                 ),
-                trendline_structure=(
-                    policy.get("trendline_structure")
-                    if isinstance(policy.get("trendline_structure"), dict)
-                    else None
-                ),
                 strategy_families=lane_family_policy,
                 cross_market_confirmation=getattr(
                     self.args,
@@ -1346,9 +1341,6 @@ class TradePrefetcher:
         zero = signal.get("zerogex_decision") or {}
         zero_playbook = zero.get("playbook") or {}
         zero_composite = zero.get("composite") or {}
-        trendline = signal.get("trendline_context") or {}
-        trendline_break = trendline.get("break") or {}
-        trendline_retest = trendline.get("retest") or {}
         families = signal.get("strategy_family_context") or {}
         orb = families.get("orb_index") or {}
         vwap = families.get("vwap_trend") or {}
@@ -1383,8 +1375,6 @@ class TradePrefetcher:
             zero_playbook.get("pattern"),
             zero_playbook.get("side"),
             zero_composite.get("posture"),
-            trendline_break.get("event_id"),
-            trendline_retest.get("status"),
             orb.get("status"),
             orb_candidate.get("event_id"),
             vwap.get("status"),
