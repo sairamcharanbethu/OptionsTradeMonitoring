@@ -43,6 +43,15 @@ async function run() {
   assert.equal(PaperTradingService.forceSkipWithoutAi(['wider spread 9.0%', 'late-session entry']), false, 'fill-cost/timing reasons alone do not force skip');
   assert.equal(PaperTradingService.forceSkipWithoutAi([]), false, 'no reasons never forces skip');
 
+  // AI deliberately disabled by config: flagged setups still TRADE at
+  // CAUTIOUS size (never SKIP) so the paper track record keeps the full
+  // sample; the review reasons ride along as risk flags for later analysis.
+  const deterministic = PaperTradingService.deterministicFlaggedDecision(['borderline confidence 75', 'low relative volume 1.00']);
+  assert.equal(deterministic.decision, 'TRADE', 'AI-off must not skip flagged setups');
+  assert.equal(deterministic.riskTier, 'CAUTIOUS', 'AI-off flagged setups size cautiously');
+  assert.equal(deterministic.source, 'RULES', 'AI-off decisions are deterministic rules');
+  assert.deepEqual(deterministic.riskFlags, ['borderline confidence 75', 'low relative volume 1.00'], 'review reasons must be journaled as risk flags');
+
   // Dollar-risk cap (per-trade max loss). riskPerContract = limit*100*stop%.
   // Expensive contract: 1 contract's worst loss ($71.80 at 20%) exceeds a $50
   // budget -> quantity 0 (caller skips).

@@ -708,12 +708,30 @@ export class PaperTradingService {
     return reasons;
   }
 
-  // When an AI review is warranted but unavailable (budget exhausted / disabled
-  // / errored), edge-degrading reasons must NOT default to a one-contract TRADE
-  // — the whole point of the review was to adjudicate them. Force a SKIP for the
-  // reasons that actually erode edge (fill-cost or timing reasons alone don't).
+  // When an AI review is warranted but unavailable (budget exhausted /
+  // errored while enabled), edge-degrading reasons must NOT default to a
+  // one-contract TRADE — the whole point of the review was to adjudicate
+  // them. Force a SKIP for the reasons that actually erode edge (fill-cost
+  // or timing reasons alone don't).
   public static forceSkipWithoutAi(reasons: string[]): boolean {
     return (reasons || []).some((r) => FORCE_SKIP_REASON_PREFIXES.some((b) => String(r).startsWith(b)));
+  }
+
+  // AI deliberately DISABLED by config is different from AI unavailable:
+  // the operator chose a deterministic policy, so flagged setups still trade
+  // (at CAUTIOUS size) instead of being skipped — otherwise the paper track
+  // record silently excludes every flagged setup and can't prove anything.
+  // The review reasons are journaled as risk flags so the AI's hypothetical
+  // value stays measurable from paper_trade_decisions.
+  public static deterministicFlaggedDecision(reasons: string[]): PaperDecision {
+    return {
+      decision: 'TRADE',
+      riskTier: 'CAUTIOUS',
+      exitProfile: 'BALANCED_T2',
+      source: 'RULES',
+      rationale: 'AI review disabled by config; deterministic cautious sizing on a flagged setup.',
+      riskFlags: [...(reasons || [])]
+    };
   }
 
   private optionFor(signal: Record<string, any>) {
@@ -810,7 +828,11 @@ export class PaperTradingService {
     let bounded = rulesDecision;
     let aiRequested = false;
     let tokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-    if (aiReasons.length > 0) {
+    if (aiReasons.length > 0 && settings.day_trading_ai_enabled === 'false') {
+      // Operator turned AI off: deterministic policy, no LLM latency, no
+      // outage coupling, and no silent sample-thinning skips.
+      bounded = PaperTradingService.deterministicFlaggedDecision(aiReasons);
+    } else if (aiReasons.length > 0) {
       const calls = await (this.fastify as any).pg.query(
         `SELECT COUNT(*)::int AS count FROM paper_trade_decisions
          WHERE account_id=$1 AND ai_requested=TRUE
@@ -818,7 +840,7 @@ export class PaperTradingService {
         [ACCOUNT_ID, today]
       );
       const underBudget = Number(calls.rows[0]?.count || 0) < MAX_DAILY_AI_CALLS;
-      if (settings.day_trading_ai_enabled !== 'false' && underBudget) {
+      if (underBudget) {
         aiRequested = true;
         try {
           const prompt = `Resolve paper-risk ambiguity only. Never change the contract, SL, TP1, or TP2.
@@ -833,10 +855,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         }
       } else {
         bounded = guardedFallback(
-          underBudget
-            ? 'AI review is disabled; one-contract fallback applied.'
-            : `Daily AI call budget of ${MAX_DAILY_AI_CALLS} reached; one-contract fallback applied.`,
-          [underBudget ? 'AI review disabled' : 'Daily AI call budget reached']
+          `Daily AI call budget of ${MAX_DAILY_AI_CALLS} reached; one-contract fallback applied.`,
+          ['Daily AI call budget reached']
         );
       }
     }
