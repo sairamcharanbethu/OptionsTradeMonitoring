@@ -459,7 +459,8 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
 
 def run_day(client: UWClient, date: str, interval: int, verbose: bool,
             variants_spec: list[dict] | None = None,
-            fetch_only: bool = False) -> dict:
+            fetch_only: bool = False,
+            no_wall_chain: bool = False) -> dict:
     open_at, close_at = _session_bounds(date)
     flatten_at = close_at - 40 * 60
     entry_cutoff = close_at - 60 * 60
@@ -491,7 +492,7 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
     next_meta = contract_symbols_for_expiry(client, date, next_expiry, mid_price, width) if next_expiry else []
     wall_meta = (
         contract_symbols_for_expiry(client, date, wall_expiry, mid_price, max(6.0, width * 0.8))
-        if wall_expiry and wall_expiry not in (session_yyyymmdd,) else []
+        if wall_expiry and wall_expiry not in (session_yyyymmdd,) and not no_wall_chain else []
     )
     option_data = {
         entry["symbol"]: fetch_option_candles(client, entry["symbol"], date)
@@ -682,6 +683,8 @@ def main() -> None:
                         help="fetch and cache the session's UW data without simulating")
     parser.add_argument("--mid-fills", action="store_true",
                         help="price fills at candle mid (upper bound: quantifies spread drag)")
+    parser.add_argument("--no-wall-chain", action="store_true",
+                        help="frozen setups use the primary adaptive chain (0DTE, 1DTE after 1PM) instead of ~3DTE — mirrors live --wall-option-expiry-dte 0")
     parser.add_argument("--exit-t1-variant", action="store_true",
                         help="also simulate an exit policy that banks the full position at T1")
     parser.add_argument("--trades-out",
@@ -726,7 +729,8 @@ def main() -> None:
         print(f"\n=== {date} ===", flush=True)
         try:
             result = run_day(client, date, args.interval, verbose=not args.summary_only,
-                             variants_spec=variants_spec, fetch_only=args.fetch_only)
+                             variants_spec=variants_spec, fetch_only=args.fetch_only,
+                             no_wall_chain=args.no_wall_chain)
         except Exception as exc:
             print(f"  FAILED: {exc}")
             continue
