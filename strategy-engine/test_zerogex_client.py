@@ -9,6 +9,7 @@ from unittest.mock import patch
 from zerogex_client import (
     ADVANCED_ENDPOINTS,
     ZeroGEXAuthError,
+    ZeroGEXError,
     fetch_component_snapshot,
     fetch_snapshot,
     get_api_key,
@@ -213,13 +214,13 @@ class ZeroGEXClientTest(unittest.TestCase):
         self.assertCountEqual(
             [path for path, _, _ in calls],
             [
-                "/api/signals/trade-bias",
-                "/api/gex/summary",
-                "/api/signals/basic",
-                "/api/signals/score",
-                "/api/signals/action",
-                "/api/market/quote",
-                "/api/market/historical",
+                "/api/v2/signals/trade-bias",
+                "/api/v2/gex/summary",
+                "/api/v2/signals/basic",
+                "/api/v2/signals/score",
+                "/api/v2/signals/action",
+                "/api/v2/market/quote",
+                "/api/v2/market/historical",
             ],
         )
         self.assertTrue(all(key == "test-key" for _, _, key in calls))
@@ -279,16 +280,16 @@ class ZeroGEXClientTest(unittest.TestCase):
         )
 
         self.assertTrue(
-            set(ADVANCED_ENDPOINTS.values()).issubset(set(calls))
+            set("/api/v2/" + p[len("/api/"):] for p in ADVANCED_ENDPOINTS.values()).issubset(set(calls))
         )
-        self.assertIn("/api/gex/historical-context", calls)
-        self.assertIn("/api/market/volatility", calls)
-        self.assertIn("/api/gex/strike-profile-timeseries", calls)
-        self.assertIn("/api/flow/series", calls)
-        self.assertIn("/api/flow/smart-money", calls)
-        self.assertIn("/api/market/session-levels", calls)
-        self.assertIn("/api/technicals/dealer-hedging", calls)
-        self.assertIn("/api/forced-flow/levels", calls)
+        self.assertIn("/api/v2/gex/historical-context", calls)
+        self.assertIn("/api/v2/market/volatility", calls)
+        self.assertIn("/api/v2/gex/strike-profile-timeseries", calls)
+        self.assertIn("/api/v2/flow/series", calls)
+        self.assertIn("/api/v2/flow/smart-money", calls)
+        self.assertIn("/api/v2/market/session-levels", calls)
+        self.assertIn("/api/v2/technicals/dealer-hedging", calls)
+        self.assertIn("/api/v2/forced-flow/levels", calls)
 
     def test_deep_fetch_maps_underlying_to_volatility_index(self) -> None:
         for symbol, expected_index in (("SPY", "VIX"), ("QQQ", "VXN")):
@@ -296,7 +297,7 @@ class ZeroGEXClientTest(unittest.TestCase):
                 volatility_params = []
 
                 def request_json(path, params, **kwargs):
-                    if path == "/api/market/volatility":
+                    if path == "/api/v2/market/volatility":
                         volatility_params.append(params)
                         return {
                             "timestamp": "2026-08-05T14:00:00Z",
@@ -322,9 +323,34 @@ class ZeroGEXClientTest(unittest.TestCase):
                     expected_index,
                 )
 
+    def test_deep_fetch_accepts_numeric_volatility_index(self) -> None:
+        # The provider stopped echoing the ticker name: `index` is now the
+        # numeric reading, so identity can't be cross-checked from the body.
+        def request_json(path, params, **kwargs):
+            if path == "/api/v2/market/volatility":
+                return {
+                    "timestamp": "2026-08-27T12:10:00-04:00",
+                    "index": 14.49,
+                    "level": 2.3,
+                    "level_label": "Low",
+                    "momentum": 3.03,
+                    "momentum_label": "Easing",
+                }
+            return {}
+
+        snapshot = fetch_component_snapshot(
+            "SPY",
+            lane="deep",
+            api_key="test-key",
+            request_json=request_json,
+        )
+        self.assertNotIn("market_volatility", snapshot["endpoint_errors"])
+        self.assertEqual(snapshot["market_volatility"]["index"], 14.49)
+        self.assertEqual(snapshot["market_volatility"]["index_name"], "VIX")
+
     def test_deep_fetch_rejects_mismatched_volatility_index(self) -> None:
         def request_json(path, params, **kwargs):
-            if path == "/api/market/volatility":
+            if path == "/api/v2/market/volatility":
                 return {
                     "timestamp": "2026-08-05T14:00:00Z",
                     "index": "VIX",
@@ -374,7 +400,7 @@ class ZeroGEXClientTest(unittest.TestCase):
             api_key="test-key",
             request_json=request_json,
         )
-        self.assertEqual(calls, ["/api/gex/summary"])
+        self.assertEqual(calls, ["/api/v2/gex/summary"])
         self.assertEqual(fast["gex_summary"]["call_wall"], 740)
         self.assertEqual(fast["_fetched_components"], ["gex_summary"])
 
@@ -385,10 +411,10 @@ class ZeroGEXClientTest(unittest.TestCase):
             api_key="test-key",
             request_json=request_json,
         )
-        self.assertNotIn("/api/gex/summary", calls)
-        self.assertNotIn("/api/gex/historical-context", calls)
-        self.assertIn("/api/signals/trade-bias", calls)
-        self.assertIn("/api/market/historical", calls)
+        self.assertNotIn("/api/v2/gex/summary", calls)
+        self.assertNotIn("/api/v2/gex/historical-context", calls)
+        self.assertIn("/api/v2/signals/trade-bias", calls)
+        self.assertIn("/api/v2/market/historical", calls)
         self.assertNotIn("gex_summary", core["_fetched_components"])
 
         calls.clear()
@@ -398,10 +424,10 @@ class ZeroGEXClientTest(unittest.TestCase):
             api_key="test-key",
             request_json=request_json,
         )
-        self.assertNotIn("/api/gex/summary", calls)
-        self.assertNotIn("/api/signals/trade-bias", calls)
-        self.assertIn("/api/gex/historical-context", calls)
-        self.assertIn("/api/gex/strike-profile-timeseries", calls)
+        self.assertNotIn("/api/v2/gex/summary", calls)
+        self.assertNotIn("/api/v2/signals/trade-bias", calls)
+        self.assertIn("/api/v2/gex/historical-context", calls)
+        self.assertIn("/api/v2/gex/strike-profile-timeseries", calls)
         self.assertNotIn("gex_summary", deep["_fetched_components"])
 
     def test_component_fetch_rejects_unknown_lane(self) -> None:
@@ -565,6 +591,116 @@ class ZeroGEXClientTest(unittest.TestCase):
         self.assertIn("SHORT", text)
         self.assertIn("advanced=vol_expansion", text)
         self.assertNotIn("test-key", text)
+
+
+class ZeroGEXV2EnvelopeTest(unittest.TestCase):
+    def test_v2_envelope_is_unwrapped_and_freshness_kept(self) -> None:
+        def request_json(path, params, **kwargs):
+            self.assertTrue(path.startswith("/api/v2/"))
+            if path.endswith("/summary"):
+                return {
+                    "data": {
+                        "symbol": "SPY",
+                        "call_wall": 740,
+                        "pin_strike": 741.0,
+                        "pin_score": 0.8,
+                    },
+                    "freshness": {
+                        "freshness_status": "fresh",
+                        "age_seconds": 12.0,
+                        "source_timestamp": "2026-08-27T15:56:00Z",
+                        "stale_after": "2026-08-27T15:58:30Z",
+                        "expected_update_cadence_seconds": 60.0,
+                        "evaluated_at": "2026-08-27T15:56:12Z",
+                        "cadence_profile": "dropped",
+                    },
+                }
+            return {}
+
+        snapshot = fetch_component_snapshot(
+            "SPY", lane="gex", api_key="k", request_json=request_json
+        )
+        self.assertEqual(snapshot["gex_summary"]["call_wall"], 740)
+        self.assertEqual(snapshot["gex_summary"]["pin_strike"], 741.0)
+        entry = snapshot["freshness"]["gex_summary"]
+        self.assertEqual(entry["freshness_status"], "fresh")
+        self.assertEqual(entry["stale_after"], "2026-08-27T15:58:30Z")
+        self.assertNotIn("cadence_profile", entry)
+
+    def test_v1_bodies_pass_through_without_freshness(self) -> None:
+        def request_json(path, params, **kwargs):
+            if path.endswith("/summary"):
+                return {"symbol": "SPY", "call_wall": 740}
+            return {}
+
+        snapshot = fetch_component_snapshot(
+            "SPY", lane="gex", api_key="k", request_json=request_json
+        )
+        self.assertEqual(snapshot["gex_summary"]["call_wall"], 740)
+        self.assertEqual(snapshot["freshness"], {})
+
+    def test_missing_v2_endpoint_falls_back_to_v1(self) -> None:
+        calls = []
+
+        def request_json(path, params, **kwargs):
+            calls.append(path)
+            if path == "/api/v2/gex/summary":
+                raise ZeroGEXError(
+                    "ZeroGEX request failed (HTTP 404)", status=404
+                )
+            if path == "/api/gex/summary":
+                return {"symbol": "SPY", "call_wall": 740}
+            return {}
+
+        snapshot = fetch_component_snapshot(
+            "SPY", lane="gex", api_key="k", request_json=request_json
+        )
+        self.assertEqual(calls, ["/api/v2/gex/summary", "/api/gex/summary"])
+        self.assertEqual(snapshot["gex_summary"]["call_wall"], 740)
+
+    def test_non_404_errors_do_not_fall_back_to_v1(self) -> None:
+        calls = []
+
+        def request_json(path, params, **kwargs):
+            calls.append(path)
+            raise ZeroGEXError("ZeroGEX request failed (HTTP 500)", status=500)
+
+        with self.assertRaises(ZeroGEXError):
+            fetch_component_snapshot(
+                "SPY", lane="gex", api_key="k", request_json=request_json
+            )
+        self.assertEqual(calls, ["/api/v2/gex/summary"])
+
+    def test_carried_forward_component_keeps_prior_freshness(self) -> None:
+        def request_json(path, params, **kwargs):
+            if path.endswith("/dealer-hedging"):
+                raise ZeroGEXError(
+                    "ZeroGEX request failed (HTTP 500)", status=500
+                )
+            return {}
+
+        previous = {
+            "dealer_hedging": {"hedge_pressure": "Balanced"},
+            "freshness": {
+                "dealer_hedging": {
+                    "freshness_status": "fresh",
+                    "source_timestamp": "2026-08-27T15:55:00Z",
+                }
+            },
+        }
+        snapshot = fetch_component_snapshot(
+            "SPY",
+            lane="deep",
+            api_key="k",
+            request_json=request_json,
+            previous_snapshot=previous,
+        )
+        self.assertEqual(
+            snapshot["dealer_hedging"]["hedge_pressure"], "Balanced"
+        )
+        entry = snapshot["freshness"]["dealer_hedging"]
+        self.assertTrue(entry["carried_forward"])
+        self.assertEqual(entry["freshness_status"], "fresh")
 
 
 if __name__ == "__main__":

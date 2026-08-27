@@ -62,6 +62,18 @@ GEX_FIELDS = (
     "local_gex",
     "put_call_ratio",
     "convexity_risk",
+    "pin_strike",
+    "pin_score",
+    "pin_confidence",
+    "pin_strike_reason",
+)
+FRESHNESS_FIELDS = (
+    "freshness_status",
+    "age_seconds",
+    "source_timestamp",
+    "stale_after",
+    "expected_update_cadence_seconds",
+    "evaluated_at",
 )
 MARKET_QUOTE_FIELDS = (
     "timestamp",
@@ -302,6 +314,10 @@ ADVANCED_CONTEXT_FIELDS = {
 class ZeroGEXError(RuntimeError):
     """Safe client error that never includes an API key."""
 
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
 
 class ZeroGEXAuthError(ZeroGEXError):
     """Authentication or entitlement failure."""
@@ -358,7 +374,9 @@ def _request_json(
             raise ZeroGEXAuthError(
                 f"ZeroGEX authentication or Pro entitlement failed (HTTP {exc.code})"
             ) from exc
-        raise ZeroGEXError(f"ZeroGEX request failed (HTTP {exc.code})") from exc
+        raise ZeroGEXError(
+            f"ZeroGEX request failed (HTTP {exc.code})", status=exc.code
+        ) from exc
     except urllib.error.URLError as exc:
         reason = getattr(exc, "reason", None)
         reason_name = type(reason).__name__ if reason is not None else "network error"
@@ -373,6 +391,27 @@ def _select_fields(payload: Any, fields: tuple[str, ...]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
     return {field: payload.get(field) for field in fields if field in payload}
+
+
+def _v2_path(path: str) -> str:
+    if path.startswith("/api/v1/") or path.startswith("/api/v2/"):
+        return path
+    if path.startswith("/api/"):
+        return "/api/v2/" + path[len("/api/"):]
+    return path
+
+
+def _unwrap_envelope(payload: Any) -> tuple[Any, dict[str, Any] | None]:
+    """Split a v2 ``{"data", "freshness"}`` envelope; pass v1 bodies through."""
+    if (
+        isinstance(payload, dict)
+        and "data" in payload
+        and isinstance(payload.get("freshness"), dict)
+    ):
+        return payload["data"], _select_fields(
+            payload["freshness"], FRESHNESS_FIELDS
+        )
+    return payload, None
 
 
 def _number(value: Any) -> float | None:
@@ -901,6 +940,7 @@ def _normalize_market_volatility(payload: Any) -> dict[str, Any]:
         (
             "timestamp",
             "index",
+            "index_name",
             "level",
             "level_label",
             "momentum",
@@ -1081,19 +1121,33 @@ def _fetch_payloads(
     api_key: str,
     timeout: float,
     request_json: Callable[..., Any],
-) -> tuple[dict[str, Any], dict[str, str], dict[str, Exception]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    dict[str, str],
+    dict[str, Exception],
+]:
     payloads: dict[str, Any] = {}
+    freshness: dict[str, dict[str, Any]] = {}
     errors: dict[str, str] = {}
     exceptions: dict[str, Exception] = {}
 
-    def fetch(item: tuple[str, tuple[str, dict[str, Any]]]) -> tuple[str, Any]:
+    def fetch(
+        item: tuple[str, tuple[str, dict[str, Any]]],
+    ) -> tuple[str, Any, dict[str, Any] | None]:
         name, (path, params) = item
-        return name, request_json(
-            path,
-            params,
-            api_key=api_key,
-            timeout=timeout,
-        )
+        v2 = _v2_path(path)
+        try:
+            payload = request_json(v2, params, api_key=api_key, timeout=timeout)
+        except ZeroGEXError as exc:
+            # An endpoint without a v2 mirror falls back to its v1 form.
+            if v2 == path or getattr(exc, "status", None) != 404:
+                raise
+            payload = request_json(
+                path, params, api_key=api_key, timeout=timeout
+            )
+        data, envelope = _unwrap_envelope(payload)
+        return name, data, envelope
 
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=min(8, max(1, len(specs)))
@@ -1105,36 +1159,45 @@ def _fetch_payloads(
         for future in concurrent.futures.as_completed(future_names):
             name = future_names[future]
             try:
-                result_name, payload = future.result()
+                result_name, payload, envelope = future.result()
                 payloads[result_name] = payload
+                if envelope is not None:
+                    freshness[result_name] = envelope
             except Exception as exc:
                 errors[name] = f"{type(exc).__name__}: {exc}"
                 exceptions[name] = exc
-    return payloads, errors, exceptions
+    return payloads, freshness, errors, exceptions
 
 
 def _snapshot_from_payloads(
     symbol: str,
     payloads: dict[str, Any],
     endpoint_errors: dict[str, str],
+    freshness: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     market_volatility = payloads.get("market_volatility")
     if isinstance(market_volatility, dict) and market_volatility:
         expected_index = "VXN" if symbol.upper() == "QQQ" else "VIX"
-        returned_index = str(market_volatility.get("index") or "").upper()
-        if returned_index != expected_index:
+        returned_index = market_volatility.get("index")
+        if isinstance(returned_index, str) and returned_index.upper() != expected_index:
+            # Legacy shape echoed the ticker name; a name mismatch means the
+            # provider answered for the wrong underlying.
             endpoint_errors["market_volatility"] = (
                 "ZeroGEX returned volatility index "
-                f"{returned_index or 'missing'} for {symbol.upper()}; "
+                f"{returned_index.upper() or 'missing'} for {symbol.upper()}; "
                 f"expected {expected_index}"
             )
             payloads.pop("market_volatility", None)
+        else:
+            # Current shape reports `index` as the numeric reading and never
+            # echoes the ticker, so record which index was requested.
+            market_volatility.setdefault("index_name", expected_index)
     advanced_payloads = {
         name.removeprefix("advanced:"): payload
         for name, payload in payloads.items()
         if name.startswith("advanced:")
     }
-    return normalize_snapshot(
+    snapshot = normalize_snapshot(
         symbol,
         payloads.get("trade_bias"),
         payloads.get("gex_summary"),
@@ -1155,6 +1218,8 @@ def _snapshot_from_payloads(
         forced_flow_levels=payloads.get("forced_flow_levels"),
         endpoint_errors=endpoint_errors,
     )
+    snapshot["freshness"] = dict(freshness or {})
+    return snapshot
 
 
 def _carry_forward_failed_components(
@@ -1178,9 +1243,20 @@ def _carry_forward_failed_components(
         "dealer_hedging": "dealer_hedging",
         "forced_flow_levels": "forced_flow",
     }
+    previous_freshness = previous.get("freshness") or {}
+
+    def carry_freshness(raw_name: str) -> None:
+        entry = previous_freshness.get(raw_name)
+        if entry and raw_name not in snapshot.get("freshness", {}):
+            snapshot.setdefault("freshness", {})[raw_name] = {
+                **entry,
+                "carried_forward": True,
+            }
+
     for raw_name, normalized_name in raw_to_normalized.items():
         if raw_name not in payloads and previous.get(normalized_name):
             snapshot[normalized_name] = previous[normalized_name]
+            carry_freshness(raw_name)
     previous_advanced = previous.get("advanced_signals") or {}
     advanced_payloads = {
         name.removeprefix("advanced:"): payload
@@ -1190,6 +1266,7 @@ def _carry_forward_failed_components(
     for name in ADVANCED_ENDPOINTS:
         if name not in advanced_payloads and name in previous_advanced:
             snapshot["advanced_signals"][name] = previous_advanced[name]
+            carry_freshness(f"advanced:{name}")
 
 
 def fetch_component_snapshot(
@@ -1213,7 +1290,7 @@ def fetch_component_snapshot(
         specs = lane_specs[lane](symbol)
     except KeyError as exc:
         raise ValueError(f"unknown ZeroGEX polling lane: {lane}") from exc
-    payloads, endpoint_errors, exceptions = _fetch_payloads(
+    payloads, freshness, endpoint_errors, exceptions = _fetch_payloads(
         specs,
         api_key=api_key,
         timeout=timeout,
@@ -1224,7 +1301,9 @@ def fetch_component_snapshot(
             "gex_summary",
             ZeroGEXError("ZeroGEX GEX summary is unavailable"),
         )
-    snapshot = _snapshot_from_payloads(symbol, payloads, endpoint_errors)
+    snapshot = _snapshot_from_payloads(
+        symbol, payloads, endpoint_errors, freshness
+    )
     _carry_forward_failed_components(snapshot, payloads, previous_snapshot)
     snapshot["_fetched_components"] = sorted(payloads)
     return snapshot
@@ -1240,7 +1319,7 @@ def fetch_snapshot(
     previous_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     symbol = symbol.upper()
-    payloads, endpoint_errors, exceptions = _fetch_payloads(
+    payloads, freshness, endpoint_errors, exceptions = _fetch_payloads(
         _request_specs(symbol, include_extended),
         api_key=api_key,
         timeout=timeout,
@@ -1251,7 +1330,9 @@ def fetch_snapshot(
             "gex_summary",
             ZeroGEXError("ZeroGEX GEX summary is unavailable"),
         )
-    snapshot = _snapshot_from_payloads(symbol, payloads, endpoint_errors)
+    snapshot = _snapshot_from_payloads(
+        symbol, payloads, endpoint_errors, freshness
+    )
     _carry_forward_failed_components(snapshot, payloads, previous_snapshot)
     return snapshot
 

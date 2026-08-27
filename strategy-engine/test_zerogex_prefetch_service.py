@@ -58,6 +58,64 @@ class ZeroGEXPrefetchServiceTest(unittest.TestCase):
         self.assertEqual(current["trade_bias"]["direction"], "short")
         self.assertTrue(current["advanced_signals"]["range_break"]["triggered"])
 
+    def test_lane_freshness_merge_is_scoped_to_lane_components(self) -> None:
+        main = {
+            "fetched_at": 200.0,
+            "gex_summary": {"call_wall": 740},
+            "freshness": {"gex_summary": {"freshness_status": "fresh"}},
+        }
+        core = {
+            "fetched_at": 150.0,
+            "trade_bias": {"direction": "long"},
+            "basic_signals": {},
+            "composite": {},
+            "playbook": {},
+            "market_quote": {},
+            "market_bars": [],
+            "freshness": {
+                "trade_bias": {"freshness_status": "aging"},
+                # A stale gex entry inside a lane snapshot (e.g. carried
+                # forward by the client) must never clobber the live one.
+                "gex_summary": {"freshness_status": "stale"},
+            },
+        }
+
+        _apply_lane_result(main, "core", core)
+
+        self.assertEqual(
+            main["freshness"]["gex_summary"]["freshness_status"], "fresh"
+        )
+        self.assertEqual(
+            main["freshness"]["trade_bias"]["freshness_status"], "aging"
+        )
+
+    def test_cached_context_merge_keeps_lane_freshness(self) -> None:
+        current = {
+            "fetched_at": 205.0,
+            "gex_summary": {"call_wall": 741},
+            "freshness": {"gex_summary": {"freshness_status": "fresh"}},
+        }
+        previous = {
+            "fetched_at": 200.0,
+            "gex_summary": {"call_wall": 740},
+            "freshness": {
+                "gex_summary": {"freshness_status": "stale"},
+                "advanced:squeeze_setup": {"freshness_status": "fresh"},
+                "strike_profile": {"freshness_status": "aging"},
+            },
+        }
+
+        _merge_cached_context(current, previous)
+
+        self.assertEqual(
+            current["freshness"]["gex_summary"]["freshness_status"], "fresh"
+        )
+        self.assertEqual(
+            current["freshness"]["strike_profile"]["freshness_status"],
+            "aging",
+        )
+        self.assertIn("advanced:squeeze_setup", current["freshness"])
+
     def test_health_exposes_independent_polling_lanes(self) -> None:
         lane_state = {
             "core": {

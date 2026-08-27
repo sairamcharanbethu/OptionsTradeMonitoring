@@ -297,6 +297,8 @@ def _zerogex_primary_snapshot(
     stamp = time.time() if now is None else now
     fetched_at = snapshot.get("fetched_at")
     summary = snapshot.get("gex_summary") or {}
+    summary_freshness = (snapshot.get("freshness") or {}).get("gex_summary") or {}
+    provider_verdict = summary_freshness.get("freshness_status")
     provider_freshness = provider_timestamp_freshness(
         summary.get("timestamp"),
         now=stamp,
@@ -342,6 +344,14 @@ def _zerogex_primary_snapshot(
         )
     elif missing:
         error = f"ZeroGEX GEX summary missing: {', '.join(missing)}"
+    elif provider_verdict == "stale":
+        # v2 freshness verdict tightens the age heuristic, never relaxes it:
+        # only the provider's explicit "stale" blocks; other verdicts pass.
+        error = (
+            "ZeroGEX reports gex_summary freshness_status=stale "
+            f"(source {summary_freshness.get('source_timestamp')}, "
+            f"stale_after {summary_freshness.get('stale_after')})"
+        )
 
     positive = _valid(net_gex) and float(net_gex) >= 0
     spy = {
@@ -377,6 +387,7 @@ def _zerogex_primary_snapshot(
         else None,
         "provider_timestamp_precision_grace_seconds":
             provider_precision_grace,
+        "provider_freshness_status": provider_verdict,
     }
     if error:
         spy["error"] = error

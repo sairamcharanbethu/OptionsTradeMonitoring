@@ -105,6 +105,63 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         self.assertEqual(spy["call_wall"]["strike"], 745.0)
         self.assertNotIn("error", spy)
 
+
+    def test_provider_stale_freshness_verdict_blocks_primary(self) -> None:
+        now = 1_785_162_000.0
+        snapshot = {
+            "fetched_at": now - 5,
+            "source": "zerogex",
+            "symbol": "SPY",
+            "gex_summary": {
+                "timestamp": datetime.fromtimestamp(
+                    now - 30, timezone.utc
+                ).isoformat(),
+                "spot_price": 741.5,
+                "gamma_flip": 747.66,
+                "call_wall": 745.0,
+                "put_wall": 740.0,
+                "net_gex": -3_800_000_000,
+            },
+            "freshness": {
+                "gex_summary": {
+                    "freshness_status": "stale",
+                    "source_timestamp": "2026-08-27T15:40:00Z",
+                    "stale_after": "2026-08-27T15:42:30Z",
+                }
+            },
+        }
+
+        normalized = _zerogex_primary_snapshot(snapshot, now=now)
+        spy = normalized["data"]["SPY"]
+        self.assertIn("freshness_status=stale", spy["error"])
+        self.assertEqual(spy["provider_freshness_status"], "stale")
+
+    def test_provider_aging_freshness_verdict_does_not_block(self) -> None:
+        now = 1_785_162_000.0
+        snapshot = {
+            "fetched_at": now - 5,
+            "source": "zerogex",
+            "symbol": "SPY",
+            "gex_summary": {
+                "timestamp": datetime.fromtimestamp(
+                    now - 30, timezone.utc
+                ).isoformat(),
+                "spot_price": 741.5,
+                "gamma_flip": 747.66,
+                "call_wall": 745.0,
+                "put_wall": 740.0,
+                "net_gex": -3_800_000_000,
+            },
+            "freshness": {
+                "gex_summary": {"freshness_status": "aging"}
+            },
+        }
+
+        normalized = _zerogex_primary_snapshot(snapshot, now=now)
+        spy = normalized["data"]["SPY"]
+        self.assertNotIn("error", spy)
+        self.assertEqual(spy["provider_freshness_status"], "aging")
+
     def test_stale_zerogex_provider_data_is_not_usable_as_primary(self) -> None:
         now = 1_785_162_000.0
         snapshot = {

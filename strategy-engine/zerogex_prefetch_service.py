@@ -39,6 +39,39 @@ LANE_FIELDS = {
     ),
 }
 
+# Raw request-spec names whose v2 freshness envelopes belong to each lane
+# (freshness is keyed by raw component name, not the normalized field name).
+LANE_FRESHNESS_KEYS = {
+    "core": (
+        "trade_bias",
+        "basic_signals",
+        "composite",
+        "playbook",
+        "market_quote",
+        "market_bars",
+    ),
+    "deep": (
+        "gex_history",
+        "market_volatility",
+        "strike_profile",
+        "flow_series",
+        "smart_money",
+        "session_levels",
+        "technicals",
+        "dealer_hedging",
+        "forced_flow_levels",
+    ),
+}
+
+
+def _lane_freshness(lane: str, freshness: dict[str, Any]) -> dict[str, Any]:
+    keys = LANE_FRESHNESS_KEYS.get(lane, ())
+    return {
+        name: entry
+        for name, entry in (freshness or {}).items()
+        if name in keys or (lane == "deep" and name.startswith("advanced:"))
+    }
+
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,6 +119,11 @@ def _health_payload(
             "forced_flow": forced_flow.get("timestamp"),
         },
         "endpoint_errors": (snapshot or {}).get("endpoint_errors") or {},
+        "freshness_status": {
+            name: entry.get("freshness_status")
+            for name, entry in ((snapshot or {}).get("freshness") or {}).items()
+            if isinstance(entry, dict)
+        },
         "polling": dict(polling or {}),
         "error": error,
     }
@@ -100,6 +138,12 @@ def _merge_cached_context(
     for fields in LANE_FIELDS.values():
         for field in fields:
             snapshot[field] = previous_snapshot.get(field)
+    merged_freshness = dict(snapshot.get("freshness") or {})
+    for lane in LANE_FRESHNESS_KEYS:
+        merged_freshness.update(
+            _lane_freshness(lane, previous_snapshot.get("freshness") or {})
+        )
+    snapshot["freshness"] = merged_freshness
 
 
 def _apply_lane_result(
@@ -109,6 +153,9 @@ def _apply_lane_result(
 ) -> dict[str, str]:
     for field in LANE_FIELDS[lane]:
         snapshot[field] = lane_snapshot.get(field)
+    snapshot.setdefault("freshness", {}).update(
+        _lane_freshness(lane, lane_snapshot.get("freshness") or {})
+    )
     return dict(lane_snapshot.get("endpoint_errors") or {})
 
 
