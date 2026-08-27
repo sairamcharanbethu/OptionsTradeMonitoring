@@ -36,6 +36,11 @@ LANE_FIELDS = {
         "session_context",
         "dealer_hedging",
         "forced_flow",
+        "expiry_rolloff",
+        "flip_horizons",
+    ),
+    "slow": (
+        "regime_shift",
     ),
 }
 
@@ -60,6 +65,11 @@ LANE_FRESHNESS_KEYS = {
         "technicals",
         "dealer_hedging",
         "forced_flow_levels",
+        "expiry_rolloff",
+        "flip_horizons",
+    ),
+    "slow": (
+        "regime_shift",
     ),
 }
 
@@ -165,8 +175,9 @@ def _polling_status(
     gex_interval: float,
     core_interval: float,
     deep_interval: float,
+    slow_interval: float | None = None,
 ) -> dict[str, Any]:
-    return {
+    status = {
         "gex_summary_interval_seconds": gex_interval,
         "core_context_interval_seconds": core_interval,
         "deep_context_interval_seconds": deep_interval,
@@ -177,6 +188,15 @@ def _polling_status(
         "last_deep_started_at": lane_state["deep"].get("last_started_at"),
         "last_deep_completed_at": lane_state["deep"].get("last_completed_at"),
     }
+    slow = lane_state.get("slow")
+    if slow is not None:
+        status.update(
+            slow_context_interval_seconds=slow_interval,
+            slow_in_flight=slow.get("future") is not None,
+            last_slow_started_at=slow.get("last_started_at"),
+            last_slow_completed_at=slow.get("last_completed_at"),
+        )
+    return status
 
 
 def _run_once(
@@ -240,7 +260,22 @@ def main() -> None:
         default=30,
         help="Seconds between advanced-signal, volatility, and historical-context reads.",
     )
+    parser.add_argument(
+        "--slow-interval",
+        type=float,
+        default=300,
+        help=(
+            "Seconds between slow-lane reads (regime-shift is computed on "
+            "demand server-side and is expensive to refresh)."
+        ),
+    )
     parser.add_argument("--timeout", type=float, default=10)
+    parser.add_argument(
+        "--slow-timeout",
+        type=float,
+        default=45,
+        help="Request timeout for the slow lane (~25s cold compute).",
+    )
     parser.add_argument("--error-interval", type=float, default=30)
     parser.add_argument("--auth-error-interval", type=float, default=300)
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
@@ -254,7 +289,12 @@ def main() -> None:
     )
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
-    if min(args.interval, args.context_interval, args.deep_interval) <= 0:
+    if min(
+        args.interval,
+        args.context_interval,
+        args.deep_interval,
+        args.slow_interval,
+    ) <= 0:
         parser.error("polling intervals must be greater than zero")
     symbol = args.symbol.upper()
     if args.once:
@@ -266,7 +306,7 @@ def main() -> None:
         return
 
     last_good: dict[str, Any] | None = None
-    lane_errors: dict[str, dict[str, str]] = {"core": {}, "deep": {}}
+    lane_errors: dict[str, dict[str, str]] = {"core": {}, "deep": {}, "slow": {}}
     lane_state: dict[str, dict[str, Any]] = {
         "core": {
             "future": None,
@@ -280,13 +320,25 @@ def main() -> None:
             "last_started_at": None,
             "last_completed_at": None,
         },
+        "slow": {
+            "future": None,
+            "last_started_mono": None,
+            "last_started_at": None,
+            "last_completed_at": None,
+        },
     }
     lane_intervals = {
         "core": args.context_interval,
         "deep": args.deep_interval,
+        "slow": args.slow_interval,
+    }
+    lane_timeouts = {
+        "core": args.timeout,
+        "deep": args.timeout,
+        "slow": args.slow_timeout,
     }
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         while True:
             started = time.time()
             started_mono = time.monotonic()
@@ -326,6 +378,7 @@ def main() -> None:
                 snapshot["endpoint_errors"] = {
                     **lane_errors["core"],
                     **lane_errors["deep"],
+                    **lane_errors["slow"],
                     **(snapshot.get("endpoint_errors") or {}),
                 }
                 snapshot["mode"] = args.mode
@@ -345,7 +398,7 @@ def main() -> None:
                         symbol,
                         lane=lane,
                         api_key=key,
-                        timeout=args.timeout,
+                        timeout=lane_timeouts[lane],
                         previous_snapshot=last_good,
                     )
                     state["last_started_mono"] = started_mono
@@ -356,6 +409,7 @@ def main() -> None:
                     gex_interval=args.interval,
                     core_interval=args.context_interval,
                     deep_interval=args.deep_interval,
+                    slow_interval=args.slow_interval,
                 )
                 _atomic_json(args.output_file, snapshot)
                 _atomic_json(
@@ -391,6 +445,7 @@ def main() -> None:
                             gex_interval=args.interval,
                             core_interval=args.context_interval,
                             deep_interval=args.deep_interval,
+                            slow_interval=args.slow_interval,
                         ),
                     ),
                 )
@@ -411,6 +466,7 @@ def main() -> None:
                             gex_interval=args.interval,
                             core_interval=args.context_interval,
                             deep_interval=args.deep_interval,
+                            slow_interval=args.slow_interval,
                         ),
                     ),
                 )

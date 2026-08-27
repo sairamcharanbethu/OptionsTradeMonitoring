@@ -30,6 +30,8 @@ MAX_GEX_ENTRY_AGE_SECONDS = 20
 MAX_ZEROGEX_FETCH_AGE_SECONDS = 30
 MAX_ZEROGEX_DATA_AGE_SECONDS = 120
 MAX_ZEROGEX_EXTENDED_AGE_SECONDS = 180
+# regime_shift refreshes on the slow lane (5-minute cadence): allow ~3 cycles.
+MAX_ZEROGEX_SLOW_AGE_SECONDS = 900
 ZEROGEX_MINUTE_BUCKET_GRACE_SECONDS = 60
 MAX_OPTION_SPREAD_PCT = 15.0
 MIN_PLAN_REWARD_RISK = 1.5
@@ -2098,6 +2100,9 @@ def _zerogex_context(
     session_context = snapshot.get("session_context") or {}
     dealer_hedging = snapshot.get("dealer_hedging") or {}
     forced_flow = snapshot.get("forced_flow") or {}
+    expiry_rolloff = snapshot.get("expiry_rolloff") or {}
+    regime_shift = snapshot.get("regime_shift") or {}
+    flip_horizons = snapshot.get("flip_horizons") or {}
 
     def freshness(payload: Any, max_age: float) -> dict[str, Any]:
         return provider_timestamp_freshness(
@@ -2142,6 +2147,18 @@ def _zerogex_context(
         ),
         "forced_flow": freshness(
             forced_flow,
+            MAX_ZEROGEX_EXTENDED_AGE_SECONDS,
+        ),
+        "expiry_rolloff": freshness(
+            expiry_rolloff,
+            MAX_ZEROGEX_EXTENDED_AGE_SECONDS,
+        ),
+        "regime_shift": freshness(
+            regime_shift,
+            MAX_ZEROGEX_SLOW_AGE_SECONDS,
+        ),
+        "flip_horizons": freshness(
+            flip_horizons,
             MAX_ZEROGEX_EXTENDED_AGE_SECONDS,
         ),
     }
@@ -2316,6 +2333,9 @@ def _zerogex_context(
         session_context=copy.deepcopy(session_context),
         dealer_hedging=copy.deepcopy(dealer_hedging),
         forced_flow=copy.deepcopy(forced_flow),
+        expiry_rolloff=copy.deepcopy(expiry_rolloff),
+        regime_shift=copy.deepcopy(regime_shift),
+        flip_horizons=copy.deepcopy(flip_horizons),
         endpoint_errors=copy.deepcopy(snapshot.get("endpoint_errors") or {}),
         comparison={
             "source": "sscgex" if comparison_enabled else None,

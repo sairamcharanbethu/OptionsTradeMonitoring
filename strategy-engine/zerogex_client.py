@@ -126,6 +126,39 @@ DEALER_HEDGING_FIELDS = (
     "expected_hedge_shares",
     "hedge_pressure",
 )
+EXPIRY_TRANCHE_FIELDS = (
+    "expiration",
+    "dte",
+    "net_gex",
+    "abs_gex",
+    "share",
+)
+REGIME_SHIFT_LEVEL_FIELDS = (
+    "timestamp",
+    "spot",
+    "gamma_flip",
+    "call_wall",
+    "put_wall",
+    "max_pain",
+    "net_gex_at_spot",
+    "total_net_gex",
+)
+REGIME_SHIFT_READ_FIELDS = (
+    "state",
+    "adverb",
+    "lean_z",
+    "stability_z",
+    "magnitude",
+    "meaning",
+    "normalization",
+    "sessions_in_window",
+)
+FLIP_HORIZON_FIELDS = (
+    "horizon_days",
+    "flip",
+    "resolved",
+    "net_gex_at_spot",
+)
 BASIC_SIGNAL_FIELDS = (
     "score",
     "clamped_score",
@@ -949,6 +982,73 @@ def _normalize_market_volatility(payload: Any) -> dict[str, Any]:
     )
 
 
+def _normalize_expiry_rolloff(payload: Any) -> dict[str, Any]:
+    """Per-expiration gamma tranches: how much of the map dies with 0DTE."""
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    tranches = [
+        _select_fields(tranche, EXPIRY_TRANCHE_FIELDS)
+        for tranche in (payload.get("tranches") or [])
+        if isinstance(tranche, dict)
+    ][:8]
+    shares = {
+        tranche.get("dte"): tranche.get("share")
+        for tranche in tranches
+        if tranche.get("dte") is not None
+    }
+    return {
+        "timestamp": payload.get("as_of"),
+        "session_date": payload.get("session_date"),
+        "spot": payload.get("spot"),
+        "total_net_gex": payload.get("total_net_gex"),
+        "total_abs_gex": payload.get("total_abs_gex"),
+        "next": _select_fields(payload.get("next"), EXPIRY_TRANCHE_FIELDS),
+        "zero_dte_share": shares.get(0),
+        "one_dte_share": shares.get(1),
+        "context": _select_fields(
+            payload.get("context"),
+            ("percentile", "verdict", "sessions_in_window"),
+        ),
+        "tranches": tranches,
+    }
+
+
+def _normalize_regime_shift(payload: Any) -> dict[str, Any]:
+    """Session repositioning read; the per-strike diff is dropped as bulk."""
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    to_level = payload.get("to") or {}
+    return {
+        "timestamp": to_level.get("timestamp"),
+        "session_date": payload.get("session_date"),
+        "lookback": payload.get("lookback"),
+        "lens": payload.get("lens"),
+        "from": _select_fields(payload.get("from"), REGIME_SHIFT_LEVEL_FIELDS),
+        "to": _select_fields(to_level, REGIME_SHIFT_LEVEL_FIELDS),
+        "read": _select_fields(payload.get("read"), REGIME_SHIFT_READ_FIELDS),
+        "scores": _select_fields(
+            payload.get("scores"), ("lean", "stability")
+        ),
+    }
+
+
+def _normalize_flip_horizons(payload: Any) -> dict[str, Any]:
+    """Multi-horizon gamma flips; the historical overlay is dropped as bulk."""
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    curve = [
+        _select_fields(entry, FLIP_HORIZON_FIELDS)
+        for entry in (payload.get("curve") or [])
+        if isinstance(entry, dict)
+    ]
+    return {
+        "timestamp": payload.get("timestamp"),
+        "spot": payload.get("spot"),
+        "horizons_days": payload.get("horizons_days"),
+        "curve": curve,
+    }
+
+
 def _normalize_market_bars(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(payload, list):
         return []
@@ -981,6 +1081,9 @@ def normalize_snapshot(
     technicals: Any = None,
     dealer_hedging: Any = None,
     forced_flow_levels: Any = None,
+    expiry_rolloff: Any = None,
+    regime_shift: Any = None,
+    flip_horizons: Any = None,
     endpoint_errors: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     normalized_signals = {}
@@ -1012,6 +1115,9 @@ def normalize_snapshot(
         "session_context": _normalize_session_context(session_levels, technicals),
         "dealer_hedging": _normalize_dealer_hedging(dealer_hedging),
         "forced_flow": _select_fields(forced_flow_levels, FORCED_FLOW_FIELDS),
+        "expiry_rolloff": _normalize_expiry_rolloff(expiry_rolloff),
+        "regime_shift": _normalize_regime_shift(regime_shift),
+        "flip_horizons": _normalize_flip_horizons(flip_horizons),
         "endpoint_errors": dict(endpoint_errors or {}),
     }
 
@@ -1097,9 +1203,36 @@ def _deep_context_request_specs(
                 "/api/forced-flow/levels",
                 {"symbol": symbol},
             ),
+            "expiry_rolloff": (
+                "/api/gex/expiry-rolloff",
+                {"symbol": symbol},
+            ),
+            "flip_horizons": (
+                "/api/gex/flip-term-structure",
+                {"symbol": symbol, "horizons": "1,3,5,10"},
+            ),
         }
     )
     return specs
+
+
+def _slow_context_request_specs(
+    symbol: str,
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    # regime-shift is computed on demand server-side (~25s cold, short-lived
+    # cache), so it gets its own low-cadence lane with a long timeout instead
+    # of riding the 30s deep cycle.
+    return {
+        "regime_shift": (
+            "/api/gex/regime-shift",
+            {
+                "symbol": symbol,
+                "lookback": "session",
+                "lens": "positioning",
+                "strike_limit": 10,
+            },
+        ),
+    }
 
 
 def _request_specs(
@@ -1216,6 +1349,9 @@ def _snapshot_from_payloads(
         technicals=payloads.get("technicals"),
         dealer_hedging=payloads.get("dealer_hedging"),
         forced_flow_levels=payloads.get("forced_flow_levels"),
+        expiry_rolloff=payloads.get("expiry_rolloff"),
+        regime_shift=payloads.get("regime_shift"),
+        flip_horizons=payloads.get("flip_horizons"),
         endpoint_errors=endpoint_errors,
     )
     snapshot["freshness"] = dict(freshness or {})
@@ -1242,6 +1378,9 @@ def _carry_forward_failed_components(
         "session_levels": "session_context",
         "dealer_hedging": "dealer_hedging",
         "forced_flow_levels": "forced_flow",
+        "expiry_rolloff": "expiry_rolloff",
+        "regime_shift": "regime_shift",
+        "flip_horizons": "flip_horizons",
     }
     previous_freshness = previous.get("freshness") or {}
 
@@ -1285,6 +1424,7 @@ def fetch_component_snapshot(
         "gex": _gex_summary_request_specs,
         "core": _core_context_request_specs,
         "deep": _deep_context_request_specs,
+        "slow": _slow_context_request_specs,
     }
     try:
         specs = lane_specs[lane](symbol)
@@ -1335,6 +1475,87 @@ def fetch_snapshot(
     )
     _carry_forward_failed_components(snapshot, payloads, previous_snapshot)
     return snapshot
+
+
+def _fetch_data(
+    path: str,
+    params: dict[str, Any],
+    *,
+    api_key: str,
+    timeout: float,
+    request_json: Callable[..., Any],
+) -> Any:
+    payload = request_json(
+        _v2_path(path), params, api_key=api_key, timeout=timeout
+    )
+    data, _ = _unwrap_envelope(payload)
+    return data
+
+
+def fetch_replay_sessions(
+    symbol: str = "SPY",
+    *,
+    api_key: str,
+    limit: int = 30,
+    timeout: float = DEFAULT_TIMEOUT,
+    request_json: Callable[..., Any] = _request_json,
+) -> Any:
+    """Sessions with stored 1-minute replay frames (~30 most recent)."""
+    return _fetch_data(
+        "/api/replay/sessions",
+        {"symbol": symbol.upper(), "limit": limit},
+        api_key=api_key,
+        timeout=timeout,
+        request_json=request_json,
+    )
+
+
+def fetch_replay_frame(
+    symbol: str,
+    ts: str,
+    *,
+    api_key: str,
+    strike_limit: int = 60,
+    timeout: float = DEFAULT_TIMEOUT,
+    request_json: Callable[..., Any] = _request_json,
+) -> Any:
+    """One per-minute frame (headline flip/walls + per-strike GEX) at-or-before ts."""
+    return _fetch_data(
+        "/api/replay/frame",
+        {"symbol": symbol.upper(), "ts": ts, "strike_limit": strike_limit},
+        api_key=api_key,
+        timeout=timeout,
+        request_json=request_json,
+    )
+
+
+def fetch_replay_range(
+    symbol: str,
+    date: str,
+    *,
+    api_key: str,
+    timeframe: str = "1min",
+    strike_band_pct: float = 0.04,
+    include_expirations: bool = False,
+    max_expirations: int = 6,
+    timeout: float = 60.0,
+    request_json: Callable[..., Any] = _request_json,
+) -> Any:
+    """A whole session of replay frames for offline cross-validation work."""
+    return _fetch_data(
+        "/api/replay/range",
+        {
+            "symbol": symbol.upper(),
+            "date": date,
+            "timeframe": timeframe,
+            "strike_band_pct": strike_band_pct,
+            "include_expirations": include_expirations,
+            "max_expirations": max_expirations,
+        },
+        api_key=api_key,
+        timeout=timeout,
+        request_json=request_json,
+    )
 
 
 def render_text(snapshot: dict[str, Any]) -> str:

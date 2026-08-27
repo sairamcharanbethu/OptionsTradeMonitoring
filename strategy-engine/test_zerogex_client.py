@@ -434,7 +434,7 @@ class ZeroGEXClientTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown ZeroGEX polling lane"):
             fetch_component_snapshot(
                 "SPY",
-                lane="slow",
+                lane="hourly",
                 api_key="test-key",
                 request_json=lambda *args, **kwargs: {},
             )
@@ -701,6 +701,118 @@ class ZeroGEXV2EnvelopeTest(unittest.TestCase):
         entry = snapshot["freshness"]["dealer_hedging"]
         self.assertTrue(entry["carried_forward"])
         self.assertEqual(entry["freshness_status"], "fresh")
+
+
+class ZeroGEXNewComponentTest(unittest.TestCase):
+    def test_deep_lane_fetches_rolloff_and_flip_horizons(self) -> None:
+        calls = []
+
+        def request_json(path, params, **kwargs):
+            calls.append((path, dict(params)))
+            if path.endswith("/expiry-rolloff"):
+                return {
+                    "symbol": "SPY",
+                    "as_of": "2026-08-27T15:10:00+00:00",
+                    "session_date": "2026-08-27",
+                    "spot": 770.55,
+                    "total_abs_gex": 11.2e9,
+                    "total_net_gex": 3.5e9,
+                    "next": {
+                        "expiration": "2026-08-27",
+                        "dte": 0,
+                        "net_gex": 2.4e9,
+                        "abs_gex": 3.2e9,
+                        "share": 0.285,
+                    },
+                    "context": {
+                        "percentile": None,
+                        "verdict": None,
+                        "sessions_in_window": 0,
+                    },
+                    "tranches": [
+                        {"expiration": "2026-08-27", "dte": 0, "net_gex": 2.4e9, "abs_gex": 3.2e9, "share": 0.285, "noise": 1},
+                        {"expiration": "2026-08-28", "dte": 1, "net_gex": 1.4e9, "abs_gex": 2.7e9, "share": 0.239},
+                    ],
+                }
+            if path.endswith("/flip-term-structure"):
+                return {
+                    "symbol": "SPY",
+                    "spot": 772.2,
+                    "timestamp": "2026-08-27T16:40:00+00:00",
+                    "horizons_days": [1.0, 3.0, 5.0, 10.0],
+                    "curve": [
+                        {"horizon_days": 1.0, "flip": 769.0, "resolved": True, "span_used": 0.2, "net_gex_at_spot": 2.8e9},
+                        {"horizon_days": 3.0, "flip": 770.27, "resolved": True, "net_gex_at_spot": 2.4e9},
+                    ],
+                    "historical": [{"horizon_days": 1.0, "realized_at": "..."}],
+                }
+            return {}
+
+        snapshot = fetch_component_snapshot(
+            "SPY", lane="deep", api_key="k", request_json=request_json
+        )
+
+        paths = [path for path, _ in calls]
+        self.assertIn("/api/v2/gex/expiry-rolloff", paths)
+        self.assertIn("/api/v2/gex/flip-term-structure", paths)
+        self.assertNotIn("/api/v2/gex/regime-shift", paths)
+
+        rolloff = snapshot["expiry_rolloff"]
+        self.assertEqual(rolloff["zero_dte_share"], 0.285)
+        self.assertEqual(rolloff["one_dte_share"], 0.239)
+        self.assertEqual(rolloff["next"]["dte"], 0)
+        self.assertEqual(rolloff["timestamp"], "2026-08-27T15:10:00+00:00")
+        self.assertNotIn("noise", rolloff["tranches"][0])
+
+        horizons = snapshot["flip_horizons"]
+        self.assertEqual(horizons["spot"], 772.2)
+        self.assertEqual(horizons["curve"][0]["flip"], 769.0)
+        self.assertNotIn("span_used", horizons["curve"][0])
+        self.assertNotIn("historical", horizons)
+
+    def test_slow_lane_fetches_only_regime_shift(self) -> None:
+        calls = []
+
+        def request_json(path, params, **kwargs):
+            calls.append((path, dict(params)))
+            if path.endswith("/regime-shift"):
+                return {
+                    "symbol": "SPY",
+                    "lookback": "session",
+                    "lens": "positioning",
+                    "session_date": "2026-08-27",
+                    "from": {"timestamp": "2026-08-27T13:30:00+00:00", "gamma_flip": 769.07, "spot": 768.65},
+                    "to": {"timestamp": "2026-08-27T15:10:00+00:00", "gamma_flip": 769.56, "spot": 770.55},
+                    "read": {
+                        "state": "QUIET",
+                        "adverb": "barely",
+                        "lean_z": 0.0,
+                        "stability_z": 0.0,
+                        "magnitude": 0.0,
+                        "meaning": "No meaningful repositioning.",
+                        "normalization": "proxy",
+                        "sessions_in_window": 0,
+                    },
+                    "scores": {"lean": -1.04, "stability": 0.99},
+                    "strikes": [{"strike": 770, "delta_gex": 1.0}],
+                    "band": {},
+                }
+            return {}
+
+        snapshot = fetch_component_snapshot(
+            "SPY", lane="slow", api_key="k", request_json=request_json
+        )
+
+        self.assertEqual(
+            [path for path, _ in calls], ["/api/v2/gex/regime-shift"]
+        )
+        self.assertEqual(calls[0][1]["lens"], "positioning")
+        shift = snapshot["regime_shift"]
+        self.assertEqual(shift["read"]["state"], "QUIET")
+        self.assertEqual(shift["timestamp"], "2026-08-27T15:10:00+00:00")
+        self.assertEqual(shift["to"]["gamma_flip"], 769.56)
+        self.assertNotIn("strikes", shift)
+        self.assertEqual(snapshot["_fetched_components"], ["regime_shift"])
 
 
 if __name__ == "__main__":

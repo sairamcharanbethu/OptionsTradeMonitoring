@@ -169,8 +169,12 @@ services:
       - "15"
       - --deep-interval
       - "30"
+      - --slow-interval
+      - "300"
       - --timeout
       - "10"
+      - --slow-timeout
+      - "45"
       - --auth-error-interval
       - "10"
     networks:
