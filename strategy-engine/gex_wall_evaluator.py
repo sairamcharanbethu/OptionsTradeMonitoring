@@ -52,7 +52,8 @@ RECLAIM_PROXIMITY = 1.002
 # Strong-negative-gamma gate, in priority order:
 #   1. net_gex 30d percentile <= NEGATIVE_GAMMA_PERCENTILE (scale-robust, preferred)
 #   2. raw net_gex < NEGATIVE_GAMMA_NET_THRESHOLD (source strategy's absolute gate)
-#   3. regime == "Negative" (sign only, last resort)
+#   3. regime == "Negative" (sign only, last resort — demote-only: it still
+#      cautions long setups but never upgrades a short to A+/PARTICIPATE)
 NEGATIVE_GAMMA_PERCENTILE = 10.0
 NEGATIVE_GAMMA_NET_THRESHOLD = -1.5e9
 # Volume-exhaustion guard for wall *fades* (bounce/rejection): a fade into an
@@ -148,14 +149,26 @@ def _log_regression(
     return slope, end, end + band, end - band, slope > 0
 
 
-def _is_negative_gamma(gex: dict[str, Any]) -> bool:
+def _negative_gamma_state(gex: dict[str, Any]) -> tuple[bool, bool]:
+    """Return ``(is_negative, confident)`` for the strong-negative-gamma gate.
+
+    ``confident`` is True only when the verdict comes from measured evidence
+    (30d percentile or absolute net GEX). The regime-sign fallback still says
+    "negative" so long setups keep their caution demotion, but it must never
+    count as the *strong* negative gamma that upgrades a short to A+/
+    PARTICIPATE — demote-never-promote on degraded data.
+    """
     percentile = gex.get("net_gex_percentile")
     if _number(percentile):
-        return float(percentile) <= NEGATIVE_GAMMA_PERCENTILE
+        return float(percentile) <= NEGATIVE_GAMMA_PERCENTILE, True
     net_gex = gex.get("net_gex")
     if _number(net_gex):
-        return float(net_gex) < NEGATIVE_GAMMA_NET_THRESHOLD
-    return str(gex.get("regime")) == "Negative"
+        return float(net_gex) < NEGATIVE_GAMMA_NET_THRESHOLD, True
+    return str(gex.get("regime")) == "Negative", False
+
+
+def _is_negative_gamma(gex: dict[str, Any]) -> bool:
+    return _negative_gamma_state(gex)[0]
 
 
 def _empty_result(
@@ -256,7 +269,9 @@ def evaluate_gex_wall(
             channel_width=channel_width,
         )
 
-    is_negative_gamma = _is_negative_gamma(gex)
+    is_negative_gamma, negative_gamma_confident = _negative_gamma_state(gex)
+    # Only evidence-backed negative gamma may upgrade a short setup.
+    strong_negative_gamma = is_negative_gamma and negative_gamma_confident
 
     prev = previous_walls or {}
     prev_cw = float(prev["call_wall"]) if _number(prev.get("call_wall")) else cw
@@ -337,9 +352,9 @@ def evaluate_gex_wall(
         if wall_migrated_higher:
             verdict, confidence = "AVOID", "C"
             reason = "AVOID: call wall migrated higher; do not fade a rising ceiling."
-        elif not is_15m_up or is_negative_gamma:
+        elif not is_15m_up or strong_negative_gamma:
             verdict = "PARTICIPATE"
-            confidence = "A+" if (not is_15m_up and is_negative_gamma) else "A"
+            confidence = "A+" if (not is_15m_up and strong_negative_gamma) else "A"
             reason = (
                 f"Confirmed Upper Band / Call Wall rejection at ${cw:.2f} below EMA9 "
                 "with 15m DOWN alignment and Negative Gamma tailwinds."
@@ -365,7 +380,7 @@ def evaluate_gex_wall(
         if retest_confirmed:
             setup_type = "CALL_WALL_FAILED_BREAKOUT_PUT"
             direction = "PUT"
-            if not is_15m_up or is_negative_gamma:
+            if not is_15m_up or strong_negative_gamma:
                 verdict, confidence = "PARTICIPATE", "A+"
                 reason = (
                     f"Spot swept Upper Band / Wall ${cw:.2f} to ${retest_high:.2f} and "
@@ -570,6 +585,7 @@ def evaluate_gex_wall(
         },
         "regime": {
             "negative_gamma": is_negative_gamma,
+            "negative_gamma_confident": negative_gamma_confident,
             "net_gex": gex.get("net_gex") if _number(gex.get("net_gex")) else None,
             "net_gex_percentile": (
                 gex.get("net_gex_percentile")

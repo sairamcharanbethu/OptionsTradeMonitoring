@@ -149,12 +149,30 @@ async function testAutonomousExitRetryRequiresFreshTerminalBrokerEvidence() {
     last_broker_sync_at: now,
     exit_retry_count: TradeLifecycleService.MAX_EXIT_RETRIES
   });
+  const staleWithConfirmedCancel = TradeLifecycleService.canAutoRetryExit({
+    status: 'OPEN',
+    execution_status: 'EXIT_STALE',
+    broker_exit_order_id: 'exit-order-1',
+    last_broker_order_status: 'CANCELED',
+    last_broker_sync_at: now,
+    exit_retry_count: 0
+  });
+  const staleStillWorking = TradeLifecycleService.canAutoRetryExit({
+    status: 'OPEN',
+    execution_status: 'EXIT_STALE',
+    broker_exit_order_id: 'exit-order-1',
+    last_broker_order_status: 'PENDING',
+    last_broker_sync_at: now,
+    exit_retry_count: 0
+  });
 
   assert(confirmedRejected.allowed, 'A freshly broker-confirmed rejected exit should be safe for bounded autonomous retry');
   assert(!unknownBrokerState.allowed, 'UNKNOWN broker state must never authorize an autonomous close retry');
   assert(!staleEvidence.allowed, 'Stale terminal broker evidence must not authorize an autonomous close retry');
   assert(definitePreAcceptanceFailure.allowed, 'A definite pre-acceptance failure without a broker id should remain autonomously retryable');
   assert(!retryLimitReached.allowed, 'Autonomous close retry must respect the existing retry limit');
+  assert(staleWithConfirmedCancel.allowed, 'EXIT_STALE with a broker-confirmed dead order must be autonomously recoverable, not a human dead-end');
+  assert(!staleStillWorking.allowed, 'EXIT_STALE with the broker order still working must stay parked (never risk a double sell)');
 }
 
 async function testShortOptionLifecycleHelpers() {

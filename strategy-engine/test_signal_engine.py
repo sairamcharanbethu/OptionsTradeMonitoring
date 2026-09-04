@@ -968,6 +968,35 @@ class ZeroGEXShadowContextTest(unittest.TestCase):
             decision["gates"]["calls"]["warnings"],
         )
 
+    def test_unavailable_components_are_availability_not_risk_warnings(self) -> None:
+        # Missing/stale playbook and composite are missing *context*, not
+        # adverse evidence: they must land in the gate's `availability` list,
+        # never in `warnings` (which the AI-unavailable path force-SKIPs on).
+        self.snapshot.pop("playbook", None)
+        self.snapshot.pop("composite", None)
+        context = _zerogex_context(
+            self.snapshot,
+            {"source": "zerogex"},
+            741.5,
+            now=self.now,
+            role="primary",
+        )
+        decision = _zerogex_decision_context(context)
+
+        for side in ("calls", "puts"):
+            gate = decision["gates"][side]
+            self.assertIn(
+                "ZeroGEX playbook unavailable or stale; using GEX and local structure only",
+                gate["availability"],
+            )
+            self.assertIn(
+                "ZeroGEX MSI composite unavailable or stale",
+                gate["availability"],
+            )
+            self.assertFalse(
+                any("unavailable or stale" in warning for warning in gate["warnings"])
+            )
+
     def test_primary_high_confidence_opposing_playbook_is_an_entry_veto(self) -> None:
         timestamp = datetime.fromtimestamp(
             self.now - 20, timezone.utc

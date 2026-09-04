@@ -454,6 +454,54 @@ export class MarketPoller {
     return { hour, minute, minutes: hour * 60 + minute };
   }
 
+  // Releases the exit claim on a position whose broker exit order the sync has
+  // CONFIRMED terminal (canceled/expired/rejected with nothing filled), so the
+  // regular monitoring loop can re-evaluate triggers and submit a fresh exit.
+  // Positions that don't meet TradeLifecycleService.canAutoRetryExit's safety
+  // contract (unconfirmed broker status, stale sync, retry budget exhausted)
+  // stay parked in their EXIT_* review state exactly as before.
+  private async maybeReleaseBrokerTerminalExit(position: any, currentExecutionStatus: string): Promise<void> {
+    if (position.is_simulated) return;
+    const decision = TradeLifecycleService.canAutoRetryExit(position);
+    if (!decision.allowed) return;
+    const retryCount = Number(position.exit_retry_count || 0);
+    const released = await (this.fastify as any).pg.query(
+      `UPDATE positions
+       SET execution_status = NULL,
+           execution_error = NULL,
+           broker_exit_order_id = NULL,
+           broker_exit_trade_id = NULL,
+           exit_order_type = NULL,
+           exit_requested_at = NULL,
+           exit_reason = NULL,
+           profit_trim_status = CASE WHEN profit_trim_status = 'PENDING' THEN NULL ELSE profit_trim_status END,
+           exit_retry_count = COALESCE(exit_retry_count, 0) + 1,
+           notes = COALESCE(notes, '') || $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+         AND status = 'OPEN'
+         AND execution_status = $3
+       RETURNING id`,
+      [
+        ` [Broker confirmed ${currentExecutionStatus} exit order dead (${position.last_broker_order_status}); claim released for auto-retry ${retryCount + 1}/${TradeLifecycleService.MAX_EXIT_RETRIES}]`,
+        position.id,
+        currentExecutionStatus
+      ]
+    );
+    if ((released.rowCount ?? 0) === 0) return;
+    this.fastify.log.warn(`[MarketPoller] Released ${currentExecutionStatus} claim on position ${position.id}; exit monitoring re-armed (retry ${retryCount + 1}/${TradeLifecycleService.MAX_EXIT_RETRIES}).`);
+    await new DiscordAlertService(this.fastify).send({
+      userId: Number(position.user_id),
+      title: 'Exit order auto-retry armed',
+      message: `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)}: broker confirmed the previous exit order is dead (${position.last_broker_order_status}). Exit monitoring re-armed automatically (retry ${retryCount + 1}/${TradeLifecycleService.MAX_EXIT_RETRIES}).`,
+      severity: 'warning',
+      category: 'exit-auto-retry',
+      tradeId: position.id,
+      dedupeKey: `exit-auto-retry:${position.id}:${retryCount + 1}`,
+      dedupeSeconds: 300
+    });
+  }
+
   private async submitSnapTradeExit(
     position: any,
     orderType: 'LIMIT' | 'MARKET',
@@ -1402,23 +1450,32 @@ export class MarketPoller {
 
     const currentExecutionStatus = String(position.execution_status || '');
     if (currentExecutionStatus.startsWith('EXIT_')) {
+      // A broker-confirmed-dead exit order (canceled/expired/rejected) is not
+      // a human dead-end: release the claim so the next cycle re-evaluates
+      // triggers with fresh quotes and resubmits through the normal exit path.
+      await this.maybeReleaseBrokerTerminalExit(position, currentExecutionStatus);
       return;
     }
 
     if (['PENDING_EXIT', 'PENDING_TRIM'].includes(currentExecutionStatus)) {
       const requestedAtMs = position.exit_requested_at ? new Date(position.exit_requested_at).getTime() : NaN;
+      // The 15s SnapTrade pending-order sync owns stale-limit escalation (it
+      // cancels the dead order at the broker with full order context). The
+      // poller only backstops with EXIT_STALE after 300s — by then the sync
+      // has had ~20 chances to escalate, so a stale mark here means the sync
+      // path is down or the cancel keeps failing.
       const staleLimitExit = String(position.exit_order_type || '').toUpperCase() === 'LIMIT'
         && Number.isFinite(requestedAtMs)
-        && Date.now() - requestedAtMs > 120_000;
+        && Date.now() - requestedAtMs > 300_000;
       if (staleLimitExit) {
         await (this.fastify as any).pg.query(
           `UPDATE positions
            SET execution_status = 'EXIT_STALE',
-               execution_error = 'Limit exit order is still pending after 120 seconds; verify/cancel at broker before retrying.',
+               execution_error = 'Limit exit order is still pending after 300 seconds and broker-side escalation has not resolved it; verify/cancel at broker before retrying.',
                notes = COALESCE(notes, '') || $1,
                updated_at = CURRENT_TIMESTAMP
            WHERE id = $2 AND execution_status IN ('PENDING_EXIT', 'PENDING_TRIM')`,
-          [' [Limit exit marked stale by market poller]', position.id]
+          [' [Limit exit marked stale by market poller after broker-side escalation window]', position.id]
         );
       }
       return;

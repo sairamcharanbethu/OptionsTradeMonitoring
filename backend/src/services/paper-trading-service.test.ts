@@ -34,6 +34,16 @@ async function run() {
     ),
     ['borderline confidence 74', 'wider spread 9.0%', 'low relative volume 1.10', 'ZeroGEX risk warnings', 'late-session entry']
   );
+  // Availability notices route to AI review but as their own reason, never as
+  // "ZeroGEX risk warnings".
+  assert.deepEqual(
+    PaperTradingService.aiReviewReasons(
+      { confidence_score: 92, favoring: 'calls', zerogex_decision: { gates: { calls: { warnings: [], availability: ['ZeroGEX MSI composite unavailable or stale'] } } } },
+      { spread_pct: 4 },
+      11 * 60
+    ),
+    ['ZeroGEX context unavailable']
+  );
 
   // When AI review can't run, edge-degrading reasons force a SKIP (not a blind
   // one-contract TRADE); fill-cost / timing reasons alone still allow fallback.
@@ -41,6 +51,11 @@ async function run() {
   assert.equal(PaperTradingService.forceSkipWithoutAi(['low relative volume 1.00']), true, 'low RVOL must force skip');
   assert.equal(PaperTradingService.forceSkipWithoutAi(['ZeroGEX risk warnings']), true, 'ZeroGEX risk warnings must force skip');
   assert.equal(PaperTradingService.forceSkipWithoutAi(['wider spread 9.0%', 'late-session entry']), false, 'fill-cost/timing reasons alone do not force skip');
+  assert.equal(
+    PaperTradingService.forceSkipWithoutAi(['ZeroGEX context unavailable']),
+    false,
+    'a ZeroGEX availability outage must never force skip (data outage != adverse evidence)'
+  );
   assert.equal(PaperTradingService.forceSkipWithoutAi([]), false, 'no reasons never forces skip');
 
   // AI deliberately disabled by config: flagged setups still TRADE at

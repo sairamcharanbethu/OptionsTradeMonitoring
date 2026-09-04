@@ -186,7 +186,12 @@ export class TradeLifecycleService {
       EXIT_FAILED: ['FAILED'],
       EXIT_CANCELED: ['CANCELED', 'CANCELLED'],
       EXIT_CANCELLED: ['CANCELED', 'CANCELLED'],
-      EXIT_EXPIRED: ['EXPIRED']
+      EXIT_EXPIRED: ['EXPIRED'],
+      // A stale-marked limit exit whose broker order is since CONFIRMED dead
+      // (canceled/expired/rejected by broker sync) is safe to retry — without
+      // this, EXIT_STALE was a permanent human dead-end even after the broker
+      // confirmed nothing was working anymore.
+      EXIT_STALE: ['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED']
     };
     const allowedBrokerStatuses = terminalBrokerStatuses[executionStatus];
     if (!allowedBrokerStatuses) {

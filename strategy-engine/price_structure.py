@@ -24,15 +24,13 @@ Features:
     intent after a sweep).
   * ``find_fvgs``        — fair-value gaps (3-bar imbalance) and their inversion
     (IFVG) once price closes through them.
-  * ``velocity``         — ATR-normalized rate of change (approach speed).
-  * ``effort_vs_result`` — bar-level Wyckoff proxy (volume vs. price delivered).
-    NOTE: a *bar-level* proxy, not footprint delta; flagged as such.
-  * ``structure_context``— assembles the above into one dict for the evaluator.
+  * ``reference_levels`` — flattens ``session_levels`` into the ordered level
+    list the sweep/acceptance checks scan.
 
 Bar shape: ``{time, open, high, low, close, volume}`` with epoch-second ``time``
 (same as ``gex_wall_evaluator``). Level/pattern features operate on *closed*
-bars; ``structure_context`` aggregates raw bars to closed 5m via the shared
-``_aggregate`` so its basis is identical to the wall evaluator's.
+bars aggregated via the shared ``_aggregate`` so their basis is identical to
+the wall evaluator's.
 """
 
 from __future__ import annotations

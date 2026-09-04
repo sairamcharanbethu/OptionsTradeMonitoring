@@ -125,6 +125,15 @@ def _enforce_entry_gates(
         and str(gex.get("gamma_regime")) == "Range"
     ):
         gates.append(f"{strategy} momentum setup blocked in Positive/Range pin regime")
+    elif strategy in MOMENTUM_STRATEGIES and (
+        not gex.get("regime") or not gex.get("gamma_regime")
+    ):
+        # Missing regime data silently skips the pin-regime gate above. Keep
+        # that permissive (an availability outage must not halt entries) but
+        # make the un-evaluated gate visible instead of silent.
+        result.setdefault("warnings", []).append(
+            "gamma regime unknown; Positive/Range pin gate not evaluated"
+        )
 
     if gates:
         result.setdefault("lifecycle", {})["entry_allowed"] = False
@@ -2774,6 +2783,12 @@ def _zerogex_decision_context(
         blockers: list[str] = []
         warnings: list[str] = []
         confirmations: list[str] = []
+        # Availability notices are kept out of `warnings`: a ZeroGEX component
+        # being unavailable/stale is missing *context*, not adverse evidence,
+        # and must never trip the AI-unavailable forced-SKIP path the way a
+        # genuine risk warning does (2026-08-19 lesson: data outages must not
+        # convert into trade suppression for a non-authoritative source).
+        availability: list[str] = []
         if decision["gex_primary"]:
             playbook_state = decision["playbook"]["state"]
             playbook_side = decision["playbook"]["side"]
@@ -2797,7 +2812,7 @@ def _zerogex_decision_context(
                         f"ZeroGEX playbook leans against {side}"
                     )
             elif playbook_state == "unavailable":
-                warnings.append(
+                availability.append(
                     "ZeroGEX playbook unavailable or stale; using GEX and local structure only"
                 )
 
@@ -3006,7 +3021,7 @@ def _zerogex_decision_context(
             elif posture == "high_risk_reversal":
                 warnings.append("ZeroGEX MSI posture favors high-risk reversal")
             elif posture == "unavailable":
-                warnings.append("ZeroGEX MSI composite unavailable or stale")
+                availability.append("ZeroGEX MSI composite unavailable or stale")
             if history_extreme == "extreme_negative":
                 warnings.append(
                     "ZeroGEX GEX is at a 30d negative extreme; confirmed moves may amplify"
@@ -3019,6 +3034,7 @@ def _zerogex_decision_context(
             "entry_allowed": not blockers,
             "blockers": blockers,
             "warnings": warnings,
+            "availability": availability,
             "confirmations": confirmations,
         }
     return decision
@@ -3756,6 +3772,7 @@ def _dedupe_messages(result: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "zerogex": {
                     "warnings": copy.deepcopy((zero_gates.get(side) or {}).get("warnings") or []),
+                    "availability": copy.deepcopy((zero_gates.get(side) or {}).get("availability") or []),
                     "confirmations": copy.deepcopy((zero_gates.get(side) or {}).get("confirmations") or []),
                 },
             }
@@ -3950,7 +3967,10 @@ def _continuation_confidence(
         "vwap_alignment": 10 if vwap_aligned else 0,
         "volume_expansion": 15 if rvol >= 1.2 else 0,
         "strong_volume_bonus": 5 if rvol >= 1.5 else 0,
-        "gex_trend_context": 10 if gamma_regime == "Trend" else 5 if gamma_regime == "Range" else 0,
+        # Range earns no credit: the late entry gate treats Positive/Range as a
+        # pin regime and blocks momentum there, so scoring it as a positive
+        # would contradict the gate (only Trend supports continuation).
+        "gex_trend_context": 10 if gamma_regime == "Trend" else 0,
         "channel_quality": min(10, round(channel_atr * 10)),
         "trigger_proximity": 5 if trigger_distance_atr <= 0.25 else 3 if trigger_distance_atr <= 0.50 else 1 if trigger_distance_atr <= 0.75 else 0,
     }
@@ -4752,6 +4772,10 @@ def build_signal(
         gate = (zerogex_decision.get("gates") or {}).get(side) or {}
         result["blockers"].extend(gate.get("blockers") or [])
         result["warnings"].extend(gate.get("warnings") or [])
+        # Availability notices stay operator-visible as top-level warnings but
+        # are excluded from the per-side gate warnings the paper/live AI
+        # review counts as risk evidence.
+        result["warnings"].extend(gate.get("availability") or [])
         result["confirmations"].extend(gate.get("confirmations") or [])
     if not readiness["entry_ready"]:
         blocker = readiness["summary"]

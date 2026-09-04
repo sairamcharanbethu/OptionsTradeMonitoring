@@ -26,8 +26,14 @@ const AI_REVIEW_REASON = {
   widerSpread: 'wider spread',
   lowRelativeVolume: 'low relative volume',
   zeroGexWarnings: 'ZeroGEX risk warnings',
+  zeroGexAvailability: 'ZeroGEX context unavailable',
   lateSession: 'late-session entry'
 } as const;
+// zeroGexAvailability is deliberately NOT here: a stale/unavailable ZeroGEX
+// component is missing context from a non-authoritative source, not adverse
+// evidence — a data outage must never convert into trade suppression once the
+// AI budget is exhausted (2026-08-19 0/8 lesson). It still routes the setup to
+// AI review while budget remains.
 const FORCE_SKIP_REASON_PREFIXES: string[] = [
   AI_REVIEW_REASON.borderlineConfidence,
   AI_REVIEW_REASON.lowRelativeVolume,
@@ -699,11 +705,14 @@ export class PaperTradingService {
     const confidence = Number(signal.confidence_score);
     const spread = Number(option.spread_pct);
     const rvol = Number(signal.market_context?.rvol_1m);
-    const zeroWarnings = signal.zerogex_decision?.gates?.[signal.favoring]?.warnings;
+    const zeroGates = signal.zerogex_decision?.gates?.[signal.favoring];
+    const zeroWarnings = zeroGates?.warnings;
+    const zeroAvailability = zeroGates?.availability;
     if (Number.isFinite(confidence) && confidence < 80) reasons.push(`${AI_REVIEW_REASON.borderlineConfidence} ${confidence}`);
     if (Number.isFinite(spread) && spread >= 8) reasons.push(`${AI_REVIEW_REASON.widerSpread} ${spread.toFixed(1)}%`);
     if (Number.isFinite(rvol) && rvol > 0 && rvol < 1.2) reasons.push(`${AI_REVIEW_REASON.lowRelativeVolume} ${rvol.toFixed(2)}`);
     if (Array.isArray(zeroWarnings) && zeroWarnings.length > 0) reasons.push(AI_REVIEW_REASON.zeroGexWarnings);
+    if (Array.isArray(zeroAvailability) && zeroAvailability.length > 0) reasons.push(AI_REVIEW_REASON.zeroGexAvailability);
     if (etMinutes >= 14 * 60 + 30) reasons.push(AI_REVIEW_REASON.lateSession);
     return reasons;
   }

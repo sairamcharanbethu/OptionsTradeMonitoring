@@ -69,10 +69,13 @@ class GexWallEvaluatorTest(unittest.TestCase):
         self.assertEqual(result["mode"], "shadow")
 
     def test_call_wall_rejection_put_a_plus_in_negative_gamma(self):
-        # Falling trend (15m down) + Negative Gamma + shooting star at the call wall.
+        # Falling trend (15m down) + measured Negative Gamma + shooting star at
+        # the call wall. The percentile is what makes the negative gamma
+        # "strong" — regime sign alone must not reach A+ (see next test).
         bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
         result = evaluate_gex_wall(
-            {"call_wall": 535.0, "put_wall": 500.0, "regime": "Negative"}, bars, now=NOW
+            {"call_wall": 535.0, "put_wall": 500.0, "regime": "Negative", "net_gex_percentile": 5},
+            bars, now=NOW,
         )
         self.assertEqual(result["setup_type"], "CALL_WALL_REJECTION_PUT")
         self.assertEqual(result["verdict"], "PARTICIPATE")
@@ -81,6 +84,21 @@ class GexWallEvaluatorTest(unittest.TestCase):
         self.assertEqual(result["confidence"], "A+")
         self.assertEqual(result["macro"]["trend_15m"], "down")
         self.assertTrue(result["regime"]["negative_gamma"])
+        self.assertTrue(result["regime"]["negative_gamma_confident"])
+
+    def test_sign_only_negative_gamma_cannot_upgrade_to_a_plus(self):
+        # Same setup but the regime sign is the ONLY negative-gamma evidence
+        # (no percentile, no net_gex). Demote-never-promote: the short still
+        # PARTICIPATEs on the 15m-down alignment, but caps at A.
+        bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
+        result = evaluate_gex_wall(
+            {"call_wall": 535.0, "put_wall": 500.0, "regime": "Negative"}, bars, now=NOW
+        )
+        self.assertEqual(result["setup_type"], "CALL_WALL_REJECTION_PUT")
+        self.assertEqual(result["verdict"], "PARTICIPATE")
+        self.assertEqual(result["confidence"], "A")
+        self.assertTrue(result["regime"]["negative_gamma"])
+        self.assertFalse(result["regime"]["negative_gamma_confident"])
 
     def test_call_wall_migration_guard_blocks_fade(self):
         # Same rejection shape, but the call wall migrated up from a prior read.
@@ -144,6 +162,7 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
             },
             bars,
             NOW,
+            net_gex_percentile=5,
         )
         self.assertIsNotNone(candidate)
         self.assertEqual(candidate["strategy"], "GEX_WALL_REJECTION")

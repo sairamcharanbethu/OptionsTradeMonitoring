@@ -1312,6 +1312,53 @@ export class SnaptradeService {
                         && Date.now() - requestedAtMs > 120_000;
 
                     if (limitExitStale) {
+                        // Escalation, not a human dead-end: request a broker
+                        // cancel of the dead limit order. The next sync pass
+                        // classifies the outcome (CANCELED -> EXIT_CANCELED ->
+                        // the market poller releases the claim and re-arms exit
+                        // monitoring; EXECUTED -> normal fill reconciliation).
+                        // Only after the retry budget is exhausted, or when the
+                        // cancel request itself fails, does the position fall
+                        // back to EXIT_STALE manual review.
+                        const exitRetryCount = Number(position.exit_retry_count || 0);
+                        if (position.broker_exit_order_id && exitRetryCount < TradeLifecycleService.MAX_EXIT_RETRIES) {
+                            try {
+                                const cancelRecord = await snaptrade.trading.cancelUserAccountOrder({
+                                    userId: userIdStr,
+                                    userSecret,
+                                    accountId: this.toSnaptradeAccountId(accountId),
+                                    brokerage_order_id: String(position.broker_exit_order_id)
+                                }, this.snaptradeRequestOptions());
+                                const cancelStatus = String((cancelRecord.data as any)?.status || 'UNKNOWN').toUpperCase();
+                                await this.fastify.pg.query(
+                                    `UPDATE positions
+                                     SET exit_requested_at = CURRENT_TIMESTAMP,
+                                         notes = COALESCE(notes, '') || $1,
+                                         updated_at = CURRENT_TIMESTAMP
+                                     WHERE id = $2
+                                       AND execution_status IN ('PENDING_EXIT', 'PENDING_TRIM')`,
+                                    [` [Stale limit exit: broker cancel requested (broker status ${cancelStatus})]`, position.id]
+                                );
+                                summary.stillPending += 1;
+                                summary.orders.push({
+                                    positionId: position.id,
+                                    status: cancelStatus,
+                                    action: 'exit_cancel_requested',
+                                    brokerOrderId: position.broker_exit_order_id,
+                                    brokerTradeId: position.broker_exit_trade_id
+                                });
+                                await TradeRedisService.recordEvent(this.fastify.pg, {
+                                    userId,
+                                    positionId: position.id,
+                                    eventType: 'EXIT_CANCEL_REQUESTED',
+                                    message: `Stale limit exit: broker cancel requested (broker status ${cancelStatus})`,
+                                    metadata: { status: cancelStatus, brokerOrderId: position.broker_exit_order_id }
+                                });
+                                continue;
+                            } catch (cancelErr: any) {
+                                this.fastify.log.warn(`[SnaptradeService] Cancel of stale limit exit failed for position ${position.id}: ${cancelErr.message || String(cancelErr)}`);
+                            }
+                        }
                         await this.fastify.pg.query(
                             `UPDATE positions
                              SET execution_status = 'EXIT_STALE',
@@ -1710,6 +1757,26 @@ export class SnaptradeService {
             position: insertRes.rows[0],
             rawResponse: order.rawResponse
         };
+    }
+
+    /**
+     * Request cancellation of a working broker order. Returns the broker's
+     * view of the order after the cancel request (status may be CANCELED,
+     * CANCEL_PENDING, or EXECUTED if it filled first). Callers must treat this
+     * as a *request*: reconciliation of the outcome stays with the pending
+     * order sync, which already classifies terminal statuses.
+     */
+    async cancelOptionOrder(userId: number, accountId: string, brokerageOrderId: string) {
+        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        const snaptradeAccountId = this.toSnaptradeAccountId(accountId);
+        this.fastify.log.info(`[SnaptradeService] Requesting cancel of order ${brokerageOrderId} on account ${accountId}`);
+        const response = await snaptrade.trading.cancelUserAccountOrder({
+            userId: userIdStr,
+            userSecret,
+            accountId: snaptradeAccountId,
+            brokerage_order_id: brokerageOrderId
+        }, this.snaptradeRequestOptions());
+        return response.data;
     }
 
     async placeOptionOrder(
