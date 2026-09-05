@@ -16,8 +16,11 @@
 #                                            staging<->prod host-port clashes
 #                                            when both run on one Coolify host.
 #   3. frontend exposed via SERVICE_FQDN  -> Coolify assigns a domain + Traefik
-#      instead of a published port           route + Let's Encrypt TLS. Override
-#                                            the domain in the Coolify UI.
+#      instead of a published port           route + Let's Encrypt TLS. The var
+#                                            is SERVICE_FQDN_<SERVICE-NAME>_<PORT>
+#                                            and the name must match the compose
+#                                            service exactly, or the domain is
+#                                            generated but attached to nothing.
 #   4. backend gets extra_hosts           -> keeps OLLAMA_URL host.docker.internal
 #                                            working on a Linux Coolify host.
 #   5. Service NAMES kept identical       -> nginx upstream (trade-staging-backend)
@@ -43,7 +46,14 @@
 #   - Only ONE stack may hold the IBKR client IDs (backend 21/22, engine 23) at a
 #     time — stop the old options-monitor-staging stack before running this one.
 #   - Set all environment variables in the Coolify UI (bulk-paste your .env).
-#   - Grab the deploy webhook UUID + an API token for the GitHub Actions step.
+#     Do NOT set PORT — nginx.conf and the backend healthcheck both hardcode 3001.
+#   - Turn ON "Preserve Repository During Deployment" (Configuration > General).
+#     The db service bind-mounts ./db/schema.sql from the checkout; without this
+#     the path is missing at start and Docker substitutes an empty directory.
+#   - Set the domain on the trade-staging-frontend service in the Coolify UI
+#     (Configuration > Domains). The magic var above generates a sslip.io-style
+#     default; the UI field is what pins your real hostname, and it is also the
+#     version-independent way to get the Traefik router created.
 # =============================================================================
 
 services:
@@ -58,10 +68,13 @@ services:
     # database resource only if you need external access.
     volumes:
       - db-data:/var/lib/postgresql/data
-      # schema.sql only runs on first init (empty data dir). The repo is checked
-      # out by Coolify, so this relative bind mount resolves. If you'd rather let
-      # Coolify manage Postgres as its own resource (with backups), drop this
-      # service and point DATABASE_URL at that resource instead.
+      # schema.sql only runs on first init (empty data dir).
+      # REQUIRES "Preserve Repository During Deployment" (Configuration >
+      # General) to be ON, or the checkout is gone by the time compose starts and
+      # Docker silently creates an empty DIRECTORY at this path — postgres then
+      # fails its init, never goes healthy, and takes the backend down with it.
+      # If you'd rather let Coolify manage Postgres as its own resource (with
+      # backups), drop this service and point DATABASE_URL at that resource.
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     networks:
       - default
@@ -89,7 +102,10 @@ services:
       PAPER_LEGACY_DATABASE_URL: ${PAPER_LEGACY_DATABASE_URL:-}
       REDIS_URL: redis://trade-staging-redis:6379
       JWT_SECRET: ${JWT_SECRET}
-      PORT: ${PORT}
+      # Internal port only. nginx.conf proxies /api to trade-staging-backend:3001
+      # and the healthcheck below probes 3001, so both break if PORT is anything
+      # else — leave it unset in Coolify unless you change nginx.conf too.
+      PORT: ${PORT:-3001}
       N8N_ALERT_WEBHOOK_URL: ${N8N_ALERT_WEBHOOK_URL}
       MARKET_DATA_POLL_INTERVAL: ${MARKET_DATA_POLL_INTERVAL}
       SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS: ${SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS:-60}
@@ -292,15 +308,35 @@ services:
         VITE_APP_BUILD_SHA: ${VITE_APP_BUILD_SHA:-}
         VITE_ENABLE_DEV_TRADING_TESTS: ${VITE_ENABLE_DEV_TRADING_TESTS:-false}
     restart: always
+    # Declares the container port the proxy should route the domain at. No host
+    # `ports:` on purpose — a published host port bypasses domain-based routing.
+    expose:
+      - "80"
     environment:
-      # Coolify magic var: generates a domain + Traefik route + TLS for the
-      # nginx container's port 80. Set the real domain in the Coolify UI (Domains).
+      # Coolify magic var: generates a domain + Traefik route + TLS.
+      #
+      # The identifier between `SERVICE_FQDN_` and the `_80` port suffix MUST be
+      # THIS compose service's name — that is how Coolify decides which container
+      # to attach the generated domain and Traefik router to. The old value here
+      # was `SERVICE_FQDN_FRONTEND_80`, and there is no service named `frontend`:
+      # Coolify minted a domain, bound it to nothing, and reported a successful
+      # deploy while the URL resolved to no backend at all.
+      #
+      # Hyphens are kept rather than converted to underscores: an
+      # underscore-style identifier cannot carry a port suffix (Coolify cannot
+      # tell the name apart from the port), which is exactly the case here.
+      #
       # MUST be map form (key: value), not list form (- KEY) — Coolify merges its
       # own map-form env in, and a list here triggers a non-string-key parse error.
-      SERVICE_FQDN_FRONTEND_80: ""
+      SERVICE_FQDN_TRADE-STAGING-FRONTEND_80: ""
     depends_on:
+      # `service_started`, not `service_healthy`. nginx serves a static SPA and
+      # only needs the backend's DNS name to resolve for `proxy_pass` at config
+      # load. Gating on backend health meant any db hiccup or failing `/ready`
+      # left the frontend container never started — the whole site unreachable
+      # rather than merely degraded.
       trade-staging-backend:
-        condition: service_healthy
+        condition: service_started
     networks:
       - default
     healthcheck:
