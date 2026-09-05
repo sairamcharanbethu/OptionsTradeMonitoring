@@ -17,10 +17,12 @@
 #                                            when both run on one Coolify host.
 #   3. frontend exposed via SERVICE_FQDN  -> Coolify assigns a domain + Traefik
 #      instead of a published port           route + Let's Encrypt TLS. The var
-#                                            is SERVICE_FQDN_<SERVICE-NAME>_<PORT>
-#                                            and the name must match the compose
-#                                            service exactly, or the domain is
-#                                            generated but attached to nothing.
+#                                            is SERVICE_FQDN_<SERVICE_NAME> and
+#                                            the name must match the compose
+#                                            service (hyphens -> underscores), or
+#                                            the domain is generated but attached
+#                                            to nothing. No hyphens in the key:
+#                                            Coolify's validator rejects them.
 #   4. backend gets extra_hosts           -> keeps OLLAMA_URL host.docker.internal
 #                                            working on a Linux Coolify host.
 #   5. Service NAMES kept identical       -> nginx upstream (trade-staging-backend)
@@ -315,20 +317,26 @@ services:
     environment:
       # Coolify magic var: generates a domain + Traefik route + TLS.
       #
-      # The identifier between `SERVICE_FQDN_` and the `_80` port suffix MUST be
-      # THIS compose service's name — that is how Coolify decides which container
-      # to attach the generated domain and Traefik router to. The old value here
-      # was `SERVICE_FQDN_FRONTEND_80`, and there is no service named `frontend`:
-      # Coolify minted a domain, bound it to nothing, and reported a successful
-      # deploy while the URL resolved to no backend at all.
+      # The identifier after `SERVICE_FQDN_` MUST name THIS compose service —
+      # that is how Coolify decides which container to attach the generated
+      # domain and Traefik router to. It was `SERVICE_FQDN_FRONTEND_80`, and
+      # there is no service named `frontend`: Coolify minted a domain, bound it
+      # to nothing, and reported a successful deploy while the URL resolved to
+      # no backend at all.
       #
-      # Hyphens are kept rather than converted to underscores: an
-      # underscore-style identifier cannot carry a port suffix (Coolify cannot
-      # tell the name apart from the port), which is exactly the case here.
+      # Hyphens in the service name become underscores here, and that forces us
+      # to DROP the port suffix. Coolify's docs say to keep the hyphens when you
+      # need a port (`SERVICE_URL_APPWRITE-SERVICE_3000`), but its env-key
+      # validator rejects them outright: "The key must start with a letter or
+      # underscore and may only contain letters, numbers, underscores, and
+      # dots." With underscores a trailing `_80` is unparseable as a port, so it
+      # is omitted — harmless, because nginx listens on 80 and the proxy already
+      # assumes 80 when no port is given. `expose: 80` above is what tells
+      # Coolify the container port.
       #
       # MUST be map form (key: value), not list form (- KEY) — Coolify merges its
       # own map-form env in, and a list here triggers a non-string-key parse error.
-      SERVICE_FQDN_TRADE-STAGING-FRONTEND_80: ""
+      SERVICE_FQDN_TRADE_STAGING_FRONTEND: ""
     depends_on:
       # `service_started`, not `service_healthy`. nginx serves a static SPA and
       # only needs the backend's DNS name to resolve for `proxy_pass` at config
