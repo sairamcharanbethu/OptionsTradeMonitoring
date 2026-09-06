@@ -54,7 +54,8 @@ export class KillSwitchService {
   static async dayOpenPnl(pg: any, scope: KillSwitchScope, userId?: number): Promise<number> {
     if (scope === 'paper') {
       const { rows } = await pg.query(
-        `SELECT COALESCE(SUM((current_price - entry_price) * quantity * 100), 0)::float8 AS pnl
+        `SELECT COALESCE(SUM((current_price - entry_price) * quantity * 100
+                 * CASE WHEN UPPER(COALESCE(entry_action, '')) = 'SELL_TO_OPEN' THEN -1 ELSE 1 END), 0)::float8 AS pnl
            FROM positions
           WHERE paper_account_id = $1
             AND status = ANY($2)
@@ -68,7 +69,8 @@ export class KillSwitchService {
       throw new Error('KillSwitchService: a userId is required for live scope');
     }
     const { rows } = await pg.query(
-      `SELECT COALESCE(SUM((current_price - entry_price) * quantity * 100), 0)::float8 AS pnl
+      `SELECT COALESCE(SUM((current_price - entry_price) * quantity * 100
+               * CASE WHEN UPPER(COALESCE(entry_action, '')) = 'SELL_TO_OPEN' THEN -1 ELSE 1 END), 0)::float8 AS pnl
          FROM positions
         WHERE user_id = $1
           AND status = ANY($2)

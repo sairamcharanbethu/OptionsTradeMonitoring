@@ -377,7 +377,7 @@ def evaluate_gex_wall(
 
     # --- Check 3: CALL_WALL failed breakout + retest -> PUT (momentum) ------
     has_breached_wall = recent_highs > cw or recent_highs >= up_5m
-    lost_wall_on_close = close_p < cw or close_p < up_5m
+    lost_wall_on_close = close_p < cw  # mirrors Check 4; a close under the band but above the wall is not a failed breakout
     if has_breached_wall and lost_wall_on_close and close_p < ema9:
         retest_confirmed = False
         retest_high = cw

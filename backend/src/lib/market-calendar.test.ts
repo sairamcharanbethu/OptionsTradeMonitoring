@@ -1,4 +1,4 @@
-import { getNewYorkMarketState, getUSMarketCloseMinutes, getUSMarketHolidays, parseMarketDate, tradingDaysBetween } from './market-calendar';
+import { getNewYorkMarketState, getUSMarketCloseMinutes, getUSMarketHolidays, parseMarketDate, toExpirationDateKey, tradingDaysBetween } from './market-calendar';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
@@ -40,9 +40,29 @@ async function testEarlyCloseCalendar() {
   assert(getUSMarketCloseMinutes(new Date('2026-08-03T15:00:00.000Z')) === 16 * 60, 'An ordinary session must close at 16:00 ET');
 }
 
+async function testNewYearsOnSaturdayIsNotObserved() {
+  // Jan 1, 2022 was a Saturday; NYSE did not close on Fri Dec 31, 2021.
+  const holidays = getUSMarketHolidays(2022);
+  assert(!holidays.has('2021-12-31'), 'Dec 31 must not be a holiday when New Year\'s Day falls on Saturday');
+  assert(!holidays.has('2022-01-01'), 'Saturday Jan 1 itself is not a trading day to mark');
+  // Jan 1, 2023 was a Sunday: observed Monday Jan 2 as usual.
+  assert(getUSMarketHolidays(2023).has('2023-01-02'), 'Sunday New Year\'s Day must be observed on Monday');
+}
+
+async function testExpirationDateKey() {
+  // node-pg decodes DATE as local midnight; that must read back as the same calendar day on any host TZ.
+  assert(toExpirationDateKey(new Date(2026, 7, 3)) === '2026-08-03', 'Local-midnight DATE must keep its calendar day');
+  assert(toExpirationDateKey(new Date('2026-08-03T00:00:00.000Z')) === '2026-08-03', 'UTC-midnight literal must read in UTC');
+  assert(toExpirationDateKey('2026-08-03T04:00:00.000Z') === '2026-08-03', 'ISO string keeps its date part');
+  assert(toExpirationDateKey('2026-08-03') === '2026-08-03', 'Plain date string passes through');
+  assert(toExpirationDateKey(new Date('invalid')) === '', 'Invalid date yields empty key');
+}
+
 async function runTests() {
   console.log('Running market calendar tests...');
   await testObservedIndependenceDay2026();
+  await testNewYearsOnSaturdayIsNotObserved();
+  await testExpirationDateKey();
   await testHolidayMarketState();
   await testCloseMinuteIsExclusive();
   await testJuly2026TradingDays();

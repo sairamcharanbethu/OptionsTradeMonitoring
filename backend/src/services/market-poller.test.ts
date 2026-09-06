@@ -435,8 +435,12 @@ async function testSyntheticTrailNeedsTwoBreachQuotesBeforeMarketExit() {
 
   await poller.processPositionExitUpdate(position, 1.01, undefined, undefined, undefined, quote);
   assert(submitted.length === 0, 'The first soft trail breach should only arm confirmation');
+  // The same print re-delivered by the other feed (stream + poll) is a replay, not a second quote.
   await poller.processPositionExitUpdate(position, 1.01, undefined, undefined, undefined, quote);
-  assert(submitted.length === 1, `The second trail breach should submit one exit, got ${submitted.length}`);
+  assert(submitted.length === 0, `A replayed identical quote must not confirm the trail stop, got ${submitted.length}`);
+  const secondQuote = { ...quote, bid: 0.99, ask: 1.01, mid: 1.0 };
+  await poller.processPositionExitUpdate(position, 1.0, undefined, undefined, undefined, secondQuote);
+  assert(submitted.length === 1, `The second distinct trail breach should submit one exit, got ${submitted.length}`);
   assert(submitted[0].orderType === 'MARKET' && submitted[0].reason === 'TRAILING_STOP', `Trail breach should submit a MARKET trailing exit, got ${JSON.stringify(submitted[0])}`);
 }
 

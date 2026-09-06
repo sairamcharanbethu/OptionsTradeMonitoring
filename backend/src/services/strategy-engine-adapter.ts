@@ -452,10 +452,16 @@ export class StrategyEngineAdapter {
     source: 'python'
   ): Promise<void> {
     if (Object.keys(signals).length === 0) return;
-    for (const signal of Object.values(signals)) {
-      if (signal.engine_version !== 'signal-only-v2' || signal.execution_enabled !== false) {
-        throw new Error('Rejected strategy snapshot with an invalid signal-only contract');
-      }
+    const invalidLanes = Object.entries(signals)
+      .filter(([, signal]) => signal.engine_version !== 'signal-only-v2' || signal.execution_enabled !== false)
+      .map(([lane]) => lane);
+    if (invalidLanes.length === Object.keys(signals).length) {
+      throw new Error('Rejected strategy snapshot with an invalid signal-only contract');
+    }
+    if (invalidLanes.length > 0) {
+      // One bad lane must not drop the other lanes' valid signals.
+      this.fastify.log.warn(`[StrategyEngineAdapter] Dropping lanes with an invalid signal-only contract: ${invalidLanes.join(', ')}`);
+      signals = Object.fromEntries(Object.entries(signals).filter(([lane]) => !invalidLanes.includes(lane)));
     }
     this.currentHealth = health;
     const snapshotFingerprint = this.hash({ source, signals });

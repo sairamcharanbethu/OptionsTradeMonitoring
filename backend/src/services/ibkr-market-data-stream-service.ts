@@ -302,11 +302,21 @@ export class IbkrMarketDataStreamService extends EventEmitter {
     this.emitQuote(subscription);
   };
 
+  // Informational reqId=-1 notices (farm connection status etc.) that must not
+  // tear the stream down; every other system code is logged and only the
+  // connectivity-loss codes trigger a reconnect.
+  private static readonly INFO_SYSTEM_CODES = new Set([2100, 2101, 2102, 2104, 2106, 2107, 2108, 2119, 2137, 2158, 2168, 2169]);
+  private static readonly CONNECTIVITY_LOSS_CODES = new Set([502, 504, 1100, 1300, 2103, 2105, 2110]);
+
   private readonly onStreamError = (err: any, code: any, reqId: any) => {
-    if (code === 2104 || code === 2106 || code === 2158) return;
+    const numericCode = Number(code);
+    if (IbkrMarketDataStreamService.INFO_SYSTEM_CODES.has(numericCode)) return;
     this.lastError = `IBKR stream error${code ? ` ${code}` : ''}: ${err?.message || String(err)}`;
     this.fastify.log.warn(`[IBKRStream] ${this.lastError}`);
-    if (Number(reqId) === -1 || reqId === undefined || reqId === null) {
+    const systemScoped = Number(reqId) === -1 || reqId === undefined || reqId === null;
+    const connectivityLoss = IbkrMarketDataStreamService.CONNECTIVITY_LOSS_CODES.has(numericCode)
+      || (systemScoped && !Number.isFinite(numericCode));
+    if (systemScoped && connectivityLoss) {
       this.handleDisconnected(this.lastError);
     }
   };

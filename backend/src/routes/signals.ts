@@ -254,7 +254,7 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
 }`;
 
     try {
-      const raw = await new AIService(fastify).askTradingJSON(prompt, userId, 350);
+      const raw = await new AIService(fastify).askTradingJSON(prompt, userId, 350, 15_000);
       const allowedVerdicts = new Set(['ALIGNED', 'MIXED', 'CONFLICTED', 'WAIT']);
       const plain = (value: unknown, fallback: string) => {
         const text = String(value || '').replace(/\s+/g, ' ').trim();

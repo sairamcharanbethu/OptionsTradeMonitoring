@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { toExpirationDateKey } from '../lib/market-calendar';
 import { redis } from '../lib/redis';
 import { isAmbiguousSnapTradeOrderError, isBrokerSyncInProgressError, SnaptradeService } from './snaptrade-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
@@ -541,7 +542,6 @@ export class TradeExecutionService {
          AND symbol = ANY($2::text[])
          AND status IN ('OPEN', 'PENDING_ORDER')
          AND ${this.executionScopeSql(broker)}
-         AND COALESCE(execution_status, '') NOT IN ('PENDING_EXIT', 'PENDING_TRIM')
        ORDER BY created_at DESC`,
       [userId, correlatedSymbols]
     );
@@ -1714,7 +1714,7 @@ export class TradeExecutionService {
   }
 
   private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
-    const dateStr = expiration instanceof Date ? expiration.toISOString().split('T')[0] : expiration.split('T')[0];
+    const dateStr = toExpirationDateKey(expiration);
     const [year, month, day] = dateStr.split('-');
     const yy = year.slice(-2);
     const side = type === 'CALL' ? 'C' : 'P';

@@ -18,11 +18,35 @@ export function parseMarketDate(value: string | Date): Date {
   return new Date(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate());
 }
 
+/**
+ * Normalize an option expiration to 'YYYY-MM-DD'.
+ *
+ * node-pg decodes a Postgres DATE as a JS Date at *local* midnight, so the
+ * local calendar fields are the truth for rows read from the DB; reading them
+ * through UTC or the New York zone rolls the day on a UTC / UTC+ host, which is
+ * how the 0DTE theta stop and flatten silently failed to arm. Dates that are
+ * not at local midnight (e.g. an ISO 'T00:00:00Z' literal) are read in UTC.
+ */
+export function toExpirationDateKey(value: unknown): string {
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) return '';
+    const atLocalMidnight = value.getHours() === 0 && value.getMinutes() === 0 && value.getSeconds() === 0;
+    const y = atLocalMidnight ? value.getFullYear() : value.getUTCFullYear();
+    const m = atLocalMidnight ? value.getMonth() : value.getUTCMonth();
+    const d = atLocalMidnight ? value.getDate() : value.getUTCDate();
+    return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  return String(value ?? '').split('T')[0].slice(0, 10);
+}
+
 export function getUSMarketHolidays(year: number): Set<string> {
   const holidays = new Set<string>();
 
   const add = (m: number, d: number) => {
     let dt = new Date(year, m - 1, d);
+    // NYSE rule: when New Year's Day falls on a Saturday the preceding Friday
+    // (Dec 31) is NOT a holiday.
+    if (dt.getDay() === 6 && m === 1 && d === 1) return;
     if (dt.getDay() === 6) dt = new Date(year, m - 1, d - 1);
     if (dt.getDay() === 0) dt = new Date(year, m - 1, d + 1);
     holidays.add(toMarketDateKey(dt));
@@ -97,7 +121,7 @@ export function getNewYorkDateParts(date: Date = new Date()) {
   const year = Number(get('year'));
   const month = Number(get('month'));
   const day = Number(get('day'));
-  const hour = Number(get('hour'));
+  const hour = Number(get('hour')) % 24; // some ICU builds render midnight as "24"
   const minute = Number(get('minute'));
 
   return {

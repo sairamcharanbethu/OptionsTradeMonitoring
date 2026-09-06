@@ -9,7 +9,7 @@ import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
 import { MarketDataWriteBufferService } from './market-data-write-buffer-service';
-import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
+import { getNewYorkMarketState, getUSMarketCloseMinutes, toExpirationDateKey } from '../lib/market-calendar';
 
 type ExitQuoteContext = {
   bid?: number;
@@ -215,6 +215,10 @@ export class MarketPoller {
     }
   }
 
+  private normalizeExpirationDate(value: any): string {
+    return toExpirationDateKey(value);
+  }
+
   private getNewYorkDateString(date: Date = new Date()): string {
     const parts = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/New_York',
@@ -322,9 +326,7 @@ export class MarketPoller {
   } | null {
     if (String(position.status || '').toUpperCase() !== 'OPEN') return null;
 
-    const expirationDate = position.expiration_date instanceof Date
-      ? this.getNewYorkDateString(position.expiration_date)
-      : String(position.expiration_date || '').split('T')[0];
+    const expirationDate = this.normalizeExpirationDate(position.expiration_date);
     if (expirationDate !== this.getNewYorkDateString(now)) return null;
 
     const enteredAt = this.getThetaStopStartTime(position, startedAtOverride);
@@ -349,9 +351,7 @@ export class MarketPoller {
   } | null {
     if (position.is_simulated
       || String(position.execution_broker || '').toLowerCase() !== 'wealthsimple_snaptrade') return null;
-    const expiration = position.expiration_date instanceof Date
-      ? position.expiration_date.toISOString().slice(0, 10)
-      : String(position.expiration_date || '').split('T')[0];
+    const expiration = this.normalizeExpirationDate(position.expiration_date);
     if (expiration !== this.getNewYorkDateString(now)) return null;
 
     const closeMinutes = getUSMarketCloseMinutes(now);
@@ -964,9 +964,7 @@ export class MarketPoller {
   }
 
   private isPositionExpired(position: any, now: Date = new Date()): boolean {
-    const expiration = position?.expiration_date instanceof Date
-      ? position.expiration_date.toISOString().slice(0, 10)
-      : String(position?.expiration_date || '').slice(0, 10);
+    const expiration = this.normalizeExpirationDate(position?.expiration_date);
     return /^\d{4}-\d{2}-\d{2}$/.test(expiration)
       && expiration < this.getNewYorkDateString(now);
   }
@@ -1124,6 +1122,9 @@ export class MarketPoller {
     const softPremiumStop = Number(bufferedStopLossTrigger ?? position.stop_loss_trigger);
     const hardPremiumStop = Number(Math.max(entryPrice * 0.65, softPremiumStop * 0.85).toFixed(2));
     const softStopConfirmationMs = 10_000;
+    // The stream and the poll path can both deliver the same tick; a "second
+    // confirming quote" must be a distinct print, not a replay of the same one.
+    const quoteFingerprint = [price, quoteContext.bid ?? '', quoteContext.ask ?? '', quoteContext.last ?? ''].join('|');
     const premiumSoftStopHit = !isShortPremiumPosition
       && engineResult.triggered
       && engineResult.triggerType === 'STOP_LOSS'
@@ -1201,7 +1202,8 @@ export class MarketPoller {
         const existingArmedAt = analysis.smartStopWarning?.armedAt || analysis.smartStopWarning?.triggeredAt;
         const armedAtMs = existingArmedAt ? new Date(existingArmedAt).getTime() : NaN;
         const confirmedByTime = Number.isFinite(armedAtMs) && now - armedAtMs >= softStopConfirmationMs;
-        const belowStopCount = Number(analysis.smartStopWarning?.belowStopCount || 0) + 1;
+        const distinctQuote = analysis.smartStopWarning?.lastBelowQuote !== quoteFingerprint;
+        const belowStopCount = Number(analysis.smartStopWarning?.belowStopCount || 0) + (distinctQuote ? 1 : 0);
         const confirmedByQuotes = belowStopCount >= 2;
 
         if (underlyingStopBroken || confirmedByTime || confirmedByQuotes) {
@@ -1222,6 +1224,7 @@ export class MarketPoller {
             underlyingPrice: underlyingPrice ?? null,
             underlyingStop,
             belowStopCount,
+            lastBelowQuote: quoteFingerprint,
             armedAt: Number.isFinite(armedAtMs) ? existingArmedAt : new Date(now).toISOString(),
             triggeredAt: new Date(now).toISOString()
           };
@@ -1236,6 +1239,7 @@ export class MarketPoller {
             underlyingPrice: underlyingPrice ?? null,
             underlyingStop,
             belowStopCount,
+            lastBelowQuote: quoteFingerprint,
             armedAt: Number.isFinite(armedAtMs) ? existingArmedAt : new Date(now).toISOString(),
             confirmationSeconds: softStopConfirmationMs / 1000
           };

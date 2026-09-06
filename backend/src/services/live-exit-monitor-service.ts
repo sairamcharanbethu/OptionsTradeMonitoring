@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { redis } from '../lib/redis';
+import { toExpirationDateKey } from '../lib/market-calendar';
 
 type LiveExitHealth = {
   status: 'UP' | 'DEGRADED' | 'DOWN';
@@ -244,15 +245,7 @@ export class LiveExitMonitorService {
   }
 
   private constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
-    let dateStr = '';
-    if (expiration instanceof Date) {
-      const year = expiration.getFullYear();
-      const month = (expiration.getMonth() + 1).toString().padStart(2, '0');
-      const day = expiration.getDate().toString().padStart(2, '0');
-      dateStr = `${year}-${month}-${day}`;
-    } else {
-      dateStr = expiration.split('T')[0];
-    }
+    const dateStr = toExpirationDateKey(expiration);
 
     const parts = dateStr.split('-');
     if (parts.length !== 3) return symbol.toUpperCase();

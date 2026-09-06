@@ -119,12 +119,27 @@ def _enforce_entry_gates(
                 f"${float(flip):.2f} — whipsaw no-man's-land"
             )
 
+    # The IBKR open-interest fallback derives gamma_regime from the sign of net
+    # GEX alone ("Range" iff net_gex >= 0). That is not the provider's pin flag,
+    # and letting it hard-gate blocked every momentum setup on every
+    # positive-gamma day the fallback was active. Warn instead of gate.
+    local_oi_proxy = str(gex.get("source") or "") == "ibkr-local-oi-model"
     if (
         strategy in MOMENTUM_STRATEGIES
         and str(gex.get("regime")) == "Positive"
         and str(gex.get("gamma_regime")) == "Range"
+        and not local_oi_proxy
     ):
         gates.append(f"{strategy} momentum setup blocked in Positive/Range pin regime")
+    elif (
+        strategy in MOMENTUM_STRATEGIES
+        and local_oi_proxy
+        and str(gex.get("regime")) == "Positive"
+    ):
+        result.setdefault("warnings", []).append(
+            "positive net GEX from local OI model; Positive/Range pin gate not "
+            "evaluated (sign-only proxy, not a provider pin regime)"
+        )
     elif strategy in MOMENTUM_STRATEGIES and (
         not gex.get("regime") or not gex.get("gamma_regime")
     ):
