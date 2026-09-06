@@ -15,6 +15,17 @@
 #      backend                               internal network; also avoids
 #                                            staging<->prod host-port clashes
 #                                            when both run on one Coolify host.
+#   2b. NO `networks:` at all, per-service  -> Coolify creates and owns the
+#      or top-level                           resource network, joins every
+#                                            service to it, and joins the
+#                                            coolify-proxy to it so Traefik can
+#                                            reach the frontend. Declaring our
+#                                            own `default` put containers on a
+#                                            SECOND network and made which one
+#                                            Traefik should dial ambiguous.
+#                                            Service-name DNS is unaffected:
+#                                            nginx -> trade-staging-backend,
+#                                            REDIS_URL and db all still resolve.
 #   3. frontend `expose: 80`, no host     -> the domain is assigned to the
 #      `ports:`                              frontend service in the Coolify UI
 #                                            (Configuration > Domains); Coolify
@@ -81,8 +92,6 @@ services:
       # If you'd rather let Coolify manage Postgres as its own resource (with
       # backups), drop this service and point DATABASE_URL at that resource.
       - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
-    networks:
-      - default
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
@@ -141,8 +150,6 @@ services:
         condition: service_healthy
       trade-staging-redis:
         condition: service_started
-    networks:
-      - default
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 30s
@@ -153,8 +160,6 @@ services:
     image: redis:alpine
     restart: always
     # No host `ports:` — reached internally as trade-staging-redis:6379.
-    networks:
-      - default
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -198,8 +203,6 @@ services:
       - "45"
       - --auth-error-interval
       - "10"
-    networks:
-      - default
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') != 'error' and time.time()-float(h['updated_at']) < 45\""]
       interval: 10s
@@ -294,8 +297,6 @@ services:
         condition: service_started
       trade-staging-backend:
         condition: service_started
-    networks:
-      - default
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/health.json')); assert h.get('status') != 'error' and h.get('connected') is True and time.time()-float(h['updated_at']) < 10\""]
       interval: 5s
@@ -331,19 +332,11 @@ services:
       # rather than merely degraded.
       trade-staging-backend:
         condition: service_started
-    networks:
-      - default
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
-
-networks:
-  # Single Coolify-managed network. All services join it and resolve each other
-  # by service name. IB Gateway, once added to this stack (or reachable via the
-  # address you set for IBKR_HOST), lives here too — no external network needed.
-  default:
 
 volumes:
   db-data:
