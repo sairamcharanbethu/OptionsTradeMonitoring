@@ -9,7 +9,6 @@ export const QUERY_KEYS = {
     marketStatus: ['marketStatus'],
     briefing: ['briefing'],
     signals: ['signals'],
-    liveMacroMetrics: ['liveMacroMetrics'],
     strategyState: ['strategyState'],
     strategyHistory: ['strategyHistory'],
     tradeUsage: ['tradeUsage'],
@@ -69,14 +68,6 @@ export function useStrategyHistory(refreshInterval = 15000) {
 }
 
 
-export function useLiveMacroMetrics(refreshInterval = 15000) {
-    return useQuery({
-        queryKey: QUERY_KEYS.liveMacroMetrics,
-        queryFn: () => api.getLiveMacroMetrics(),
-        refetchInterval: refreshInterval,
-        staleTime: 10000,
-    });
-}
 
 export function useClosedPositions(page: number = 1, limit: number = 10) {
     return useQuery({

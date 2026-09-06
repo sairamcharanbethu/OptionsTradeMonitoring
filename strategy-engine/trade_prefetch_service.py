@@ -16,14 +16,19 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ib_insync import IB, Stock, Ticker, util
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ib_insync import Ticker
+else:  # ib_insync is only needed by the live process; tests and the UW replay import this module without it.
+    Ticker = Any  # type: ignore[misc,assignment]
 
 try:
     import redis as redis_client
 except ImportError:  # Local tests can run without the optional event transport.
     redis_client = None
 
-from ibkr_0dte_options import (
+from ibkr_option_snapshot import (
     DATA_TYPES,
     DEFAULT_CURRENCY,
     DEFAULT_EXCHANGE,
@@ -494,6 +499,8 @@ def _policy_option_expiry_dte(policy: dict[str, Any] | None, default: int) -> in
 class TradePrefetcher:
     def __init__(self, args: argparse.Namespace):
         self.args = args
+        from ib_insync import IB  # lazy: keep module import free of ib_insync
+
         self.ib = IB()
         self.stocks: dict[str, Any] = {}
         self.tickers: dict[str, Ticker] = {}
@@ -657,6 +664,8 @@ class TradePrefetcher:
         )
         self.ib.reqMarketDataType(DATA_TYPES[self.args.data_type])
         for symbol in self.args.symbols:
+            from ib_insync import Stock
+
             stock = Stock(symbol, DEFAULT_EXCHANGE, DEFAULT_CURRENCY)
             self.ib.qualifyContracts(stock)
             self.stocks[symbol] = stock
@@ -1709,6 +1718,8 @@ def main() -> None:
             "--zerogex-minute-bucket-grace-seconds must be between 0 and 60"
         )
     args.symbols = [symbol.upper() for symbol in args.symbols]
+    from ib_insync import util
+
     util.patchAsyncio()
     TradePrefetcher(args).run()
 

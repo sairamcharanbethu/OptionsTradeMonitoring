@@ -94,7 +94,7 @@ async function main() {
 
   console.log('\nParity:', JSON.stringify(res.parity));
   console.log('\nNOTE: PnL is GROSS — the replay does not subtract commissions. On 1–5');
-  console.log('contract 0DTE, commissions are a meaningful haircut; judge edge accordingly.');
+  console.log('contract short-dated and day-traded; judge edge net of the modeled spread.');
 
   await pool.end();
 }

@@ -8,3 +8,5 @@ frontend/node_modules
 frontend/dist
 strategy-engine/uw_cache/
 strategy-engine/uw_results/
+__pycache__/
+*.pyc

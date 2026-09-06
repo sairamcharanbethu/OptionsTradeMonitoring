@@ -24,7 +24,7 @@ export function parseMarketDate(value: string | Date): Date {
  * node-pg decodes a Postgres DATE as a JS Date at *local* midnight, so the
  * local calendar fields are the truth for rows read from the DB; reading them
  * through UTC or the New York zone rolls the day on a UTC / UTC+ host, which is
- * how the 0DTE theta stop and flatten silently failed to arm. Dates that are
+ * how the same-day theta stop and flatten silently failed to arm. Dates that are
  * not at local midnight (e.g. an ISO 'T00:00:00Z' literal) are read in UTC.
  */
 export function toExpirationDateKey(value: unknown): string {

@@ -307,7 +307,7 @@ export class RiskDecisionService {
   /**
    * Same-direction cap: independent setups (and manual entries) can each add a
    * same-direction SPY position; without this only the pooled SPY/QQQ count
-   * limited how many long-delta (or short-delta) 0DTE positions stacked up.
+   * limited how many long-delta (or short-delta) short-dated positions stacked up.
    */
   static forSameDirectionExposure(
     current: number,

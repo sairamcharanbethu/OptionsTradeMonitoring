@@ -1,5 +1,5 @@
 /**
- * Scheduled macro events that a 0DTE desk does not trade into.
+ * Scheduled macro events that a short-dated options desk does not trade into.
  *
  * Built-in dates are the published 2026 schedules (Federal Reserve FOMC
  * calendar; BLS CPI and Employment Situation release schedules). Operators can

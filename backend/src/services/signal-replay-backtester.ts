@@ -823,7 +823,7 @@ export class SignalReplayBacktester {
 
     try {
       const prompt = [
-        'You are reviewing a research-only counterfactual replay of blocked 0DTE options candidates.',
+        'You are reviewing a research-only counterfactual replay of blocked short-dated options candidates.',
         'Do not recommend live execution, automatic gate changes, or lowering a blocker from this sample alone.',
         'Assess whether the evidence suggests keeping the blocker, researching a narrower exception, or collecting more data.',
         'Return JSON with exactly: verdict (KEEP_BLOCKED, RESEARCH_FILTER, or INSUFFICIENT_EVIDENCE), analysis (concise evidence-based paragraph), recommendations (array of short strings).',

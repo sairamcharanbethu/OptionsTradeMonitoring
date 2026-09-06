@@ -456,46 +456,6 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
     }
   });
 
-  fastify.get('/macro', {
-    schema: {
-      tags: ['Signals'],
-      summary: 'Get live macro metrics',
-      description: 'Fetch the current macro snapshot used by the scanner scoring guards.',
-      security: [{ bearerAuth: [] }],
-      response: {
-        200: {
-          type: 'object',
-          additionalProperties: true,
-          properties: {
-            generatedAt: { type: 'string', format: 'date-time' },
-            vixQuote: { type: 'number', nullable: true },
-            vixChangePercent: { type: 'number', nullable: true },
-            vix3mQuote: { type: 'number', nullable: true },
-            vixTermStructure: { type: 'object', nullable: true, additionalProperties: true },
-            tenYearYield: { type: 'number', nullable: true },
-            tenYearChangePercent: { type: 'number', nullable: true },
-            tenYearChangeBps: { type: 'number', nullable: true },
-            dxy: { type: 'object', nullable: true, additionalProperties: true },
-            oil: { type: 'object', nullable: true, additionalProperties: true },
-            gold: { type: 'object', nullable: true, additionalProperties: true },
-            assessments: { type: 'object', nullable: true, additionalProperties: true }
-          }
-        }
-      }
-    }
-  }, async (request, reply) => {
-    try {
-      const scanner = (fastify as any).scanner;
-      if (!scanner?.getCurrentMacroSnapshot) {
-        return (reply as any).code(503).send({ error: 'Scanner service not initialized' });
-      }
-      return scanner.getCurrentMacroSnapshot();
-    } catch (err: any) {
-      fastify.log.error(err);
-      return (reply as any).code(500).send({ error: err.message || 'Failed to fetch live macro metrics' });
-    }
-  });
-
   fastify.get('/strategy-state', {
     schema: {
       tags: ['Signals'],
@@ -581,7 +541,7 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
         }
         const scanner = (fastify as any).scanner;
         if (!scanner) {
-          return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
+          return (reply as any).code(500).send({ error: 'Execution service not initialized' });
         }
 
         const executionResult = await scanner.executeSignalForUser(userId, id);
@@ -799,7 +759,7 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
       const { id: userId } = (request as any).user;
       const scanner = (fastify as any).scanner;
       if (!scanner) {
-        return (reply as any).code(500).send({ error: 'Scanner service not initialized' });
+        return (reply as any).code(500).send({ error: 'Execution service not initialized' });
       }
       const health = await scanner.runHealthCheck(userId);
       return health;

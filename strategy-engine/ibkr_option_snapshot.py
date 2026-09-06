@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Read-only IBKR 0DTE option snapshot for candidate contract selection.
+"""Read-only IBKR option-chain snapshot for candidate contract selection.
+
+Shared helpers (contract builder, chain/expiry/strike selection) are imported by
+trade_prefetch_service; run directly for a quick terminal look at a chain.
 
 Default use:
-    python3 ibkr_0dte_options.py
-    python3 ibkr_0dte_options.py --data-type delayed-frozen
-    python3 ibkr_0dte_options.py --expiry 20260709 --underlying SPY
+    python3 ibkr_option_snapshot.py
+    python3 ibkr_option_snapshot.py --data-type delayed-frozen
+    python3 ibkr_option_snapshot.py --expiry 20260709 --underlying SPY
 """
 
 from __future__ import annotations
@@ -15,7 +18,12 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ib_insync import IB, Option, Stock, util
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from ib_insync import Option
+else:  # lazy: importing this module must not require ib_insync (tests / UW replay)
+    Option = Any  # type: ignore[misc,assignment]
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4001
@@ -111,6 +119,8 @@ def _select_strikes(strikes: list[float], spot: float, count: int) -> tuple[list
 
 
 def _contract(symbol: str, expiry: str, strike: float, right: str, trading_class: str) -> Option:
+    from ib_insync import Option
+
     return Option(
         symbol=symbol,
         lastTradeDateOrContractMonth=expiry,
@@ -154,7 +164,7 @@ def _summarize_ticker(label: str, ticker: Any) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch compact IBKR 0DTE option candidates")
+    parser = argparse.ArgumentParser(description="Fetch compact IBKR option-chain candidates")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--client-id", type=int, default=DEFAULT_CLIENT_ID)
@@ -168,6 +178,8 @@ def main() -> None:
         help="IBKR market data type. Use delayed-frozen outside regular hours if needed.",
     )
     args = parser.parse_args()
+
+    from ib_insync import IB, Stock
 
     symbol = args.underlying.upper()
     ib = IB()
@@ -193,7 +205,7 @@ def main() -> None:
 
         print(
             f"IBKR {symbol} spot {_fmt(spot)} expiry {expiry} "
-            f"{'0DTE' if is_0dte else 'NOT_0DTE'} chain {chain.tradingClass}/{chain.exchange} "
+            f"{'same-day' if is_0dte else 'multi-day'} chain {chain.tradingClass}/{chain.exchange} "
             f"data {args.data_type}"
         )
         for ticker in sorted(
@@ -208,5 +220,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from ib_insync import util
+
     util.patchAsyncio()
     main()

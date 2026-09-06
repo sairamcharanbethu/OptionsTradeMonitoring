@@ -29,7 +29,7 @@ export class StrategyLifecycleManager {
   }): Promise<any> {
     const scanner = (this.fastify as any).scanner;
     if (!scanner?.executeSignalForUser) {
-      throw new Error('scanner execution service unavailable');
+      throw new Error('signal execution service unavailable');
     }
     await input.assertExecutable(input.signalId);
     // Quantity is bounded downstream by the engine's planned_contracts (debit

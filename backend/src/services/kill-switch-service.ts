@@ -49,7 +49,7 @@ export class KillSwitchService {
   }
 
   // Unrealized P&L of positions that still carry exposure, at their last recorded
-  // mark. On 0DTE the open drawdown IS the risk — a halt that only counts realized
+  // mark. On short-dated, day-traded options the open drawdown IS the risk — a halt that only counts realized
   // P&L reports "fine" while the account bleeds in open premium.
   static async dayOpenPnl(pg: any, scope: KillSwitchScope, userId?: number): Promise<number> {
     if (scope === 'paper') {

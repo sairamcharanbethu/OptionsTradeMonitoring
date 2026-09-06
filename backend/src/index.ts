@@ -971,8 +971,9 @@ const start = async () => {
     const poller = new MarketPoller(fastify);
     fastify.decorate('poller', poller);
 
-    const { SignalScannerService } = await import('./services/signal-scanner-service');
-    const scanner = new SignalScannerService(fastify);
+    // Execution shim + status probes (the legacy scanner itself is retired).
+    const { SignalExecutionService } = await import('./services/signal-execution-service');
+    const scanner = new SignalExecutionService(fastify);
     fastify.decorate('scanner', scanner);
 
     const { StrategyEngineAdapter } = await import('./services/strategy-engine-adapter');
@@ -1207,7 +1208,7 @@ const start = async () => {
             status: 'DEGRADED',
             enabled: false,
             marketOpen: false,
-            error: 'Scanner health check timed out'
+            error: 'Execution service status check timed out'
           })
         ),
         withTimeout(

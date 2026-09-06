@@ -51,7 +51,7 @@ export class StrategyEngineAdapter {
   private lastEntryBlock: { halted: boolean; reason: string | null } | null = null;
   // Live entries stay disabled until the exit monitor, order watchdog, and broker
   // sync loops are running. The adapter starts before them (to publish IBKR policy
-  // early), and an autonomous 0DTE entry must never fire while nothing is watching
+  // early), and an autonomous short-dated entry must never fire while nothing is watching
   // its exit.
   private liveEntriesReady = false;
   private lifecycleManager: StrategyLifecycleManager;

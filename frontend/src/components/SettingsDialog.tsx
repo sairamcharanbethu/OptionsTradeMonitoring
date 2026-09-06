@@ -23,8 +23,6 @@ const DEFAULT_AI_PROVIDER = 'openrouter';
 const DEFAULT_AI_MODEL = 'deepseek/deepseek-chat';
 const DEFAULT_IBKR_LIVE_PORT = '4003';
 const DEFAULT_IBKR_PAPER_PORT = '4004';
-const SUPPORTED_DAY_TRADING_SYMBOLS = ['QQQ', 'SPY'] as const;
-type DayTradingSymbol = typeof SUPPORTED_DAY_TRADING_SYMBOLS[number];
 
 function formatAccountBalance(account: any) {
     const fallbackBalance = Array.isArray(account?.balances)
@@ -53,17 +51,6 @@ function defaultIbkrPort(mode: string) {
     return normalizeIbkrGatewayMode(mode) === 'paper' ? DEFAULT_IBKR_PAPER_PORT : DEFAULT_IBKR_LIVE_PORT;
 }
 
-function parseDayTradingSymbols(value?: string): DayTradingSymbol[] {
-    const normalized = String(value || '')
-        .split(',')
-        .map(symbol => symbol.trim().toUpperCase())
-        .filter((symbol): symbol is DayTradingSymbol => SUPPORTED_DAY_TRADING_SYMBOLS.includes(symbol as DayTradingSymbol));
-    return normalized.length > 0 ? Array.from(new Set(normalized)) : [...SUPPORTED_DAY_TRADING_SYMBOLS];
-}
-
-function formatDayTradingSymbols(symbols: DayTradingSymbol[]) {
-    return symbols.join(',');
-}
 
 function configNeedsAttention(status: RuntimeConfigItem['status']) {
     return status === 'missing' || status === 'attention';
@@ -208,7 +195,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
     // Day Trading State
     const [dayTradingEnabled, setDayTradingEnabled] = useState(true);
-    const [dayTradingSymbols, setDayTradingSymbols] = useState('SPY');
     const [strategyMaxTotalDebitDollars, setStrategyMaxTotalDebitDollars] = useState('500');
     const [strategyPreferredContracts, setStrategyPreferredContracts] = useState('1');
     const [strategyMaxRiskPerTradeDollars, setStrategyMaxRiskPerTradeDollars] = useState('50');
@@ -217,10 +203,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [strategyMultiDayMaxHoldMinutes, setStrategyMultiDayMaxHoldMinutes] = useState('45');
     const [paperTrailingStopPct, setPaperTrailingStopPct] = useState('15');
     const [dailyLossLimitDollars, setDailyLossLimitDollars] = useState('');
-    const [strikeOffset, setStrikeOffset] = useState('0');
-    const [minSignalScore, setMinSignalScore] = useState('70');
-    const [tradingStartTime, setTradingStartTime] = useState('09:30');
-    const [tradingCutoffTime, setTradingCutoffTime] = useState('16:00');
     const [discordAlertsEnabled, setDiscordAlertsEnabled] = useState(false);
     const [discordWebhookUrl, setDiscordWebhookUrl] = useState('');
     const [dayTradingAiEnabled, setDayTradingAiEnabled] = useState(true);
@@ -233,7 +215,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [maxPremiumRiskDollars, setMaxPremiumRiskDollars] = useState('500');
     const [maxCorrelatedPositions, setMaxCorrelatedPositions] = useState('3');
     const [shadowTradingEnabled, setShadowTradingEnabled] = useState(false);
-    const [expiryMode, setExpiryMode] = useState('adaptive');
     const [orderType, setOrderType] = useState('LIMIT');
     const [entrySlippagePct, setEntrySlippagePct] = useState('3');
     const [takeProfitPct, setTakeProfitPct] = useState('');
@@ -270,7 +251,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [snaptradeCheckingAccess, setSnaptradeCheckingAccess] = useState(false);
     const [snaptradeResettingAccess, setSnaptradeResettingAccess] = useState(false);
     const selectedSnaptradeAccount = snaptradeAccounts.find((account: any) => account.id === snaptradeTradingAccountId);
-    const enabledDayTradingSymbols = parseDayTradingSymbols(dayTradingSymbols);
     const wealthsimpleMissingItems = [
         snaptradeClientId ? null : 'SnapTrade client ID',
         snaptradeConsumerKey ? null : 'SnapTrade consumer key',
@@ -351,7 +331,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setMaxPremiumRiskDollars(data.max_premium_risk_dollars || '500');
             setMaxCorrelatedPositions(data.max_correlated_positions || '3');
             setShadowTradingEnabled(data.shadow_trading_enabled === 'true');
-            setExpiryMode(data.day_trading_expiry_mode || 'adaptive');
             setOrderType('LIMIT');
             setEntrySlippagePct(data.entry_slippage_pct || '3');
             setTakeProfitPct(data.take_profit_pct || '');
@@ -364,7 +343,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
 
             // Load Day Trading settings
             setDayTradingEnabled(data.day_trading_enabled !== 'false');
-            setDayTradingSymbols(data.day_trading_symbols || 'SPY');
             setStrategyMaxTotalDebitDollars(data.strategy_max_total_debit_dollars || '500');
             setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
             setStrategyMaxRiskPerTradeDollars(data.strategy_max_risk_per_trade_dollars || '500');
@@ -373,10 +351,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setStrategyMultiDayMaxHoldMinutes(data.strategy_multi_day_max_hold_minutes || '45');
             setPaperTrailingStopPct(data.paper_trailing_stop_pct || '15');
             setDailyLossLimitDollars(data.daily_loss_limit_dollars || '');
-            setStrikeOffset(data.strike_offset || '0');
-            setMinSignalScore(data.min_signal_score || '70');
-            setTradingStartTime(data.trading_start_time || '09:30');
-            setTradingCutoffTime(data.trading_cutoff_time || '16:00');
             setDiscordAlertsEnabled(data.discord_alerts_enabled === 'true');
             setDiscordWebhookUrl(data.discord_webhook_url || '');
             setDayTradingAiEnabled(data.day_trading_ai_enabled !== 'false');
@@ -442,19 +416,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
         const nextMode = normalizeIbkrGatewayMode(value);
         setIbkrGatewayMode(nextMode);
         setIbkrPort(defaultIbkrPort(nextMode));
-    }
-
-    function handleDayTradingSymbolToggle(symbol: DayTradingSymbol, checked: boolean) {
-        const current = parseDayTradingSymbols(dayTradingSymbols);
-        const next = checked
-            ? Array.from(new Set([...current, symbol]))
-            : current.filter(item => item !== symbol);
-        if (next.length === 0) {
-            alert('Enable at least one day-trading symbol.');
-            return;
-        }
-        const sorted = SUPPORTED_DAY_TRADING_SYMBOLS.filter(item => next.includes(item));
-        setDayTradingSymbols(formatDayTradingSymbols(sorted));
     }
 
     async function saveSnaptradeCredentials() {
@@ -589,11 +550,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     }
 
     async function handleSaveSettings() {
-        const normalizedSymbols: DayTradingSymbol[] = ['SPY'];
-        if (normalizedSymbols.length === 0) {
-            alert('Enable at least one day-trading symbol.');
-            return;
-        }
         setSaving(true);
         try {
             const settingsPayload: Record<string, string> = {
@@ -617,7 +573,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 max_premium_risk_dollars: maxPremiumRiskDollars,
                 max_correlated_positions: maxCorrelatedPositions,
                 shadow_trading_enabled: shadowTradingEnabled ? 'true' : 'false',
-                day_trading_expiry_mode: expiryMode,
                 order_type: 'LIMIT',
                 entry_slippage_pct: entrySlippagePct,
                 take_profit_pct: takeProfitPct,
@@ -627,11 +582,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 autonomous_live_entry_enabled: autonomousLiveEntryEnabled && autonomousLiveEntryReady ? 'true' : 'false',
                 live_trading_acknowledged: liveTradingAcknowledged ? 'true' : 'false',
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
-                day_trading_symbols: formatDayTradingSymbols(normalizedSymbols),
-                strike_offset: strikeOffset,
-                min_signal_score: minSignalScore,
-                trading_start_time: tradingStartTime,
-                trading_cutoff_time: tradingCutoffTime,
                 discord_alerts_enabled: discordAlertsEnabled ? 'true' : 'false',
                 discord_webhook_url: discordWebhookUrl,
                 day_trading_ai_enabled: dayTradingAiEnabled ? 'true' : 'false',
@@ -862,58 +812,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        <div className="hidden">
-                                            <div className="flex items-center justify-between gap-3">
-                                                <div>
-                                                    <Label>Trading Symbols</Label>
-                                                    <p className="mt-1 text-[10px] text-muted-foreground">
-                                                        Admin-only global scanner universe.
-                                                    </p>
-                                                </div>
-                                                {!isAdmin && <Badge variant="secondary" className="text-[10px]">Read-only</Badge>}
-                                            </div>
-                                            <div className="grid gap-2 sm:grid-cols-2">
-                                                {SUPPORTED_DAY_TRADING_SYMBOLS.map(symbol => (
-                                                    <div key={symbol} className="flex items-center justify-between rounded-md border bg-background/70 px-3 py-2">
-                                                        <Label htmlFor={`dt-symbol-${symbol}`} className="text-sm font-semibold">{symbol}</Label>
-                                                        <Switch
-                                                            id={`dt-symbol-${symbol}`}
-                                                            checked={enabledDayTradingSymbols.includes(symbol)}
-                                                            onCheckedChange={(checked) => handleDayTradingSymbolToggle(symbol, checked)}
-                                                            disabled={!isAdmin}
-                                                        />
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-
-                                        <div className="hidden">
-                                            <Label htmlFor="dtMinScore">Minimum Setup Score</Label>
-                                            <Input
-                                                id="dtMinScore"
-                                                type="number"
-                                                value={minSignalScore}
-                                                onChange={(e) => setMinSignalScore(e.target.value)}
-                                                placeholder="70"
-                                            />
-                                        </div>
-
-                                        <div className="hidden">
-                                            <Label htmlFor="dtStrikeOffset">Options Strike Offset</Label>
-                                            <Select value={strikeOffset} onValueChange={setStrikeOffset}>
-                                                <SelectTrigger>
-                                                    <SelectValue placeholder="Select Offset" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="-2">ITM 2 Strikes (-2)</SelectItem>
-                                                    <SelectItem value="-1">ITM 1 Strike (-1)</SelectItem>
-                                                    <SelectItem value="0">At the Money (0)</SelectItem>
-                                                    <SelectItem value="1">OTM 1 Strike (+1)</SelectItem>
-                                                    <SelectItem value="2">OTM 2 Strikes (+2)</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-
                                         <div className="grid gap-2">
                                             <Label htmlFor="strategyMaxDebit">Strategy Max Total Debit ($)</Label>
                                             <Input
@@ -1024,26 +922,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             </div>
                                         </div>
 
-                                        <div className="hidden">
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="dtStartTime">Start ET</Label>
-                                                <Input
-                                                    id="dtStartTime"
-                                                    type="time"
-                                                    value={tradingStartTime}
-                                                    onChange={(e) => setTradingStartTime(e.target.value)}
-                                                />
-                                            </div>
-                                            <div className="grid gap-2">
-                                                <Label htmlFor="dtCutoffTime">Cutoff ET</Label>
-                                                <Input
-                                                    id="dtCutoffTime"
-                                                    type="time"
-                                                    value={tradingCutoffTime}
-                                                    onChange={(e) => setTradingCutoffTime(e.target.value)}
-                                                />
-                                            </div>
-                                        </div>
                                     </div>
                                 </section>
 
@@ -1129,30 +1007,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     </p>
                                                 )}
                                             </div>
-                                            {isAdmin && (
-                                                <div className="hidden">
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <Label htmlFor="mcpTradingEnabled" className="flex flex-wrap items-center gap-2">
-                                                            MCP Trading Endpoint
-                                                            {mcpTradingEnabled ? (
-                                                                <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
-                                                            ) : (
-                                                                <Badge variant="secondary" className="h-5 text-[10px]">Disabled</Badge>
-                                                            )}
-                                                        </Label>
-                                                        <Switch
-                                                            id="mcpTradingEnabled"
-                                                            checked={mcpTradingEnabled}
-                                                            onCheckedChange={setMcpTradingEnabled}
-                                                        />
-                                                    </div>
-                                                    <p className={`text-[10px] ${mcpTradingEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
-                                                        {mcpTradingEnabled
-                                                            ? 'JWT-authenticated MCP clients can reach the option trading tools.'
-                                                            : 'Public MCP requests are blocked before auth and trade validation.'}
-                                                    </p>
-                                                </div>
-                                            )}
                                         </div>
                                     </div>
 
@@ -1214,21 +1068,6 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </div>
                                     </div>
 
-                                    <div className="hidden">
-                                        <div>
-                                            <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Expiry policy</h5>
-                                            <p className="text-[10px] text-muted-foreground">Legacy scanner setting. The autonomous engine's expiry is controlled by "Option Expiry (min DTE)" above.</p>
-                                        </div>
-                                        <Select value={expiryMode} onValueChange={setExpiryMode}>
-                                            <SelectTrigger><SelectValue /></SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="adaptive">Adaptive: 0DTE before 1 PM, 1DTE after</SelectItem>
-                                                <SelectItem value="0dte">Always 0DTE</SelectItem>
-                                                <SelectItem value="1dte">Always 1DTE</SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entry protection</h5>
@@ -1239,8 +1078,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <Label>Order type</Label>
                                                 <div className="rounded-md border bg-background/70 px-3 py-2 text-sm font-medium">Protected limit only</div>
                                             </div>
-                                            <div className="hidden">
-                                                <Label htmlFor="entrySlippagePct">Legacy signal move tolerance (%)</Label>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="entrySlippagePct">Entry limit fallback offset (%)</Label>
                                                 <Input
                                                     id="entrySlippagePct"
                                                     type="number"
@@ -1249,7 +1088,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     value={entrySlippagePct}
                                                     onChange={(e) => setEntrySlippagePct(e.target.value)}
                                                 />
-                                                <p className="text-[10px] text-muted-foreground">This does not replace the live protected-limit and debit checks.</p>
+                                                <p className="text-[10px] text-muted-foreground">Offset above the signal mark used to seed the limit before the live protected-limit check replaces it. Does not bypass the protected-limit or debit checks.</p>
                                             </div>
                                         </div>
                                     </div>
@@ -1335,10 +1174,10 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     </div>
                                 </section>
 
-                                <section className="hidden">
+                                <section className="rounded-lg border bg-card p-4 space-y-4">
                                     <div className="flex items-center justify-between">
                                         <Label htmlFor="dtAiEnabled" className="flex items-center gap-2">
-                                            Enable AI Coach Commentary
+                                            AI review for paper entries
                                         </Label>
                                         <Switch
                                             id="dtAiEnabled"
@@ -1354,7 +1193,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <div>Provider: {provider === 'openrouter' ? 'OpenRouter' : 'Local Ollama'}</div>
                                                 <div>Model: {model || DEFAULT_AI_MODEL}</div>
                                                 <p className="mt-2 text-[10px] leading-normal">
-                                                    News classification, macro verdicts, trade plans, and position analysis use this same model.
+                                                    Paper entries flagged as ambiguous are sent to this model for a TRADE/SKIP and size-tier verdict; the autonomous live AI gate is configured separately. Off = deterministic paper sizing, no model calls.
                                                 </p>
                                             </div>
                                         </div>
