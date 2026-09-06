@@ -506,7 +506,7 @@ export class TradeExecutionService {
     const maxPremiumRisk = this.parsePositiveNumber(settings.max_premium_risk_dollars, 500, 1_000_000);
     const maxCorrelatedPositions = this.parsePositiveInt(settings.max_correlated_positions, 3, 20);
     const maxSameDirectionPositions = this.parsePositiveInt(settings.max_same_direction_positions, 1, 20);
-    const maxRiskPerTrade = this.parsePositiveNumber(settings.strategy_max_risk_per_trade_dollars, 50, 1_000_000);
+    const maxRiskPerTrade = this.parsePositiveNumber(settings.strategy_max_risk_per_trade_dollars, 500, 1_000_000);
     const { rows: pnlRows } = await this.fastify.pg.query(
       `SELECT COALESCE(SUM(realized_pnl), 0)::numeric AS daily_pnl
        FROM positions

@@ -647,9 +647,14 @@ async function run() {
     'paper 0DTE flatten must begin 40 minutes before an early close'
   );
   assert.equal(
-    calendarService.mandatoryFlattenDue({ expiration_date: '2026-11-28' }, new Date('2026-11-27T17:20:00.000Z')),
+    calendarService.mandatoryFlattenDue({ expiration_date: '2026-11-30' }, new Date('2026-11-27T17:20:00.000Z')),
+    true,
+    'paper day-trade flatten applies to the multi-day (3 DTE) chain too'
+  );
+  assert.equal(
+    calendarService.mandatoryFlattenDue({ expiration_date: '2026-11-30' }, new Date('2026-11-27T16:00:00.000Z')),
     false,
-    'paper flatten must not close a later-dated contract'
+    'paper flatten still waits for the 40-minute window before the close'
   );
   assert.equal(
     calendarService.expirationExitIntent({ expiration_date: '2026-11-27' }, new Date('2026-11-27T18:05:00.000Z')),

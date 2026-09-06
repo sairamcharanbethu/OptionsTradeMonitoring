@@ -424,6 +424,19 @@ def _mandatory_flatten_due(
     )
 
 
+def _expiry_mode_label(expiry_mode: str) -> str | None:
+    """Short DTE label for an option expiry mode (``MULTI_DAY_3DTE`` -> ``3DTE``)."""
+    mode = str(expiry_mode or "")
+    if mode.startswith("MULTI_DAY_") and mode != "MULTI_DAY_WALL":
+        return mode[len("MULTI_DAY_"):]
+    return {
+        "0DTE": "0DTE",
+        "0DTE_NO_FUTURE_EXPIRY": "0DTE",
+        "1DTE_NEXT_LISTED": "1DTE",
+        "MULTI_DAY_WALL": "wall-3DTE",
+    }.get(mode)
+
+
 def _number(value: Any) -> bool:
     return (
         not isinstance(value, bool)
@@ -1141,7 +1154,7 @@ def calculate_orb_index_context(
         "trigger_timeframe_minutes": 1,
         "trigger_bar_count": trigger_bar_count,
         "freshness_seconds": float(freshness_seconds),
-        "instrument": "SPY 0DTE or nearest liquid ATM / one-strike OTM option",
+        "instrument": "SPY nearest liquid ATM / one-strike OTM option on the configured-DTE chain (default 3 DTE)",
         "risk_plan": risk,
     }
     if any(bar is None for bar in opening):
@@ -6272,11 +6285,7 @@ def _render_option_lines(
     contract = f"SPY {option.get('expiry') or '-'} {strike if strike is not None else '-'}{right}"
     selection = option.get("selection") or "OTM"
     expiry_mode = str(option.get("expiry_mode") or "")
-    expiry_label = {
-        "0DTE": "0DTE",
-        "0DTE_NO_FUTURE_EXPIRY": "0DTE",
-        "1DTE_NEXT_LISTED": "1DTE",
-    }.get(expiry_mode)
+    expiry_label = _expiry_mode_label(expiry_mode)
     if expiry_label:
         selection += f" {expiry_label}"
     if option.get("locked_at_activation"):
@@ -6815,11 +6824,7 @@ def _render_signal_details(signal: dict[str, Any], *, color: bool = False) -> st
             strike = favored_option.get("target_strike")
             selection = str(favored_option.get("selection") or "OTM")
             expiry_mode = str(favored_option.get("expiry_mode") or "")
-            expiry_label = {
-                "0DTE": "0DTE",
-                "0DTE_NO_FUTURE_EXPIRY": "0DTE",
-                "1DTE_NEXT_LISTED": "1DTE",
-            }.get(expiry_mode)
+            expiry_label = _expiry_mode_label(expiry_mode)
             if expiry_label:
                 selection += f" {expiry_label}"
             contract = (

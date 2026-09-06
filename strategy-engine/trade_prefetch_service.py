@@ -500,9 +500,20 @@ def _locked_option_expiry(signal: dict[str, Any] | None) -> str | None:
 
 
 def _preferred_option_expiry(
-    expirations: list[str], now: float | None = None
+    expirations: list[str], now: float | None = None, min_dte: int = 0
 ) -> tuple[str, str]:
-    """Use today's expiry before 1 PM ET, then the next valid listed expiry."""
+    """Primary option expiry.
+
+    With ``min_dte > 0`` (the default deployment is 3) the primary chain is the
+    nearest listed expiry at least that many calendar days out, mode
+    ``MULTI_DAY_<n>DTE``: higher delta, tighter spreads and far less theta than
+    same-day contracts. When no listed expiry reaches ``min_dte`` the legacy
+    same-day logic applies: today's expiry before 1 PM ET, then the next listed.
+    """
+    if min_dte > 0:
+        multi_day = _wall_option_expiry(expirations, now, min_dte=min_dte)
+        if multi_day:
+            return multi_day, f"MULTI_DAY_{int(min_dte)}DTE"
     stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
     today = stamp.strftime("%Y%m%d")
     listed = sorted({str(expiry) for expiry in expirations})
@@ -802,7 +813,8 @@ class TradePrefetcher:
             previous_signal,
         )
         preferred_expiry, preferred_mode = _preferred_option_expiry(
-            list(chain.expirations)
+            list(chain.expirations),
+            min_dte=int(getattr(self.args, "option_expiry_dte", 0) or 0),
         )
         locked_expiries = {
             expiry
@@ -871,7 +883,8 @@ class TradePrefetcher:
         if self.option_chain is None:
             return True
         preferred_expiry, _ = _preferred_option_expiry(
-            list(self.option_chain.expirations)
+            list(self.option_chain.expirations),
+            min_dte=int(getattr(self.args, "option_expiry_dte", 0) or 0),
         )
         desired_expiries = {
             preferred_expiry,
@@ -1535,6 +1548,17 @@ def main() -> None:
         ),
     )
     parser.add_argument("--strikes-per-side", type=int, default=6)
+    parser.add_argument(
+        "--option-expiry-dte",
+        type=int,
+        default=3,
+        help=(
+            "Minimum calendar days-to-expiry for the PRIMARY option chain every "
+            "setup trades. The nearest listed expiry at least this many days out "
+            "is used (default 3). 0 restores same-day (0DTE, rolling to the next "
+            "listed expiry at 1 PM ET)."
+        ),
+    )
     parser.add_argument(
         "--wall-option-expiry-dte",
         type=int,

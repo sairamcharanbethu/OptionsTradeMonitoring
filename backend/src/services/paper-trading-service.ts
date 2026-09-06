@@ -879,7 +879,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     // one contract already exceeds it. Applies to fallback 1-contract entries
     // too (those produced the largest dollar losses on expensive contracts).
     const configuredMaxRisk = Number(settings.strategy_max_risk_per_trade_dollars);
-    const maxRiskPerTrade = Number.isFinite(configuredMaxRisk) && configuredMaxRisk > 0 ? configuredMaxRisk : 50;
+    const maxRiskPerTrade = Number.isFinite(configuredMaxRisk) && configuredMaxRisk > 0 ? configuredMaxRisk : 500;
     let riskCapSkip = false;
     if (bounded.decision !== 'SKIP' && quantity >= 1) {
       const riskCap = PaperTradingService.riskCappedQuantity(
@@ -1845,7 +1845,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const today = ET_DATE.format(date);
     if (!expiration) return null;
     if (expiration < today) return 'EXPIRED_RECOVERY';
-    if (expiration !== today) return null;
+    // Paper positions are strategy day trades: flat by the close whatever the
+    // expiry (the primary chain is ~3 DTE), not only when the contract expires today.
     const closeMinutes = getUSMarketCloseMinutes(date);
     const market = getNewYorkMarketState(date, 9 * 60 + 30, closeMinutes);
     if (market.isWeekend || market.isHoliday || market.minutes < closeMinutes - 40) return null;

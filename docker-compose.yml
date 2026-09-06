@@ -186,6 +186,8 @@ services:
       - "0.15"
       - --option-max-spread-pct
       - "5"
+      - --option-expiry-dte
+      - ${STRATEGY_OPTION_EXPIRY_DTE:-3}
       - --wall-option-expiry-dte
       - ${STRATEGY_WALL_OPTION_EXPIRY_DTE:-0}
       - --paper-exit-target

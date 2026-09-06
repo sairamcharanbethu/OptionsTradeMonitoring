@@ -294,6 +294,26 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             ("20260727", "1DTE_NEXT_LISTED"),
         )
 
+    def test_primary_expiry_prefers_min_dte_chain(self) -> None:
+        et = ZoneInfo("America/New_York")
+        # Wed 2026-07-22 morning; Mon 07-27 is the first expiry >= 3 calendar days out.
+        stamp = datetime(2026, 7, 22, 10, 0, tzinfo=et).timestamp()
+        expirations = ["20260722", "20260723", "20260724", "20260727", "20260731"]
+        self.assertEqual(
+            _preferred_option_expiry(expirations, stamp, min_dte=3),
+            ("20260727", "MULTI_DAY_3DTE"),
+        )
+        # The 1 PM rollover is irrelevant on the multi-day chain.
+        after = datetime(2026, 7, 22, 13, 30, tzinfo=et).timestamp()
+        self.assertEqual(_preferred_option_expiry(expirations, after, min_dte=3)[0], "20260727")
+        # No listed expiry reaches 3 DTE -> legacy same-day behaviour.
+        self.assertEqual(
+            _preferred_option_expiry(["20260722", "20260723"], stamp, min_dte=3),
+            ("20260722", "0DTE"),
+        )
+        # min_dte=0 keeps the legacy behaviour exactly.
+        self.assertEqual(_preferred_option_expiry(expirations, stamp, min_dte=0), ("20260722", "0DTE"))
+
     def test_wall_expiry_picks_nearest_at_least_3dte(self) -> None:
         et = ZoneInfo("America/New_York")
         # Wed 2026-07-22; Mon 07-27 is the first expiry >= 3 calendar days out.

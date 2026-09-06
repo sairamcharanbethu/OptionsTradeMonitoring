@@ -365,7 +365,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setDayTradingSymbols(data.day_trading_symbols || 'SPY');
             setStrategyMaxTotalDebitDollars(data.strategy_max_total_debit_dollars || '500');
             setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
-            setStrategyMaxRiskPerTradeDollars(data.strategy_max_risk_per_trade_dollars || '50');
+            setStrategyMaxRiskPerTradeDollars(data.strategy_max_risk_per_trade_dollars || '500');
             setStrategyMaxContracts(data.strategy_max_contracts || '1');
             setPaperTrailingStopPct(data.paper_trailing_stop_pct || '15');
             setDailyLossLimitDollars(data.daily_loss_limit_dollars || '');

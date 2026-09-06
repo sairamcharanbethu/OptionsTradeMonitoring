@@ -351,8 +351,12 @@ export class MarketPoller {
   } | null {
     if (position.is_simulated
       || String(position.execution_broker || '').toLowerCase() !== 'wealthsimple_snaptrade') return null;
+    // Day-trade contract: every strategy-managed live position is flat by the
+    // close whatever its expiry (the primary chain is now ~3 DTE). Non-strategy
+    // (manual) live positions are only force-flattened when they expire today.
     const expiration = this.normalizeExpirationDate(position.expiration_date);
-    if (expiration !== this.getNewYorkDateString(now)) return null;
+    const expiresToday = expiration === this.getNewYorkDateString(now);
+    if (!expiresToday && position.strategy_managed !== true) return null;
 
     const closeMinutes = getUSMarketCloseMinutes(now);
     const flattenMinutes = closeMinutes - 40;
@@ -836,7 +840,7 @@ export class MarketPoller {
       return;
     }
 
-    // 0. Calendar-aware 0DTE flatten enforcement.
+    // 0. Calendar-aware day-trade flatten enforcement.
     const now = new Date();
 
     for (const pos of positions) {
@@ -855,7 +859,7 @@ export class MarketPoller {
           shouldForceClose = true;
           const hour = Math.floor(mandatoryFlatten.flattenMinutes / 60);
           const minute = String(mandatoryFlatten.flattenMinutes % 60).padStart(2, '0');
-          reason = `0DTE mandatory flatten (${hour}:${minute} ET)`;
+          reason = `day-trade mandatory flatten (${hour}:${minute} ET)`;
         }
 
         if (shouldForceClose) {
@@ -1422,7 +1426,7 @@ export class MarketPoller {
         triggeredAt: new Date().toISOString()
       };
       analysisDirty = true;
-      this.fastify.log.warn(`[MarketPoller] Mandatory 0DTE flatten triggered for live strategy position ${position.id}.`);
+      this.fastify.log.warn(`[MarketPoller] Mandatory day-trade flatten triggered for live strategy position ${position.id}.`);
     }
 
     if (!triggered) {
