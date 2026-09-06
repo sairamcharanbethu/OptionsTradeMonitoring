@@ -1,9 +1,9 @@
 #!/bin/bash
 # Overnight out-of-sample backtest through the LIVE engine on Unusual Whales
-# history. One pass simulates three executor variants simultaneously:
+# history. One pass simulates the executor variants simultaneously:
 #   baseline        — live caps as-is
-#   no_wall_bounce  — executor vetoes GEX_WALL_BOUNCE entries
 #   morning_only    — no entries after 11:00 ET
+#   (post-T1 exit-policy variants: add --exit-policy-variants; 3 DTE chain: --primary-dte 3)
 #
 # Usage:
 #   ./run_overnight_backtest.sh                 # 2026-04-14 .. 2026-08-20
@@ -30,7 +30,7 @@ mkdir -p "$OUT_DIR"
 LOG="$OUT_DIR/run-$STAMP-$START-to-$END.log"
 
 echo "Backtest $START .. $END -> $LOG"
-echo "Variants: baseline, no_wall_bounce, morning_only"
+echo "Variants: baseline, morning_only"
 echo "Started $(date). This will take hours; caffeinate keeps the Mac awake."
 
 # caffeinate: prevent sleep for the duration (macOS). nohup + tee so closing
