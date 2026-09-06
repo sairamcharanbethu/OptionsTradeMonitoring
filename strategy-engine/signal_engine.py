@@ -4385,6 +4385,7 @@ def _gex_wall_candidate(
     now: float,
     previous_walls: dict[str, Any] | None = None,
     net_gex_percentile: Any = None,
+    history_completed: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Native Day Trading candidate from the validated GEX wall-reaction engine.
 
@@ -4412,6 +4413,7 @@ def _gex_wall_candidate(
         completed,
         now=now,
         previous_walls=previous_walls,
+        history_bars=history_completed,
     )
     if evaluation.get("verdict") != "PARTICIPATE":
         return None
@@ -5160,6 +5162,9 @@ def build_signal(
                         "net_gex_30d_percentile"
                     )
                 ),
+                # Multi-day bars so the 15m macro filter and PDH/PDL/ONH/ONL
+                # levels are defined from the open, not only after ~13:15 ET.
+                history_completed=_completed_bars(spy_bars),
             ),
         )
         if reversal:

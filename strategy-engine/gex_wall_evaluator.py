@@ -211,16 +211,24 @@ def evaluate_gex_wall(
     previous_walls: dict[str, Any] | None = None,
     log_regression_length: int = LOG_REGRESSION_LENGTH,
     channel_width: float = CHANNEL_WIDTH,
+    history_bars: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Evaluate the GEX wall-reaction setups against closed 5m/15m structure.
 
     Returns a graded, execution-free shadow signal. ``previous_walls`` (dict
     with ``call_wall``/``put_wall`` from the prior evaluation) enables the
     call-wall-migration guard; when absent the guard is treated as inactive.
+
+    ``bars`` is the current session's 1m bars and drives the 5m reaction
+    checks. ``history_bars`` (optional, multi-day 1m bars) feeds the 15m macro
+    trend filter and the Tier-A session levels (PDH/PDL/ONH/ONL); when omitted
+    both fall back to ``bars``, which leaves the 15m filter undefined until
+    ~13:15 ET and the prior-day levels permanently unavailable.
     """
     current = time.time() if now is None else now
     gex = gex or {}
     bars = bars or []
+    macro_bars = history_bars if history_bars else bars
 
     cw = gex.get("call_wall")
     pw = gex.get("put_wall")
@@ -259,7 +267,7 @@ def evaluate_gex_wall(
         )
 
     # 15m macro trend filter.
-    closed_15m = _aggregate(bars, 15, now=current)
+    closed_15m = _aggregate(macro_bars, 15, now=current)
     is_15m_up = True
     slope_15m = 0.0
     if len(closed_15m) >= MIN_CLOSED_5M_BARS:
@@ -477,7 +485,7 @@ def evaluate_gex_wall(
             session_levels,
         )
 
-        session = session_levels(bars, now=current)
+        session = session_levels(macro_bars, now=current)
         refs = reference_levels(session)
         disp = displacement(closed_5m)
         fvgs = find_fvgs(closed_5m)

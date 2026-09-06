@@ -248,7 +248,7 @@ export class MarketDataWriteBufferService {
            gamma = $4,
            vega = $5,
            iv = $6,
-           underlying_price = $7,
+           underlying_price = COALESCE($7, underlying_price),
            max_favorable_price = COALESCE($8, max_favorable_price),
            max_adverse_price = COALESCE($9, max_adverse_price),
            mfe_pct = COALESCE($10, mfe_pct),

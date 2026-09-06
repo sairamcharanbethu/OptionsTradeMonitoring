@@ -40,6 +40,7 @@ export class MarketPoller {
   }
 
   private readonly LOCK_KEY = 'MARKET_POLLER_LEADER';
+  private redisLockDegradedSince: number | null = null;
 
   public async start() {
     // 1. Fetch the preferred interval and polling enabled state from settings
@@ -73,7 +74,22 @@ export class MarketPoller {
         // Distributed Lock Check
         // Attempt to acquire lock for slightly longer than the interval
         const lockDuration = this.currentIntervalSeconds + 5;
-        const acquired = await this.redisClient.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
+        let acquired = false;
+        if (typeof this.redisClient?.isReady !== 'function' || this.redisClient.isReady()) {
+          acquired = await this.redisClient.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
+          this.redisLockDegradedSince = null;
+        } else {
+          // Redis down: setNX would return false forever and stop/TP/theta/flatten
+          // evaluation would silently halt while entries stay gated closed. Exit
+          // submission is already idempotent via the DB claim in submitSnapTradeExit, so
+          // run unlocked and alert instead of failing open on exits.
+          acquired = true;
+          const now = Date.now();
+          if (!this.redisLockDegradedSince || now - this.redisLockDegradedSince > 5 * 60 * 1000) {
+            this.redisLockDegradedSince = now;
+            this.fastify.log.error('[MarketPoller] Redis unavailable: running exit poll WITHOUT the leader lock so open positions keep being monitored.');
+          }
+        }
 
         if (acquired) {
           await this.poll();
@@ -744,6 +760,22 @@ export class MarketPoller {
     }
   }
 
+  /**
+   * Live underlying spot for the poll path. Underlying-based stops/targets
+   * (`stopUnderlying`, T1/T2, GEX trail) are only evaluated when this is a
+   * positive number, so a failed lookup returns undefined rather than 0.
+   */
+  private async getUnderlyingSpot(symbol: string): Promise<number | undefined> {
+    try {
+      const quote = await new IbkrMarketDataService(this.fastify).getUnderlyingQuote(symbol);
+      const spot = Number(quote?.mark ?? quote?.last ?? 0);
+      return spot > 0 ? spot : undefined;
+    } catch (err: any) {
+      this.fastify.log.warn(`[MarketPoller] Underlying quote unavailable for ${symbol}: ${err?.message || String(err)}`);
+      return undefined;
+    }
+  }
+
   public async syncPrice(symbol: string, skipCache: boolean = false) {
     this.fastify.log.info(`[MarketPoller] TARGETED Sync for symbol: ${symbol}`);
     const { rows: positions } = await (this.fastify as any).pg.query(
@@ -757,6 +789,8 @@ export class MarketPoller {
     }
 
     let lastFetchedPrice = null;
+    // One underlying snapshot per symbol per cycle, shared by every position on it.
+    const underlyingSpot = await this.getUnderlyingSpot(symbol);
 
     for (const position of positions) {
       const data = await this.getOptionPremium(
@@ -769,9 +803,10 @@ export class MarketPoller {
       );
 
       if (data && data.price !== null) {
-        // this.fastify.log.debug(`[MarketPoller] ${position.symbol} ${position.option_type} $${position.strike_price} -> Premium: $${data.price}`);
-        this.fastify.log.info(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${data.underlying_price} Greeks:`, data.greeks);
-        await this.processUpdate(position, data.price, data.greeks, data.iv, data.underlying_price, data.quote);
+        const underlying = underlyingSpot
+          ?? (Number(data.underlying_price) > 0 ? Number(data.underlying_price) : undefined);
+        this.fastify.log.info(`[MarketPoller] ${position.symbol} Price: ${data.price} IV: ${data.iv} Underlying: ${underlying ?? 'n/a'} Greeks:`, data.greeks);
+        await this.processUpdate(position, data.price, data.greeks, data.iv, underlying, data.quote);
         lastFetchedPrice = data.price;
       }
     }
@@ -972,6 +1007,12 @@ export class MarketPoller {
     // Keeping them out of the legacy poller prevents duplicate closes and broker calls.
     if (position.execution_broker === 'system_paper') return;
     position = await this.marketDataBuffer.applyLatestToPosition(position);
+    // A 0/NaN underlying is "unknown", not a price: it must neither short-circuit
+    // the underlying stop/target checks nor be persisted over a real last-known spot.
+    if (!(Number(underlyingPrice) > 0)) {
+      const lastKnown = Number(position.underlying_price || 0);
+      underlyingPrice = lastKnown > 0 ? lastKnown : undefined;
+    }
     let analysis: any = {};
     let analysisDirty = false;
     try {

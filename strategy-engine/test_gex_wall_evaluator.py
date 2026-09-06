@@ -366,3 +366,25 @@ class StructureConfluenceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class MacroHistoryBarsTest(unittest.TestCase):
+    """The 15m macro filter must come from multi-day history, not today's bars.
+
+    With today-only bars the evaluator has <15 closed 15m candles until ~13:15 ET
+    and silently defaults to "up". Passing ``history_bars`` makes the filter
+    defined from the open.
+    """
+
+    def test_history_bars_define_15m_trend_before_midday(self):
+        # 76 falling 5m buckets; "today" is only the last 16 (80 minutes after the open).
+        full = _trend_bars(76, 560, -0.4, last_override=(530.3, 530.4, 529.9, 530.0))
+        today = full[-16:]
+        now = BASE + 76 * 300 + 30
+        gex = {"call_wall": 600, "put_wall": 480, "regime": "Positive"}
+
+        legacy = evaluate_gex_wall(gex, today, now=now)
+        self.assertEqual(legacy.get("macro", {}).get("trend_15m"), "up")  # undefined -> default
+
+        fixed = evaluate_gex_wall(gex, today, now=now, history_bars=full)
+        self.assertEqual(fixed.get("macro", {}).get("trend_15m"), "down")

@@ -1199,8 +1199,26 @@ export class SnaptradeService {
                         const syntheticManualStop = manualEntry && syntheticTrailingPct >= 1 && syntheticTrailingPct <= 50
                             ? roundProtectiveStop(fillPrice * (1 - syntheticTrailingPct / 100))
                             : null;
-                        const stopLoss = syntheticManualStop ?? (manualEntry || isShortOpen ? null : Number((fillPrice * 0.8).toFixed(2)));
-                        const takeProfit = !strategySyntheticTrailing && !isShortOpen && manualEntry?.takeProfitPct
+                        // Strategy-managed entries already carry the strategy's own premium stop / TP
+                        // (set from premium_stop_pct in TradeExecutionService). Rescale those to the
+                        // actual fill instead of clobbering them with the generic 20% / user TP defaults.
+                        const plannedEntry = Number(position.entry_price);
+                        const plannedStop = Number(position.stop_loss_trigger);
+                        const plannedTp = position.take_profit_trigger === null || position.take_profit_trigger === undefined
+                            ? null
+                            : Number(position.take_profit_trigger);
+                        const rescale = (planned: number) => Number((fillPrice * (planned / plannedEntry)).toFixed(2));
+                        const canRescale = Boolean(position.strategy_managed)
+                            && !manualEntry
+                            && !isShortOpen
+                            && Number.isFinite(plannedEntry) && plannedEntry > 0
+                            && Number.isFinite(plannedStop) && plannedStop > 0 && plannedStop < plannedEntry;
+                        const stopLoss = canRescale
+                            ? rescale(plannedStop)
+                            : (syntheticManualStop ?? (manualEntry || isShortOpen ? null : Number((fillPrice * 0.8).toFixed(2))));
+                        const takeProfit = canRescale
+                            ? (plannedTp !== null && Number.isFinite(plannedTp) && plannedTp > plannedEntry ? rescale(plannedTp) : null)
+                            : !strategySyntheticTrailing && !isShortOpen && manualEntry?.takeProfitPct
                             ? Number((fillPrice * (1 + manualEntry.takeProfitPct / 100)).toFixed(2))
                             : !strategySyntheticTrailing && !isShortOpen && takeProfitPct !== null
                             ? Number((fillPrice * (1 + takeProfitPct / 100)).toFixed(2))
@@ -1223,7 +1241,7 @@ export class SnaptradeService {
                                  updated_at = CURRENT_TIMESTAMP
                              WHERE id = $7`,
                             [finalEntryStatus, filledQuantity, fillPrice, stopLoss, takeProfit,
-                                ` [SnapTrade fill confirmed: ${finalEntryStatus}; ${filledQuantity}/${requestedQuantity} contracts; auto exits recalculated from fill]`, position.id]
+                                ` [SnapTrade fill confirmed: ${finalEntryStatus}; ${filledQuantity}/${requestedQuantity} contracts; ${canRescale ? 'strategy exits rescaled to fill' : 'auto exits recalculated from fill'}]`, position.id]
                         );
                         summary.opened += 1;
                         await this.syncSignalExecutionFromOrder(position, 'EXECUTED', finalEntryStatus);
