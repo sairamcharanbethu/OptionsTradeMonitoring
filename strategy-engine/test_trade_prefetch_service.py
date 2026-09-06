@@ -21,7 +21,6 @@ from trade_prefetch_service import (
     _policy_option_expiry_dte,
     _wall_option_expiry,
     _previous_strategy_lanes,
-    _strategy_family_policy_for_lane,
     _normalize_strategy_lane,
     _ticker_time,
     _zerogex_primary_snapshot,
@@ -397,7 +396,8 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             with patch("trade_prefetch_service.time.time", return_value=after):
                 self.assertFalse(prefetcher._options_need_recenter())
 
-    def test_strategy_lanes_keep_independent_previous_state(self) -> None:
+    def test_previous_lanes_only_keep_the_configured_lane(self) -> None:
+        # Retired family lanes left in an old strategy-signals.json are ignored.
         payload = {
             "signals": {
                 "mtf": {"strategy": "MTF_TREND_BREAK", "state": "WATCH"},
@@ -406,42 +406,18 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             }
         }
         lanes = _previous_strategy_lanes(payload)
+        self.assertEqual(set(lanes), {"mtf"})
         self.assertEqual(lanes["mtf"]["state"], "WATCH")
-        self.assertEqual(lanes["orb_index"]["state"], "ACTIVE")
-        self.assertEqual(lanes["vwap_trend"]["state"], "MANAGE")
 
-    def test_each_family_lane_only_enables_its_own_detector(self) -> None:
-        configured = {
-            "mode": "primary",
-            "orb_index": {"enabled": True, "freshness_seconds": 300},
-            "vwap_trend": {"enabled": True, "freshness_seconds": 300},
-        }
-        orb = _strategy_family_policy_for_lane(configured, "orb_index")
-        vwap = _strategy_family_policy_for_lane(configured, "vwap_trend")
-        mtf = _strategy_family_policy_for_lane(configured, "mtf")
-        self.assertTrue(orb["orb_index"]["enabled"])
-        self.assertFalse(orb["vwap_trend"]["enabled"])
-        self.assertFalse(vwap["orb_index"]["enabled"])
-        self.assertTrue(vwap["vwap_trend"]["enabled"])
-        self.assertFalse(mtf["enabled"])
+    def test_normalize_lane_tags_the_signal(self) -> None:
+        normalized = _normalize_strategy_lane({"strategy": "MTF_TREND_BREAK", "state": "ACTIVE"}, "mtf")
+        self.assertEqual(normalized["strategy_lane"], "mtf")
+        self.assertEqual(normalized["state"], "ACTIVE")
 
-    def test_family_lane_does_not_publish_an_mtf_fallback(self) -> None:
-        normalized = _normalize_strategy_lane({
-            "strategy": "MTF_TREND_BREAK",
-            "state": "ACTIVE",
-            "favoring": "calls",
-            "call_setup": {"trigger": 775},
-            "lifecycle": {"entry_allowed": True, "paper_position_open": True},
-        }, "orb_index")
-        self.assertEqual(normalized["strategy"], "ORB_INDEX")
-        self.assertEqual(normalized["state"], "WAIT")
-        self.assertEqual(normalized["favoring"], "no-trade")
-        self.assertFalse(normalized["lifecycle"]["entry_allowed"])
-
-    def test_active_family_retains_its_exact_contract_subscription(self) -> None:
+    def test_active_trend_break_retains_its_exact_contract_subscription(self) -> None:
         signal = {
             "state": "ACTIVE",
-            "strategy": "ORB_INDEX",
+            "strategy": "MTF_TREND_BREAK",
             "favoring": "calls",
             "call_setup": {
                 "option": {"expiry": "20260721", "target_strike": 747.0, "right": "C"}
@@ -618,19 +594,6 @@ class TradePrefetchHelpersTest(unittest.TestCase):
                     },
                     "raw_bar_history": [{"close": 741.25}] * 100,
                 },
-                "strategy_family_context": {
-                    "version": "strategy-family-lab-v1",
-                    "mode": "shadow",
-                    "entry_authority": False,
-                    "orb_index": {
-                        "candidate": {"event_id": "orb-index:test"},
-                    },
-                    "vwap_trend": {
-                        "candidate": {"event_id": "vwap-trend:test"},
-                    },
-                    "shared_risk": {"trim_ladder_pct": [25, 45, 75]},
-                    "raw_bar_history": [{"close": 741.25}] * 100,
-                },
                 "zerogex_shadow": {
                     "fresh": True,
                     "advanced_signals": {"raw": "x" * 20_000},
@@ -660,31 +623,7 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             "raw_bar_history",
             record["entry_structure_context"],
         )
-        self.assertEqual(
-            record["strategy_family_context"]["orb_index"]["candidate"]["event_id"],
-            "orb-index:test",
-        )
-        self.assertNotIn("raw_bar_history", record["strategy_family_context"])
         self.assertIn("advanced_signals", signal["zerogex_shadow"])
-
-    def test_strategy_family_event_changes_signal_fingerprint(self) -> None:
-        baseline = {
-            "state": "WAIT",
-            "strategy_family_context": {
-                "orb_index": {"status": "WATCHING", "candidate": None},
-                "vwap_trend": {"status": "WAITING_PULLBACK_RECLAIM"},
-            },
-        }
-        candidate = json.loads(json.dumps(baseline))
-        candidate["strategy_family_context"]["orb_index"] = {
-            "status": "FRESH_BREAK",
-            "candidate": {"event_id": "orb-index:test"},
-        }
-
-        self.assertNotEqual(
-            TradePrefetcher._signal_fingerprint(baseline),
-            TradePrefetcher._signal_fingerprint(candidate),
-        )
 
     def test_runtime_ibkr_policy_reconnects_on_admin_config_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -752,9 +752,6 @@ export class PaperTradingService {
   private strategyLane(snapshot: Record<string, any>): string {
     const explicit = String(snapshot?.strategy_lane || '').trim().toLowerCase();
     if (explicit) return explicit;
-    const strategy = String(snapshot?.strategy || '').toUpperCase();
-    if (strategy === 'ORB_INDEX') return 'orb_index';
-    if (strategy === 'VWAP_TREND') return 'vwap_trend';
     return 'mtf';
   }
 

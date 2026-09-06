@@ -305,8 +305,8 @@ export class RiskDecisionService {
   }
 
   /**
-   * Cross-lane cap: the three engine lanes (mtf, orb_index, vwap_trend) can each
-   * arm a same-direction SPY setup; without this only the pooled SPY/QQQ count
+   * Same-direction cap: independent setups (and manual entries) can each add a
+   * same-direction SPY position; without this only the pooled SPY/QQQ count
    * limited how many long-delta (or short-delta) 0DTE positions stacked up.
    */
   static forSameDirectionExposure(

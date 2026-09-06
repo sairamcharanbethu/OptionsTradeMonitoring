@@ -12,7 +12,6 @@ export const QUERY_KEYS = {
     liveMacroMetrics: ['liveMacroMetrics'],
     strategyState: ['strategyState'],
     strategyHistory: ['strategyHistory'],
-    strategyFamilyHistory: ['strategyFamilyHistory'],
     tradeUsage: ['tradeUsage'],
     paperAccount: ['paperAccount'],
     killSwitch: ['killSwitch'],
@@ -69,14 +68,6 @@ export function useStrategyHistory(refreshInterval = 15000) {
     });
 }
 
-export function useStrategyFamilyHistory(refreshInterval = 15000) {
-    return useQuery({
-        queryKey: QUERY_KEYS.strategyFamilyHistory,
-        queryFn: () => api.getStrategyFamilyHistory(),
-        refetchInterval: refreshInterval,
-        staleTime: 5000,
-    });
-}
 
 export function useLiveMacroMetrics(refreshInterval = 15000) {
     return useQuery({

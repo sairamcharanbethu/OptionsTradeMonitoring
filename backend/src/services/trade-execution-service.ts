@@ -481,9 +481,6 @@ export class TradeExecutionService {
   private strategyLane(snapshot: any): string {
     const explicit = String(snapshot?.strategy_lane || '').trim().toLowerCase();
     if (explicit) return explicit;
-    const strategy = String(snapshot?.strategy || '').toUpperCase();
-    if (strategy === 'ORB_INDEX') return 'orb_index';
-    if (strategy === 'VWAP_TREND') return 'vwap_trend';
     return 'mtf';
   }
 
@@ -1407,22 +1404,20 @@ export class TradeExecutionService {
       : input.targetUnderlying;
     const finalUnderlyingTarget = input.targetUnderlying;
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
-    const strategyName = String(strategySnapshot?.strategy || '').toUpperCase();
-    const familyStrategy = ['ORB_INDEX', 'VWAP_TREND'].includes(strategyName);
+    // The strategy's own premium stop (paper_policy.premium_stop_pct) wins; 20% otherwise.
     const configuredStrategyStopPct = Number(strategySnapshot?.paper_policy?.premium_stop_pct);
-    const premiumStopPct = familyStrategy
-      && Number.isFinite(configuredStrategyStopPct)
+    const strategyPremiumStopConfigured = Number.isFinite(configuredStrategyStopPct)
       && configuredStrategyStopPct > 0
-      && configuredStrategyStopPct < 100
-      ? configuredStrategyStopPct
-      : 20;
+      && configuredStrategyStopPct < 100;
+    const premiumStopPct = strategyPremiumStopConfigured ? configuredStrategyStopPct : 20;
     const premiumStopLoss = Number((entryPrice * (1 - premiumStopPct / 100)).toFixed(2));
     const configuredTakeProfitPct = this.parseOptionalPct(execution.takeProfitPct, 500);
     const syntheticTrailingPct = !execution.isSimulated && execution.syntheticTrailingEnabled
       ? this.parseOptionalPct(execution.syntheticTrailingPct || '15', 50)
       : null;
+    // A strategy that carries its own premium stop manages its own exits; no generic premium TP.
     const premiumTakeProfit = configuredTakeProfitPct !== null
-      && !familyStrategy
+      && !strategyPremiumStopConfigured
       && !(strategyManaged && syntheticTrailingPct !== null)
       ? Number((entryPrice * (1 + configuredTakeProfitPct / 100)).toFixed(2))
       : null;

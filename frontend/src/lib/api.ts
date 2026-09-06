@@ -1591,19 +1591,6 @@ export const api = {
     }));
   },
 
-  async getStrategyFamilyHistory(limit = 100): Promise<StrategyFamilyHistoryEvent[]> {
-    const res = await authFetch(`${API_BASE}/signals/strategy-family-history?limit=${limit}&t=${Date.now()}`);
-    if (!res.ok) throw new Error('Failed to fetch strategy family history');
-    const rows = await res.json();
-    return rows.map((row: any) => ({
-      ...row,
-      confirmed_at: row.confirmed_at == null ? null : Number(row.confirmed_at),
-      journaled_at: row.journaled_at == null ? null : Number(row.journaled_at),
-      generated_at: row.generated_at == null ? null : Number(row.generated_at),
-      spot: row.spot == null ? null : Number(row.spot)
-    }));
-  },
-
   async getSignalRiskAssessment(id: number): Promise<SignalRiskAssessment> {
     const res = await authFetch(`${API_BASE}/signals/${id}/risk-assessment`);
     if (!res.ok) {
@@ -1861,7 +1848,6 @@ export interface StrategyLifecycleEvent {
   closeReason?: string | null;
   blockers: string[];
   entryStructure?: ShadowEntryStructureContext;
-  strategyFamilyContext?: ShadowStrategyFamilyContext;
   trendlineContext?: Record<string, any>;
   createdAt: string;
 }
@@ -1879,37 +1865,6 @@ export interface ShadowEntryStructureContext {
   cross_market?: Record<string, any>;
 }
 
-export interface ShadowStrategyFamilyContext {
-  version?: string;
-  enabled?: boolean;
-  mode?: 'shadow' | 'primary';
-  entry_authority?: boolean;
-  orb_index?: Record<string, any> | null;
-  vwap_trend?: Record<string, any> | null;
-  shared_risk?: Record<string, any>;
-  observation?: string;
-}
-
-export interface StrategyFamilyHistoryEvent {
-  event_id: string;
-  family: 'ORB_INDEX' | 'VWAP_TREND';
-  side?: 'calls' | 'puts' | null;
-  status?: string | null;
-  confirmed_at?: number | null;
-  journaled_at?: number | null;
-  generated_at?: number | null;
-  spot?: number | null;
-  fresh: boolean;
-  suppressed: boolean;
-  entry_authority: boolean;
-  observation?: string | null;
-  opening_range?: Record<string, any> | null;
-  gex_alignment?: Record<string, any> | null;
-  trend?: Record<string, any> | null;
-  kill_switch?: Record<string, any> | null;
-  risk_plan?: Record<string, any> | null;
-}
-
 export interface StrategyHistorySetup {
   id: number;
   setup_id: string;
@@ -1924,7 +1879,6 @@ export interface StrategyHistorySetup {
   confidence_score: number;
   option_details?: OptionDetailsJSON | null;
   entry_structure_context?: ShadowEntryStructureContext | null;
-  strategy_family_context?: ShadowStrategyFamilyContext | null;
   trendline_context?: Record<string, any> | null;
   no_trade_reasons?: string[] | null;
   created_at: string;
@@ -1957,7 +1911,7 @@ export interface StrategyEngineState {
   marketDataReadiness?: Record<string, any> | null;
   signal: Record<string, any> | null;
   strategySignals?: Array<{
-    lane: 'mtf' | 'orb_index' | 'vwap_trend' | string;
+    lane: 'mtf' | string;
     setupId: string | null;
     ageSeconds: number | null;
     signal: Record<string, any>;

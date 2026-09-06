@@ -385,13 +385,13 @@ const strategyDisplay = (strategy?: string | null) => {
       name: 'Trend continuation',
       explanation: 'SPY is attempting to resume the established move after holding its continuation structure.'
     },
-    ORB_INDEX: {
-      name: 'Opening-range breakout',
-      explanation: 'A completed one-minute candle closed outside SPY’s first five-minute range while the breakout was still fresh.'
+    GEX_WALL_REJECTION: {
+      name: 'GEX wall rejection',
+      explanation: 'SPY touched a dealer gamma wall and printed a rejection candle with 5-minute and 15-minute structure aligned against the wall.'
     },
-    VWAP_TREND: {
-      name: 'VWAP trend pullback',
-      explanation: 'SPY held the sloping side of session VWAP, pulled back into the VWAP band, and completed a reclaim in the trend direction.'
+    GEX_WALL_BREAK_FAIL: {
+      name: 'GEX wall failed break',
+      explanation: 'SPY broke through a dealer gamma wall, failed to hold it, and confirmed the failure on a retest.'
     }
   };
   return strategies[code] || {

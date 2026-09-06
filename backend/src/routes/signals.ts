@@ -14,10 +14,6 @@ const SignalIdSchema = z.object({
   id: z.coerce.number().int().positive()
 });
 
-const StrategyFamilyHistoryQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).default(100)
-});
-
 export async function signalRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
 
@@ -46,7 +42,6 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
            s.confidence_score,
            s.option_details,
            s.option_details->'decision_telemetry'->'entry_structure_context' AS entry_structure_context,
-           s.option_details->'decision_telemetry'->'strategy_family_context' AS strategy_family_context,
            s.option_details->'decision_telemetry'->'trendline_context' AS trendline_context,
            s.no_trade_reasons,
            s.created_at,
@@ -93,7 +88,6 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
                'closeReason', event.signal_snapshot->'lifecycle'->>'close_reason',
                'blockers', COALESCE(event.signal_snapshot->'blockers', '[]'::jsonb),
                'entryStructure', COALESCE(event.signal_snapshot->'decision_telemetry'->'entry_structure_context', '{}'::jsonb),
-               'strategyFamilyContext', COALESCE(event.signal_snapshot->'decision_telemetry'->'strategy_family_context', '{}'::jsonb),
                'trendlineContext', COALESCE(event.signal_snapshot->'decision_telemetry'->'trendline_context', '{}'::jsonb),
                'createdAt', event.created_at
              )
@@ -112,30 +106,6 @@ export async function signalRoutes(fastify: FastifyInstance, options: FastifyPlu
     } catch (err: any) {
       fastify.log.error(err);
       return reply.code(500).send({ error: 'Failed to fetch strategy setup history' });
-    }
-  });
-
-  fastify.get('/strategy-family-history', {
-    schema: {
-      tags: ['Signals'],
-      summary: 'Get shadow strategy family candidate history',
-      description: 'Return deduplicated ORB_INDEX and VWAP_TREND candidates from the replay journal without creating authoritative signals.',
-      security: [{ bearerAuth: [] }]
-    }
-  }, async (request, reply) => {
-    const parsed = StrategyFamilyHistoryQuerySchema.safeParse(request.query);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: 'Strategy family history limit must be between 1 and 200' });
-    }
-    const strategyEngine = (fastify as any).strategyEngine;
-    if (!strategyEngine?.getStrategyFamilyHistory) {
-      return reply.code(503).send({ error: 'Strategy family history is unavailable' });
-    }
-    try {
-      return await strategyEngine.getStrategyFamilyHistory(parsed.data.limit);
-    } catch (err: any) {
-      fastify.log.error(err);
-      return reply.code(500).send({ error: 'Failed to read strategy family history' });
     }
   });
 

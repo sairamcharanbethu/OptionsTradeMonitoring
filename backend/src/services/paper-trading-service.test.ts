@@ -16,9 +16,9 @@ async function run() {
   );
   assert.equal(PaperTradingService.quantityForTier(100, 1.53, 'FULL').quantity, 0);
   assert.equal(
-    PaperTradingService.premiumStopPct({ strategy: 'ORB_INDEX', paper_policy: { premium_stop_pct: 35 } }),
+    PaperTradingService.premiumStopPct({ strategy: 'MTF_TREND_BREAK', paper_policy: { premium_stop_pct: 35 } }),
     35,
-    'paper ORB/VWAP entries must retain the family 35% hard premium stop'
+    'paper entries must honor the strategy premium stop carried in paper_policy'
   );
   assert.equal(PaperTradingService.premiumStopPct({}), 20, 'legacy paper entries must retain their existing 20% premium stop');
 

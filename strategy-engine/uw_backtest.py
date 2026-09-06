@@ -37,15 +37,14 @@ from zoneinfo import ZoneInfo
 
 import signal_engine
 from signal_engine import build_signal
-# The exact per-lane family policy and wall-expiry selection the live loop
-# uses — never approximate them.
-from trade_prefetch_service import _strategy_family_policy_for_lane, _wall_option_expiry
+# The exact wall-expiry selection the live loop uses — never approximate it.
+from trade_prefetch_service import _wall_option_expiry
 
 ET = ZoneInfo("America/New_York")
 API_BASE = "https://api.unusualwhales.com/api"
 CACHE_DIR = Path(os.environ.get("UW_CACHE_DIR", "uw_cache"))
 THROTTLE_SECONDS = 0.45
-STRATEGY_LANES = ("mtf", "orb_index", "vwap_trend")
+STRATEGY_LANES = ("mtf",)
 RISK_FREE_RATE = 0.04
 
 _REAL_MONOTONIC = time.monotonic
@@ -403,15 +402,14 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
                            result so it pairs against the other policies.
 
     Conservative intrabar rule: if a bar spans both stop and target, the stop
-    fills first. The premium stop mirrors the live exit stack (35% for the
-    ORB/VWAP families, 20% otherwise) and is checked on each minute's option
-    candle close — without it, a 0DTE option can "ride to zero" in ways the
+    fills first. The premium stop mirrors the live exit stack (20%) and is
+    checked on each minute's option candle close — without it, a 0DTE option can "ride to zero" in ways the
     live StopLossEngine never allows.
     """
     side = trade["side"]
     stop = trade["stop"]
     targets = trade["targets"]
-    premium_stop_pct = 35.0 if trade["strategy"] in ("ORB_INDEX", "VWAP_TREND") else 20.0
+    premium_stop_pct = 20.0  # live premium stop for every remaining strategy
     premium_floor = trade["entry_price"] * (1 - premium_stop_pct / 100)
     entry_minute = int(trade["entry_time"] // 60) * 60
     t1_hit = False
@@ -629,7 +627,6 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
                     option_max_total_debit_dollars=1000,
                     option_preferred_contracts=1,
                     max_tracking_gap_seconds=max(180.0, interval * 3.0),
-                    strategy_families=_strategy_family_policy_for_lane(None, lane),
                     wall_options=wall_options,
                 )
                 previous[lane] = signal
@@ -736,7 +733,7 @@ def main() -> None:
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--summary-only", action="store_true")
     parser.add_argument("--variants", action="store_true",
-                        help="also simulate no-wall-bounce and morning-only executor variants")
+                        help="also simulate the morning-only executor variant")
     parser.add_argument("--fetch-only", action="store_true",
                         help="fetch and cache the session's UW data without simulating")
     parser.add_argument("--mid-fills", action="store_true",
@@ -761,8 +758,6 @@ def main() -> None:
     ]
     if args.variants:
         variants_spec += [
-            {"name": "no_wall_bounce", "skip_strategies": {"GEX_WALL_BOUNCE"},
-             "latest_entry_minute_et": None},
             {"name": "morning_only", "skip_strategies": set(),
              "latest_entry_minute_et": 11 * 60},
         ]

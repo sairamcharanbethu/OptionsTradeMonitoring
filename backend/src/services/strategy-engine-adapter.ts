@@ -163,87 +163,6 @@ export class StrategyEngineAdapter {
     this.lastEntryBlock = { halted, reason: reason || null };
   }
 
-  public async getStrategyFamilyHistory(limit = 100): Promise<Array<Record<string, any>>> {
-    const cappedLimit = Math.max(1, Math.min(200, Math.trunc(Number(limit) || 100)));
-    const historyDir = path.join(this.dataDir, 'history');
-    let fileNames: string[];
-    try {
-      fileNames = (await fs.readdir(historyDir))
-        .filter(name => /^signals-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name))
-        .sort()
-        .reverse()
-        .slice(0, 7);
-    } catch (error: any) {
-      if (error?.code === 'ENOENT') return [];
-      throw error;
-    }
-
-    const events: Array<Record<string, any>> = [];
-    const seen = new Set<string>();
-    for (const fileName of fileNames) {
-      let lines: string[];
-      try {
-        lines = (await fs.readFile(path.join(historyDir, fileName), 'utf8'))
-          .split('\n')
-          .filter(Boolean)
-          .reverse();
-      } catch (error: any) {
-        if (error?.code === 'ENOENT') continue;
-        throw error;
-      }
-      for (const line of lines) {
-        let record: Record<string, any>;
-        try {
-          record = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const context = record.strategy_family_context;
-        if (
-          !context
-          || !['shadow', 'primary'].includes(String(context.mode || ''))
-          || typeof context.entry_authority !== 'boolean'
-        ) continue;
-        for (const [field, familyName] of [
-          ['vwap_trend', 'VWAP_TREND'],
-          ['orb_index', 'ORB_INDEX']
-        ] as const) {
-          const family = context[field];
-          if (!family || typeof family !== 'object') continue;
-          const candidate = family.candidate || family.suppressed_candidate;
-          const eventId = String(candidate?.event_id || '');
-          if (!eventId || seen.has(eventId)) continue;
-          seen.add(eventId);
-          events.push({
-            event_id: eventId,
-            family: familyName,
-            side: candidate.side || null,
-            status: family.status || null,
-            confirmed_at: Number(candidate.confirmed_at || 0) || null,
-            journaled_at: Number(record.journaled_at || 0) || null,
-            generated_at: Number(record.generated_at || 0) || null,
-            spot: Number(record.spot || 0) || null,
-            fresh: candidate.fresh === true,
-            suppressed: !family.candidate && Boolean(family.suppressed_candidate),
-            entry_authority: context.entry_authority === true,
-            observation: family.observation || null,
-            opening_range: family.opening_range || null,
-            gex_alignment: family.gex_alignment || null,
-            trend: family.trend || null,
-            kill_switch: family.kill_switch || null,
-            risk_plan: context.shared_risk || family.risk_plan || null
-          });
-        }
-      }
-    }
-    return events
-      .sort((left, right) => (
-        Number(right.confirmed_at || right.journaled_at || 0)
-        - Number(left.confirmed_at || left.journaled_at || 0)
-      ))
-      .slice(0, cappedLimit);
-  }
-
   private startRedisSubscription(): void {
     if (process.env.NODE_ENV === 'test') return;
     const redisUrl = process.env.REDIS_URL;
@@ -418,9 +337,6 @@ export class StrategyEngineAdapter {
   private strategyLane(signal: StrategySnapshot | null | undefined): string {
     const explicit = String(signal?.strategy_lane || '').trim().toLowerCase();
     if (explicit) return explicit;
-    const strategy = String(signal?.strategy || '').toUpperCase();
-    if (strategy === 'ORB_INDEX') return 'orb_index';
-    if (strategy === 'VWAP_TREND') return 'vwap_trend';
     return 'mtf';
   }
 
@@ -699,8 +615,8 @@ export class StrategyEngineAdapter {
       MTF_REVERSAL: 'multi-timeframe reversal',
       GEX_REJECTION: 'GEX level rejection',
       CONTINUATION: 'trend continuation',
-      ORB_INDEX: 'opening-range breakout',
-      VWAP_TREND: 'VWAP trend pullback'
+      GEX_WALL_REJECTION: 'GEX wall rejection',
+      GEX_WALL_BREAK_FAIL: 'GEX wall failed break'
     };
     const strategyCode = String(signal.strategy || 'setup').toUpperCase();
     const strategyName = strategyNames[strategyCode] || strategyCode.toLowerCase().replace(/_/g, ' ');
@@ -1125,12 +1041,6 @@ export class StrategyEngineAdapter {
         1,
         5
       ),
-      strategy_families: {
-        enabled: true,
-        mode: 'primary',
-        orb_index: { enabled: true },
-        vwap_trend: { enabled: true }
-      },
       ibkr_host: ibkr.host,
       ibkr_port: ibkr.port,
       ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live',

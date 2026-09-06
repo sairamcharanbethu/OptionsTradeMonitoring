@@ -46,12 +46,10 @@ from signal_engine import (
 
 ET = ZoneInfo("America/New_York")
 NEXT_EXPIRY_ROLLOVER_MINUTE_ET = 13 * 60
-STRATEGY_LANES = ("mtf", "orb_index", "vwap_trend")
-LANE_STRATEGIES = {
-    "mtf": {"CONTINUATION", "MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION"},
-    "orb_index": {"ORB_INDEX"},
-    "vwap_trend": {"VWAP_TREND"},
-}
+# One engine lane. The ORB_INDEX / VWAP_TREND family lanes were removed on
+# 2026-09-06 (ORB negative in every replay sample; VWAP no measured edge). The
+# lane-keyed JSON contract is kept so the backend adapter is unchanged.
+STRATEGY_LANES = ("mtf",)
 
 
 def _valid(value: Any) -> bool:
@@ -81,11 +79,6 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _strategy_lane(signal: dict[str, Any] | None) -> str:
-    strategy = str((signal or {}).get("strategy") or "").upper()
-    if strategy == "ORB_INDEX":
-        return "orb_index"
-    if strategy == "VWAP_TREND":
-        return "vwap_trend"
     return "mtf"
 
 
@@ -104,73 +97,9 @@ def _previous_strategy_lanes(
     return lanes
 
 
-def _strategy_family_policy_for_lane(
-    configured: dict[str, Any] | None,
-    lane: str,
-) -> dict[str, Any]:
-    source = copy.deepcopy(configured or {})
-    if lane == "mtf":
-        return {"enabled": False, "mode": "shadow"}
-    families_enabled = source.get("enabled", True) is True
-    orb_enabled = (source.get("orb_index") or {}).get("enabled", True) is True
-    vwap_enabled = (source.get("vwap_trend") or {}).get("enabled", True) is True
-    return {
-        **source,
-        "enabled": families_enabled,
-        "mode": "primary",
-        "orb_index": {
-            **dict(source.get("orb_index") or {}),
-            "enabled": lane == "orb_index" and orb_enabled,
-        },
-        "vwap_trend": {
-            **dict(source.get("vwap_trend") or {}),
-            "enabled": lane == "vwap_trend" and vwap_enabled,
-        },
-    }
-
-
 def _normalize_strategy_lane(signal: dict[str, Any], lane: str) -> dict[str, Any]:
     signal["strategy_lane"] = lane
-    strategy = str(signal.get("strategy") or "").upper()
-    favored_setup = (
-        signal.get("call_setup")
-        if signal.get("favoring") == "calls"
-        else signal.get("put_setup")
-        if signal.get("favoring") == "puts"
-        else {}
-    ) or {}
-    reversal_setup = signal.get("reversal_setup") or {}
-    has_family_event = bool(
-        favored_setup.get("source_event_id")
-        or reversal_setup.get("event_id")
-    )
-    if strategy in LANE_STRATEGIES[lane] and (
-        lane == "mtf" or has_family_event
-    ):
-        return signal
-    if lane == "mtf":
-        return signal
-
-    idle = copy.deepcopy(signal)
-    idle.update(
-        state="WAIT",
-        signal_phase="NO_TRADE",
-        favoring="no-trade",
-        strategy="ORB_INDEX" if lane == "orb_index" else "VWAP_TREND",
-        confidence_score=None,
-        call_setup={},
-        put_setup={},
-        reversal_setup=None,
-        blockers=[],
-        confirmations=[],
-        lifecycle={
-            "status": "WAIT",
-            "entry_allowed": False,
-            "paper_position_open": False,
-        },
-        strategy_lane=lane,
-    )
-    return idle
+    return signal
 
 
 def _atomic_text(path: Path, payload: str) -> None:
@@ -470,7 +399,6 @@ def _locked_option_spec(signal: dict[str, Any] | None, expiry: str) -> tuple[flo
     signal = signal or {}
     if signal.get("state") not in CONTINUATION_OPEN_STATES or signal.get("strategy") not in {
         "CONTINUATION", "MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION",
-        "ORB_INDEX", "VWAP_TREND",
     }:
         return None
     side = signal.get("favoring")
@@ -1111,12 +1039,6 @@ class TradePrefetcher:
                 else "disabled"
             ),
         }
-        configured_families = (
-            policy.get("strategy_families")
-            if isinstance(policy.get("strategy_families"), dict)
-            else None
-        )
-
         def options_for_lane(lane: str) -> dict[str, Any]:
             locked_expiry = _locked_option_expiry(previous_lanes.get(lane))
             expiry = (
@@ -1142,10 +1064,6 @@ class TradePrefetcher:
 
         signals: dict[str, dict[str, Any]] = {}
         for lane in STRATEGY_LANES:
-            lane_family_policy = _strategy_family_policy_for_lane(
-                configured_families,
-                lane,
-            )
             lane_signal = build_signal(
                 market,
                 indicators,
@@ -1188,7 +1106,6 @@ class TradePrefetcher:
                     if isinstance(policy.get("session"), dict)
                     else None
                 ),
-                strategy_families=lane_family_policy,
                 cross_market_confirmation=getattr(
                     self.args,
                     "cross_market_confirmation",
@@ -1205,7 +1122,6 @@ class TradePrefetcher:
                 "strategy_lane": lane,
                 "concurrent_strategy_lanes": list(STRATEGY_LANES),
                 "session": lane_signal.get("session_policy"),
-                "strategy_families": lane_family_policy,
             }
             lane_signal["policy_fingerprint"] = _policy_fingerprint(
                 lane_signal["strategy_policy"]
@@ -1381,15 +1297,6 @@ class TradePrefetcher:
         zero = signal.get("zerogex_decision") or {}
         zero_playbook = zero.get("playbook") or {}
         zero_composite = zero.get("composite") or {}
-        families = signal.get("strategy_family_context") or {}
-        orb = families.get("orb_index") or {}
-        vwap = families.get("vwap_trend") or {}
-        orb_candidate = orb.get("candidate") or {}
-        vwap_candidate = (
-            vwap.get("candidate")
-            or vwap.get("suppressed_candidate")
-            or {}
-        )
         return (
             signal.get("state"),
             signal.get("favoring"),
@@ -1415,11 +1322,6 @@ class TradePrefetcher:
             zero_playbook.get("pattern"),
             zero_playbook.get("side"),
             zero_composite.get("posture"),
-            orb.get("status"),
-            orb_candidate.get("event_id"),
-            vwap.get("status"),
-            vwap_candidate.get("event_id"),
-            (vwap.get("kill_switch") or {}).get("active"),
             tuple(
                 (
                     item.get("name"),

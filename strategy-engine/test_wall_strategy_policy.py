@@ -1,7 +1,8 @@
-"""GEX_WALL_BOUNCE is disabled on replay evidence — pin that policy.
+"""The wall-bounce reaction was retired on replay evidence — pin that policy.
 
 UW replay 2026-04-14..08-20: bounce n=12, 17% win, mean -$40.42 ± $13.08 SE
-per contract (~3.1 SE below zero). The other wall reactions stay enabled.
+per contract (~3.1 SE below zero). The evaluator may still report a
+PUT_WALL_BOUNCE_CALL verdict; the engine must never turn it into a candidate.
 """
 from __future__ import annotations
 
@@ -45,9 +46,6 @@ def _candidate(setup_type: str, side: str):
 
 
 class WallStrategyPolicyTest(unittest.TestCase):
-    def test_bounce_is_in_the_disabled_set(self):
-        self.assertIn("GEX_WALL_BOUNCE", signal_engine.DISABLED_WALL_STRATEGIES)
-
     def test_bounce_setup_never_becomes_a_candidate(self):
         self.assertIsNone(_candidate("PUT_WALL_BOUNCE_CALL", "calls"))
 

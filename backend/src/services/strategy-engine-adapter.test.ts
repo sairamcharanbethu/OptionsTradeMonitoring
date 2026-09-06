@@ -123,15 +123,13 @@ async function runTests() {
     }
   }));
   assert(first !== changedPlan, 'A changed frozen trigger must create a new setup identity');
-  const firstFamilyEvent = adapter.planFingerprint(signal({
-    strategy: 'VWAP_TREND',
-    call_setup: { ...signal().call_setup, source_event_id: 'vwap:event:1' }
+  const firstEvent = adapter.planFingerprint(signal({
+    call_setup: { ...signal().call_setup, source_event_id: 'setup:event:1' }
   }));
-  const secondFamilyEvent = adapter.planFingerprint(signal({
-    strategy: 'VWAP_TREND',
-    call_setup: { ...signal().call_setup, source_event_id: 'vwap:event:2' }
+  const secondEvent = adapter.planFingerprint(signal({
+    call_setup: { ...signal().call_setup, source_event_id: 'setup:event:2' }
   }));
-  assert(firstFamilyEvent !== secondFamilyEvent, 'Distinct VWAP reclaim events must create distinct setup identities even when their rounded levels match');
+  assert(firstEvent !== secondEvent, 'Distinct source events must create distinct setup identities even when their rounded levels match');
 
   adapter.updateSetupIdentity(signal());
   const setupId = adapter.currentSetupId;
@@ -150,30 +148,31 @@ async function runTests() {
   concurrentAdapter.maybeExecuteAutonomousLiveEntries = async (snapshot: any) => {
     concurrentExecutions.push(snapshot.strategy_lane);
   };
-  const activeOrb = signal({
-    strategy_lane: 'orb_index',
-    strategy: 'ORB_INDEX',
+  // Lane plumbing is generic: two concurrently published lanes keep independent identities.
+  const activeMtf = signal({
+    strategy_lane: 'mtf',
+    strategy: 'MTF_TREND_BREAK',
     state: 'ACTIVE',
     lifecycle: { entry_allowed: true, paper_position_open: true },
-    call_setup: { ...signal().call_setup, source_event_id: 'orb:event:1' }
+    call_setup: { ...signal().call_setup, source_event_id: 'mtf:event:1' }
   });
-  const activeVwap = signal({
-    strategy_lane: 'vwap_trend',
-    strategy: 'VWAP_TREND',
+  const activeAlt = signal({
+    strategy_lane: 'alt',
+    strategy: 'GEX_REJECTION',
     state: 'ACTIVE',
     lifecycle: { entry_allowed: true, paper_position_open: true },
-    call_setup: { ...signal().call_setup, source_event_id: 'vwap:event:1' }
+    call_setup: { ...signal().call_setup, source_event_id: 'alt:event:1' }
   });
-  await concurrentAdapter.processLaneSnapshot('orb_index', activeOrb);
-  await concurrentAdapter.processLaneSnapshot('vwap_trend', activeVwap);
+  await concurrentAdapter.processLaneSnapshot('mtf', activeMtf);
+  await concurrentAdapter.processLaneSnapshot('alt', activeAlt);
   assert(
-    concurrentAdapter.laneSetupIds.orb_index
-      && concurrentAdapter.laneSetupIds.vwap_trend
-      && concurrentAdapter.laneSetupIds.orb_index !== concurrentAdapter.laneSetupIds.vwap_trend,
-    'Simultaneous ORB and VWAP activations must retain independent setup identities'
+    concurrentAdapter.laneSetupIds.mtf
+      && concurrentAdapter.laneSetupIds.alt
+      && concurrentAdapter.laneSetupIds.mtf !== concurrentAdapter.laneSetupIds.alt,
+    'Simultaneous lane activations must retain independent setup identities'
   );
   assert(
-    concurrentExecutions.includes('orb_index') && concurrentExecutions.includes('vwap_trend'),
+    concurrentExecutions.includes('mtf') && concurrentExecutions.includes('alt'),
     'Each active strategy lane must independently reach guarded execution'
   );
   assert(
@@ -414,12 +413,6 @@ async function runTests() {
       entry_structure_context: {
         mode: 'shadow',
         confluence: { grade: 'TRIPLE_CONFLUENCE', entry_authority: false }
-      },
-      strategy_family_context: {
-        mode: 'primary',
-        entry_authority: true,
-        orb_index: { status: 'FRESH_BREAK', candidate: { event_id: 'orb-index:test' } },
-        shared_risk: { trim_ladder_pct: [25, 45, 75] }
       }
     }
   }));
@@ -439,8 +432,6 @@ async function runTests() {
   assert(persistedOption.decision_telemetry.version === 'strategy-decision-v1', 'Persisted signal must retain replay telemetry');
   assert(persistedOption.decision_telemetry.entry_structure_context.mode === 'shadow', 'Persisted signal must retain compact shadow entry evidence');
   assert(persistedOption.decision_telemetry.entry_structure_context.confluence.entry_authority === false, 'Persisted shadow evidence must remain non-authoritative');
-  assert(persistedOption.decision_telemetry.strategy_family_context.entry_authority === true, 'Persisted primary strategy family evidence must retain entry authority');
-  assert(persistedOption.decision_telemetry.strategy_family_context.shared_risk.trim_ladder_pct[2] === 75, 'Persisted strategy family evidence must retain the trim ladder');
   assert(positionUpdate?.values[2] === 552, 'Open strategy positions must retain the first target as TP1');
   assert(positionUpdate?.values[3] === 554, 'Open strategy positions must retain the configured final target as TP2');
   queries.length = 0;
@@ -545,73 +536,6 @@ async function runTests() {
   );
   const terminalPositionUpdate = queries.find((query) => query.sql.includes('strategy_exit_requested_at'));
   assert(terminalPositionUpdate?.values[1] === 'INVALIDATED', 'Position exit reason must retain the terminal lifecycle state');
-
-  const familyHistoryDir = await mkdtemp(path.join(os.tmpdir(), 'strategy-family-history-'));
-  try {
-    await mkdir(path.join(familyHistoryDir, 'history'));
-    const orbRecord = {
-      journaled_at: 1_786_000_100,
-      generated_at: 1_786_000_099,
-      spot: 550.25,
-      strategy_family_context: {
-        mode: 'shadow',
-        entry_authority: false,
-        orb_index: {
-          strategy: 'ORB_INDEX',
-          status: 'FRESH_BREAK',
-          observation: 'SHADOW: calls ORB close confirmed',
-          opening_range: { high: 550, low: 548 },
-          candidate: {
-            side: 'calls',
-            event_id: 'orb-index:2026-08-10:calls:1786000099',
-            confirmed_at: 1_786_000_099,
-            fresh: true
-          }
-        },
-        shared_risk: { trim_ladder_pct: [25, 45, 75] }
-      },
-      raw_bar_history: [{ close: 550.25 }]
-    };
-    const vwapRecord = {
-      journaled_at: 1_786_000_200,
-      generated_at: 1_786_000_199,
-      spot: 551,
-      strategy_family_context: {
-        mode: 'primary',
-        entry_authority: true,
-        vwap_trend: {
-          strategy: 'VWAP_TREND',
-          status: 'REENTRY_COOLDOWN',
-          observation: 'PRIMARY: reclaim inside cooldown',
-          trend: { side: 'calls', vwap: 550.5, slope_bps: 3.2 },
-          suppressed_candidate: {
-            side: 'calls',
-            event_id: 'vwap-trend:2026-08-10:calls:1786000199',
-            confirmed_at: 1_786_000_199,
-            fresh: true
-          }
-        }
-      }
-    };
-    await writeFile(
-      path.join(familyHistoryDir, 'history', 'signals-2026-08-10.jsonl'),
-      [JSON.stringify(orbRecord), JSON.stringify(orbRecord), '{bad json', JSON.stringify(vwapRecord)].join('\n')
-    );
-    const familyAdapter = createAdapter();
-    familyAdapter.dataDir = familyHistoryDir;
-
-    const familyEvents = await familyAdapter.getStrategyFamilyHistory(10);
-
-    assert(familyEvents.length === 2, 'Family history must deduplicate stable event IDs and ignore malformed rows');
-    assert(familyEvents[0].event_id.startsWith('vwap-trend:'), 'Family history must return newest candidates first');
-    assert(familyEvents[0].suppressed === true, 'Family history must retain suppressed VWAP observations');
-    assert(familyEvents[0].entry_authority === true, 'Family history must retain primary authority for promoted strategy candidates');
-    assert(familyEvents[1].family === 'ORB_INDEX', 'Family history must retain standalone ORB observations');
-    assert(familyEvents[1].entry_authority === false, 'Family history must remain explicitly non-authoritative');
-    assert(!('raw_bar_history' in familyEvents[1]), 'Family history must never expose raw bar history');
-  } finally {
-    await rm(familyHistoryDir, { recursive: true, force: true });
-  }
 }
 
 runTests()

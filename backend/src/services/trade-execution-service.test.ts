@@ -730,7 +730,7 @@ async function testPrimaryFamilyUsesThirtyFivePercentPremiumStop() {
               engine_version: 'signal-only-v2',
               lifecycle_status: 'ACTIVE',
               strategy_snapshot: {
-                strategy: 'ORB_INDEX',
+                strategy: 'MTF_TREND_BREAK',
                 paper_policy: { premium_stop_pct: 35 },
                 call_setup: { targets: [101, 102] }
               }
@@ -761,9 +761,9 @@ async function testPrimaryFamilyUsesThirtyFivePercentPremiumStop() {
     notes: '[ORB test entry]'
   });
 
-  assert(insertParams[7] === 1.3, `ORB live premium stop should be 35% below a $2 entry, got ${insertParams[7]}`);
-  assert(insertParams[8] === null, 'ORB must not use the generic automatic premium take-profit setting');
-  assert(String(insertParams[15]).includes('(35%)'), 'ORB position notes must record the frozen premium-stop percentage');
+  assert(insertParams[7] === 1.3, `The strategy's own premium stop (35%) must be honored below a $2 entry, got ${insertParams[7]}`);
+  assert(insertParams[8] === null, 'A strategy with its own stop must not use the generic automatic premium take-profit setting');
+  assert(String(insertParams[15]).includes('(35%)'), 'Position notes must record the frozen premium-stop percentage');
 }
 
 async function testLiveEntryUsesCorrelatedExposureLockAndFailsClosed() {
@@ -1043,7 +1043,7 @@ async function testOppositeStrategyLaneDoesNotSupersedeConcurrentPosition() {
     option_type: 'CALL',
     status: 'OPEN',
     strategy_managed: true,
-    strategy_snapshot: { strategy_lane: 'orb_index', strategy: 'ORB_INDEX' },
+    strategy_snapshot: { strategy_lane: 'mtf', strategy: 'MTF_TREND_BREAK' },
     execution_broker: 'wealthsimple_snaptrade',
     is_simulated: false
   };
@@ -1051,7 +1051,7 @@ async function testOppositeStrategyLaneDoesNotSupersedeConcurrentPosition() {
     log: { info: () => {}, warn: () => {}, error: () => {} },
     pg: {
       query: async (sql: string) => sql.includes('SELECT strategy_snapshot FROM signals')
-        ? { rows: [{ strategy_snapshot: { strategy_lane: 'vwap_trend', strategy: 'VWAP_TREND' } }] }
+        ? { rows: [{ strategy_snapshot: { strategy_lane: 'alt', strategy: 'GEX_REJECTION' } }] }
         : { rows: [orbPosition] }
     }
   } as any) as any;

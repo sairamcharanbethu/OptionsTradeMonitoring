@@ -15,8 +15,6 @@ const BENCHMARK_BY_STRATEGY: Record<string, { trades: number; winRate: number; a
   GEX_WALL_REJECTION: { trades: 9, winRate: 0.56, avgPnl: 35.0 },
   GEX_WALL_BREAK_FAIL: { trades: 14, winRate: 0.57, avgPnl: 3.03 },
   MTF_TREND_BREAK: { trades: 39, winRate: 0.41, avgPnl: -5.21 },
-  ORB_INDEX: { trades: 9, winRate: 0.22, avgPnl: -57.28 },
-  VWAP_TREND: { trades: 25, winRate: 0.36, avgPnl: -2.99 },
 };
 
 const SCOPE_OPTIONS = [
