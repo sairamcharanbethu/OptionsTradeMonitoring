@@ -374,11 +374,33 @@ def symbol_market(bars: list[dict], sim_now: float) -> dict:
     }
 
 
+def _bid_at_minute(option_candles: dict[float, dict], minute: float) -> float | None:
+    """Estimated sellable bid at ``minute`` (candle close minus half the modeled spread)."""
+    for lookback in range(0, 15):
+        candle = option_candles.get(minute - lookback * 60)
+        if candle and candle["close"] > 0:
+            mid = candle["close"]
+            return mid if MID_FILLS else max(0.01, mid - modeled_spread(mid) / 2)
+    return None
+
+
 def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float, dict],
                   close_at: float, flatten_at: float,
-                  exit_at_target: int | None = None) -> dict:
+                  exit_at_target: int | None = None,
+                  exit_policy: str = "live") -> dict:
     """Walk forward on 1m bars: stop / premium stop / T1 (stop-to-trigger) /
     T2 / flatten.
+
+    ``exit_policy`` selects what happens when T1 is touched:
+      live               — stop moves to the trigger, premium lock arms (production).
+      t1_no_ratchet      — stop stays at the invalidation; premium stop stays
+                           active; premium lock still arms.
+      t1_hold            — stop stays at the invalidation; premium stop stays
+                           active; no premium lock (pure hold for T2).
+      t1_trim_half_hold  — bank 50% at the T1 bid; the remainder keeps the
+                           invalidation stop and premium stop, no lock, and runs
+                           to T2 / stop / flatten. P&L is the blended per-contract
+                           result so it pairs against the other policies.
 
     Conservative intrabar rule: if a bar spans both stop and target, the stop
     fills first. The premium stop mirrors the live exit stack (35% for the
@@ -401,6 +423,10 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
     lock_arm_return = 0.20
     lock_floor_return = 0.10
     max_bid_return = None
+    ratchet_stop = exit_policy == "live"
+    lock_enabled = exit_policy in ("live", "t1_no_ratchet")
+    trim_fraction = 0.5 if exit_policy == "t1_trim_half_hold" else 0.0
+    t1_trim_bid: float | None = None
     exit_reason, exit_time = "SESSION_FLATTEN", flatten_at
     for bar in spy_bars:
         if bar["time"] <= entry_minute or bar["time"] >= flatten_at:
@@ -411,7 +437,8 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
         t1_touch = t1 is not None and (bar["high"] >= t1 if side == "CALL" else bar["low"] <= t1)
         t2_touch = t2 is not None and (bar["high"] >= t2 if side == "CALL" else bar["low"] <= t2)
         if stop_hit:
-            exit_reason = "T1_TRAIL_STOP" if t1_hit else "STOP"
+            # Ratcheted stop (live) vs the original invalidation stop after T1.
+            exit_reason = ("T1_TRAIL_STOP" if ratchet_stop else "STOP_AFTER_T1") if t1_hit else "STOP"
             exit_time = bar["time"] + 60
             break
         if t1_touch and not t1_hit:
@@ -422,7 +449,10 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
                 exit_time = bar["time"] + 60
                 break
             t1_hit = True
-            stop = trade["trigger"]  # live policy: T1 moves the stop to the trigger
+            if ratchet_stop:
+                stop = trade["trigger"]  # live policy: T1 moves the stop to the trigger
+            if trim_fraction > 0:
+                t1_trim_bid = _bid_at_minute(option_candles, bar["time"] + 60)
         if t2_touch:
             exit_reason = "TARGET_2"
             exit_time = bar["time"] + 60
@@ -430,11 +460,13 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
         candle = option_candles.get(bar["time"])
         if candle and candle["close"] > 0:
             last_premium = candle["close"]
-        if not t1_hit and last_premium is not None and last_premium <= premium_floor:
+        # Live disables the premium stop once the stop sits at the trigger; the
+        # alternative policies keep it armed for the whole hold.
+        if (not t1_hit or not ratchet_stop) and last_premium is not None and last_premium <= premium_floor:
             exit_reason = "PREMIUM_STOP"
             exit_time = bar["time"] + 60
             break
-        if t1_hit and last_premium is not None and trade["entry_price"] > 0:
+        if lock_enabled and t1_hit and last_premium is not None and trade["entry_price"] > 0:
             bid_estimate = max(0.01, last_premium - modeled_spread(last_premium) / 2)
             bid_return = bid_estimate / trade["entry_price"] - 1
             max_bid_return = bid_return if max_bid_return is None else max(max_bid_return, bid_return)
@@ -452,15 +484,21 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
         return {**trade, "exit_reason": "NO_EXIT_QUOTE", "pnl": None}
     exit_mid = candle["close"]
     exit_bid = exit_mid if MID_FILLS else max(0.01, exit_mid - modeled_spread(exit_mid) / 2)
-    pnl = round((exit_bid - trade["entry_price"]) * 100 * trade["contracts"], 2)
+    per_contract = exit_bid - trade["entry_price"]
+    if trim_fraction > 0 and t1_hit and t1_trim_bid is not None:
+        per_contract = trim_fraction * (t1_trim_bid - trade["entry_price"]) + (1 - trim_fraction) * per_contract
+        exit_reason = f"T1_TRIM+{exit_reason}"
+    pnl = round(per_contract * 100 * trade["contracts"], 2)
     return {**trade, "exit_time": exit_time, "exit_price": round(exit_bid, 2),
-            "exit_reason": exit_reason, "t1_hit": t1_hit, "pnl": pnl}
+            "exit_reason": exit_reason, "t1_hit": t1_hit, "exit_policy": exit_policy,
+            "t1_trim_price": round(t1_trim_bid, 2) if t1_trim_bid is not None else None, "pnl": pnl}
 
 
 def run_day(client: UWClient, date: str, interval: int, verbose: bool,
             variants_spec: list[dict] | None = None,
             fetch_only: bool = False,
-            no_wall_chain: bool = False) -> dict:
+            no_wall_chain: bool = False,
+            primary_dte: int = 0) -> dict:
     open_at, close_at = _session_bounds(date)
     flatten_at = close_at - 40 * 60
     entry_cutoff = close_at - 60 * 60
@@ -494,9 +532,17 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
         contract_symbols_for_expiry(client, date, wall_expiry, mid_price, max(6.0, width * 0.8))
         if wall_expiry and wall_expiry not in (session_yyyymmdd,) and not no_wall_chain else []
     )
+    # Live since 2026-09-06: the PRIMARY chain is the nearest expiry >= N days
+    # out (strategy_option_expiry_dte, default 3). Same width as the wall chain
+    # so the run stays inside the on-disk cache.
+    multi_day_expiry = _wall_option_expiry(expiries, now=open_at, min_dte=primary_dte) if primary_dte > 0 else None
+    multi_day_meta = (
+        contract_symbols_for_expiry(client, date, multi_day_expiry, mid_price, max(6.0, width * 0.8))
+        if multi_day_expiry and multi_day_expiry != session_yyyymmdd else []
+    )
     option_data = {
         entry["symbol"]: fetch_option_candles(client, entry["symbol"], date)
-        for entry in (*zero_dte_meta, *next_meta, *wall_meta)
+        for entry in (*zero_dte_meta, *next_meta, *wall_meta, *multi_day_meta)
     }
     one_pm = datetime.strptime(date, "%Y-%m-%d").replace(hour=13, minute=0, tzinfo=ET).timestamp()
     if fetch_only:
@@ -532,7 +578,11 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
             net_gamma = gamma_series[gamma_index][1] if gamma_series and gamma_series[gamma_index][0] <= sim_now else None
             gex = gex_snapshot(sim_now, spy["spot"], net_gamma, flip, call_wall, put_wall)
 
-            if sim_now < one_pm or not next_meta:
+            if multi_day_meta:
+                primary_meta = multi_day_meta
+                primary_expiry = multi_day_meta[0]["expiry"]
+                expiry_mode = f"MULTI_DAY_{primary_dte}DTE"
+            elif sim_now < one_pm or not next_meta:
                 primary_meta, primary_expiry, expiry_mode = zero_dte_meta, date, "0DTE"
             else:
                 primary_meta = next_meta
@@ -643,7 +693,8 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
         for trade in variant["open_by_lane"].values():
             candles = option_data.get(trade["contract"], {})
             rows.append(simulate_exit(trade, spy_bars, candles, close_at, flatten_at,
-                                      exit_at_target=variant.get("exit_at_target")))
+                                      exit_at_target=variant.get("exit_at_target"),
+                                      exit_policy=variant.get("exit_policy", "live")))
         variant_trades[variant["name"]] = rows
 
     return {"date": date, "variants": variant_trades, "blockers": blocker_counts, "states": state_minutes}
@@ -668,6 +719,13 @@ def summarize(all_trades: list[dict], label: str = "") -> None:
         subtotal = sum(row["pnl"] for row in rows)
         sub_wins = sum(1 for row in rows if row["pnl"] > 0)
         print(f"  {strategy:<22} {len(rows):>3} trades  {sub_wins:>2} wins  ${subtotal:>9.2f}")
+    by_exit: dict[str, list[dict]] = {}
+    for trade in priced:
+        by_exit.setdefault(str(trade.get("exit_reason")), []).append(trade)
+    for reason, rows in sorted(by_exit.items(), key=lambda item: -sum(r["pnl"] for r in item[1])):
+        subtotal = sum(row["pnl"] for row in rows)
+        sub_wins = sum(1 for row in rows if row["pnl"] > 0)
+        print(f"    exit {reason:<24} {len(rows):>3}  {sub_wins:>2} green  ${subtotal:>9.2f}  avg ${subtotal / len(rows):>7.2f}")
 
 
 def main() -> None:
@@ -687,6 +745,10 @@ def main() -> None:
                         help="frozen setups use the primary adaptive chain (0DTE, 1DTE after 1PM) instead of ~3DTE — mirrors live --wall-option-expiry-dte 0")
     parser.add_argument("--exit-t1-variant", action="store_true",
                         help="also simulate an exit policy that banks the full position at T1")
+    parser.add_argument("--exit-policy-variants", action="store_true",
+                        help="also simulate the post-T1 alternatives: t1_no_ratchet, t1_hold, t1_trim_half_hold")
+    parser.add_argument("--primary-dte", type=int, default=0,
+                        help="primary chain = nearest listed expiry >= N calendar days out (live strategy_option_expiry_dte); 0 = 0DTE/1PM-roll")
     parser.add_argument("--trades-out",
                         help="path prefix; writes <prefix>-<variant>.jsonl with every priced trade")
     args = parser.parse_args()
@@ -709,6 +771,12 @@ def main() -> None:
             "name": "exit_at_t1", "skip_strategies": set(),
             "latest_entry_minute_et": None, "exit_at_target": 1,
         })
+    if args.exit_policy_variants:
+        for policy in ("t1_no_ratchet", "t1_hold", "t1_trim_half_hold"):
+            variants_spec.append({
+                "name": policy, "skip_strategies": set(),
+                "latest_entry_minute_et": None, "exit_policy": policy,
+            })
 
     client = UWClient(_load_token())
     if args.date:
@@ -730,7 +798,7 @@ def main() -> None:
         try:
             result = run_day(client, date, args.interval, verbose=not args.summary_only,
                              variants_spec=variants_spec, fetch_only=args.fetch_only,
-                             no_wall_chain=args.no_wall_chain)
+                             no_wall_chain=args.no_wall_chain, primary_dte=args.primary_dte)
         except Exception as exc:
             print(f"  FAILED: {exc}")
             continue
