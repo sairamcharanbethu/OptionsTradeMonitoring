@@ -26,16 +26,15 @@
 #                                            Service-name DNS is unaffected:
 #                                            nginx -> trade-staging-backend,
 #                                            REDIS_URL and db all still resolve.
-#   3. frontend `expose: 80`, no host     -> the domain is assigned to the
-#      `ports:`                              frontend service in the Coolify UI
-#                                            (Configuration > Domains); Coolify
-#                                            writes the Traefik route + Let's
-#                                            Encrypt TLS from it. Deliberately NO
-#                                            SERVICE_FQDN_* var here — it only
-#                                            auto-generates a default hostname,
-#                                            which this SPA never needs (it calls
-#                                            /api relative), and its identifier
-#                                            and key-charset rules are a trap.
+#   3. frontend `expose: 80` + a          -> SOMETHING has to tell Coolify to
+#      SERVICE_FQDN_ var, no host `ports:`   emit traefik.* labels for this
+#                                            service, or the container gets none
+#                                            and the site is unreachable however
+#                                            healthy the stack looks. Either a
+#                                            domain typed into the UI or the
+#                                            magic var below will do it; the var
+#                                            is here because the UI field does
+#                                            not always render for compose apps.
 #   4. backend gets extra_hosts           -> keeps OLLAMA_URL host.docker.internal
 #                                            working on a Linux Coolify host.
 #   5. Service NAMES kept identical       -> nginx upstream (trade-staging-backend)
@@ -314,16 +313,37 @@ services:
         VITE_APP_BUILD_SHA: ${VITE_APP_BUILD_SHA:-}
         VITE_ENABLE_DEV_TRADING_TESTS: ${VITE_ENABLE_DEV_TRADING_TESTS:-false}
     restart: always
-    # The container port Coolify/Traefik routes the domain at, and the only
-    # thing this file needs to say about exposure. The domain itself is set on
-    # this service in the Coolify UI (Configuration > Domains), which is what
-    # creates the Traefik router — no SERVICE_FQDN_* magic var, and definitely
-    # no hand-written traefik.* labels.
-    #
-    # No host `ports:` on purpose: a published host port bypasses domain-based
-    # proxy routing entirely.
+    # The container port Coolify/Traefik routes the domain at. No host `ports:`
+    # on purpose: a published host port bypasses domain-based proxy routing.
     expose:
       - "80"
+    environment:
+      # Asks Coolify to generate a domain for THIS service and, crucially, to
+      # emit the traefik.* labels that create the router. Without either this or
+      # a domain typed into the UI, the container gets NO traefik labels at all
+      # (verified with `docker inspect`: labels NONE) — the stack runs perfectly
+      # and nothing can reach it.
+      #
+      # Belt-and-braces with the UI Domains field, because that field does not
+      # always render for compose services (coollabsio/coolify#5826, #4730,
+      # #3466). If a UI domain IS set, Coolify populates this var with it rather
+      # than minting a second one.
+      #
+      # Form rules, both learned the hard way:
+      #   - The identifier must be the compose service name with hyphens turned
+      #     into underscores. `SERVICE_FQDN_FRONTEND_80` named no service, so
+      #     Coolify bound the domain to nothing and still reported success.
+      #   - NO hyphens in the key, despite the docs' own
+      #     `SERVICE_URL_APPWRITE-SERVICE_3000` example: Coolify's validator
+      #     fails the deploy at parse time with "The key must start with a letter
+      #     or underscore and may only contain letters, numbers, underscores, and
+      #     dots."
+      #   - Underscores in the name make a trailing `_80` unreadable as a port,
+      #     so the port suffix is omitted. Fine: the proxy defaults to 80 and
+      #     `expose: 80` above declares the container port.
+      #   - Map form (key: value), never list form (- KEY) — Coolify merges its
+      #     own map-form env in and a list triggers a non-string-key parse error.
+      SERVICE_FQDN_TRADE_STAGING_FRONTEND: ""
     depends_on:
       # `service_started`, not `service_healthy`. nginx serves a static SPA and
       # only needs the backend's DNS name to resolve for `proxy_pass` at config
