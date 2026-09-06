@@ -9,6 +9,7 @@ import { getNewYorkDateParts, getNewYorkMarketState, getUSMarketCloseMinutes } f
 import { NoTradeWindow, findActiveNoTradeWindow, getEventNoTradeWindows, parseCustomEconomicEvents, parseEtClockMinute } from '../lib/economic-calendar';
 import { DiscordAlertService } from './discord-alert-service';
 import { StrategyLifecycleManager } from './strategy-lifecycle-manager';
+import { LiveAiGateService } from './live-ai-gate-service';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
 
@@ -54,10 +55,12 @@ export class StrategyEngineAdapter {
   // its exit.
   private liveEntriesReady = false;
   private lifecycleManager: StrategyLifecycleManager;
+  private liveAiGate: LiveAiGateService;
 
   constructor(private fastify: FastifyInstance) {
     this.dataDir = process.env.STRATEGY_DATA_DIR || '/strategy-data/trade';
     this.lifecycleManager = new StrategyLifecycleManager(fastify);
+    this.liveAiGate = new LiveAiGateService(fastify);
   }
 
   public getMode(): StrategyEngineMode {
@@ -817,7 +820,7 @@ export class StrategyEngineAdapter {
         message: autonomousActive
           ? alert.message.replace(
             'ACTION: OPEN THE APP AND REVIEW THE PLANNED ORDER NOW.\nThe trigger and activation checks passed. Entry still requires manual approval, a fresh quote, and every hard risk limit.',
-            'ACTION: MONITOR THE AUTONOMOUS ENTRY.\nThe backend will submit at most one contract only if the live account, market window, lifecycle, quote, debit, and hard risk checks all pass.'
+            'ACTION: MONITOR THE AUTONOMOUS ENTRY.\nThe backend will submit a risk-budget-sized order only if the live account, market window, lifecycle, quote, debit, hard risk checks and the AI gate all pass.'
           )
           : alert.message,
         severity: alert.severity,
@@ -1017,10 +1020,23 @@ export class StrategyEngineAdapter {
       }
 
       try {
+        // Deterministic gates first (so the model never sees a candidate that
+        // would be rejected anyway), then the AI gate as the last check.
+        await this.assertSignalExecutable(signalId);
+        const verdict = await this.liveAiGate.decide({ userId, signalId, signal, settings });
+        if (verdict.blocks) {
+          this.fastify.log.info(`[StrategyEngineAdapter] AI gate skipped signal ${signalId} for user ${userId}: ${verdict.rationale}`);
+          return { userId, result: `entry skipped by AI gate (${verdict.source}): ${verdict.rationale}` };
+        }
+        const gateSettings: Record<string, string> = { ...settings };
+        if (verdict.mode !== 'off') {
+          gateSettings.ai_gate_note = `${verdict.mode} ${verdict.decision} ${verdict.riskTier} via ${verdict.source}: ${verdict.rationale}`;
+          if (verdict.mode === 'gate') gateSettings.ai_gate_risk_tier = verdict.riskTier;
+        }
         const result = await this.lifecycleManager.submitAutonomousEntry({
           userId,
           signalId,
-          settings,
+          settings: gateSettings,
           assertExecutable: (candidateSignalId) => this.assertSignalExecutable(candidateSignalId)
         });
         if (result?.riskCode === 'DAILY_LOSS_LIMIT') {

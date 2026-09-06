@@ -498,6 +498,11 @@ async function runTests() {
     },
     log: { info: () => undefined, warn: () => undefined, error: () => undefined }
   } as any) as any;
+  const gateVerdict = (overrides: Record<string, any> = {}) => ({
+    mode: 'gate', decision: 'TRADE', riskTier: 'STANDARD', exitProfile: 'BALANCED_T2', rationale: 'clean setup',
+    riskFlags: [], source: 'AI', blocks: false, latencyMs: 5, aiRequested: true, ...overrides
+  });
+  autonomousAdapter.liveAiGate = { decide: async () => gateVerdict() };
   autonomousAdapter.currentSetupId = '33333333-3333-4333-8333-333333333333';
   autonomousAdapter.currentSignal = signal({
     generated_at: Date.now() / 1000,
@@ -517,9 +522,20 @@ async function runTests() {
   await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 88);
   assert(autonomousCalls.length === 2 && autonomousCalls.every(call => call.signalId === 88), 'Every eligible autonomous user must route the active strategy signal');
   assert(maxActiveAutonomousCalls === 2, 'Independent autonomous users must execute concurrently');
-  assert(autonomousCalls.every(call => call.settings.contracts_per_trade === '1'), 'Autonomous live entries must hard-cap each order at one contract');
+  assert(autonomousCalls.every(call => call.settings.contracts_per_trade === '4'), 'Autonomous live entries keep the user contract ceiling; sizing is risk-based downstream');
+  assert(autonomousCalls.every(call => call.settings.ai_gate_risk_tier === 'STANDARD' && String(call.settings.ai_gate_note).includes('clean setup')), 'The AI gate tier and rationale travel with the entry');
   assert(autonomousCalls.every(call => call.settings.max_trades_per_day === '2'), 'Autonomous live entries must preserve each user daily trade limit');
   assert(autonomousCalls.every(call => call.settings.max_correlated_positions === '4'), 'Autonomous live entries must preserve each configured concurrent exposure limit');
+  autonomousCalls.length = 0;
+  autonomousAdapter.liveAiGate = { decide: async () => gateVerdict({ decision: 'SKIP', riskTier: 'CAUTIOUS', blocks: true, rationale: 'GEX conflicts with direction' }) };
+  await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 89);
+  assert(autonomousCalls.length === 0, 'An AI gate SKIP must block every autonomous entry');
+  assert(String(autonomousAdapter.lastAutonomousEntryResult).includes('AI gate') && String(autonomousAdapter.lastAutonomousEntryResult).includes('GEX conflicts'), 'The skip reason must be surfaced in the last-entry status');
+  autonomousAdapter.liveAiGate = { decide: async () => gateVerdict({ mode: 'advisory', decision: 'SKIP', blocks: false }) };
+  await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 90);
+  const advisoryCalls = autonomousCalls.slice();
+  assert(advisoryCalls.length === autonomousUserIds.length && advisoryCalls.every(call => call.settings.ai_gate_risk_tier === undefined), 'Advisory mode records the verdict but neither blocks nor sizes');
+  autonomousAdapter.liveAiGate = { decide: async () => gateVerdict() };
 
   queries.length = 0;
   await persistenceAdapter.persistPrimarySignal(signal({ state: 'WAIT', signal_phase: 'INVALIDATED' }));

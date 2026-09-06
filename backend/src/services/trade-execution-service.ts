@@ -47,6 +47,10 @@ interface ExecutionSettings {
   loss_cooldown_minutes?: string;
   max_premium_risk_dollars?: string;
   max_correlated_positions?: string;
+  max_same_direction_positions?: string;
+  strategy_max_risk_per_trade_dollars?: string;
+  ai_gate_risk_tier?: string;
+  ai_gate_note?: string;
   shadow_trading_enabled?: string;
 }
 
@@ -281,6 +285,21 @@ export class TradeExecutionService {
     if (!correlatedRisk.approved) {
       return this.denyPreSubmitRisk(input, broker, correlatedRisk);
     }
+    const sameDirectionPositions = correlatedPositions.filter(
+      (position: any) => String(position.option_type || '').toUpperCase() === input.winningSide
+    );
+    const sameDirectionRisk = RiskDecisionService.evaluatePreSubmit({
+      signalId: input.signalId,
+      broker,
+      side: input.winningSide,
+      contractLabel: correlatedLabel,
+      sameDirectionOpenPositions: sameDirectionPositions.length,
+      sameDirectionPositions,
+      maxSameDirectionPositions: riskState.maxSameDirectionPositions
+    });
+    if (!sameDirectionRisk.approved) {
+      return this.denyPreSubmitRisk(input, broker, sameDirectionRisk);
+    }
 
     const accountRisk = RiskDecisionService.evaluatePreSubmit({
       signalId: input.signalId,
@@ -486,6 +505,8 @@ export class TradeExecutionService {
     const lossCooldownMinutes = this.parsePositiveInt(settings.loss_cooldown_minutes, 30, 24 * 60);
     const maxPremiumRisk = this.parsePositiveNumber(settings.max_premium_risk_dollars, 500, 1_000_000);
     const maxCorrelatedPositions = this.parsePositiveInt(settings.max_correlated_positions, 3, 20);
+    const maxSameDirectionPositions = this.parsePositiveInt(settings.max_same_direction_positions, 1, 20);
+    const maxRiskPerTrade = this.parsePositiveNumber(settings.strategy_max_risk_per_trade_dollars, 50, 1_000_000);
     const { rows: pnlRows } = await this.fastify.pg.query(
       `SELECT COALESCE(SUM(realized_pnl), 0)::numeric AS daily_pnl
        FROM positions
@@ -528,7 +549,9 @@ export class TradeExecutionService {
       maxConsecutiveLosses,
       cooldownUntil,
       maxPremiumRisk,
-      maxCorrelatedPositions
+      maxCorrelatedPositions,
+      maxSameDirectionPositions,
+      maxRiskPerTrade
     };
   }
 
@@ -1068,7 +1091,28 @@ export class TradeExecutionService {
     return Number(Math.min(quote.ask, Math.max(mid, rawLimit)).toFixed(2));
   }
 
-  private async executeSnapTradeOptionTrade(input: ExecuteSignalInput, settings: ExecutionSettings, quantity: number) {
+  /** Live premium hard stop is max(0.65×entry, 0.85×soft); ~35% covers it plus slippage. */
+  private readonly LIVE_HARD_STOP_LOSS_FRACTION = 0.35;
+
+  /**
+   * Stop-risk per contract for sizing: the larger of the engine's delta/gamma
+   * estimate to the underlying invalidation and the premium hard stop on the
+   * actual protected limit.
+   */
+  stopRiskPerContract(optionDetails: any, protectedLimit: number): number {
+    const engineEstimate = Number(optionDetails?.estimated_stop_risk?.per_contract_dollars);
+    const premiumHardStop = protectedLimit > 0 ? protectedLimit * 100 * this.LIVE_HARD_STOP_LOSS_FRACTION : 0;
+    return Math.max(Number.isFinite(engineEstimate) && engineEstimate > 0 ? engineEstimate : 0, premiumHardStop);
+  }
+
+  /** Tier from the AI gate caps size: CAUTIOUS is one contract; STANDARD/FULL keep the risk-based size. */
+  applyAiRiskTier(quantity: number, settings: ExecutionSettings): number {
+    const tier = String(settings.ai_gate_risk_tier || '').toUpperCase();
+    return tier === 'CAUTIOUS' ? Math.min(1, quantity) : quantity;
+  }
+
+  private async executeSnapTradeOptionTrade(input: ExecuteSignalInput, settings: ExecutionSettings, requestedQuantity: number) {
+    let quantity = requestedQuantity;
     const osiTicker = this.constructOSITicker(input.symbol, input.chosenStrike, input.winningSide, input.chosenExpiry);
     const optionDetails = await this.getSignalOptionDetails(input.signalId);
     const preSubmitRisk = RiskDecisionService.evaluatePreSubmit({
@@ -1097,6 +1141,25 @@ export class TradeExecutionService {
         entryQuoteValidation = validatedQuote;
         limitPrice = validatedQuote.protectedLimit.toFixed(2);
         orderType = 'LIMIT';
+        // Risk-based sizing on the real protected limit, then the AI tier cap.
+        const riskStateForSizing = await this.getRiskState(input.userId, settings, 'wealthsimple_snaptrade');
+        const riskPerContract = this.stopRiskPerContract(optionDetails, validatedQuote.protectedLimit);
+        const riskBudgetAssessment = RiskDecisionService.evaluatePreSubmit({
+          signalId: input.signalId,
+          broker: 'wealthsimple_snaptrade',
+          side: input.winningSide,
+          contractLabel: this.contractLabel(input),
+          riskPerContract,
+          maxRiskPerTrade: riskStateForSizing.maxRiskPerTrade
+        });
+        if (!riskBudgetAssessment.approved) {
+          return this.denyPreSubmitRisk(input, 'wealthsimple_snaptrade', riskBudgetAssessment);
+        }
+        const sized = RiskDecisionService.riskBasedQuantity(quantity, riskPerContract, riskStateForSizing.maxRiskPerTrade);
+        quantity = this.applyAiRiskTier(Math.max(1, sized.quantity), settings);
+        if (quantity !== requestedQuantity) {
+          this.fastify.log.info(`[TradeExecutionService] Sized signal ${input.signalId} to ${quantity} contract(s) (requested ${requestedQuantity}; ~$${riskPerContract.toFixed(0)} stop risk/contract vs $${riskStateForSizing.maxRiskPerTrade} budget${settings.ai_gate_risk_tier ? `; AI tier ${settings.ai_gate_risk_tier}` : ''}).`);
+        }
         const strategyDebitViolation = this.getStrategyDebitPlanViolation(
           optionDetails,
           validatedQuote.protectedLimit,
@@ -1190,7 +1253,7 @@ export class TradeExecutionService {
         takeProfitPct: settings.take_profit_pct,
         syntheticTrailingEnabled: settings.synthetic_trailing_stop_enabled === 'true',
         syntheticTrailingPct: settings.synthetic_trailing_stop_pct,
-        notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId};${protectedLimitNote}]`,
+        notes: `[Wealthsimple/SnapTrade live trade ${result.orderId || result.tradeId || 'submitted'} from Signal #${input.signalId};${protectedLimitNote}]${settings.ai_gate_note ? ` [AI gate: ${String(settings.ai_gate_note).slice(0, 300)}]` : ''}`,
         entryQuote: entryQuoteValidation?.quote || null,
         limitPrice: limitPrice ?? null,
         orderType

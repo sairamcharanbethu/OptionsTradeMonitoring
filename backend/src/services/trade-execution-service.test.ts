@@ -410,6 +410,13 @@ async function testRiskDecisionServiceCentralizesPreTradeBlocks() {
   assert(RiskDecisionService.forPlannedLoss(75, 75).allowed === true, 'Should allow planned loss at the remaining daily budget');
   assert(correlated.allowed === false && correlated.code === 'CORRELATED_EXPOSURE_LIMIT', 'Should block correlated exposure');
   assert(correlated.message.includes('#679 SPY 769 CALL 2026-08-04') && correlated.message.includes('broker review'), 'Correlated exposure denial must identify the counted position and reconciliation requirement');
+  const sameDir = RiskDecisionService.forSameDirectionExposure(1, 1, 'CALL', 'SPY/QQQ', [{ id: 700, symbol: 'SPY', strike_price: 770, option_type: 'CALL' }]);
+  assert(sameDir.allowed === false && sameDir.code === 'SAME_DIRECTION_EXPOSURE_LIMIT' && sameDir.message.includes('#700 SPY 770 CALL'), 'A second same-direction position across lanes is denied');
+  assert(RiskDecisionService.forSameDirectionExposure(0, 1, 'PUT', 'SPY/QQQ', []).allowed === true, 'Opposite direction is not counted against the same-direction cap');
+  assert(RiskDecisionService.riskBasedQuantity(3, 40, 100).quantity === 2 && RiskDecisionService.riskBasedQuantity(3, 40, 100).capped === true, 'Risk-based sizing floors budget / stop risk');
+  assert(RiskDecisionService.riskBasedQuantity(3, 20, 100).quantity === 3, 'Sizing never exceeds the requested quantity');
+  assert(RiskDecisionService.riskBasedQuantity(2, 70, 50).quantity === 0, 'One contract above budget sizes to zero');
+  assert(RiskDecisionService.forPerTradeRiskBudget(70, 50).code === 'PER_TRADE_RISK_BUDGET' && RiskDecisionService.forPerTradeRiskBudget(40, 50).allowed === true, 'Per-trade budget denies only when one contract does not fit');
   assert(executionRealism.allowed === false && executionRealism.code === 'EXECUTION_REALISM_TOO_LOW', 'Should block low execution realism');
   assert(theoretical.allowed === false && theoretical.code === 'THEORETICAL_PRICING', 'Should block theoretical pricing');
   assert(liveAck.denials[0]?.code === 'LIVE_TRADING_NOT_ACKNOWLEDGED', 'Should block missing live acknowledgement');
@@ -1222,7 +1229,8 @@ async function testStrategyLifecycleIsRevalidatedImmediatelyBeforeClaim() {
   const result = await service.executeSnapTradeOptionTrade(createSignalInput(), {
     live_trading_acknowledged: 'true',
     snaptrade_trading_account_id: '7:account',
-    order_type: 'LIMIT'
+    order_type: 'LIMIT',
+    strategy_max_risk_per_trade_dollars: '500'
   }, 1);
   assert(revalidated, 'The primary lifecycle must be revalidated after the final option quote');
   assert(result.skipped === true && claimCalled === false, 'A stale lifecycle must block before the durable broker submission claim');

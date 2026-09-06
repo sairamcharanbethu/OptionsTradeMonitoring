@@ -383,6 +383,18 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'Market polling enabled must be true or false' });
                     }
+                    if (key === 'autonomous_live_ai_mode' && !['off', 'advisory', 'gate'].includes(String(trimmedValue).toLowerCase())) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Autonomous live AI mode must be off, advisory or gate' });
+                    }
+                    if (key === 'autonomous_live_ai_fallback' && !['trade_cautious', 'skip'].includes(String(trimmedValue).toLowerCase())) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Autonomous live AI fallback must be trade_cautious or skip' });
+                    }
+                    if ((key === 'max_same_direction_positions' || key === 'live_ai_daily_call_budget') && !/^\d+$/.test(String(trimmedValue))) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: `${key} must be a whole number` });
+                    }
                     if (key === 'event_blackouts_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'Event blackouts enabled must be true or false' });

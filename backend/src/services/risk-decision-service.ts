@@ -9,6 +9,8 @@ export type RiskDecisionCode =
   | 'PREMIUM_RISK_LIMIT'
   | 'PLANNED_LOSS_LIMIT'
   | 'CORRELATED_EXPOSURE_LIMIT'
+  | 'SAME_DIRECTION_EXPOSURE_LIMIT'
+  | 'PER_TRADE_RISK_BUDGET'
   | 'EXECUTION_REALISM_TOO_LOW'
   | 'THEORETICAL_PRICING'
   | 'LIVE_TRADING_NOT_ACKNOWLEDGED'
@@ -53,6 +55,11 @@ export type PreSubmitRiskInput = {
   correlatedOpenPositions?: number;
   correlatedPositions?: Array<Record<string, any>>;
   maxCorrelatedPositions?: number;
+  sameDirectionOpenPositions?: number;
+  sameDirectionPositions?: Array<Record<string, any>>;
+  maxSameDirectionPositions?: number;
+  riskPerContract?: number;
+  maxRiskPerTrade?: number;
   optionDetails?: any;
   quoteValidation?: {
     quote: any;
@@ -108,6 +115,18 @@ export class RiskDecisionService {
             input.correlatedPositions
           )
         : this.allow(),
+      input.sameDirectionOpenPositions !== undefined && input.maxSameDirectionPositions !== undefined
+        ? this.forSameDirectionExposure(
+            input.sameDirectionOpenPositions,
+            input.maxSameDirectionPositions,
+            input.side || null,
+            input.contractLabel || 'underlying',
+            input.sameDirectionPositions
+          )
+        : this.allow(),
+      input.riskPerContract !== undefined && input.maxRiskPerTrade !== undefined
+        ? this.forPerTradeRiskBudget(input.riskPerContract, input.maxRiskPerTrade)
+        : this.allow(),
       input.broker === 'wealthsimple_snaptrade' && input.settings !== undefined ? this.forLiveTradingAcknowledgement(input.settings) : this.allow(),
       input.broker === 'wealthsimple_snaptrade' && input.settings !== undefined ? this.forTradingAccount(input.settings) : this.allow(),
       input.optionDetails !== undefined ? this.forTheoreticalPricing(input.optionDetails) : this.allow(),
@@ -142,6 +161,10 @@ export class RiskDecisionService {
         correlatedOpenPositions: input.correlatedOpenPositions ?? null,
         correlatedPositions: input.correlatedPositions ?? null,
         maxCorrelatedPositions: input.maxCorrelatedPositions ?? null,
+        sameDirectionOpenPositions: input.sameDirectionOpenPositions ?? null,
+        maxSameDirectionPositions: input.maxSameDirectionPositions ?? null,
+        riskPerContract: input.riskPerContract ?? null,
+        maxRiskPerTrade: input.maxRiskPerTrade ?? null,
         quote: input.quoteValidation?.quote ? {
           source: input.quoteValidation.quote.source || null,
           ticker: input.quoteValidation.quote.ticker || null,
@@ -279,6 +302,53 @@ export class RiskDecisionService {
       message: `Concurrent ${contractLabel} exposure limit reached (${current}/${max} configured).${exposureDetail} Positions awaiting broker review remain counted until closure is confirmed.`,
       metadata: { current, max, positions }
     };
+  }
+
+  /**
+   * Cross-lane cap: the three engine lanes (mtf, orb_index, vwap_trend) can each
+   * arm a same-direction SPY setup; without this only the pooled SPY/QQQ count
+   * limited how many long-delta (or short-delta) 0DTE positions stacked up.
+   */
+  static forSameDirectionExposure(
+    current: number,
+    max: number,
+    side: 'CALL' | 'PUT' | null,
+    contractLabel: string,
+    positions: Array<Record<string, any>> = []
+  ): RiskDecision {
+    if (current < max) return this.allow();
+    const counted = positions.slice(0, 3).map(position => `#${position.id} ${position.symbol} ${Number(position.strike_price)} ${position.option_type}`);
+    return {
+      allowed: false,
+      skipped: true,
+      code: 'SAME_DIRECTION_EXPOSURE_LIMIT',
+      message: `Same-direction ${side || ''} exposure limit reached on ${contractLabel} (${current}/${max} configured).${counted.length ? ` Open: ${counted.join(', ')}.` : ''} Another lane already holds this direction.`,
+      metadata: { current, max, side, positions }
+    };
+  }
+
+  /** Worst-case (stop) loss per contract must fit the per-trade risk budget at least once. */
+  static forPerTradeRiskBudget(riskPerContract: number, maxRiskPerTrade: number): RiskDecision {
+    if (!(riskPerContract > 0) || !(maxRiskPerTrade > 0) || riskPerContract <= maxRiskPerTrade) return this.allow();
+    return {
+      allowed: false,
+      skipped: true,
+      code: 'PER_TRADE_RISK_BUDGET',
+      message: `One contract risks ~$${riskPerContract.toFixed(0)} at the stop, above the $${maxRiskPerTrade.toFixed(0)} per-trade risk budget; no size fits.`,
+      metadata: { riskPerContract, maxRiskPerTrade }
+    };
+  }
+
+  /**
+   * Risk-based sizing: contracts = floor(budget / stop-risk per contract), never
+   * above the requested quantity. Returns 0 when even one contract exceeds the budget.
+   */
+  static riskBasedQuantity(requestedQuantity: number, riskPerContract: number, maxRiskPerTrade: number): { quantity: number; capped: boolean } {
+    const base = Math.max(0, Math.floor(requestedQuantity));
+    if (!(riskPerContract > 0) || !(maxRiskPerTrade > 0)) return { quantity: base, capped: false };
+    const byRisk = Math.floor(maxRiskPerTrade / riskPerContract);
+    const quantity = Math.max(0, Math.min(base, byRisk));
+    return { quantity, capped: quantity < base };
   }
 
   static forLiveTradingAcknowledgement(settings: PreSubmitRiskInput['settings']): RiskDecision {

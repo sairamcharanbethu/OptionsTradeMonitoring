@@ -32,10 +32,10 @@ export class StrategyLifecycleManager {
       throw new Error('scanner execution service unavailable');
     }
     await input.assertExecutable(input.signalId);
-    return scanner.executeSignalForUser(input.userId, input.signalId, {
-      ...input.settings,
-      contracts_per_trade: '1'
-    });
+    // Quantity is bounded downstream by the engine's planned_contracts (debit
+    // cap, strategy_max_contracts), the user's contracts_per_trade, the
+    // per-trade stop-risk budget and the AI gate tier; no hard-coded 1.
+    return scanner.executeSignalForUser(input.userId, input.signalId, { ...input.settings });
   }
 
   private async requestManagedExit(
