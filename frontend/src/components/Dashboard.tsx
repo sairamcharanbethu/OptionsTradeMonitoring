@@ -94,16 +94,14 @@ interface DashboardProps {
 }
 
 const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-trading', 'position-monitor', 'paper-accounts', 'users'] as const;
-const DASHBOARD_TAB_STORAGE_KEY = 'options-monitoring:dashboard-tab';
+// The site opens on the Day Trading monitor. A ?tab= query still selects any
+// other tab; there is no remembered last tab, so "/" always means day trading.
+const DEFAULT_DASHBOARD_TAB = 'day-trading';
 
 const getInitialDashboardTab = () => {
   const urlTab = new URLSearchParams(window.location.search).get('tab');
   if (urlTab && DASHBOARD_TABS.includes(urlTab as any)) return urlTab;
-
-  const storedTab = window.localStorage.getItem(DASHBOARD_TAB_STORAGE_KEY);
-  if (storedTab && DASHBOARD_TABS.includes(storedTab as any)) return storedTab;
-
-  return 'overview';
+  return DEFAULT_DASHBOARD_TAB;
 };
 
 export default function Dashboard({ user }: DashboardProps) {
@@ -144,9 +142,8 @@ export default function Dashboard({ user }: DashboardProps) {
       return;
     }
 
-    const nextTab = DASHBOARD_TABS.includes(tab as any) && (tab !== 'users' || user.role === 'ADMIN') ? tab : 'overview';
+    const nextTab = DASHBOARD_TABS.includes(tab as any) && (tab !== 'users' || user.role === 'ADMIN') ? tab : DEFAULT_DASHBOARD_TAB;
     setActiveTab(nextTab);
-    window.localStorage.setItem(DASHBOARD_TAB_STORAGE_KEY, nextTab);
 
     navigate(`/?tab=${nextTab}`, { replace: true });
   };
@@ -155,13 +152,13 @@ export default function Dashboard({ user }: DashboardProps) {
     const urlTab = new URLSearchParams(location.search).get('tab');
     const nextTab = urlTab && DASHBOARD_TABS.includes(urlTab as any) && (urlTab !== 'users' || user.role === 'ADMIN')
       ? urlTab
-      : 'overview';
+      : DEFAULT_DASHBOARD_TAB;
     if (nextTab !== activeTab) setActiveTab(nextTab);
   }, [location.search, user.role, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'users' && user.role !== 'ADMIN') {
-      handleTabChange('overview');
+      handleTabChange(DEFAULT_DASHBOARD_TAB);
     }
   }, [activeTab, user.role]);
 
