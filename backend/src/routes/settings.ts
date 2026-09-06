@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting, validateEntryOpenBufferMinutesSetting, validateEntryLastMinuteSetting, validateEventBlackoutDatesSetting } from '../lib/settings-utils';
+import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting, validateEntryOpenBufferMinutesSetting, validateEntryLastMinuteSetting, validateEventBlackoutDatesSetting, validateOptionExpiryDteSetting, validateMultiDayMaxHoldMinutesSetting } from '../lib/settings-utils';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
@@ -399,6 +399,15 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'Event blackouts enabled must be true or false' });
                     }
+                    if (key === 'strategy_option_expiry_dte' || key === 'strategy_multi_day_max_hold_minutes') {
+                        const validationError = key === 'strategy_option_expiry_dte'
+                            ? validateOptionExpiryDteSetting(trimmedValue)
+                            : validateMultiDayMaxHoldMinutesSetting(trimmedValue);
+                        if (validationError) {
+                            await client.query('ROLLBACK');
+                            return reply.code(400).send({ error: validationError });
+                        }
+                    }
                     if (key === 'entry_open_buffer_minutes' || key === 'entry_last_minute_et' || key === 'event_blackout_dates') {
                         const validationError = key === 'entry_open_buffer_minutes'
                             ? validateEntryOpenBufferMinutesSetting(trimmedValue)
@@ -432,6 +441,9 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 }
 
                 // If polling toggle was updated, stop/resume the poller
+                if (role === 'ADMIN' && updates.strategy_multi_day_max_hold_minutes !== undefined && (fastify as any).poller?.updateMultiDayMaxHoldMinutes) {
+                    (fastify as any).poller.updateMultiDayMaxHoldMinutes(parseInt(updates.strategy_multi_day_max_hold_minutes, 10));
+                }
                 if (role === 'ADMIN' && updates.polling_enabled !== undefined && (fastify as any).poller) {
                     if (updates.polling_enabled === 'true') {
                         (fastify as any).poller.resume();

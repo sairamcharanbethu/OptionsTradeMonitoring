@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
-import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { getGlobalSettings, getSettingsWithGlobalFallback, resolveOptionExpiryDte } from '../lib/settings-utils';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 import { getNewYorkDateParts, getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { NoTradeWindow, findActiveNoTradeWindow, getEventNoTradeWindows, parseCustomEconomicEvents, parseEtClockMinute } from '../lib/economic-calendar';
@@ -1134,6 +1134,9 @@ export class StrategyEngineAdapter {
       ibkr_host: ibkr.host,
       ibkr_port: ibkr.port,
       ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live',
+      // Minimum DTE for the primary option chain (0 = same-day). The engine
+      // prefers this over its --option-expiry-dte CLI default when present.
+      option_expiry_dte: resolveOptionExpiryDte(settings),
       session: this.buildSessionPolicy(settings, sessionParts.dateKey, sessionMarket, sessionCloseMinutes)
     };
     policy.strategy_preferred_contracts = Math.min(

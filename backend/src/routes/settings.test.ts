@@ -1,4 +1,4 @@
-import { isGlobalSettingKey, isPublicGlobalSettingKey, validateEntryLastMinuteSetting, validateEntryOpenBufferMinutesSetting, validateEventBlackoutDatesSetting, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
+import { isGlobalSettingKey, isPublicGlobalSettingKey, resolveMultiDayMaxHoldMinutes, resolveOptionExpiryDte, validateMultiDayMaxHoldMinutesSetting, validateOptionExpiryDteSetting, validateEntryLastMinuteSetting, validateEntryOpenBufferMinutesSetting, validateEventBlackoutDatesSetting, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
@@ -34,6 +34,11 @@ async function runTests() {
   assert(Boolean(validateEntryLastMinuteSetting('09:30')) && Boolean(validateEntryLastMinuteSetting('15:01')) && Boolean(validateEntryLastMinuteSetting('noon')), 'Entry last minute rejects the open, post-15:00 and garbage');
   assert(validateEventBlackoutDatesSetting('') === null && validateEventBlackoutDatesSetting('[{"date":"2027-01-27","label":"FOMC"}]') === null, 'Custom event blackouts accept blank and valid JSON');
   assert(Boolean(validateEventBlackoutDatesSetting('[{"date":"Jan 27"}]')), 'Custom event blackouts reject malformed dates');
+  assert(validateOptionExpiryDteSetting('0') === null && validateOptionExpiryDteSetting('3') === null && validateOptionExpiryDteSetting('10') === null, 'Option expiry DTE accepts 0-10');
+  assert(Boolean(validateOptionExpiryDteSetting('11')) && Boolean(validateOptionExpiryDteSetting('-1')) && Boolean(validateOptionExpiryDteSetting('3.5')), 'Option expiry DTE rejects out-of-range or fractional values');
+  assert(resolveOptionExpiryDte({}) === 3 && resolveOptionExpiryDte({ strategy_option_expiry_dte: '0' }) === 0 && resolveOptionExpiryDte({ strategy_option_expiry_dte: 'x' }) === 3, 'Option expiry DTE resolves with a 3-day default');
+  assert(validateMultiDayMaxHoldMinutesSetting('45') === null && validateMultiDayMaxHoldMinutesSetting('0') === null && Boolean(validateMultiDayMaxHoldMinutesSetting('391')), 'Multi-day max hold accepts 0-390 minutes');
+  assert(resolveMultiDayMaxHoldMinutes({}) === 45 && resolveMultiDayMaxHoldMinutes({ strategy_multi_day_max_hold_minutes: '0' }) === 0, 'Multi-day max hold resolves with a 45-minute default');
   console.log('All settings validation tests passed!');
 }
 

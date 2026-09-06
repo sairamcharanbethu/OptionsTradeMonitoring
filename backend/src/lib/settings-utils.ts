@@ -27,9 +27,13 @@ const GLOBAL_SETTING_KEYS = [
   'entry_open_buffer_minutes',
   'entry_last_minute_et',
   'event_blackouts_enabled',
-  'event_blackout_dates'
+  'event_blackout_dates',
+  'strategy_option_expiry_dte',
+  'strategy_multi_day_max_hold_minutes'
 ];
 const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
+  'strategy_option_expiry_dte',
+  'strategy_multi_day_max_hold_minutes',
   'entry_open_buffer_minutes',
   'entry_last_minute_et',
   'event_blackouts_enabled',
@@ -152,8 +156,38 @@ export function isPublicGlobalSettingKey(key: string): boolean {
     'entry_open_buffer_minutes',
     'entry_last_minute_et',
     'event_blackouts_enabled',
-    'event_blackout_dates'
+    'event_blackout_dates',
+    'strategy_option_expiry_dte',
+    'strategy_multi_day_max_hold_minutes'
   ].includes(key);
+}
+
+/** Minimum calendar days-to-expiry for the primary option chain (0 = same-day 0DTE). */
+export function validateOptionExpiryDteSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  const dte = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(dte) || dte < 0 || dte > 10) {
+    return 'Option expiry DTE must be a whole number between 0 (same-day) and 10';
+  }
+  return null;
+}
+
+/** Max hold for strategy positions on multi-day contracts, in minutes (0 disables the time stop). */
+export function validateMultiDayMaxHoldMinutesSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  const minutes = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(minutes) || minutes < 0 || minutes > 390) {
+    return 'Multi-day max hold must be a whole number of minutes between 0 and 390';
+  }
+  return null;
+}
+
+export function resolveOptionExpiryDte(settings: Record<string, string> | undefined, fallback = 3): number {
+  return validateOptionExpiryDteSetting(settings?.strategy_option_expiry_dte) === null ? Number(settings!.strategy_option_expiry_dte) : fallback;
+}
+
+export function resolveMultiDayMaxHoldMinutes(settings: Record<string, string> | undefined, fallback = 45): number {
+  return validateMultiDayMaxHoldMinutesSetting(settings?.strategy_multi_day_max_hold_minutes) === null ? Number(settings!.strategy_multi_day_max_hold_minutes) : fallback;
 }
 
 /** Minutes after the 9:30 ET open during which no new entry may be taken (0 disables). */

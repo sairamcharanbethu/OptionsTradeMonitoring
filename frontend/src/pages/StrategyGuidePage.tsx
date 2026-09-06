@@ -68,7 +68,7 @@ export default function StrategyGuidePage() {
               'Continuation, multi-timeframe trend-break/reversal, and GEX-rejection plans freeze their trigger, invalidation, targets, and exact option contract before activation.',
               'ZeroGEX is authoritative for GEX regime, flip, and walls, but local price structure remains the activation authority. ZeroGEX STAND_DOWN is context, not a veto.',
               'The app blocks duplicate entries for the same user, symbol, side, strike, and expiration while an OPEN or PENDING_ORDER position already exists.',
-              'After 1:00 PM ET, the engine selects the next listed expiry. New entries stop 60 minutes before the scheduled close, and open 0DTE exposure must flatten 40 minutes before close (3:00 PM and 3:20 PM ET on a regular session).'
+              'Contracts come from the nearest listed SPY expiry at least 3 calendar days out by default (admin setting; 0 restores same-day). New entries stop at the configured last-entry time (11:00 AM ET by default), are blocked during the opening buffer and on FOMC/CPI/NFP windows, and every strategy position is flattened 40 minutes before the close regardless of expiry (3:20 PM ET on a regular session).'
             ]}
           />
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -130,7 +130,7 @@ export default function StrategyGuidePage() {
               'The confirmation window is deliberately narrow: the 9:35 and 9:36 candles are the only eligible trigger bars. Later closes are recorded as a missed window, not chased.',
               'A confirmed break remains fresh for five minutes. The event ID is stable across refreshes, so the same close is not emitted repeatedly.',
               'Call wall, put wall, and gamma-flip alignment are recorded as advisory context. They do not grant authority or create a blocker.',
-              'Contract guidance is SPY 0DTE or the nearest liquid ATM / one-strike OTM option, but this shadow family does not select or submit a contract.'
+              'Contract guidance is the nearest liquid SPY ATM / one-strike OTM option on the configured multi-day chain (~3 DTE by default), but this shadow family does not select or submit a contract.'
             ]}
           />
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -276,17 +276,18 @@ export default function StrategyGuidePage() {
           </div>
         </RuleCard>
 
-        <RuleCard title="Late-Day Behavior" detail="The app reduces same-day expiry and liquidity risk later in the session." icon={Clock3}>
+        <RuleCard title="Late-Day Behavior" detail="The app reduces expiry and liquidity risk later in the session." icon={Clock3}>
           <BulletList
             items={[
-              'Entries after 1:00 PM ET use 1DTE instead of 0DTE.',
+              'The primary chain is ~3 DTE, so the old 1:00 PM roll from same-day to next-day expiry only applies when the admin sets the minimum DTE to 0.',
+              'Same-day contracts keep the 25/15/10-minute theta time stop; multi-day strategy positions use the configurable multi-day max hold (45 minutes by default).',
               'Late-day take-profit exits can prefer MARKET so the app is not waiting on a limit order as time decays.',
               'Near-target limit orders that sit too long can be marked stale, requiring broker review before another close attempt.'
             ]}
           />
           <div className="mt-4">
             <Example title="After 1 PM">
-              A SPY CALL scan at 1:15 PM ET chooses tomorrow expiration instead of today. A 10:30 AM scan can still choose same-day expiry.
+              On Wednesday the engine trades the following Monday's SPY expiry (the first at least 3 calendar days out). With the minimum DTE set to 0, a 1:15 PM ET scan would choose tomorrow's expiry and a 10:30 AM scan today's.
             </Example>
           </div>
         </RuleCard>

@@ -18,6 +18,7 @@ from trade_prefetch_service import (
     _locked_option_expiry,
     _locked_option_spec,
     _preferred_option_expiry,
+    _policy_option_expiry_dte,
     _wall_option_expiry,
     _previous_strategy_lanes,
     _strategy_family_policy_for_lane,
@@ -313,6 +314,14 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         )
         # min_dte=0 keeps the legacy behaviour exactly.
         self.assertEqual(_preferred_option_expiry(expirations, stamp, min_dte=0), ("20260722", "0DTE"))
+
+    def test_policy_option_expiry_dte_overrides_cli_default(self) -> None:
+        self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": 0}, 3), 0)
+        self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": "5"}, 3), 5)
+        self.assertEqual(_policy_option_expiry_dte({}, 3), 3)
+        self.assertEqual(_policy_option_expiry_dte(None, 3), 3)
+        self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": 42}, 3), 3)
+        self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": "bad"}, 3), 3)
 
     def test_wall_expiry_picks_nearest_at_least_3dte(self) -> None:
         et = ZoneInfo("America/New_York")

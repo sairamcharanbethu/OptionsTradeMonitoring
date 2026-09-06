@@ -213,6 +213,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [strategyPreferredContracts, setStrategyPreferredContracts] = useState('1');
     const [strategyMaxRiskPerTradeDollars, setStrategyMaxRiskPerTradeDollars] = useState('50');
     const [strategyMaxContracts, setStrategyMaxContracts] = useState('1');
+    const [strategyOptionExpiryDte, setStrategyOptionExpiryDte] = useState('3');
+    const [strategyMultiDayMaxHoldMinutes, setStrategyMultiDayMaxHoldMinutes] = useState('45');
     const [paperTrailingStopPct, setPaperTrailingStopPct] = useState('15');
     const [dailyLossLimitDollars, setDailyLossLimitDollars] = useState('');
     const [strikeOffset, setStrikeOffset] = useState('0');
@@ -367,6 +369,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
             setStrategyMaxRiskPerTradeDollars(data.strategy_max_risk_per_trade_dollars || '500');
             setStrategyMaxContracts(data.strategy_max_contracts || '1');
+            setStrategyOptionExpiryDte(data.strategy_option_expiry_dte || '3');
+            setStrategyMultiDayMaxHoldMinutes(data.strategy_multi_day_max_hold_minutes || '45');
             setPaperTrailingStopPct(data.paper_trailing_stop_pct || '15');
             setDailyLossLimitDollars(data.daily_loss_limit_dollars || '');
             setStrikeOffset(data.strike_offset || '0');
@@ -644,6 +648,8 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 settingsPayload.strategy_preferred_contracts = strategyPreferredContracts;
                 settingsPayload.strategy_max_risk_per_trade_dollars = strategyMaxRiskPerTradeDollars.trim();
                 settingsPayload.strategy_max_contracts = strategyMaxContracts;
+                settingsPayload.strategy_option_expiry_dte = strategyOptionExpiryDte;
+                settingsPayload.strategy_multi_day_max_hold_minutes = strategyMultiDayMaxHoldMinutes;
                 settingsPayload.paper_trailing_stop_pct = paperTrailingStopPct;
                 settingsPayload.daily_loss_limit_dollars = dailyLossLimitDollars.trim();
             }
@@ -990,6 +996,32 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     disabled={!isAdmin}
                                                 />
                                             </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="strategyOptionExpiryDte">Option Expiry (min DTE)</Label>
+                                                <Input
+                                                    id="strategyOptionExpiryDte"
+                                                    type="number"
+                                                    min="0"
+                                                    max="10"
+                                                    value={strategyOptionExpiryDte}
+                                                    onChange={(e) => setStrategyOptionExpiryDte(e.target.value)}
+                                                    disabled={!isAdmin}
+                                                />
+                                                <p className="text-[10px] text-muted-foreground">Nearest listed SPY expiry at least this many calendar days out. 3 = default multi-day chain; 0 = same-day (0DTE, rolling to the next expiry at 1 PM ET). Applies on the engine's next chain refresh.</p>
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="strategyMultiDayMaxHoldMinutes">Multi-day Max Hold (min)</Label>
+                                                <Input
+                                                    id="strategyMultiDayMaxHoldMinutes"
+                                                    type="number"
+                                                    min="0"
+                                                    max="390"
+                                                    value={strategyMultiDayMaxHoldMinutes}
+                                                    onChange={(e) => setStrategyMultiDayMaxHoldMinutes(e.target.value)}
+                                                    disabled={!isAdmin}
+                                                />
+                                                <p className="text-[10px] text-muted-foreground">Time stop for strategy positions on multi-day contracts (same-day contracts keep the 25/15/10-minute theta ladder). 0 disables.</p>
+                                            </div>
                                         </div>
 
                                         <div className="hidden">
@@ -1089,7 +1121,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     />
                                                 </div>
                                                 <p className={`text-[10px] ${autonomousLiveEntryEnabled ? 'font-semibold text-amber-500' : 'text-muted-foreground'}`}>
-                                                    One contract and one concurrent SPY/QQQ position are enforced in the backend. New entries stop 60 minutes before the NYSE close; 0DTE strategy positions are flattened 40 minutes before close. Disabling this switch stops new autonomous entries but does not stop management of an open position.
+                                                    Orders are sized by the per-trade risk budget (never above the contract ceiling), one same-direction SPY/QQQ position is allowed at a time, and the AI gate reviews every entry. New entries stop at the configured last-entry time (default 11:00 AM ET) and inside no-trade windows (opening buffer, FOMC/CPI/NFP); every strategy position is flattened 40 minutes before the close whatever its expiry (primary chain is ~3 DTE). Disabling this switch stops new autonomous entries but does not stop management of an open position.
                                                 </p>
                                                 {!autonomousLiveEntryReady && (
                                                     <p className="text-[10px] font-medium text-amber-500">
@@ -1185,7 +1217,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <div className="hidden">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Expiry policy</h5>
-                                            <p className="text-[10px] text-muted-foreground">Control whether the scanner uses same-day expiry or its safer late-day 1DTE fallback.</p>
+                                            <p className="text-[10px] text-muted-foreground">Legacy scanner setting. The autonomous engine's expiry is controlled by "Option Expiry (min DTE)" above.</p>
                                         </div>
                                         <Select value={expiryMode} onValueChange={setExpiryMode}>
                                             <SelectTrigger><SelectValue /></SelectTrigger>

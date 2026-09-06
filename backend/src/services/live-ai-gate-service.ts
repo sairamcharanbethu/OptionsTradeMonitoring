@@ -123,7 +123,7 @@ export class LiveAiGateService {
       warnings: (signal.warnings || []).slice(0, 6),
       risk: riskContext
     };
-    return `You are the final risk reviewer for one autonomous 0DTE index option entry. The contract, stop and targets are fixed by the strategy engine; you may only TRADE or SKIP and set a size tier.
+    return `You are the final risk reviewer for one autonomous short-dated (default ~3 DTE, day-traded, flat by the close) SPY option entry. The contract, stop and targets are fixed by the strategy engine; you may only TRADE or SKIP and set a size tier.
 Rules: SKIP when the supplied facts show degraded edge (thin/late tape, GEX conflict with direction, event risk, wide spread, stale quote, weak reward/risk, warnings that undercut the setup). Prefer CAUTIOUS when uncertain. Never invent facts.
 Facts: ${JSON.stringify(facts)}
 Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL","exit_profile":"CONSERVATIVE_T1|BALANCED_T2","rationale":"one sentence","risk_flags":["short"]}`;

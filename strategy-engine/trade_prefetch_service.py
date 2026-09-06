@@ -553,6 +553,16 @@ def _wall_option_expiry(
     return None
 
 
+def _policy_option_expiry_dte(policy: dict[str, Any] | None, default: int) -> int:
+    """Primary-chain minimum DTE: backend policy.json ``option_expiry_dte`` wins over the CLI default."""
+    value = (policy or {}).get("option_expiry_dte") if isinstance(policy, dict) else None
+    try:
+        dte = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    return dte if 0 <= dte <= 10 else int(default)
+
+
 class TradePrefetcher:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -814,7 +824,7 @@ class TradePrefetcher:
         )
         preferred_expiry, preferred_mode = _preferred_option_expiry(
             list(chain.expirations),
-            min_dte=int(getattr(self.args, "option_expiry_dte", 0) or 0),
+            min_dte=self._option_expiry_dte(),
         )
         locked_expiries = {
             expiry
@@ -872,6 +882,12 @@ class TradePrefetcher:
         self.option_anchor_spot = spot
         self.last_option_refresh = time.time()
 
+    def _option_expiry_dte(self) -> int:
+        policy = _read_policy(getattr(self.args, "policy_file", None))
+        return _policy_option_expiry_dte(
+            policy, int(getattr(self.args, "option_expiry_dte", 0) or 0)
+        )
+
     def _options_need_recenter(self) -> bool:
         if not self.option_tickers or self.option_anchor_spot is None or self.option_expiry is None:
             return True
@@ -884,7 +900,7 @@ class TradePrefetcher:
             return True
         preferred_expiry, _ = _preferred_option_expiry(
             list(self.option_chain.expirations),
-            min_dte=int(getattr(self.args, "option_expiry_dte", 0) or 0),
+            min_dte=self._option_expiry_dte(),
         )
         desired_expiries = {
             preferred_expiry,

@@ -4,7 +4,7 @@ import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
 import { isAmbiguousSnapTradeOrderError, SnaptradeService } from './snaptrade-service';
-import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
+import { getGlobalSettings, getSettingsWithGlobalFallback, resolveMultiDayMaxHoldMinutes } from '../lib/settings-utils';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { DiscordAlertService } from './discord-alert-service';
 import { IbkrMarketDataService } from './ibkr-market-data-service';
@@ -40,6 +40,15 @@ export class MarketPoller {
   }
 
   private readonly LOCK_KEY = 'MARKET_POLLER_LEADER';
+  /** Time stop for strategy positions on multi-day contracts; cached so the exit loop never queries settings per tick. */
+  private multiDayMaxHoldMinutes = 45;
+
+  public updateMultiDayMaxHoldMinutes(minutes: number) {
+    if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 390) {
+      this.multiDayMaxHoldMinutes = minutes;
+      this.fastify.log.info(`[MarketPoller] Multi-day max hold updated to ${minutes} minutes.`);
+    }
+  }
   private redisLockDegradedSince: number | null = null;
 
   public async start() {
@@ -48,6 +57,7 @@ export class MarketPoller {
       const settings = await getGlobalSettings((this.fastify as any).pg);
       this.currentIntervalSeconds = parseInt(settings.market_poll_interval, 10) || 60;
       this.pollingEnabled = settings.polling_enabled !== 'false';
+      this.multiDayMaxHoldMinutes = resolveMultiDayMaxHoldMinutes(settings);
     } catch (err) {
       this.fastify.log.error(`[MarketPoller] Failed to load poll settings from DB: ${err}`);
     }
@@ -318,7 +328,13 @@ export class MarketPoller {
     return createdAt && Number.isFinite(createdAt.getTime()) ? createdAt : null;
   }
 
-  private getThetaStopAssessment(position: any, now: Date = new Date(), startedAtOverride?: string | null): {
+  /**
+   * Time stop. Same-day contracts use the theta ladder (25/15/10 min by entry
+   * time). Strategy-managed positions on multi-day contracts (~3 DTE primary
+   * chain) use a flat "thesis did not play out" hold, `multiDayMaxHoldMinutes`
+   * (setting strategy_multi_day_max_hold_minutes, default 45; 0 disables).
+   */
+  private getThetaStopAssessment(position: any, now: Date = new Date(), startedAtOverride?: string | null, multiDayMaxHoldMinutes: number = 45): {
     triggered: boolean;
     maxHoldMinutes: number;
     heldMinutes: number;
@@ -327,12 +343,13 @@ export class MarketPoller {
     if (String(position.status || '').toUpperCase() !== 'OPEN') return null;
 
     const expirationDate = this.normalizeExpirationDate(position.expiration_date);
-    if (expirationDate !== this.getNewYorkDateString(now)) return null;
+    const expiresToday = expirationDate === this.getNewYorkDateString(now);
+    if (!expiresToday && !(position.strategy_managed === true && multiDayMaxHoldMinutes > 0)) return null;
 
     const enteredAt = this.getThetaStopStartTime(position, startedAtOverride);
     if (!enteredAt) return null;
 
-    const maxHoldMinutes = this.getThetaStopMaxHoldMinutes(enteredAt);
+    const maxHoldMinutes = expiresToday ? this.getThetaStopMaxHoldMinutes(enteredAt) : multiDayMaxHoldMinutes;
     if (maxHoldMinutes === null) return null;
 
     const heldMinutes = Math.max(0, (now.getTime() - enteredAt.getTime()) / 60000);
@@ -1430,7 +1447,7 @@ export class MarketPoller {
     }
 
     if (!triggered) {
-      const thetaStop = this.getThetaStopAssessment(position, new Date(), analysis.thetaStop?.startedAt);
+      const thetaStop = this.getThetaStopAssessment(position, new Date(), analysis.thetaStop?.startedAt, this.multiDayMaxHoldMinutes);
       if (thetaStop && !analysis.thetaStop?.startedAt) {
         analysis.thetaStop = {
           status: 'ACTIVE',

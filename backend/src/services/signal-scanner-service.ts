@@ -486,10 +486,10 @@ export class SignalScannerService {
 
     if (vix.value !== null) {
       if (vix.value >= 15 && vix.value <= 22) {
-        add(8, `VIX ${vix.value.toFixed(2)} is in the normal 0DTE range`);
+        add(8, `VIX ${vix.value.toFixed(2)} is in the normal short-dated range`);
       } else if (vix.value > 30) {
         warn(-22, `VIX ${vix.value.toFixed(2)} is above the 30 panic threshold`);
-        if (winningSide === 'CALL') blockers.push(`Macro guard: VIX ${vix.value.toFixed(2)} is above 30, blocking bullish 0DTE calls`);
+        if (winningSide === 'CALL') blockers.push(`Macro guard: VIX ${vix.value.toFixed(2)} is above 30, blocking bullish short-dated calls`);
       } else if (vix.value < 12) {
         warn(-5, `VIX ${vix.value.toFixed(2)} is very compressed, reducing directional edge`);
       } else if (vix.value > 24) {
@@ -505,7 +505,7 @@ export class SignalScannerService {
         else warn(-4, `VIX falling ${vix.changePct.toFixed(2)}% works against bearish puts`);
       } else if (vix.changePct >= 15) {
         warn(-18, `VIX spiking ${vix.changePct.toFixed(2)}% intraday`);
-        if (winningSide === 'CALL') blockers.push(`Macro guard: VIX is spiking ${vix.changePct.toFixed(2)}%, blocking bullish 0DTE calls`);
+        if (winningSide === 'CALL') blockers.push(`Macro guard: VIX is spiking ${vix.changePct.toFixed(2)}%, blocking bullish short-dated calls`);
       } else if (vix.changePct >= 10) {
         warn(-12, `VIX up ${vix.changePct.toFixed(2)}%, market is too unstable for easy quick-profit calls`);
       }
@@ -517,7 +517,7 @@ export class SignalScannerService {
         const msg = `DXY +${dxy.changePct.toFixed(2)}% and 10Y +${tenYearBps.toFixed(1)} bps are rising together`;
         if (winningSide === 'CALL') {
           warn(-18, msg);
-          blockers.push(`Macro guard: ${msg}, blocking bullish 0DTE calls`);
+          blockers.push(`Macro guard: ${msg}, blocking bullish short-dated calls`);
         } else {
           add(8, `${msg}, supporting bearish puts`);
         }

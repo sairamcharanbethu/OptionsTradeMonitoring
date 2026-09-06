@@ -84,7 +84,19 @@ async function testThetaStopMaxHoldWindows() {
   assert(lunch?.triggered === true && lunch.maxHoldMinutes === 15, `Expected lunch 15m theta-stop, got ${JSON.stringify(lunch)}`);
   assert(afternoon?.triggered === true && afternoon.maxHoldMinutes === 10, `Expected afternoon 10m theta-stop, got ${JSON.stringify(afternoon)}`);
   assert(stillValid?.triggered === false, `Expected 20m morning hold to remain valid, got ${JSON.stringify(stillValid)}`);
-  assert(oneDte === null, `Expected non-0DTE position to skip theta-stop, got ${JSON.stringify(oneDte)}`);
+  assert(oneDte === null, `Expected a non-strategy multi-day position to skip the theta ladder, got ${JSON.stringify(oneDte)}`);
+  const multiDayStrategy = poller.getThetaStopAssessment({
+    ...basePosition, strategy_managed: true, expiration_date: '2026-07-06', created_at: '2026-07-03T14:00:00.000Z'
+  }, new Date('2026-07-03T14:46:00.000Z'), null, 45);
+  assert(multiDayStrategy?.triggered === true && multiDayStrategy.maxHoldMinutes === 45, `Expected a 45m multi-day time stop for a strategy position, got ${JSON.stringify(multiDayStrategy)}`);
+  const multiDayEarly = poller.getThetaStopAssessment({
+    ...basePosition, strategy_managed: true, expiration_date: '2026-07-06', created_at: '2026-07-03T14:00:00.000Z'
+  }, new Date('2026-07-03T14:30:00.000Z'), null, 45);
+  assert(multiDayEarly?.triggered === false, 'A multi-day strategy position inside its hold window must not time-stop');
+  const multiDayDisabled = poller.getThetaStopAssessment({
+    ...basePosition, strategy_managed: true, expiration_date: '2026-07-06', created_at: '2026-07-03T14:00:00.000Z'
+  }, new Date('2026-07-03T15:46:00.000Z'), null, 0);
+  assert(multiDayDisabled === null, 'A zero multi-day hold disables the time stop');
   assert(liveFilledLater?.triggered === false && liveFilledLater.heldMinutes === 20, `Expected live broker theta-stop to start from fill/update time, got ${JSON.stringify(liveFilledLater)}`);
   assert(anchoredStart?.triggered === true && anchoredStart.heldMinutes === 30, `Expected stored theta-stop anchor to survive later updates, got ${JSON.stringify(anchoredStart)}`);
 }
