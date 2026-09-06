@@ -1,4 +1,4 @@
-import { isGlobalSettingKey, isPublicGlobalSettingKey, resolveMultiDayMaxHoldMinutes, resolveOptionExpiryDte, validateMultiDayMaxHoldMinutesSetting, validateOptionExpiryDteSetting, validateEntryLastMinuteSetting, validateEntryOpenBufferMinutesSetting, validateEventBlackoutDatesSetting, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
+import { isGlobalSettingKey, isPublicGlobalSettingKey, validateAutonomousLiveAiFallbackSetting, validateAutonomousLiveAiModeSetting, validateLiveAiDailyCallBudgetSetting, validateMaxSameDirectionPositionsSetting, resolveMultiDayMaxHoldMinutes, resolveOptionExpiryDte, validateMultiDayMaxHoldMinutesSetting, validateOptionExpiryDteSetting, validateEntryLastMinuteSetting, validateEntryOpenBufferMinutesSetting, validateEventBlackoutDatesSetting, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
@@ -39,6 +39,11 @@ async function runTests() {
   assert(resolveOptionExpiryDte({}) === 3 && resolveOptionExpiryDte({ strategy_option_expiry_dte: '0' }) === 0 && resolveOptionExpiryDte({ strategy_option_expiry_dte: 'x' }) === 3, 'Option expiry DTE resolves with a 3-day default');
   assert(validateMultiDayMaxHoldMinutesSetting('45') === null && validateMultiDayMaxHoldMinutesSetting('0') === null && Boolean(validateMultiDayMaxHoldMinutesSetting('391')), 'Multi-day max hold accepts 0-390 minutes');
   assert(resolveMultiDayMaxHoldMinutes({}) === 45 && resolveMultiDayMaxHoldMinutes({ strategy_multi_day_max_hold_minutes: '0' }) === 0, 'Multi-day max hold resolves with a 45-minute default');
+  assert(isGlobalSettingKey('autonomous_live_ai_mode') && isPublicGlobalSettingKey('autonomous_live_ai_mode') && isGlobalSettingKey('max_same_direction_positions'), 'AI gate and same-direction cap are visible global admin settings');
+  assert(validateAutonomousLiveAiModeSetting('gate') === null && validateAutonomousLiveAiModeSetting('Advisory') === null && Boolean(validateAutonomousLiveAiModeSetting('maybe')), 'AI mode accepts off/advisory/gate only');
+  assert(validateAutonomousLiveAiFallbackSetting('skip') === null && validateAutonomousLiveAiFallbackSetting('trade_cautious') === null && Boolean(validateAutonomousLiveAiFallbackSetting('hold')), 'AI fallback accepts trade_cautious/skip only');
+  assert(validateMaxSameDirectionPositionsSetting('1') === null && validateMaxSameDirectionPositionsSetting('20') === null && Boolean(validateMaxSameDirectionPositionsSetting('0')) && Boolean(validateMaxSameDirectionPositionsSetting('21')), 'Same-direction cap accepts 1-20');
+  assert(validateLiveAiDailyCallBudgetSetting('0') === null && validateLiveAiDailyCallBudgetSetting('500') === null && Boolean(validateLiveAiDailyCallBudgetSetting('501')) && Boolean(validateLiveAiDailyCallBudgetSetting('-1')), 'AI daily budget accepts 0-500');
   console.log('All settings validation tests passed!');
 }
 

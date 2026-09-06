@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting, validateEntryOpenBufferMinutesSetting, validateEntryLastMinuteSetting, validateEventBlackoutDatesSetting, validateOptionExpiryDteSetting, validateMultiDayMaxHoldMinutesSetting } from '../lib/settings-utils';
+import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting, validateEntryOpenBufferMinutesSetting, validateEntryLastMinuteSetting, validateEventBlackoutDatesSetting, validateOptionExpiryDteSetting, validateMultiDayMaxHoldMinutesSetting, validateAutonomousLiveAiModeSetting, validateAutonomousLiveAiFallbackSetting, validateMaxSameDirectionPositionsSetting, validateLiveAiDailyCallBudgetSetting } from '../lib/settings-utils';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
@@ -383,17 +383,18 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'Market polling enabled must be true or false' });
                     }
-                    if (key === 'autonomous_live_ai_mode' && !['off', 'advisory', 'gate'].includes(String(trimmedValue).toLowerCase())) {
-                        await client.query('ROLLBACK');
-                        return reply.code(400).send({ error: 'Autonomous live AI mode must be off, advisory or gate' });
-                    }
-                    if (key === 'autonomous_live_ai_fallback' && !['trade_cautious', 'skip'].includes(String(trimmedValue).toLowerCase())) {
-                        await client.query('ROLLBACK');
-                        return reply.code(400).send({ error: 'Autonomous live AI fallback must be trade_cautious or skip' });
-                    }
-                    if ((key === 'max_same_direction_positions' || key === 'live_ai_daily_call_budget') && !/^\d+$/.test(String(trimmedValue))) {
-                        await client.query('ROLLBACK');
-                        return reply.code(400).send({ error: `${key} must be a whole number` });
+                    if (key === 'autonomous_live_ai_mode' || key === 'autonomous_live_ai_fallback' || key === 'max_same_direction_positions' || key === 'live_ai_daily_call_budget') {
+                        const validationError = key === 'autonomous_live_ai_mode'
+                            ? validateAutonomousLiveAiModeSetting(trimmedValue)
+                            : key === 'autonomous_live_ai_fallback'
+                                ? validateAutonomousLiveAiFallbackSetting(trimmedValue)
+                                : key === 'max_same_direction_positions'
+                                    ? validateMaxSameDirectionPositionsSetting(trimmedValue)
+                                    : validateLiveAiDailyCallBudgetSetting(trimmedValue);
+                        if (validationError) {
+                            await client.query('ROLLBACK');
+                            return reply.code(400).send({ error: validationError });
+                        }
                     }
                     if (key === 'event_blackouts_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
                         await client.query('ROLLBACK');

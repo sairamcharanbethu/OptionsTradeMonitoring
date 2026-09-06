@@ -29,9 +29,17 @@ const GLOBAL_SETTING_KEYS = [
   'event_blackouts_enabled',
   'event_blackout_dates',
   'strategy_option_expiry_dte',
-  'strategy_multi_day_max_hold_minutes'
+  'strategy_multi_day_max_hold_minutes',
+  'max_same_direction_positions',
+  'autonomous_live_ai_mode',
+  'autonomous_live_ai_fallback',
+  'live_ai_daily_call_budget'
 ];
 const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
+  'max_same_direction_positions',
+  'autonomous_live_ai_mode',
+  'autonomous_live_ai_fallback',
+  'live_ai_daily_call_budget',
   'strategy_option_expiry_dte',
   'strategy_multi_day_max_hold_minutes',
   'entry_open_buffer_minutes',
@@ -158,8 +166,43 @@ export function isPublicGlobalSettingKey(key: string): boolean {
     'event_blackouts_enabled',
     'event_blackout_dates',
     'strategy_option_expiry_dte',
-    'strategy_multi_day_max_hold_minutes'
+    'strategy_multi_day_max_hold_minutes',
+    'max_same_direction_positions',
+    'autonomous_live_ai_mode',
+    'autonomous_live_ai_fallback',
+    'live_ai_daily_call_budget'
   ].includes(key);
+}
+
+/** Open positions in the same direction (CALL or PUT) allowed at once across lanes/users' pooled SPY/QQQ book. */
+export function validateMaxSameDirectionPositionsSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  const count = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(count) || count < 1 || count > 20) {
+    return 'Max same-direction positions must be a whole number between 1 and 20';
+  }
+  return null;
+}
+
+export function validateAutonomousLiveAiModeSetting(value: unknown): string | null {
+  return ['off', 'advisory', 'gate'].includes(String(value ?? '').trim().toLowerCase())
+    ? null
+    : 'Autonomous live AI mode must be off, advisory or gate';
+}
+
+export function validateAutonomousLiveAiFallbackSetting(value: unknown): string | null {
+  return ['trade_cautious', 'skip'].includes(String(value ?? '').trim().toLowerCase())
+    ? null
+    : 'Autonomous live AI fallback must be trade_cautious or skip';
+}
+
+export function validateLiveAiDailyCallBudgetSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  const count = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(count) || count < 0 || count > 500) {
+    return 'Live AI daily call budget must be a whole number between 0 and 500';
+  }
+  return null;
 }
 
 /** Minimum calendar days-to-expiry for the primary option chain (0 = same-day 0DTE). */

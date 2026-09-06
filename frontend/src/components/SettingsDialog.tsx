@@ -201,6 +201,14 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [strategyMaxContracts, setStrategyMaxContracts] = useState('1');
     const [strategyOptionExpiryDte, setStrategyOptionExpiryDte] = useState('3');
     const [strategyMultiDayMaxHoldMinutes, setStrategyMultiDayMaxHoldMinutes] = useState('45');
+    const [entryOpenBufferMinutes, setEntryOpenBufferMinutes] = useState('15');
+    const [entryLastMinuteEt, setEntryLastMinuteEt] = useState('11:00');
+    const [eventBlackoutsEnabled, setEventBlackoutsEnabled] = useState(true);
+    const [eventBlackoutDates, setEventBlackoutDates] = useState('');
+    const [maxSameDirectionPositions, setMaxSameDirectionPositions] = useState('1');
+    const [autonomousLiveAiMode, setAutonomousLiveAiMode] = useState('gate');
+    const [autonomousLiveAiFallback, setAutonomousLiveAiFallback] = useState('trade_cautious');
+    const [liveAiDailyCallBudget, setLiveAiDailyCallBudget] = useState('30');
     const [paperTrailingStopPct, setPaperTrailingStopPct] = useState('15');
     const [dailyLossLimitDollars, setDailyLossLimitDollars] = useState('');
     const [discordAlertsEnabled, setDiscordAlertsEnabled] = useState(false);
@@ -349,6 +357,14 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setStrategyMaxContracts(data.strategy_max_contracts || '1');
             setStrategyOptionExpiryDte(data.strategy_option_expiry_dte || '3');
             setStrategyMultiDayMaxHoldMinutes(data.strategy_multi_day_max_hold_minutes || '45');
+            setEntryOpenBufferMinutes(data.entry_open_buffer_minutes || '15');
+            setEntryLastMinuteEt(data.entry_last_minute_et || '11:00');
+            setEventBlackoutsEnabled(data.event_blackouts_enabled !== 'false');
+            setEventBlackoutDates(data.event_blackout_dates || '');
+            setMaxSameDirectionPositions(data.max_same_direction_positions || '1');
+            setAutonomousLiveAiMode(data.autonomous_live_ai_mode || 'gate');
+            setAutonomousLiveAiFallback(data.autonomous_live_ai_fallback || 'trade_cautious');
+            setLiveAiDailyCallBudget(data.live_ai_daily_call_budget || '30');
             setPaperTrailingStopPct(data.paper_trailing_stop_pct || '15');
             setDailyLossLimitDollars(data.daily_loss_limit_dollars || '');
             setDiscordAlertsEnabled(data.discord_alerts_enabled === 'true');
@@ -600,6 +616,14 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 settingsPayload.strategy_max_contracts = strategyMaxContracts;
                 settingsPayload.strategy_option_expiry_dte = strategyOptionExpiryDte;
                 settingsPayload.strategy_multi_day_max_hold_minutes = strategyMultiDayMaxHoldMinutes;
+                settingsPayload.entry_open_buffer_minutes = entryOpenBufferMinutes;
+                settingsPayload.entry_last_minute_et = entryLastMinuteEt.trim();
+                settingsPayload.event_blackouts_enabled = eventBlackoutsEnabled ? 'true' : 'false';
+                settingsPayload.event_blackout_dates = eventBlackoutDates.trim();
+                settingsPayload.max_same_direction_positions = maxSameDirectionPositions;
+                settingsPayload.autonomous_live_ai_mode = autonomousLiveAiMode;
+                settingsPayload.autonomous_live_ai_fallback = autonomousLiveAiFallback;
+                settingsPayload.live_ai_daily_call_budget = liveAiDailyCallBudget;
                 settingsPayload.paper_trailing_stop_pct = paperTrailingStopPct;
                 settingsPayload.daily_loss_limit_dollars = dailyLossLimitDollars.trim();
             }
@@ -922,6 +946,75 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             </div>
                                         </div>
 
+                                    </div>
+                                </section>
+
+                                <section className="rounded-lg border bg-card p-4 space-y-4">
+                                    <div>
+                                        <h4 className="text-sm font-semibold">Entry Rules &amp; AI Gate</h4>
+                                        <p className="text-[10px] text-muted-foreground">Global, admin-only. When new entries may be taken, how many same-direction positions may stack, and whether the AI gate can veto or size an autonomous live entry.</p>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="entryOpenBufferMinutes">Opening buffer (min after 9:30 ET)</Label>
+                                            <Input id="entryOpenBufferMinutes" type="number" min="0" max="120" value={entryOpenBufferMinutes} onChange={(e) => setEntryOpenBufferMinutes(e.target.value)} disabled={!isAdmin} />
+                                            <p className="text-[10px] text-muted-foreground">No new entries for this long after the open. 0 disables.</p>
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="entryLastMinuteEt">Last entry (HH:MM ET)</Label>
+                                            <Input id="entryLastMinuteEt" type="text" placeholder="11:00" value={entryLastMinuteEt} onChange={(e) => setEntryLastMinuteEt(e.target.value)} disabled={!isAdmin} />
+                                            <p className="text-[10px] text-muted-foreground">No new entries at or after this time (after 09:30, no later than 15:00). Also capped at 60 min before the close.</p>
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <Label htmlFor="eventBlackoutsEnabled">Event-day blackouts</Label>
+                                                <Switch id="eventBlackoutsEnabled" checked={eventBlackoutsEnabled} onCheckedChange={setEventBlackoutsEnabled} disabled={!isAdmin} />
+                                            </div>
+                                            <p className="text-[10px] text-muted-foreground">FOMC decision days block 13:30 ET to the close; CPI and payroll days block the first 60 minutes.</p>
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="maxSameDirectionPositions">Max same-direction positions</Label>
+                                            <Input id="maxSameDirectionPositions" type="number" min="1" max="20" value={maxSameDirectionPositions} onChange={(e) => setMaxSameDirectionPositions(e.target.value)} disabled={!isAdmin} />
+                                            <p className="text-[10px] text-muted-foreground">Open SPY/QQQ positions of the same option type allowed at once.</p>
+                                        </div>
+                                        <div className="grid gap-2 md:col-span-2">
+                                            <Label htmlFor="eventBlackoutDates">Custom blackout dates (JSON)</Label>
+                                            <textarea
+                                                id="eventBlackoutDates"
+                                                className="min-h-[72px] rounded-md border border-input bg-background px-3 py-2 text-xs font-mono shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                                                placeholder='[{"date":"2027-01-27","label":"FOMC"},{"date":"2026-11-03","label":"Election","start_minute_et":570,"end_minute_et":960}]'
+                                                value={eventBlackoutDates}
+                                                onChange={(e) => setEventBlackoutDates(e.target.value)}
+                                                disabled={!isAdmin}
+                                            />
+                                            <p className="text-[10px] text-muted-foreground">Array of {'{'}date, label, start_minute_et?, end_minute_et?{'}'}; minutes after midnight ET. Without a window the whole session is blocked. Blank = none.</p>
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="autonomousLiveAiMode">Autonomous live AI gate</Label>
+                                            <Select value={autonomousLiveAiMode} onValueChange={setAutonomousLiveAiMode} disabled={!isAdmin}>
+                                                <SelectTrigger id="autonomousLiveAiMode"><SelectValue /></SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="gate">Gate: SKIP blocks, tier sizes</SelectItem>
+                                                    <SelectItem value="advisory">Advisory: record only</SelectItem>
+                                                    <SelectItem value="off">Off: never called</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="autonomousLiveAiFallback">AI unavailable fallback</Label>
+                                            <Select value={autonomousLiveAiFallback} onValueChange={setAutonomousLiveAiFallback} disabled={!isAdmin}>
+                                                <SelectTrigger id="autonomousLiveAiFallback"><SelectValue /></SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="trade_cautious">Trade one contract, flagged</SelectItem>
+                                                    <SelectItem value="skip">Skip the entry</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            <p className="text-[10px] text-muted-foreground">Applies on timeout, provider error, malformed reply or exhausted budget.</p>
+                                        </div>
+                                        <div className="grid gap-2">
+                                            <Label htmlFor="liveAiDailyCallBudget">AI daily call budget</Label>
+                                            <Input id="liveAiDailyCallBudget" type="number" min="0" max="500" value={liveAiDailyCallBudget} onChange={(e) => setLiveAiDailyCallBudget(e.target.value)} disabled={!isAdmin} />
+                                        </div>
                                     </div>
                                 </section>
 
