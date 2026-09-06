@@ -340,6 +340,23 @@ async function runTests() {
     (error: Error) => assert(error.message.includes('session'), 'Session rejection must name the stale or closed policy')
   );
   reviewAdapter.currentSignal.session_policy.valid = true;
+  reviewAdapter.currentSignal.session_policy.no_trade_windows = [{ start_minute_et: 0, end_minute_et: 24 * 60, reason: 'CPI release (test)' }];
+  await reviewAdapter.assertSignalExecutable(7).then(
+    () => { throw new Error('An active no-trade window must block execution'); },
+    (error: Error) => assert(error.message.includes('No-trade window') && error.message.includes('CPI'), 'No-trade rejection must name the window')
+  );
+  reviewAdapter.currentSignal.session_policy.no_trade_windows = [];
+  const sessionPolicy = reviewAdapter.buildSessionPolicy(
+    { entry_open_buffer_minutes: '15', entry_last_minute_et: '11:00', event_blackout_dates: '[{"date":"2026-09-16","label":"dup"}]' },
+    '2026-09-16', { isWeekend: false, isHoliday: false }, 16 * 60
+  );
+  assert(sessionPolicy.entry_cutoff_minute_et === 11 * 60, 'Configured 11:00 last entry becomes the engine cutoff');
+  assert(sessionPolicy.no_trade_windows[0].end_minute_et === 9 * 60 + 45, 'Opening buffer window follows the setting');
+  assert(sessionPolicy.no_trade_windows.some((w: any) => w.reason.includes('FOMC')), 'Built-in FOMC decision day is a no-trade window');
+  const earlyClose = reviewAdapter.buildSessionPolicy({}, '2026-11-27', { isWeekend: false, isHoliday: false }, 13 * 60);
+  assert(earlyClose.entry_cutoff_minute_et === 11 * 60 && earlyClose.flatten_minute_et === 12 * 60 + 20, 'Early close keeps cutoff < flatten < close ordering');
+  const noBlackouts = reviewAdapter.buildSessionPolicy({ event_blackouts_enabled: 'false', entry_open_buffer_minutes: '0' }, '2026-09-16', { isWeekend: false, isHoliday: false }, 16 * 60);
+  assert(noBlackouts.no_trade_windows.length === 0 && noBlackouts.event_day === null, 'Blackouts and buffer can be disabled');
   reviewAdapter.currentSignal.gex.provider_age_seconds = 120.1;
   await reviewAdapter.assertSignalExecutable(7).then(
     () => { throw new Error('GEX older than the provider contract must block execution'); },

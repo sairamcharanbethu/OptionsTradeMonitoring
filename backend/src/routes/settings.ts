@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
+import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting, validateEntryOpenBufferMinutesSetting, validateEntryLastMinuteSetting, validateEventBlackoutDatesSetting } from '../lib/settings-utils';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
@@ -382,6 +382,21 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                     if (key === 'polling_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'Market polling enabled must be true or false' });
+                    }
+                    if (key === 'event_blackouts_enabled' && !['true', 'false'].includes(String(trimmedValue))) {
+                        await client.query('ROLLBACK');
+                        return reply.code(400).send({ error: 'Event blackouts enabled must be true or false' });
+                    }
+                    if (key === 'entry_open_buffer_minutes' || key === 'entry_last_minute_et' || key === 'event_blackout_dates') {
+                        const validationError = key === 'entry_open_buffer_minutes'
+                            ? validateEntryOpenBufferMinutesSetting(trimmedValue)
+                            : key === 'entry_last_minute_et'
+                                ? validateEntryLastMinuteSetting(trimmedValue)
+                                : validateEventBlackoutDatesSetting(trimmedValue);
+                        if (validationError) {
+                            await client.query('ROLLBACK');
+                            return reply.code(400).send({ error: validationError });
+                        }
                     }
                     await client.query(
                         `INSERT INTO settings (user_id, key, value, updated_at) 

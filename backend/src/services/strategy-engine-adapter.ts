@@ -6,6 +6,7 @@ import Redis from 'ioredis';
 import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 import { getNewYorkDateParts, getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
+import { NoTradeWindow, findActiveNoTradeWindow, getEventNoTradeWindows, parseCustomEconomicEvents, parseEtClockMinute } from '../lib/economic-calendar';
 import { DiscordAlertService } from './discord-alert-service';
 import { StrategyLifecycleManager } from './strategy-lifecycle-manager';
 
@@ -353,6 +354,10 @@ export class StrategyEngineAdapter {
       || sessionMinute >= Number(session.entry_cutoff_minute_et)
     ) {
       throw this.conflict('The strategy entry session is closed or its calendar policy is stale');
+    }
+    const activeWindow = findActiveNoTradeWindow(session.no_trade_windows, sessionMinute);
+    if (activeWindow) {
+      throw this.conflict(`No-trade window active: ${activeWindow.reason}`);
     }
     const signalAge = Date.now() / 1000 - Number(live.generated_at || 0);
     if (!Number.isFinite(signalAge) || signalAge < 0 || signalAge > 20) {
@@ -1113,15 +1118,7 @@ export class StrategyEngineAdapter {
       ibkr_host: ibkr.host,
       ibkr_port: ibkr.port,
       ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live',
-      session: {
-        market_date: sessionParts.dateKey,
-        is_trading_day: !sessionMarket.isWeekend && !sessionMarket.isHoliday,
-        open_minute_et: 9 * 60 + 30,
-        close_minute_et: sessionCloseMinutes,
-        entry_cutoff_minute_et: sessionCloseMinutes - 60,
-        flatten_minute_et: sessionCloseMinutes - 40,
-        source: 'backend-market-calendar-v1'
-      }
+      session: this.buildSessionPolicy(settings, sessionParts.dateKey, sessionMarket, sessionCloseMinutes)
     };
     policy.strategy_preferred_contracts = Math.min(
       policy.strategy_preferred_contracts,
@@ -1135,6 +1132,57 @@ export class StrategyEngineAdapter {
     await fs.writeFile(temporary, JSON.stringify(policy));
     await fs.rename(temporary, target);
     this.lastPolicyFingerprint = fingerprint;
+  }
+
+  /**
+   * Session policy consumed by the Python engine (and re-checked here before a
+   * live entry). Beyond the calendar it carries the evidence-based entry rules:
+   * the 2026-06→08 out-of-sample backtest showed every entry hour after 11:00 ET
+   * negative, so the default last-entry time is 11:00; the first minutes after
+   * the open are a warm-up buffer; scheduled macro releases (FOMC/CPI/NFP plus
+   * operator-added dates) are no-trade windows.
+   */
+  buildSessionPolicy(
+    settings: Record<string, string>,
+    dateKey: string,
+    sessionMarket: { isWeekend: boolean; isHoliday: boolean },
+    sessionCloseMinutes: number
+  ) {
+    const openMinute = 9 * 60 + 30;
+    const openBufferMinutes = this.numberInRange(settings.entry_open_buffer_minutes, 15, 0, 120);
+    const configuredLastEntry = parseEtClockMinute(settings.entry_last_minute_et);
+    const lastEntryMinute = configuredLastEntry !== null && configuredLastEntry > openMinute && configuredLastEntry <= 15 * 60
+      ? configuredLastEntry
+      : 11 * 60;
+    const entryCutoffMinute = Math.min(sessionCloseMinutes - 60, lastEntryMinute);
+    const noTradeWindows: NoTradeWindow[] = [];
+    if (openBufferMinutes > 0) {
+      noTradeWindows.push({
+        start_minute_et: openMinute,
+        end_minute_et: openMinute + openBufferMinutes,
+        reason: `opening warm-up (first ${openBufferMinutes} min)`
+      });
+    }
+    const eventBlackoutsEnabled = String(settings.event_blackouts_enabled ?? 'true').trim().toLowerCase() !== 'false';
+    const customEvents = parseCustomEconomicEvents(settings.event_blackout_dates);
+    if (customEvents.error) {
+      this.fastify.log.warn(`[StrategyEngineAdapter] Ignoring event_blackout_dates: ${customEvents.error}`);
+    }
+    const eventWindows = eventBlackoutsEnabled
+      ? getEventNoTradeWindows(dateKey, { openMinute, closeMinute: sessionCloseMinutes, customEvents: customEvents.events })
+      : [];
+    noTradeWindows.push(...eventWindows);
+    return {
+      market_date: dateKey,
+      is_trading_day: !sessionMarket.isWeekend && !sessionMarket.isHoliday,
+      open_minute_et: openMinute,
+      close_minute_et: sessionCloseMinutes,
+      entry_cutoff_minute_et: entryCutoffMinute,
+      flatten_minute_et: sessionCloseMinutes - 40,
+      no_trade_windows: noTradeWindows,
+      event_day: eventWindows.length > 0 ? eventWindows.map((w) => w.reason).join('; ') : null,
+      source: 'backend-market-calendar-v2'
+    };
   }
 
   // Pure per-lane reconciliation decision (see publishOpenPositions). Confident

@@ -1,4 +1,5 @@
 import { redis } from './redis';
+import { parseCustomEconomicEvents, parseEtClockMinute } from './economic-calendar';
 
 const GLOBAL_SETTING_KEYS = [
   'ai_provider',
@@ -22,9 +23,17 @@ const GLOBAL_SETTING_KEYS = [
   'mcp_trading_enabled',
   'day_trading_ai_provider',
   'day_trading_ai_model',
-  'day_trading_coach_model'
+  'day_trading_coach_model',
+  'entry_open_buffer_minutes',
+  'entry_last_minute_et',
+  'event_blackouts_enabled',
+  'event_blackout_dates'
 ];
 const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
+  'entry_open_buffer_minutes',
+  'entry_last_minute_et',
+  'event_blackouts_enabled',
+  'event_blackout_dates',
   'day_trading_symbols',
   'strategy_max_total_debit_dollars',
   'strategy_preferred_contracts',
@@ -139,8 +148,35 @@ export function isPublicGlobalSettingKey(key: string): boolean {
     'paper_trailing_stop_pct',
     'market_poll_interval',
     'polling_enabled',
-    'daily_loss_limit_dollars'
+    'daily_loss_limit_dollars',
+    'entry_open_buffer_minutes',
+    'entry_last_minute_et',
+    'event_blackouts_enabled',
+    'event_blackout_dates'
   ].includes(key);
+}
+
+/** Minutes after the 9:30 ET open during which no new entry may be taken (0 disables). */
+export function validateEntryOpenBufferMinutesSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  const minutes = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(minutes) || minutes < 0 || minutes > 120) {
+    return 'Entry open buffer must be a whole number of minutes between 0 and 120';
+  }
+  return null;
+}
+
+/** Last New York clock time ("HH:MM") at which a new entry may be taken; must sit inside the regular session. */
+export function validateEntryLastMinuteSetting(value: unknown): string | null {
+  const minute = parseEtClockMinute(value);
+  if (minute === null || minute <= 9 * 60 + 30 || minute > 15 * 60) {
+    return 'Entry last minute must be HH:MM New York time after 09:30 and no later than 15:00';
+  }
+  return null;
+}
+
+export function validateEventBlackoutDatesSetting(value: unknown): string | null {
+  return parseCustomEconomicEvents(value).error;
 }
 
 export function resolveMcpTradingEnabled(settings: Record<string, string>, envValue = process.env.MCP_TRADING_ENABLED): boolean {

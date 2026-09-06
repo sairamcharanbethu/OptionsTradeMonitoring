@@ -286,6 +286,7 @@ def _session_policy(
         "flatten_minute_et": (
             default_close - MANDATORY_FLATTEN_MINUTES_BEFORE_CLOSE
         ),
+        "no_trade_windows": [],
         "source": "signal-engine-default",
         "valid": policy is None,
         "reason": None if policy is None else "session policy is stale or invalid",
@@ -315,10 +316,62 @@ def _session_policy(
         "close_minute_et": close_minute,
         "entry_cutoff_minute_et": entry_cutoff,
         "flatten_minute_et": flatten_minute,
+        "no_trade_windows": _sanitize_no_trade_windows(
+            policy.get("no_trade_windows"), open_minute, close_minute
+        ),
+        "event_day": policy.get("event_day") or None,
         "source": str(policy.get("source") or "backend-market-calendar"),
         "valid": True,
         "reason": None,
     }
+
+
+def _sanitize_no_trade_windows(
+    raw: Any, open_minute: int, close_minute: int
+) -> list[dict[str, Any]]:
+    """Keep only well-formed ``[start, end)`` ET-minute windows inside the session.
+
+    A malformed window is dropped rather than invalidating the whole policy: the
+    calendar/cutoff contract must keep working even if a blackout entry is bad.
+    """
+    if not isinstance(raw, list):
+        return []
+    windows: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start = int(item.get("start_minute_et"))
+            end = int(item.get("end_minute_et"))
+        except (TypeError, ValueError):
+            continue
+        start = max(open_minute, start)
+        end = min(close_minute, end)
+        if end <= start:
+            continue
+        windows.append(
+            {
+                "start_minute_et": start,
+                "end_minute_et": end,
+                "reason": str(item.get("reason") or "no-trade window"),
+            }
+        )
+    windows.sort(key=lambda w: w["start_minute_et"])
+    return windows
+
+
+def _active_no_trade_window(
+    now: float | None = None,
+    session_policy: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The no-trade window covering ``now`` (ET), or None."""
+    stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
+    minutes = stamp.hour * 60 + stamp.minute
+    session = _session_policy(now, session_policy)
+    for window in session.get("no_trade_windows") or []:
+        if window["start_minute_et"] <= minutes < window["end_minute_et"]:
+            return window
+    return None
 
 
 def _format_et_minute(minutes: int) -> str:
@@ -353,6 +406,7 @@ def _new_entry_window_open(
         session["valid"]
         and session["is_trading_day"]
         and session["open_minute_et"] <= minutes < session["entry_cutoff_minute_et"]
+        and _active_no_trade_window(now, session_policy) is None
     )
 
 
@@ -4862,11 +4916,19 @@ def build_signal(
         )
         hard_data_block = True
     elif not _new_entry_window_open(now, session):
-        result["blockers"].append(
-            "end-of-day signal cutoff reached "
-            f"({_format_et_minute(session['entry_cutoff_minute_et'])}); "
-            "new activations are prohibited"
-        )
+        active_window = _active_no_trade_window(now, session)
+        if active_window is not None:
+            result["blockers"].append(
+                f"no-trade window: {active_window['reason']} until "
+                f"{_format_et_minute(active_window['end_minute_et'])}; "
+                "new activations are prohibited"
+            )
+        else:
+            result["blockers"].append(
+                "new-entry cutoff reached "
+                f"({_format_et_minute(session['entry_cutoff_minute_et'])}); "
+                "new activations are prohibited"
+            )
         hard_data_block = True
     if use_qqq and (
         not _number(qqq_market.get("spot"))

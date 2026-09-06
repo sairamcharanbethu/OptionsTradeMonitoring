@@ -19,6 +19,8 @@ from signal_engine import (
     _plan_quality,
     _select_otm_option,
     _new_entry_window_open,
+    _active_no_trade_window,
+    _session_policy,
     _zerogex_context,
     _zerogex_decision_context,
     build_signal,
@@ -2184,6 +2186,57 @@ class SessionCutoffTest(unittest.TestCase):
         self.assertFalse(_new_entry_window_open(at_cutoff, policy))
         self.assertFalse(_mandatory_flatten_due(at_cutoff, policy))
         self.assertTrue(_mandatory_flatten_due(at_flatten, policy))
+
+    def test_no_trade_windows_block_entries_but_not_the_policy(self) -> None:
+        policy = {
+            "market_date": "2026-09-16",
+            "is_trading_day": True,
+            "open_minute_et": 9 * 60 + 30,
+            "close_minute_et": 16 * 60,
+            "entry_cutoff_minute_et": 11 * 60,
+            "flatten_minute_et": 15 * 60 + 20,
+            "no_trade_windows": [
+                {"start_minute_et": 9 * 60 + 30, "end_minute_et": 9 * 60 + 45, "reason": "opening warm-up"},
+                {"start_minute_et": 13 * 60 + 30, "end_minute_et": 16 * 60, "reason": "FOMC rate decision"},
+                {"start_minute_et": "bad", "end_minute_et": 700, "reason": "malformed"},
+                {"start_minute_et": 800, "end_minute_et": 700, "reason": "inverted"},
+            ],
+            "event_day": "FOMC rate decision (2026-09-16)",
+            "source": "backend-market-calendar-v2",
+        }
+        at = lambda h, m: datetime(2026, 9, 16, h, m, 0, tzinfo=ET).timestamp()
+        session = _session_policy(at(10, 0), policy)
+        self.assertTrue(session["valid"])
+        self.assertEqual(len(session["no_trade_windows"]), 2)  # malformed + inverted dropped
+        # Opening buffer: blocked at 9:30-9:44, open from 9:45.
+        self.assertFalse(_new_entry_window_open(at(9, 30), policy))
+        self.assertFalse(_new_entry_window_open(at(9, 44), policy))
+        self.assertEqual(_active_no_trade_window(at(9, 44), policy)["reason"], "opening warm-up")
+        self.assertTrue(_new_entry_window_open(at(9, 45), policy))
+        self.assertIsNone(_active_no_trade_window(at(9, 45), policy))
+        # Evidence-based last entry at 11:00 comes from entry_cutoff_minute_et.
+        self.assertTrue(_new_entry_window_open(at(10, 59), policy))
+        self.assertFalse(_new_entry_window_open(at(11, 0), policy))
+        self.assertIsNone(_active_no_trade_window(at(11, 0), policy))
+        # FOMC window is reported even though the cutoff already closed entries.
+        self.assertEqual(_active_no_trade_window(at(14, 0), policy)["reason"], "FOMC rate decision")
+        self.assertFalse(_new_entry_window_open(at(14, 0), policy))
+        # Flatten is unaffected by windows.
+        self.assertTrue(_mandatory_flatten_due(at(15, 20), policy))
+
+    def test_policy_without_windows_is_unchanged(self) -> None:
+        policy = {
+            "market_date": "2026-11-27",
+            "is_trading_day": True,
+            "open_minute_et": 9 * 60 + 30,
+            "close_minute_et": 13 * 60,
+            "entry_cutoff_minute_et": 12 * 60,
+            "flatten_minute_et": 12 * 60 + 20,
+        }
+        now = datetime(2026, 11, 27, 9, 31, 0, tzinfo=ET).timestamp()
+        self.assertEqual(_session_policy(now, policy)["no_trade_windows"], [])
+        self.assertTrue(_new_entry_window_open(now, policy))
+        self.assertEqual(_session_policy(now, None)["no_trade_windows"], [])
 
     def test_stale_backend_policy_fails_closed(self) -> None:
         stale = {

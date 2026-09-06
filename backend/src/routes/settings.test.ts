@@ -1,4 +1,4 @@
-import { isGlobalSettingKey, isPublicGlobalSettingKey, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
+import { isGlobalSettingKey, isPublicGlobalSettingKey, validateEntryLastMinuteSetting, validateEntryOpenBufferMinutesSetting, validateEventBlackoutDatesSetting, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting } from '../lib/settings-utils';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
@@ -27,6 +27,13 @@ async function runTests() {
   assert(Boolean(validateMarketPollIntervalSetting('0')), 'A zero-second interval should be rejected');
   assert(Boolean(validateMarketPollIntervalSetting('1.5')), 'Fractional poll intervals should be rejected');
   assert(Boolean(validateMarketPollIntervalSetting('901')), 'Intervals above 15 minutes should be rejected');
+  assert(isGlobalSettingKey('entry_last_minute_et') && isPublicGlobalSettingKey('entry_last_minute_et'), 'The entry cutoff is a visible global setting');
+  assert(validateEntryOpenBufferMinutesSetting('0') === null && validateEntryOpenBufferMinutesSetting('15') === null && validateEntryOpenBufferMinutesSetting('120') === null, 'Open buffer accepts 0-120 minutes');
+  assert(Boolean(validateEntryOpenBufferMinutesSetting('121')) && Boolean(validateEntryOpenBufferMinutesSetting('-1')) && Boolean(validateEntryOpenBufferMinutesSetting('x')), 'Open buffer rejects out-of-range or non-integer values');
+  assert(validateEntryLastMinuteSetting('11:00') === null && validateEntryLastMinuteSetting('15:00') === null, 'Entry last minute accepts session times');
+  assert(Boolean(validateEntryLastMinuteSetting('09:30')) && Boolean(validateEntryLastMinuteSetting('15:01')) && Boolean(validateEntryLastMinuteSetting('noon')), 'Entry last minute rejects the open, post-15:00 and garbage');
+  assert(validateEventBlackoutDatesSetting('') === null && validateEventBlackoutDatesSetting('[{"date":"2027-01-27","label":"FOMC"}]') === null, 'Custom event blackouts accept blank and valid JSON');
+  assert(Boolean(validateEventBlackoutDatesSetting('[{"date":"Jan 27"}]')), 'Custom event blackouts reject malformed dates');
   console.log('All settings validation tests passed!');
 }
 
