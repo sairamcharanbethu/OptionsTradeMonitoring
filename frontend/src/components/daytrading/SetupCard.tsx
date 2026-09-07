@@ -9,6 +9,7 @@ import { useLatestAiVerdict } from '@/hooks/tradeEventStore';
 import { cn } from '@/lib/utils';
 import PriceLadder from './PriceLadder';
 import { expiryModeLabel, money, num, seconds, toneClass, type Tone } from './format';
+import { contractName, humanContractName, integer, optionExpiryLabel } from './terminalModel';
 
 /** Entry gates the contract block colours against (mirrored from the code). */
 const SPREAD_ENTRY_GATE_PCT = 5;   // TradeExecutionService entry quote gate
@@ -160,11 +161,13 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Contract</div>
-            <div className="mt-0.5 truncate font-mono text-xs text-zinc-200" title={option.local_symbol || ''}>
-              {option.local_symbol || (option.target_strike != null ? `SPY ${option.expiry || ''} ${option.target_strike}${side === 'PUT' ? 'P' : 'C'}` : '—')}
+            <div className="mt-0.5 text-sm font-semibold text-zinc-100">{humanContractName(option, side)}</div>
+            <div className="mt-0.5 select-all break-all font-mono text-[10px] text-zinc-500" title="Contract symbol">
+              {option.local_symbol || contractName(option, side)}
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            {option.expiry != null && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300">{optionExpiryLabel(option.expiry)}</Badge>}
             {dte && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300">{dte}</Badge>}
             <Badge variant="outline" className={cn('font-mono text-[10px]', eligible ? toneClass.good : toneClass.bad)}>{eligible ? 'eligible' : 'not eligible'}</Badge>
           </div>
@@ -180,7 +183,15 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
           <Stat label="Planned limit" value={money(option.planned_limit_price)} tone="plain" />
           <Stat label="Stop risk / ct" value={stopRisk != null ? `${money(stopRisk, 0)} / ${money(riskBudget, 0)}` : '—'} tone={riskTone} title="Estimated stop-loss $ per contract vs strategy_max_risk_per_trade_dollars" />
           <Stat label="Method" value={String(option.estimated_stop_risk?.method || '—').replace(/_/g, ' ')} tone="plain" />
+          <Stat label="Mark" value={money(option.mark)} tone="plain" />
+          <Stat label="Volume" value={integer(option.volume)} tone="plain" />
+          <Stat label="Open interest" value={integer(option.openInterest ?? option.open_interest)} tone="plain" />
         </div>
+        <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+          {option.mark != null && Number.isFinite(Number(option.mark))
+            ? 'Entry remains blocked when the quote is older than 15 seconds or the spread fails the strategy quality gate.'
+            : 'IBKR did not provide a mark. Bid and ask can still support a protected planned limit, but entry remains blocked unless the complete quote passes freshness and spread checks.'}
+        </p>
         {rejections.length > 0 && (
           <ul className="mt-2 space-y-0.5 text-[11px] text-rose-300/90">
             {rejections.map((r) => <li key={r}>• {r}</li>)}
