@@ -910,8 +910,8 @@ export default function GoalTracker() {
                         <Card className="bg-gradient-to-br from-card to-muted/30">
                             <CardHeader className="pb-2">
                                 <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                                    <Flame className="h-4 w-4 text-orange-500" />
-                                    Pacing Insights
+                                    <Flame className="h-4 w-4 text-sev-warn" />
+                                    {activeGoalEnded ? 'Final pacing' : 'Pacing Insights'}
                                 </CardTitle>
                             </CardHeader>
                             <CardContent className="space-y-3">
@@ -945,15 +945,26 @@ export default function GoalTracker() {
                                         <div className="pt-2 border-t">
                                             <p className="text-xs text-muted-foreground leading-relaxed">
                                                 {insights.status === 'COMPLETED' && '🎯 Congratulations! You\'ve reached your goal!'}
-                                                {insights.status === 'AHEAD' && `🚀 Great pace! You're ${insights.progressDelta.toFixed(1)}% ahead of schedule.`}
-                                                {insights.status === 'ON_TRACK' && (
-                                                    <span>✅ You're on track. Keep averaging {formatCurrency(insights.dailyAverage, true, 2)}/day.</span>
-                                                )}
-                                                {insights.status === 'AT_RISK' && (
-                                                    <span>⚠️ Slightly behind. Aim for {formatCurrency(insights.remainingPerDay, true, 2)}/day to catch up.</span>
-                                                )}
-                                                {insights.status === 'BEHIND' && (
-                                                    <span>🔴 Behind by {Math.abs(insights.progressDelta).toFixed(1)}%. Need {formatCurrency(insights.remainingPerDay, true, 2)}/day to recover.</span>
+                                                {activeGoalEnded ? (
+                                                    <span>
+                                                        This period is closed. Final result:{' '}
+                                                        {insights.progressDelta >= 0
+                                                            ? `target met with ${insights.progressDelta.toFixed(1)}% to spare.`
+                                                            : `${Math.abs(insights.progressDelta).toFixed(1)}% short of target.`}
+                                                    </span>
+                                                ) : (
+                                                    <>
+                                                        {insights.status === 'AHEAD' && `🚀 Great pace! You're ${insights.progressDelta.toFixed(1)}% ahead of schedule.`}
+                                                        {insights.status === 'ON_TRACK' && (
+                                                            <span>✅ You're on track. Keep averaging {formatCurrency(insights.dailyAverage, true, 2)}/day.</span>
+                                                        )}
+                                                        {insights.status === 'AT_RISK' && (
+                                                            <span>⚠️ Slightly behind. Aim for {formatCurrency(insights.remainingPerDay, true, 2)}/day to catch up.</span>
+                                                        )}
+                                                        {insights.status === 'BEHIND' && (
+                                                            <span>🔴 Behind by {Math.abs(insights.progressDelta).toFixed(1)}%. Need {formatCurrency(insights.remainingPerDay, true, 2)}/day to recover.</span>
+                                                        )}
+                                                    </>
                                                 )}
                                             </p>
                                         </div>

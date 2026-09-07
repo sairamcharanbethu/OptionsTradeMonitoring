@@ -92,8 +92,8 @@ const SEV: Record<Severity, { chip: string; dot: string }> = {
 export function severityOf(status: string | null | undefined): Severity {
   const s = String(status || '').toUpperCase();
   if (!s) return 'muted';
-  if (['DOWN', 'ERROR', 'CRITICAL', 'FAILED', 'HALTED', 'UNREACHABLE'].includes(s)) return 'critical';
-  if (['DEGRADED', 'WARN', 'WARNING', 'STALE', 'DISARMED', 'BLOCKED', 'PAUSED'].includes(s)) return 'warn';
+  if (['DOWN', 'ERROR', 'CRITICAL', 'FAILED', 'HALTED', 'UNREACHABLE', 'DISCONNECTED', 'OFFLINE'].includes(s)) return 'critical';
+  if (['DEGRADED', 'WARN', 'WARNING', 'STALE', 'DISARMED', 'BLOCKED', 'PAUSED', 'IDLE', 'STOPPED', 'UNAVAILABLE', 'MARKET_CLOSED'].includes(s)) return 'warn';
   if (['UP', 'OK', 'HEALTHY', 'LIVE', 'RUNNING', 'CONNECTED', 'ACTIVE', 'ARMED'].includes(s)) return 'ok';
   return 'info';
 }
