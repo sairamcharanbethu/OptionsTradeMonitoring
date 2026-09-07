@@ -16,9 +16,6 @@ import {
   ListChecks,
   LogOut,
   Menu,
-  Moon,
-  PanelTop,
-  Sun,
   Target,
   Trophy,
   UserRoundCog,
@@ -30,7 +27,6 @@ import { User, api } from '@/lib/api';
 import { useKillSwitch, useMarketStatus, useSettings } from '@/hooks/useDashboardData';
 import { useRealtimeSync } from '@/hooks/useRealtimeSync';
 import ActionBar from '@/components/ActionBar';
-import { useTheme } from './ThemeProvider';
 import SettingsDialog from './SettingsDialog';
 import { Button } from './ui/button';
 import {
@@ -38,8 +34,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from './ui/dropdown-menu';
@@ -236,7 +230,6 @@ export default function AppShell({ user, onUserUpdate, children }: {
   const { data: shellSettings = {} } = useSettings();
   // Applies server pushes (strategy state, positions, kill switch, events) to the query caches app-wide.
   useRealtimeSync();
-  const { theme, setTheme } = useTheme();
   // One glanceable truth on every page: is this system armed for real money?
   const liveConfigured = shellSettings.shadow_trading_enabled !== 'true'
     && shellSettings.execution_broker === 'wealthsimple_snaptrade'
@@ -334,13 +327,7 @@ export default function AppShell({ user, onUserUpdate, children }: {
                   <span className="block text-2xs font-normal text-muted-foreground">{user.role}</span>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuRadioGroup value={theme} onValueChange={(value) => setTheme(value as 'light' | 'dark' | 'system')}>
-                  <DropdownMenuRadioItem value="light" className="rounded-lg py-2.5 pr-3"><Sun />Light appearance</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="dark" className="rounded-lg py-2.5 pr-3"><Moon />Dark appearance</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="system" className="rounded-lg py-2.5 pr-3"><PanelTop />Use device setting</DropdownMenuRadioItem>
-                </DropdownMenuRadioGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onSelect={() => api.logout()} className="rounded-lg px-3 py-2.5 text-red-600 focus:text-red-600">
+                <DropdownMenuItem onSelect={() => api.logout()} className="rounded-lg px-3 py-2.5 text-act-danger focus:text-act-danger">
                   <LogOut />Sign out
                 </DropdownMenuItem>
               </DropdownMenuContent>

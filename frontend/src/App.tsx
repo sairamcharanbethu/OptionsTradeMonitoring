@@ -1,7 +1,6 @@
 import { Suspense, lazy, useState, useEffect } from 'react';
 import Auth from './components/Auth';
 import { api, User } from './lib/api';
-import { ThemeProvider } from './components/ThemeProvider';
 import { BrowserRouter, Link, Routes, Route } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import AppShell from './components/AppShell';
@@ -71,35 +70,31 @@ function App() {
 
   if (!user) {
     return (
-      <ThemeProvider defaultTheme="system" storageKey="options-trade-ui-theme">
-        <Auth onLogin={setUser} />
-      </ThemeProvider>
+      <Auth onLogin={setUser} />
     );
   }
 
   return (
-    <ThemeProvider defaultTheme="system" storageKey="options-trade-ui-theme">
-      <BrowserRouter>
-        <AppShell user={user} onUserUpdate={setUser}>
-            <Suspense fallback={<RouteLoader />}>
-              <Routes>
-                <Route path="/" element={<Dashboard user={user} />} />
-                <Route path="/trades" element={<TradesPage user={user} />} />
-                <Route path="/manual-entry" element={<ManualEntryPage />} />
-                <Route path="/options-calculator" element={<OptionsCalculatorPage />} />
-                <Route path="/trade-intelligence" element={<TradeIntelligencePage />} />
-                <Route path="/research" element={<ResearchPage />} />
-                <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
-                <Route path="/system-health" element={<SystemHealthPage />} />
-                <Route path="/strategy-guide" element={<StrategyGuidePage />} />
-                <Route path="/positions/:id" element={<PositionDetailsPage />} />
-                {devTradeTestsEnabled && <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />}
-                <Route path="*" element={<NotFoundPage />} />
-              </Routes>
-            </Suspense>
-        </AppShell>
-      </BrowserRouter>
-    </ThemeProvider>
+    <BrowserRouter>
+      <AppShell user={user} onUserUpdate={setUser}>
+          <Suspense fallback={<RouteLoader />}>
+            <Routes>
+              <Route path="/" element={<Dashboard user={user} />} />
+              <Route path="/trades" element={<TradesPage user={user} />} />
+              <Route path="/manual-entry" element={<ManualEntryPage />} />
+              <Route path="/options-calculator" element={<OptionsCalculatorPage />} />
+              <Route path="/trade-intelligence" element={<TradeIntelligencePage />} />
+              <Route path="/research" element={<ResearchPage />} />
+              <Route path="/trades/:id/command" element={<TradeCommandCenterPage />} />
+              <Route path="/system-health" element={<SystemHealthPage />} />
+              <Route path="/strategy-guide" element={<StrategyGuidePage />} />
+              <Route path="/positions/:id" element={<PositionDetailsPage />} />
+              {devTradeTestsEnabled && <Route path="/dev/live-exit-test" element={<DevLiveExitTestPage />} />}
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </Suspense>
+      </AppShell>
+    </BrowserRouter>
   );
 }
 

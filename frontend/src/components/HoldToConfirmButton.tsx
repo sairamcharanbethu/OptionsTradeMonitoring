@@ -103,7 +103,7 @@ export default function HoldToConfirmButton({
       <span className={cn('pointer-events-none absolute inset-y-0 left-0 -z-10 transition-none', fillClass)} style={{ width: `${progress * 100}%` }} aria-hidden="true" />
       {icon}
       <span>{busy ? 'Working…' : label}</span>
-      {count != null && <span className="num rounded-full bg-foreground/10 px-1.5 text-2xs">{count}</span>}
+      {count != null && <span className={cn('num rounded-full px-1.5 text-2xs', isOff ? 'bg-foreground/[0.06]' : 'bg-foreground/10')}>{count}</span>}
     </button>
   );
 }

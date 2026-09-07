@@ -167,7 +167,7 @@ export default function TerminalHeaderBar(props: Props) {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 border-amber-500/40 text-2xs text-amber-200 hover:bg-amber-950/40"
+                className="h-7 border-act-warn/60 text-2xs text-act-warn hover:bg-act-warn/12"
                 onClick={handleArmLive}
                 disabled={armToggling || killSwitchUnavailable}
               >
@@ -177,7 +177,7 @@ export default function TerminalHeaderBar(props: Props) {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 border-rose-500/40 text-2xs text-rose-200 hover:bg-rose-950/40"
+                className="h-7 border-act-danger/60 text-2xs text-act-danger hover:bg-act-danger/12"
                 onClick={handleDisarmLive}
                 disabled={armToggling || killSwitchUnavailable}
               >
