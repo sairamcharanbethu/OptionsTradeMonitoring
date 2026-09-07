@@ -69,3 +69,49 @@ export function expiryModeLabel(mode: unknown): string | null {
   if (text.startsWith('MULTI_DAY_') && text !== 'MULTI_DAY_WALL') return text.slice('MULTI_DAY_'.length);
   return ({ '0DTE': '0DTE', '0DTE_NO_FUTURE_EXPIRY': '0DTE', '1DTE_NEXT_LISTED': '1DTE', MULTI_DAY_WALL: 'wall 3DTE', LOCKED_POSITION: 'locked' } as Record<string, string>)[text] || text;
 }
+
+/** h:mm:ss ET for an ISO timestamp. */
+export function etTimeOfDay(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('en-US', { timeZone: ET_ZONE, hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(date);
+}
+
+/** ET minute-of-day for an ISO timestamp (for the same-day theta ladder). */
+export function etMinuteOfDayFor(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return null;
+  return etMinuteOfDay(date);
+}
+
+/** YYYY-MM-DD in ET for a Date. */
+export function etDateKey(date: Date = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: ET_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/** "SPY $770 Call · Sep 8" style label for a position or option row. */
+export function contractLabel(input: { strike?: unknown; strike_price?: unknown; expiry?: unknown; expiration_date?: unknown }, side: string | null | undefined): string {
+  const strikeRaw = Number(input.strike ?? input.strike_price);
+  const strike = Number.isFinite(strikeRaw) ? `$${strikeRaw.toFixed(2).replace(/\.00$/, '')}` : 'strike —';
+  const expiryRaw = String(input.expiry ?? input.expiration_date ?? '').slice(0, 10);
+  let expiry = 'expiry —';
+  const match = /^(\d{4})-?(\d{2})-?(\d{2})$/.exec(expiryRaw.replace(/-/g, '')) || /^(\d{4})-(\d{2})-(\d{2})$/.exec(expiryRaw);
+  if (match) {
+    const d = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+    expiry = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', month: 'short', day: 'numeric' }).format(d);
+  }
+  const sideLabel = side ? `${side[0]}${side.slice(1).toLowerCase()}` : 'option';
+  return `SPY ${strike} ${sideLabel} · ${expiry}`;
+}
+
+/** Same-day theta ladder used by the live exit engine (MarketPoller.getThetaStopMaxHoldMinutes). */
+export function sameDayMaxHoldMinutes(entryMinuteEt: number): number | null {
+  if (entryMinuteEt < 11 * 60 + 30) return 25;
+  if (entryMinuteEt < 14 * 60) return 15;
+  if (entryMinuteEt < 15 * 60 + 30) return 10;
+  return null;
+}

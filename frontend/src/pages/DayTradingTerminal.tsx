@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import CockpitHeader from '@/components/daytrading/CockpitHeader';
 import SetupCard from '@/components/daytrading/SetupCard';
+import PositionsStrip from '@/components/daytrading/PositionsStrip';
+import DecisionLog from '@/components/daytrading/DecisionLog';
 import {
   Activity,
   ArrowUpRight,
@@ -731,6 +733,8 @@ export default function DayTradingTerminal() {
   const [riskLoading, setRiskLoading] = useState(false);
   const [paperUpdating, setPaperUpdating] = useState(false);
   const [paperClosePosition, setPaperClosePosition] = useState<PaperAccountSummary['openPositions'][number] | null>(null);
+  // Decision log ↔ positions strip cross-highlight.
+  const [highlightedPositionId, setHighlightedPositionId] = useState<number | null>(null);
   const [paperClosing, setPaperClosing] = useState(false);
   const [paperForceCloseAvailable, setPaperForceCloseAvailable] = useState(false);
   const [riskError, setRiskError] = useState<string | null>(null);
@@ -2863,6 +2867,24 @@ export default function DayTradingTerminal() {
         vetoed={strategyState?.setupVetoed === true}
         settings={settings}
         lifecycle={lifecycle}
+      />
+
+      <PositionsStrip
+        positions={positions}
+        paperPositions={paperAccount?.openPositions || []}
+        paperCanManage={paperAccount?.canManage === true}
+        settings={settings}
+        highlightedId={highlightedPositionId}
+        onPaperChanged={() => { void refetchPaperAccount(); }}
+      />
+
+      <DecisionLog
+        onHighlightPosition={(id) => {
+          setHighlightedPositionId(id);
+          if (id != null) document.getElementById(`position-row-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }}
+        highlightedId={highlightedPositionId}
+        currentSetupId={strategySetupId}
       />
 
       <section className={entryReviewAvailable ? 'grid gap-4 lg:grid-cols-[1.1fr_0.9fr]' : ''}>

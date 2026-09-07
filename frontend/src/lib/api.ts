@@ -388,6 +388,28 @@ export interface TradeEvent {
   created_at: string;
 }
 
+/** One row of the app-wide trade-event stream (GET /api/trade-events). */
+export interface TradeEventStreamItem {
+  /** Redis stream id ("<ms>-<seq>"); null when served from the Postgres fallback. */
+  stream_id?: string | null;
+  id?: string | number | null;
+  cursor?: string | null;
+  user_id?: number | null;
+  signal_id?: number | null;
+  position_id?: number | null;
+  event_type: string;
+  message?: string | null;
+  metadata?: Record<string, any> | string | null;
+  created_at: string;
+}
+
+export interface TradeEventStreamResponse {
+  events: TradeEventStreamItem[];
+  /** Newest stream id in the page; pass back as `after` to backfill. */
+  cursor: string | null;
+  source: 'redis' | 'postgres';
+}
+
 export interface TradeCommandCenterResponse {
   trade: Position;
   signal: any | null;
@@ -783,6 +805,29 @@ export const api = {
     const res = await authFetch(`${API_BASE}/trades/${id}/events?t=${Date.now()}`);
     if (!res.ok) throw new Error('Failed to fetch trade events');
     return res.json();
+  },
+
+  /**
+   * App-wide trade-event stream, newest first. Served from the Redis stream
+   * (`source: 'redis'`) with a Postgres fallback. `after` is a stream id cursor
+   * used to backfill events missed while the socket was down.
+   */
+  async getTradeEventStream(params: { limit?: number; after?: string | null; types?: string[] } = {}): Promise<TradeEventStreamResponse> {
+    const query = new URLSearchParams();
+    query.set('limit', String(params.limit ?? 200));
+    if (params.after) query.set('after', params.after);
+    if (params.types?.length) query.set('types', params.types.join(','));
+    query.set('t', String(Date.now()));
+    const res = await authFetch(`${API_BASE}/trade-events?${query.toString()}`);
+    if (!res.ok) throw new Error(await readErrorMessage(res, 'Failed to fetch trade events'));
+    const data = await res.json();
+    const events: TradeEventStreamItem[] = Array.isArray(data?.events) ? data.events : Array.isArray(data) ? data : [];
+    return {
+      events,
+      cursor: data?.cursor ?? (events[0]?.stream_id ?? events[0]?.cursor ?? null),
+      // Backend reports 'redis' (stream) or 'db' (Postgres fallback).
+      source: data?.source === 'redis' ? 'redis' : 'postgres'
+    };
   },
 
   async getTradeUsage(): Promise<TradeUsageResponse> {

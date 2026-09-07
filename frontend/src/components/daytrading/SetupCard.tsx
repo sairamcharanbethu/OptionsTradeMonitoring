@@ -1,12 +1,13 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Ban, ChevronDown, RotateCcw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import HoldToConfirmButton from '@/components/HoldToConfirmButton';
 import { api } from '@/lib/api';
 import { QUERY_KEYS } from '@/hooks/useDashboardData';
-import { useRecentTradeEvents } from '@/hooks/useRealtimeSync';
+import { useLatestAiVerdict } from '@/hooks/tradeEventStore';
 import { cn } from '@/lib/utils';
+import PriceLadder from './PriceLadder';
 import { expiryModeLabel, money, num, seconds, toneClass, type Tone } from './format';
 
 /** Entry gates the contract block colours against (mirrored from the code). */
@@ -35,57 +36,37 @@ function Stat({ label, value, tone = 'muted', title }: { label: string; value: s
   );
 }
 
-/**
- * Horizontal price ladder: invalidation → trigger → T1 → T2, laid out so the
- * profit direction always runs left→right (put setups are mirrored). Spot is
- * the live marker.
- */
-function PriceLadder({ side, invalidation, trigger, targets, spot, atr }: { side: 'CALL' | 'PUT'; invalidation: number; trigger: number; targets: number[]; spot: number | null; atr: number | null }) {
-  const levels = [invalidation, trigger, ...targets].filter((v) => Number.isFinite(v));
-  const lo = Math.min(...levels, spot ?? Infinity);
-  const hi = Math.max(...levels, spot ?? -Infinity);
-  const pad = Math.max((hi - lo) * 0.08, 0.05);
-  const min = lo - pad; const max = hi + pad; const span = Math.max(max - min, 0.01);
-  // Mirror for puts so "toward profit" is rightward.
-  const x = (price: number) => `${(((side === 'CALL' ? price - min : max - price) / span) * 100).toFixed(2)}%`;
-  const marks: Array<{ price: number; label: string; cls: string }> = [
-    { price: invalidation, label: 'Stop', cls: 'bg-rose-400' },
-    { price: trigger, label: 'Trigger', cls: 'bg-sky-300' },
-    ...targets.map((t, i) => ({ price: t, label: `T${i + 1}`, cls: 'bg-emerald-400' }))
-  ];
+/** Setup-specific ladder: stop → trigger → targets, with distance-to-trigger and underlying R. */
+function SetupLadder({ side, invalidation, trigger, targets, spot, atr }: { side: 'CALL' | 'PUT'; invalidation: number; trigger: number; targets: number[]; spot: number | null; atr: number | null }) {
   const distance = spot != null ? (side === 'CALL' ? trigger - spot : spot - trigger) : null;
   return (
-    <div>
-      <div className="relative mt-5 h-2 rounded-full bg-gradient-to-r from-rose-500/30 via-zinc-700 to-emerald-500/30" role="img" aria-label={`Price ladder: stop ${money(invalidation)}, trigger ${money(trigger)}, targets ${targets.map((t) => money(t)).join(', ')}${spot != null ? `, spot ${money(spot)}` : ''}`}>
-        {marks.map((m) => (
-          <div key={m.label} className="absolute -top-4 flex -translate-x-1/2 flex-col items-center" style={{ left: x(m.price) }}>
-            <span className="text-[9px] font-semibold text-zinc-400">{m.label}</span>
-            <span className={cn('mt-0.5 h-3.5 w-0.5 rounded', m.cls)} />
-            <span className="mt-4 font-mono text-[9px] text-zinc-400">{num(m.price)}</span>
-          </div>
-        ))}
-        {spot != null && Number.isFinite(spot) && (
-          <div className="absolute -top-1.5 -translate-x-1/2" style={{ left: x(spot) }} title={`Spot ${money(spot)}`}>
-            <div className="h-5 w-5 rounded-full border-2 border-zinc-50 bg-zinc-950 shadow-[0_0_10px_rgba(255,255,255,0.6)]" />
-          </div>
-        )}
-      </div>
-      <div className="mt-7 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-zinc-400">
-        <span>Direction <span className="font-semibold text-zinc-200">{side === 'CALL' ? 'up →' : 'down →'}</span> (profit runs right)</span>
-        {distance != null && (
-          <span>
-            To trigger <span className={cn('font-mono font-semibold', distance <= 0 ? 'text-emerald-300' : 'text-zinc-200')}>{distance <= 0 ? 'through' : `${money(distance)}${atr ? ` · ${num(distance / atr, 2)} ATR` : ''}`}</span>
-          </span>
-        )}
-        <span>Underlying R <span className="font-mono font-semibold text-zinc-200">{money(Math.abs(trigger - invalidation))}</span></span>
-      </div>
-    </div>
+    <PriceLadder
+      side={side}
+      spot={spot}
+      marks={[
+        { price: invalidation, label: 'Stop', cls: 'bg-rose-400' },
+        { price: trigger, label: 'Trigger', cls: 'bg-sky-300' },
+        ...targets.map((t, i) => ({ price: t, label: `T${i + 1}`, cls: 'bg-emerald-400' }))
+      ]}
+      ariaLabel={`Price ladder: stop ${money(invalidation)}, trigger ${money(trigger)}, targets ${targets.map((t) => money(t)).join(', ')}${spot != null ? `, spot ${money(spot)}` : ''}`}
+      footer={(
+        <>
+          <span>Direction <span className="font-semibold text-zinc-200">{side === 'CALL' ? 'up →' : 'down →'}</span> (profit runs right)</span>
+          {distance != null && (
+            <span>
+              To trigger <span className={cn('font-mono font-semibold', distance <= 0 ? 'text-emerald-300' : 'text-zinc-200')}>{distance <= 0 ? 'through' : `${money(distance)}${atr ? ` · ${num(distance / atr, 2)} ATR` : ''}`}</span>
+            </span>
+          )}
+          <span>Underlying R <span className="font-mono font-semibold text-zinc-200">{money(Math.abs(trigger - invalidation))}</span></span>
+        </>
+      )}
+    />
   );
 }
 
 export default function SetupCard({ signal, side, setup, option, setupId, vetoed, settings, lifecycle }: Props) {
   const queryClient = useQueryClient();
-  const events = useRecentTradeEvents();
+  const aiVerdict = useLatestAiVerdict(setupId);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ tone: Tone; text: string } | null>(null);
   const [warningsOpen, setWarningsOpen] = useState(false);
@@ -112,11 +93,6 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
   const blockers: string[] = Array.from(new Set(((signal?.blockers || []) as unknown[]).filter(Boolean).map(String))).reverse();
   const warnings: string[] = Array.from(new Set(((signal?.warnings || []) as unknown[]).filter(Boolean).map(String)));
   const dte = expiryModeLabel(option.expiry_mode);
-
-  const aiVerdict = useMemo(() => {
-    if (!setupId) return null;
-    return events.find((e) => e.event_type === 'AI_LIVE_GATE' && String(e.metadata?.setup_id || '') === String(setupId)) || null;
-  }, [events, setupId]);
 
   const run = useCallback(async (action: () => Promise<string>, tone: Tone) => {
     if (busy) return;
@@ -164,7 +140,7 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
 
       {/* Plan geometry */}
       {hasPlan && side ? (
-        <PriceLadder side={side} invalidation={invalidation} trigger={trigger} targets={targets} spot={spot} atr={atr} />
+        <SetupLadder side={side} invalidation={invalidation} trigger={trigger} targets={targets} spot={spot} atr={atr} />
       ) : (
         <div className="mt-4 rounded-lg border border-dashed border-zinc-800 px-3 py-5 text-center text-xs text-zinc-500">
           No frozen plan yet. Trigger, invalidation and targets appear when a setup arms.

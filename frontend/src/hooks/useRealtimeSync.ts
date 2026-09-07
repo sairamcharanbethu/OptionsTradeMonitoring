@@ -1,35 +1,21 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { subscribeRealtime, useRealtimeConnected } from '@/hooks/useWebSocket';
 import { QUERY_KEYS } from '@/hooks/useDashboardData';
+import { toTradeEventItem, tradeEventStore, useTradeEvents, type TradeEventItem } from '@/hooks/tradeEventStore';
 import type { KillSwitchResponse, Position, StrategyEngineState } from '@/lib/api';
 
-export interface RealtimeTradeEvent {
-  user_id?: number;
-  signal_id?: number | null;
-  position_id?: number | null;
-  event_type: string;
-  message?: string | null;
-  metadata?: Record<string, any>;
-  created_at: string;
-}
+export type RealtimeTradeEvent = TradeEventItem;
 
 const MAX_EVENTS = 100;
 
-// Module-level store so any page can read the ring buffer the app-wide sync
-// hook fills (AppShell mounts useRealtimeSync once; pages use useRecentTradeEvents).
-let recentEventsSnapshot: RealtimeTradeEvent[] = [];
-const recentEventListeners = new Set<() => void>();
-function publishRecentEvents(next: RealtimeTradeEvent[]) {
-  recentEventsSnapshot = next;
-  recentEventListeners.forEach((listener) => listener());
-}
+/**
+ * Recent trade events (newest first). Backed by the app-wide trade-event store,
+ * which the Decision Log seeds from GET /api/trade-events and this hook appends
+ * to from TRADE_EVENT pushes — so consumers see history, not only post-load events.
+ */
 export function useRecentTradeEvents(): RealtimeTradeEvent[] {
-  return useSyncExternalStore(
-    (listener) => { recentEventListeners.add(listener); return () => { recentEventListeners.delete(listener); }; },
-    () => recentEventsSnapshot,
-    () => recentEventsSnapshot
-  );
+  return useTradeEvents();
 }
 
 /**
@@ -102,13 +88,10 @@ export function useRealtimeSync() {
           return;
         }
         case 'TRADE_EVENT': {
-          const event = msg.data as RealtimeTradeEvent;
-          if (!event?.event_type) return;
-          setRecentEvents((current) => {
-            const next = [event, ...current].slice(0, MAX_EVENTS);
-            publishRecentEvents(next);
-            return next;
-          });
+          const event = toTradeEventItem(msg.data, msg);
+          if (!event) return;
+          tradeEventStore.append(event);
+          setRecentEvents((current) => [event, ...current].slice(0, MAX_EVENTS));
           if (event.position_id) scheduleInvalidate();
           if (event.event_type === 'SETUP_VETOED' || event.event_type === 'SETUP_VETO_CLEARED') {
             queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyState });
