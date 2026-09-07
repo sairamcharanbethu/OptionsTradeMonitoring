@@ -67,6 +67,16 @@ def _load_token() -> str:
     return token
 
 
+class CacheMissError(RuntimeError):
+    """Raised in --cache-only mode when a request is not on disk."""
+
+
+CACHE_ONLY = False
+# Ablation only: reproduce the pre-2026-09-06 fill (current minute's close) to
+# measure how much that look-ahead flattered results. Never use for decisions.
+LEGACY_FILL_LOOKAHEAD = False
+
+
 class UWClient:
     def __init__(self, token: str):
         self.token = token
@@ -77,6 +87,8 @@ class UWClient:
         cache_file = CACHE_DIR / f"{slug}.json"
         if cache_file.exists():
             return json.loads(cache_file.read_text())
+        if CACHE_ONLY:
+            raise CacheMissError(f"not cached: {path} {params}")
         wait = THROTTLE_SECONDS - (_REAL_MONOTONIC() - _last_request_at[0])
         if wait > 0:
             time.sleep(wait)
@@ -144,6 +156,53 @@ def fetch_bars(client: UWClient, symbol: str, date: str) -> list[dict]:
         })
     bars.sort(key=lambda bar: bar["time"])
     return bars
+
+
+HISTORY_SESSIONS = 5
+
+
+def _prior_trading_dates(date: str, count: int, span_days: int | None = None):
+    cursor = datetime.strptime(date, "%Y-%m-%d")
+    produced = 0
+    for _ in range(span_days or count * 3):
+        if produced >= count:
+            return
+        cursor -= timedelta(days=1)
+        if cursor.weekday() >= 5:
+            continue
+        produced += 1
+        yield cursor.strftime("%Y-%m-%d")
+
+
+def fetch_bars_with_history(client: UWClient, symbol: str, date: str,
+                            sessions: int = HISTORY_SESSIONS) -> list[dict]:
+    """Today's 1m bars preceded by the prior ``sessions`` trading days' bars."""
+    bars = list(fetch_bars(client, symbol, date))
+    collected = 0
+    for prior_date in _prior_trading_dates(date, sessions * 2):
+        if collected >= sessions:
+            break
+        try:
+            prior = fetch_bars(client, symbol, prior_date)
+        except (CacheMissError, urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+            continue
+        if prior:
+            bars.extend(prior)
+            collected += 1
+    bars.sort(key=lambda bar: bar["time"])
+    return bars
+
+
+def fetch_prior_strike_profile(client: UWClient, date: str) -> list[dict]:
+    """Strike GEX profile of the most recent prior session (known at today's open)."""
+    for prior_date in _prior_trading_dates(date, 4):
+        try:
+            profile = fetch_strike_profile(client, prior_date)
+        except (CacheMissError, urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+            continue
+        if profile:
+            return profile
+    return fetch_strike_profile(client, date)
 
 
 def fetch_spot_gamma_series(client: UWClient, date: str) -> list[tuple[float, float, float]]:
@@ -272,13 +331,16 @@ def contract_symbols_for_expiry(client: UWClient, date: str, expiry_yyyymmdd: st
 
 def build_option_contract(entry: dict, candles: dict[float, dict], sim_now: float,
                           spot: float) -> dict | None:
-    minute = int(sim_now // 60) * 60
+    # The quote available at sim_now is the LAST CLOSED minute's candle. The
+    # current minute's close is not known until the minute ends; using it was a
+    # look-ahead in every entry fill (found in the 2026-09-06 critic review).
+    last_closed = int(sim_now // 60) * 60 - (0 if LEGACY_FILL_LOOKAHEAD else 60)
     candle = None
     # UW candles exist only where trades printed; multi-day contracts trade
     # thinly, so forward-fill up to 10 minutes (live IBKR streams a quote even
     # with zero volume).
     for lookback in range(0, 10):
-        candle = candles.get(minute - lookback * 60)
+        candle = candles.get(last_closed - lookback * 60)
         if candle:
             break
     if not candle or candle["close"] <= 0:
@@ -312,8 +374,10 @@ def build_option_contract(entry: dict, candles: dict[float, dict], sim_now: floa
         "open_interest": None,
         "volume": candle["volume"],
         "liquidity": "ok" if spread_pct <= 10 else "caution" if spread_pct <= 20 else "wide",
-        "quote_time": sim_now - 1,
-        "quote_age_seconds": 1.0,
+        # Fixed mode: the quote is the last closed candle, aged from its close.
+        # Ablation mode reproduces the old "fresh" stamp on the forming candle.
+        "quote_time": sim_now - 1 if LEGACY_FILL_LOOKAHEAD else last_closed + 60,
+        "quote_age_seconds": 1.0 if LEGACY_FILL_LOOKAHEAD else round(sim_now - (last_closed + 60), 1),
     }
 
 
@@ -501,20 +565,29 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
     flatten_at = close_at - 40 * 60
     entry_cutoff = close_at - 60 * 60
 
-    spy_bars = fetch_bars(client, "SPY", date)
-    qqq_bars = fetch_bars(client, "QQQ", date)
+    # Live feeds the engine ~6 sessions of 1m history (15m macro filter, HTF
+    # levels, 60m EMAs). Replaying today-only bars left the wall evaluator's
+    # macro filter undefined all morning (same bug fixed in live 2026-09-06).
+    spy_bars = fetch_bars_with_history(client, "SPY", date)
+    qqq_bars = fetch_bars_with_history(client, "QQQ", date)
     session_spy = [bar for bar in spy_bars if open_at <= bar["time"] < close_at]
     if len(session_spy) < 30:
         return {"date": date, "skipped": f"only {len(session_spy)} session bars"}
     gamma_series = fetch_spot_gamma_series(client, date)
-    profile = fetch_strike_profile(client, date)
+    # The vendor's strike GEX profile is a per-DATE snapshot with no intraday
+    # timestamp (see cached payload: fields date/strike/call_gex/put_gex only),
+    # i.e. it is computed for that session as a whole. Use the PRIOR session's
+    # profile so walls/flip are fully known at the open; fall back to same-day
+    # only when the prior day is unavailable (documented leakage in that case).
+    profile = fetch_prior_strike_profile(client, date)
     open_spot = session_spy[0]["open"]
     flip, call_wall, put_wall = derive_walls_and_flip(profile, open_spot)
 
-    day_low = min(bar["low"] for bar in session_spy)
-    day_high = max(bar["high"] for bar in session_spy)
-    width = max(6.0, (day_high - day_low) * 1.2)
-    mid_price = (day_high + day_low) / 2
+    # Contract universe centred on the OPEN with a fixed +/-1.2% width. The
+    # previous version used the day's realised high/low, so the set of tradeable
+    # strikes at 10:00 depended on where the market closed (look-ahead).
+    width = max(6.0, round(open_spot * 0.012, 2))
+    mid_price = open_spot
     session_yyyymmdd = date.replace("-", "")
     expiries = listed_expiries(client, date)
 
@@ -538,10 +611,24 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
         contract_symbols_for_expiry(client, date, multi_day_expiry, mid_price, max(6.0, width * 0.8))
         if multi_day_expiry and multi_day_expiry != session_yyyymmdd else []
     )
-    option_data = {
-        entry["symbol"]: fetch_option_candles(client, entry["symbol"], date)
-        for entry in (*zero_dte_meta, *next_meta, *wall_meta, *multi_day_meta)
-    }
+    option_data: dict[str, dict[float, dict]] = {}
+    unavailable = 0
+    for entry in (*zero_dte_meta, *next_meta, *wall_meta, *multi_day_meta):
+        if entry["symbol"] in option_data:
+            continue
+        try:
+            option_data[entry["symbol"]] = fetch_option_candles(client, entry["symbol"], date)
+        except (CacheMissError, urllib.error.HTTPError) as err:
+            # Vendor history is a rolling window and the token may be expired; a
+            # strike outside the on-disk cache is skipped rather than failing
+            # the whole session. The count is reported so universe thinning is
+            # visible.
+            unavailable += 1
+            option_data[entry["symbol"]] = {}
+            if isinstance(err, urllib.error.HTTPError) and err.code not in (401, 403, 404, 410, 422):
+                raise
+    if unavailable:
+        print(f"  {unavailable}/{len(option_data)} option contracts not available (skipped)")
     one_pm = datetime.strptime(date, "%Y-%m-%d").replace(hour=13, minute=0, tzinfo=ET).timestamp()
     if fetch_only:
         # All API data for the session is now cached on disk; skip simulation.
@@ -746,12 +833,20 @@ def main() -> None:
                         help="also simulate the post-T1 alternatives: t1_no_ratchet, t1_hold, t1_trim_half_hold")
     parser.add_argument("--primary-dte", type=int, default=0,
                         help="primary chain = nearest listed expiry >= N calendar days out (live strategy_option_expiry_dte); 0 = 0DTE/1PM-roll")
+    parser.add_argument("--legacy-fill-lookahead", action="store_true",
+                        help="ABLATION: fill at the current minute's close (the old look-ahead) to size its effect")
+    parser.add_argument("--cache-only", action="store_true",
+                        help="never call the vendor API; optional contracts missing from uw_cache are skipped (count reported)")
     parser.add_argument("--trades-out",
                         help="path prefix; writes <prefix>-<variant>.jsonl with every priced trade")
     args = parser.parse_args()
 
     if args.mid_fills:
         globals()["MID_FILLS"] = True
+    if args.cache_only:
+        globals()["CACHE_ONLY"] = True
+    if args.legacy_fill_lookahead:
+        globals()["LEGACY_FILL_LOOKAHEAD"] = True
 
     variants_spec = [
         {"name": "baseline", "skip_strategies": set(), "latest_entry_minute_et": None},
