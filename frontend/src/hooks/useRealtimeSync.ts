@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { subscribeRealtime, useRealtimeConnected } from '@/hooks/useWebSocket';
 import { QUERY_KEYS } from '@/hooks/useDashboardData';
@@ -15,6 +15,22 @@ export interface RealtimeTradeEvent {
 }
 
 const MAX_EVENTS = 100;
+
+// Module-level store so any page can read the ring buffer the app-wide sync
+// hook fills (AppShell mounts useRealtimeSync once; pages use useRecentTradeEvents).
+let recentEventsSnapshot: RealtimeTradeEvent[] = [];
+const recentEventListeners = new Set<() => void>();
+function publishRecentEvents(next: RealtimeTradeEvent[]) {
+  recentEventsSnapshot = next;
+  recentEventListeners.forEach((listener) => listener());
+}
+export function useRecentTradeEvents(): RealtimeTradeEvent[] {
+  return useSyncExternalStore(
+    (listener) => { recentEventListeners.add(listener); return () => { recentEventListeners.delete(listener); }; },
+    () => recentEventsSnapshot,
+    () => recentEventsSnapshot
+  );
+}
 
 /**
  * Mount once (AppShell). Applies server pushes to the react-query caches the
@@ -88,7 +104,11 @@ export function useRealtimeSync() {
         case 'TRADE_EVENT': {
           const event = msg.data as RealtimeTradeEvent;
           if (!event?.event_type) return;
-          setRecentEvents((current) => [event, ...current].slice(0, MAX_EVENTS));
+          setRecentEvents((current) => {
+            const next = [event, ...current].slice(0, MAX_EVENTS);
+            publishRecentEvents(next);
+            return next;
+          });
           if (event.position_id) scheduleInvalidate();
           if (event.event_type === 'SETUP_VETOED' || event.event_type === 'SETUP_VETO_CLEARED') {
             queryClient.invalidateQueries({ queryKey: QUERY_KEYS.strategyState });

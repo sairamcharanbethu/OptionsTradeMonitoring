@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import CockpitHeader from '@/components/daytrading/CockpitHeader';
+import SetupCard from '@/components/daytrading/SetupCard';
 import {
   Activity,
   ArrowUpRight,
@@ -1594,6 +1596,17 @@ export default function DayTradingTerminal() {
           </div>
         </header>
 
+        <CockpitHeader
+          strategyState={strategyState}
+          killSwitch={killSwitch}
+          killSwitchUnavailable={killSwitchUnavailable}
+          positions={positions}
+          tradeUsage={tradeUsage}
+          settings={settings}
+          healthy={services ? systemReady : null}
+          healthLabel={strategyHealth?.status ? `Strategy engine ${strategyHealth.status}` : undefined}
+        />
+
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2 text-[10px] sm:hidden">
           <span className={freshSnapshot ? 'text-emerald-300' : 'text-amber-300'}>
             <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" />
@@ -2840,6 +2853,17 @@ export default function DayTradingTerminal() {
         )}
         </div>
       </section>
+
+      <SetupCard
+        signal={strategySignal}
+        side={side}
+        setup={setup || null}
+        option={option}
+        setupId={strategySetupId}
+        vetoed={strategyState?.setupVetoed === true}
+        settings={settings}
+        lifecycle={lifecycle}
+      />
 
       <section className={entryReviewAvailable ? 'grid gap-4 lg:grid-cols-[1.1fr_0.9fr]' : ''}>
         {entryReviewAvailable && <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">

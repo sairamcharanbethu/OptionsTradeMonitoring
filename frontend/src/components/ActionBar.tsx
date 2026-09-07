@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Ban, CircleSlash2, Layers3, Power, PowerOff, Radio, RotateCcw, ShieldAlert } from 'lucide-react';
+import HoldToConfirmButton from '@/components/HoldToConfirmButton';
 import { api, type Position, type User } from '@/lib/api';
 import { QUERY_KEYS, useKillSwitch, usePositions, useStrategyState } from '@/hooks/useDashboardData';
 import { useRealtimeConnected } from '@/hooks/useWebSocket';
@@ -16,7 +17,6 @@ import { cn } from '@/lib/utils';
  * Destructive actions are hold-to-confirm (~800ms) instead of modal dialogs.
  */
 
-const HOLD_MS = 800;
 
 type Tone = 'ok' | 'warn' | 'error' | 'info';
 type Toast = { id: number; tone: Tone; text: string };
@@ -26,90 +26,6 @@ function isEditableTarget(target: EventTarget | null): boolean {
   if (!el) return false;
   const tag = (el.tagName || '').toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable === true;
-}
-
-function HoldButton({
-  label, hint, icon, tone = 'neutral', disabled, busy, onConfirm, shortcut, count
-}: {
-  label: string;
-  hint: string;
-  icon: React.ReactNode;
-  tone?: 'neutral' | 'danger' | 'warn' | 'good';
-  disabled?: boolean;
-  busy?: boolean;
-  onConfirm: () => void;
-  shortcut?: string;
-  count?: number | null;
-}) {
-  const [progress, setProgress] = useState(0);
-  const startedAt = useRef<number | null>(null);
-  const frame = useRef<number | null>(null);
-  const fired = useRef(false);
-
-  const cancel = useCallback(() => {
-    startedAt.current = null;
-    if (frame.current) cancelAnimationFrame(frame.current);
-    frame.current = null;
-    setProgress(0);
-  }, []);
-
-  const tick = useCallback(() => {
-    if (startedAt.current === null) return;
-    const elapsed = performance.now() - startedAt.current;
-    const next = Math.min(1, elapsed / HOLD_MS);
-    setProgress(next);
-    if (next >= 1) {
-      if (!fired.current) {
-        fired.current = true;
-        onConfirm();
-      }
-      cancel();
-      return;
-    }
-    frame.current = requestAnimationFrame(tick);
-  }, [cancel, onConfirm]);
-
-  const start = (event: React.PointerEvent) => {
-    if (disabled || busy) return;
-    event.preventDefault();
-    fired.current = false;
-    startedAt.current = performance.now();
-    frame.current = requestAnimationFrame(tick);
-  };
-
-  useEffect(() => () => cancel(), [cancel]);
-
-  const toneClass = tone === 'danger'
-    ? 'border-red-500/50 text-red-600 dark:text-red-400 hover:bg-red-500/10'
-    : tone === 'warn'
-      ? 'border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10'
-      : tone === 'good'
-        ? 'border-emerald-500/50 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10'
-        : 'border-border text-foreground hover:bg-accent';
-  const fillClass = tone === 'danger' ? 'bg-red-500/25' : tone === 'warn' ? 'bg-amber-500/25' : tone === 'good' ? 'bg-emerald-500/25' : 'bg-primary/20';
-
-  return (
-    <button
-      type="button"
-      className={cn(
-        'relative isolate flex h-10 min-w-[7.5rem] select-none items-center justify-center gap-1.5 overflow-hidden rounded-lg border px-3 text-xs font-semibold tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
-        toneClass
-      )}
-      disabled={disabled || busy}
-      title={`${hint}${shortcut ? ` (${shortcut})` : ''} — press and hold`}
-      aria-label={`${label}. ${hint}. Press and hold to confirm${shortcut ? `, or use ${shortcut}` : ''}`}
-      onPointerDown={start}
-      onPointerUp={cancel}
-      onPointerLeave={cancel}
-      onPointerCancel={cancel}
-      onContextMenu={(event) => event.preventDefault()}
-    >
-      <span className={cn('pointer-events-none absolute inset-y-0 left-0 -z-10 transition-none', fillClass)} style={{ width: `${progress * 100}%` }} aria-hidden="true" />
-      {icon}
-      <span>{busy ? 'Working…' : label}</span>
-      {count != null && <span className="rounded-full bg-foreground/10 px-1.5 text-[10px] tabular-nums">{count}</span>}
-    </button>
-  );
 }
 
 export default function ActionBar({ user }: { user: User }) {
@@ -244,7 +160,7 @@ export default function ActionBar({ user }: { user: User }) {
         <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold', statusChip.className)} aria-live="polite">{statusChip.text}</span>
 
         {disarmed ? (
-          <HoldButton label="Arm" hint="Re-arm autonomous live entries" icon={<Power className="h-3.5 w-3.5" />} tone="good" busy={busy === 'arm'} onConfirm={arm} shortcut="Shift+D" />
+          <HoldToConfirmButton label="Arm" hint="Re-arm autonomous live entries" icon={<Power className="h-3.5 w-3.5" />} tone="good" busy={busy === 'arm'} onConfirm={arm} shortcut="Shift+D" />
         ) : (
           <button
             type="button"
@@ -259,7 +175,7 @@ export default function ActionBar({ user }: { user: User }) {
           </button>
         )}
 
-        <HoldButton
+        <HoldToConfirmButton
           label="Flatten all"
           hint={`MARKET-exit ${liveOpen.length} open live position${liveOpen.length === 1 ? '' : 's'} and disarm`}
           icon={<ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />}
@@ -284,7 +200,7 @@ export default function ActionBar({ user }: { user: User }) {
             <span>Vetoed · un-veto</span>
           </button>
         ) : (
-          <HoldButton
+          <HoldToConfirmButton
             label="Veto setup"
             hint={setupLive ? `Veto ${setupLabel} · ${setupId?.slice(0, 8)}` : 'No armed or active setup to veto'}
             icon={<Ban className="h-3.5 w-3.5" aria-hidden="true" />}
@@ -302,7 +218,7 @@ export default function ActionBar({ user }: { user: User }) {
         )}
 
         {routePosition && (
-          <HoldButton
+          <HoldToConfirmButton
             label="Close position"
             hint={`MARKET-close ${routePosition.symbol} ${routePosition.option_type} ${routePosition.strike_price} (${routePosition.quantity})`}
             icon={<CircleSlash2 className="h-3.5 w-3.5" aria-hidden="true" />}
