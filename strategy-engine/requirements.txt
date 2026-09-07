@@ -1,5 +1,5 @@
 # Maintained fork of ib_insync (same API). trade_prefetch_service falls back to ib_insync if only that is installed.
-ib_async>=1.0.3,<3
+ib_async==2.1.0  # requires Python>=3.10 (image is 3.11); pins tzdata<2026
 python-dotenv==1.0.1
 requests==2.32.4
 redis==8.0.1
