@@ -98,7 +98,18 @@ const DASHBOARD_TABS = ['overview', 'portfolio', 'wealthsimple', 'goals', 'day-t
 // other tab; there is no remembered last tab, so "/" always means day trading.
 const DEFAULT_DASHBOARD_TAB = 'day-trading';
 
+// Each dashboard section is a real route (/overview, /goals, ...) rather than
+// a ?tab= on "/". Half the app's destinations used to be query params and half
+// were paths, which made browser back behave differently depending on which
+// half you were in. Legacy ?tab= links still resolve, then rewrite themselves.
+const tabFromPath = (pathname: string) => {
+  const segment = pathname.replace(/^\/+|\/+$/g, '');
+  return DASHBOARD_TABS.includes(segment as any) ? segment : null;
+};
+
 const getInitialDashboardTab = () => {
+  const fromPath = tabFromPath(window.location.pathname);
+  if (fromPath) return fromPath;
   const urlTab = new URLSearchParams(window.location.search).get('tab');
   if (urlTab && DASHBOARD_TABS.includes(urlTab as any)) return urlTab;
   return DEFAULT_DASHBOARD_TAB;
@@ -145,16 +156,26 @@ export default function Dashboard({ user }: DashboardProps) {
     const nextTab = DASHBOARD_TABS.includes(tab as any) && (tab !== 'users' || user.role === 'ADMIN') ? tab : DEFAULT_DASHBOARD_TAB;
     setActiveTab(nextTab);
 
-    navigate(`/?tab=${nextTab}`, { replace: true });
+    navigate(`/${nextTab}`);
   };
 
+  // Rewrite a legacy ?tab= link onto its route, once, without a history entry.
   useEffect(() => {
     const urlTab = new URLSearchParams(location.search).get('tab');
-    const nextTab = urlTab && DASHBOARD_TABS.includes(urlTab as any) && (urlTab !== 'users' || user.role === 'ADMIN')
-      ? urlTab
+    if (urlTab && DASHBOARD_TABS.includes(urlTab as any)) {
+      navigate(`/${urlTab}`, { replace: true });
+    }
+  }, [location.search, navigate]);
+
+  useEffect(() => {
+    const fromPath = tabFromPath(location.pathname);
+    const urlTab = new URLSearchParams(location.search).get('tab');
+    const candidate = fromPath || (urlTab && DASHBOARD_TABS.includes(urlTab as any) ? urlTab : null);
+    const nextTab = candidate && (candidate !== 'users' || user.role === 'ADMIN')
+      ? candidate
       : DEFAULT_DASHBOARD_TAB;
     if (nextTab !== activeTab) setActiveTab(nextTab);
-  }, [location.search, user.role, activeTab]);
+  }, [location.pathname, location.search, user.role, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'users' && user.role !== 'ADMIN') {
@@ -371,7 +392,7 @@ export default function Dashboard({ user }: DashboardProps) {
   // Ideally we should fetch history for positions.
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 px-3 py-4 sm:w-[95%] sm:px-0 sm:py-6 lg:space-y-8">
+    <div className="page-shell space-y-5  lg:space-y-8">
       <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-5 lg:space-y-8">
 
         <TabsContent value="overview" className="space-y-8 mt-0">
@@ -412,7 +433,7 @@ export default function Dashboard({ user }: DashboardProps) {
           </div>
 
           {queryError && (
-            <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+            <div role="alert" className="flex items-start gap-2 rounded-lg border border-sev-critical/30 bg-sev-critical-soft px-4 py-3 text-sm text-sev-critical">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{queryError instanceof Error ? queryError.message : 'Positions could not be loaded.'}</span>
             </div>
@@ -424,18 +445,20 @@ export default function Dashboard({ user }: DashboardProps) {
               title="Active Positions"
               value={positions.filter(p => p.status !== 'CLOSED').length}
               icon={Activity}
+              description="Tracked · open now"
             />
             <StatsCard
               title="Realized PnL"
               value={`$${totalRealizedPnL.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
               icon={TrendingUp}
-              valueClassName={totalRealizedPnL >= 0 ? 'text-green-500' : 'text-red-500'}
+              description="All tracked positions · paper + live · all time"
+              valueClassName={totalRealizedPnL >= 0 ? 'text-pnl-up' : 'text-pnl-down'}
             />
             {/* Performance Chart Card */}
             <div className="col-span-2 double-bezel-shell hover-glow">
               <div className="double-bezel-core flex flex-col justify-between h-full bg-zinc-50/50 dark:bg-zinc-950/40 border border-black/[0.02] dark:border-white/[0.02] p-6">
                 <div className="flex justify-between items-center pb-2">
-                  <span className="text-2xs uppercase tracking-[0.15em] font-bold text-muted-foreground/90">Performance (Cumulative PnL)</span>
+                  <span className="text-2xs uppercase tracking-[0.15em] font-bold text-muted-foreground/90">Performance · cumulative, all tracked</span>
                   <div className="p-1.5 bg-black/5 dark:bg-white/5 rounded-lg border border-black/[0.03] dark:border-white/[0.06] flex items-center justify-center">
                     <BarChart3 className="h-3.5 w-3.5 text-foreground/85" />
                   </div>
@@ -603,7 +626,7 @@ export default function Dashboard({ user }: DashboardProps) {
                   <article key={`mobile-${pos.id}`} className="rounded-xl border border-border/70 bg-background/60 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div><div className="font-bold">{pos.symbol}</div><div className="mt-1 text-xs text-muted-foreground">{pos.option_type} ${pos.strike_price}</div></div>
-                      <div className={`text-right font-mono font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>${Number(pos.realized_pnl).toFixed(2)}<div className="text-xs font-normal">{getRoi(pos).toFixed(2)}%</div></div>
+                      <div className={`text-right font-mono font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>${Number(pos.realized_pnl).toFixed(2)}<div className="text-xs font-normal">{getRoi(pos).toFixed(2)}%</div></div>
                     </div>
                     <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-3">
                       <Badge variant="outline">Closed</Badge>
@@ -639,7 +662,7 @@ export default function Dashboard({ user }: DashboardProps) {
                           </td>
                           <td className="px-4 py-3"><Badge variant="outline" className="text-2xs">CLOSED</Badge></td>
                           <td className="px-4 py-3">
-                            <div className={`font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            <div className={`font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                               ${Number(pos.realized_pnl).toFixed(2)}
                               <span className="ml-1 text-2xs opacity-70">({getRoi(pos).toFixed(2)}%)</span>
                             </div>
@@ -743,7 +766,7 @@ export default function Dashboard({ user }: DashboardProps) {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
             <StatsCard title="Win Rate" value={`${stats?.winRate ?? 0}%`} icon={Trophy} description={`${stats?.closedTrades ?? 0} closed trades`} />
             <StatsCard title="Profit Factor" value={stats?.profitFactor ?? 0} icon={Percent} description="Gross Profit / Gross Loss" />
-            <StatsCard title="Total Realized PnL" value={`$${(stats?.totalRealizedPnl ?? 0).toLocaleString()}`} icon={TrendingUp} valueClassName={(stats?.totalRealizedPnl ?? 0) >= 0 ? 'text-green-500' : 'text-red-500'} />
+            <StatsCard title="Total Realized PnL" value={`$${(stats?.totalRealizedPnl ?? 0).toLocaleString()}`} icon={TrendingUp} description="All tracked positions · all time" valueClassName={(stats?.totalRealizedPnl ?? 0) >= 0 ? 'text-pnl-up' : 'text-pnl-down'} />
             <StatsCard title="Avg Profit/Trade" value={`$${stats?.closedTrades ? (stats.totalRealizedPnl / stats.closedTrades).toLocaleString(undefined, { minimumFractionDigits: 2 }) : '0.00'}`} icon={Activity} />
           </div>
 

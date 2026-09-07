@@ -550,7 +550,7 @@ export default function ManualEntryPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-4">
+    <div className="page-shell">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <div className="min-w-0">
@@ -579,7 +579,7 @@ export default function ManualEntryPage() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+        <div className="mb-4 rounded-md border border-sev-critical/30 bg-sev-critical-soft px-4 py-3 text-sm text-sev-critical">
           {error}
         </div>
       )}

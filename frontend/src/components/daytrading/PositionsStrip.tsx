@@ -239,7 +239,7 @@ export default function PositionsStrip({ positions, paperPositions, paperCanMana
                   <div><div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Mark</div><div className="font-mono text-xs text-zinc-100">{money(mark)}</div></div>
                   <div>
                     <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">P&amp;L</div>
-                    <div className={cn('font-mono text-xs font-semibold', pnl == null ? 'text-zinc-500' : pnl >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
+                    <div className={cn('font-mono text-xs font-semibold', pnl == null ? 'text-pnl-flat' : pnl >= 0 ? 'text-pnl-up' : 'text-pnl-down')}>
                       {pnl == null ? '—' : `${signedMoney(pnl)}${pnlPct != null ? ` (${pnlPct >= 0 ? '+' : ''}${num(pnlPct, 1)}%)` : ''}`}
                     </div>
                   </div>

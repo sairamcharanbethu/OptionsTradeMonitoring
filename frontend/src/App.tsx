@@ -18,6 +18,13 @@ const ManualEntryPage = lazy(() => import('./pages/ManualEntryPage'));
 const OptionsCalculatorPage = lazy(() => import('./pages/OptionsCalculatorPage'));
 const ResearchPage = lazy(() => import('./pages/ResearchPage'));
 
+// Dashboard sections are real routes now, not ?tab= query params, so browser
+// back behaves the same everywhere in the app.
+const DASHBOARD_ROUTES = [
+  'overview', 'portfolio', 'wealthsimple', 'goals',
+  'day-trading', 'position-monitor', 'paper-accounts', 'users'
+] as const;
+
 function RouteLoader() {
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
@@ -33,7 +40,7 @@ function NotFoundPage() {
       <h2 className="mt-2 text-2xl font-semibold tracking-tight">This route is not available.</h2>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">Use the navigation to continue, or return to your account overview.</p>
       <Button asChild className="mt-5 h-11 px-5">
-        <Link to="/?tab=overview">Return to overview</Link>
+        <Link to="/overview">Return to overview</Link>
       </Button>
     </div>
   );
@@ -80,6 +87,9 @@ function App() {
           <Suspense fallback={<RouteLoader />}>
             <Routes>
               <Route path="/" element={<Dashboard user={user} />} />
+              {DASHBOARD_ROUTES.map((tab) => (
+                <Route key={tab} path={`/${tab}`} element={<Dashboard user={user} />} />
+              ))}
               <Route path="/trades" element={<TradesPage user={user} />} />
               <Route path="/manual-entry" element={<ManualEntryPage />} />
               <Route path="/options-calculator" element={<OptionsCalculatorPage />} />

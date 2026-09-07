@@ -104,7 +104,7 @@ export default function ResearchPage() {
   const statusReady = report?.research.status === 'READY_FOR_REVIEW';
 
   return (
-    <div className="mx-auto w-full max-w-[1500px] px-3 py-4 sm:w-[95%] sm:px-0">
+    <div className="page-shell">
       <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3 sm:items-center">
           <div className="min-w-0">
@@ -121,7 +121,7 @@ export default function ResearchPage() {
         </Button>
       </div>
 
-      <div className="mb-4 flex items-start gap-3 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-300">
+      <div className="mb-4 flex items-start gap-3 rounded-md border border-sev-warn/35 bg-sev-warn-soft p-4 text-sm text-amber-700 dark:text-amber-300">
         <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
         <p>Research only. This page does not change scanner settings, approve a strategy, or place trades. A candidate needs enough stored evidence before it is reviewable.</p>
       </div>
@@ -137,7 +137,7 @@ export default function ResearchPage() {
         </CardContent>
       </Card>
 
-      {error && <div className="mb-4 flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-500"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div>}
+      {error && <div className="mb-4 flex items-start gap-2 rounded-md border border-sev-critical/30 bg-sev-critical-soft p-4 text-sm text-red-500"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{error}</span></div>}
 
       {!report && !loading && !error && (
         <Card className="border-dashed">
@@ -153,7 +153,7 @@ export default function ResearchPage() {
 
       {report && !loading && (
         <div className="space-y-4">
-          <div className={`flex items-start gap-3 rounded-md border p-4 ${statusReady ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300'}`}>
+          <div className={`flex items-start gap-3 rounded-md border p-4 ${statusReady ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-sev-warn/35 bg-sev-warn-soft text-amber-700 dark:text-amber-300'}`}>
             {statusReady ? <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" /> : <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />}
             <div className="min-w-0"><div className="font-semibold">{statusReady ? 'Candidate is ready for human review' : 'Not enough comparable evidence yet'}</div><div className="mt-1 break-words text-sm">{report.research.notes[report.research.notes.length - 1]}</div></div>
           </div>
@@ -205,7 +205,7 @@ export default function ResearchPage() {
                 <div className="rounded-md border border-border bg-muted/20 p-4"><div className="mb-3 flex items-center justify-between"><span className="font-semibold">Baseline</span><Badge variant="outline">All usable signals</Badge></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3"><Metric label="Trades" value={String(report.research.baseline.trades)} /><Metric label="Win rate" value={percent(report.research.baseline.winRate)} /><Metric label="P&L" value={currency(report.research.baseline.totalPnl)} tone={numberTone(report.research.baseline.totalPnl)} /><Metric label="Profit factor" value={report.research.baseline.profitFactor.toFixed(2)} /><Metric label="Max drawdown" value={currency(report.research.baseline.maxDrawdown)} tone="text-red-500" /></div></div>
                 <div className="rounded-md border border-sky-500/30 bg-sky-500/5 p-4"><div className="mb-3 flex items-center justify-between"><span className="font-semibold">VIX contango</span><Badge variant="outline">Ratio ≥ {report.research.minimumRatio.toFixed(2)}</Badge></div><div className="grid grid-cols-2 gap-2 sm:grid-cols-3"><Metric label="Trades" value={String(report.research.candidate.trades)} /><Metric label="Win rate" value={percent(report.research.candidate.winRate)} /><Metric label="P&L" value={currency(report.research.candidate.totalPnl)} tone={numberTone(report.research.candidate.totalPnl)} /><Metric label="Profit factor" value={report.research.candidate.profitFactor.toFixed(2)} /><Metric label="Max drawdown" value={currency(report.research.candidate.maxDrawdown)} tone="text-red-500" /></div></div>
               </div>
-              <div className="mt-4 grid gap-2 border-t border-border pt-4 sm:grid-cols-4"><Metric label="Trade delta" value={`${report.research.delta.trades >= 0 ? '+' : ''}${report.research.delta.trades}`} /><Metric label="Win-rate delta" value={signedPercent(report.research.delta.winRate)} tone={numberTone(report.research.delta.winRate)} /><Metric label="P&L delta" value={signedCurrency(report.research.delta.totalPnl)} tone={numberTone(report.research.delta.totalPnl)} /><Metric label="Drawdown delta" value={signedCurrency(report.research.delta.maxDrawdown)} tone={report.research.delta.maxDrawdown <= 0 ? 'text-emerald-500' : 'text-red-500'} /></div>
+              <div className="mt-4 grid gap-2 border-t border-border pt-4 sm:grid-cols-4"><Metric label="Trade delta" value={`${report.research.delta.trades >= 0 ? '+' : ''}${report.research.delta.trades}`} /><Metric label="Win-rate delta" value={signedPercent(report.research.delta.winRate)} tone={numberTone(report.research.delta.winRate)} /><Metric label="P&L delta" value={signedCurrency(report.research.delta.totalPnl)} tone={numberTone(report.research.delta.totalPnl)} /><Metric label="Drawdown delta" value={signedCurrency(report.research.delta.maxDrawdown)} tone={report.research.delta.maxDrawdown <= 0 ? 'text-pnl-up' : 'text-pnl-down'} /></div>
             </CardContent>
           </Card>
 

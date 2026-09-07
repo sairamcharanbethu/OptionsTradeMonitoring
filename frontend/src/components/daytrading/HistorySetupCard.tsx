@@ -57,7 +57,7 @@ const HistorySetupCard = ({ setup }: { setup: StrategyHistorySetup }) => {
           </div>
           <div className="rounded-md bg-black/20 p-2.5 text-2xs text-zinc-500">
             <div>Result</div>
-            <div className={`mt-1 font-mono text-xs ${setup.realized_pnl == null ? 'text-zinc-200' : setup.realized_pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+            <div className={`mt-1 font-mono text-xs ${setup.realized_pnl == null ? 'text-pnl-flat' : setup.realized_pnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
               {setup.realized_pnl == null ? setup.position_status || 'No position' : `${setup.realized_pnl >= 0 ? '+' : ''}${money(setup.realized_pnl)}`}
             </div>
             <div className="mt-1">{terminalEvent?.closeReason?.replace(/_/g, ' ') || 'No close reason recorded'} · {duration(setup.created_at, finalEvent?.createdAt || setup.position_updated_at)}</div>

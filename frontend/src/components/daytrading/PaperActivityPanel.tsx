@@ -268,7 +268,7 @@ export default function PaperActivityPanel(props: Props) {
                             </div>
                           </div>
                           <div className="sm:text-right">
-                            <div className={`font-mono text-sm font-semibold ${tradePnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                            <div className={`font-mono text-sm font-semibold ${tradePnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                               {tradePnl >= 0 ? '+' : ''}{money(tradePnl)}
                             </div>
                             <div className="text-2xs text-zinc-600">{isClosed ? 'realized' : 'unrealized'}</div>
@@ -330,7 +330,7 @@ export default function PaperActivityPanel(props: Props) {
                               <div className="mt-2 border-t border-zinc-800 pt-2 text-2xs text-zinc-500">
                                 1-contract baseline <span className="font-mono text-zinc-300">{hasBaseline ? money(baselinePnl) : '—'}</span>
                                 {isClosed && hasBaseline && (
-                                  <span className={`ml-2 font-mono ${tradePnl - baselinePnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                                  <span className={`ml-2 font-mono ${tradePnl - baselinePnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                     {tradePnl - baselinePnl >= 0 ? '+' : ''}{money(tradePnl - baselinePnl)} sizing value
                                   </span>
                                 )}

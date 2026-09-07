@@ -99,9 +99,9 @@ export default function StrategyAccountCard(props: Props) {
               label="Today account P&L"
               value={`${paperAccount.session.pnl >= 0 ? '+' : ''}${money(paperAccount.session.pnl)}`}
               detail={`${number(paperAccount.session.pnlPct)}%`}
-              tone={paperAccount.session.pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+              tone={paperAccount.session.pnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}
             />
-            <Metric label="Unrealized P&L" value={`${paperUnrealizedPnl >= 0 ? '+' : ''}${money(paperUnrealizedPnl)}`} detail={`${paperAccount.openPositions.length} open positions`} tone={paperUnrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
+            <Metric label="Unrealized P&L" value={`${paperUnrealizedPnl >= 0 ? '+' : ''}${money(paperUnrealizedPnl)}`} detail={`${paperAccount.openPositions.length} open positions`} tone={paperUnrealizedPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'} />
             <Metric label="Paper entries today" value={`${paperAccount.session.entries} · unlimited`} detail={paperAccount.health.lastProcessedAt ? `checked ${dateTime(paperAccount.health.lastProcessedAt)}` : 'waiting for snapshot'} />
           </div>
 
@@ -125,21 +125,21 @@ export default function StrategyAccountCard(props: Props) {
                   value={money(paperAccount.baseline.managedRealizedPnl)}
                   detail="AI/rules exits"
                   tooltip="Realized paper P&L produced by the configured strategy sizing and exit policy."
-                  tone={paperAccount.baseline.managedRealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+                  tone={paperAccount.baseline.managedRealizedPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}
                 />
                 <Metric
                   label="1-contract baseline"
                   value={money(paperAccount.baseline.realizedPnl)}
                   detail={`${paperAccount.baseline.closedTrades} closed`}
                   tooltip="Comparison result if each recorded paper setup used one contract."
-                  tone={paperAccount.baseline.realizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+                  tone={paperAccount.baseline.realizedPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}
                 />
                 <Metric
                   label="Sizing value"
                   value={`${paperAccount.baseline.valueAdded >= 0 ? '+' : ''}${money(paperAccount.baseline.valueAdded)}`}
                   detail="managed − baseline"
                   tooltip="Difference between managed paper P&L and the one-contract comparison baseline."
-                  tone={paperAccount.baseline.valueAdded >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+                  tone={paperAccount.baseline.valueAdded >= 0 ? 'text-pnl-up' : 'text-pnl-down'}
                 />
               </div>
             </div>
@@ -169,7 +169,7 @@ export default function StrategyAccountCard(props: Props) {
                       <div className="text-zinc-300">
                         {money(position.entry_price)} → {money(position.current_price)}
                       </div>
-                      <div className={`mt-1 font-semibold ${unrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                      <div className={`mt-1 font-semibold ${unrealizedPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                         Unrealized {unrealizedPnl >= 0 ? '+' : ''}{money(unrealizedPnl)}
                       </div>
                       {paperAccount.canManage && position.paper_strategy !== 'WALL_REACTION' && (
@@ -191,7 +191,7 @@ export default function StrategyAccountCard(props: Props) {
                   </div>
                 );
               })}
-              <div className={`text-right font-mono text-xs font-semibold ${paperUnrealizedPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+              <div className={`text-right font-mono text-xs font-semibold ${paperUnrealizedPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                 Total unrealized {paperUnrealizedPnl >= 0 ? '+' : ''}{money(paperUnrealizedPnl)}
               </div>
             </div>
@@ -236,7 +236,7 @@ export default function StrategyAccountCard(props: Props) {
                   <div key={item.month} className="grid grid-cols-4 gap-2 py-2.5 font-mono text-2xs text-zinc-400">
                     <span className="text-zinc-200">{item.month}</span>
                     <span>{money(item.report.closingEquity)}</span>
-                    <span className={Number(item.report.returnPct) >= 0 ? 'text-emerald-300' : 'text-rose-300'}>{number(item.report.returnPct)}%</span>
+                    <span className={Number(item.report.returnPct) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}>{number(item.report.returnPct)}%</span>
                     <span>{item.report.closedTrades || 0} trades</span>
                   </div>
                 ))}

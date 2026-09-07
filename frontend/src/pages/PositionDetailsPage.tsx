@@ -205,7 +205,7 @@ export default function PositionDetailsPage() {
         : Number(position.strike_price) - Number(entryPrice);
 
     return (
-        <div className="container mx-auto p-4 sm:p-6 lg:p-8 max-w-[1600px] animate-in fade-in duration-200">
+        <div className="page-shell animate-in fade-in duration-200">
             {/* Header */}
             <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -264,7 +264,7 @@ export default function PositionDetailsPage() {
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <div className="p-4 bg-card rounded-xl border shadow-sm">
                             <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Total P&L</div>
-                            <div className={cn("text-2xl font-mono font-bold tracking-tight", isProfit ? 'text-green-600' : 'text-red-600')}>
+                            <div className={cn("text-2xl font-mono font-bold tracking-tight", isProfit ? 'text-pnl-up' : 'text-pnl-down')}>
                                 {unrealizedPnl > 0 ? '+' : ''}{formatCurrency(unrealizedPnl)}
                             </div>
                         </div>
@@ -545,7 +545,7 @@ export default function PositionDetailsPage() {
                                                             <td className="p-2 border-b font-mono">
                                                                 ${estOptionPrice.toFixed(2)}
                                                             </td>
-                                                            <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                            <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                                 {estPnl >= 0 ? '+' : ''}${estPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                                                 <span className="text-2xs ml-1 opacity-70">
                                                                     ({estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(1)}%)

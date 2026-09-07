@@ -83,14 +83,14 @@ const formatDurationMs = (value?: number | null) => {
 const statusTone = (status?: string | null) => {
   const normalized = String(status || '').toUpperCase();
   if (['UP', 'RUNNING', 'SCANNING', 'CONNECTED', 'OK'].includes(normalized)) return 'text-emerald-500 border-emerald-500/30 bg-emerald-500/10';
-  if (['DEGRADED', 'MARKET_CLOSED', 'IDLE', 'STOPPED'].includes(normalized)) return 'text-amber-500 border-amber-500/30 bg-amber-500/10';
+  if (['DEGRADED', 'MARKET_CLOSED', 'IDLE', 'STOPPED'].includes(normalized)) return 'text-amber-500 border-sev-warn/35 bg-sev-warn-soft';
   if (['N/A', 'DISABLED'].includes(normalized)) return 'text-muted-foreground border-border bg-muted/40';
-  return 'text-red-500 border-red-500/30 bg-red-500/10';
+  return 'text-red-500 border-sev-critical/30 bg-sev-critical-soft';
 };
 
 const severityTone = (severity: HealthSeverity) => {
-  if (severity === 'critical') return 'border-red-500/30 bg-red-500/10 text-red-500';
-  if (severity === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-500';
+  if (severity === 'critical') return 'border-sev-critical/30 bg-sev-critical-soft text-red-500';
+  if (severity === 'warning') return 'border-sev-warn/35 bg-sev-warn-soft text-amber-500';
   if (severity === 'ok') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500';
   return 'border-border bg-muted/40 text-muted-foreground';
 };
@@ -603,7 +603,7 @@ export default function SystemHealthPage() {
   const activeProvider = services?.streams?.ibkr;
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">
+    <div className="page-shell">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3 sm:items-center">
           <div className="min-w-0">
@@ -618,7 +618,7 @@ export default function SystemHealthPage() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+        <div className="mb-4 rounded-md border border-sev-critical/30 bg-sev-critical-soft px-4 py-3 text-sm text-sev-critical">
           {error}
         </div>
       )}

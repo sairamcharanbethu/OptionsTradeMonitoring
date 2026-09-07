@@ -49,7 +49,7 @@ const PositionSummary = ({
           </div>
         </div>
         <div className="text-left sm:text-right">
-          <div className={`font-mono text-xl font-semibold tabular-nums ${openPnl === null ? 'text-amber-300' : openPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+          <div className={`font-mono text-xl font-semibold tabular-nums ${openPnl === null ? 'text-pnl-flat' : openPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
             {openPnl === null ? '—' : `${openPnl >= 0 ? '+' : ''}${money(openPnl)}`}
           </div>
           <div className="text-2xs text-zinc-500">{openPnl === null ? 'awaiting option quote' : 'estimated open P&L'}</div>

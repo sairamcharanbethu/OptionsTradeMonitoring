@@ -65,7 +65,7 @@ export default function ExecuteSignalDialog(props: Props) {
               )}
               <div className={`rounded-lg border px-3 py-2.5 ${canConfirmExecution ? 'border-emerald-500/20 bg-emerald-950/10' : 'border-rose-500/25 bg-rose-950/10'}`}>
                 <div className="flex items-center justify-between gap-3">
-                  <span className={`text-xs font-semibold ${canConfirmExecution ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  <span className={`text-xs font-semibold ${canConfirmExecution ? 'text-sev-ok' : 'text-sev-warn'}`}>
                     {canConfirmExecution ? `Approval data expires in ${approvalSecondsRemaining}s` : 'Order review expired'}
                   </span>
                   <span className="font-mono text-2xs text-zinc-500">{marketSessionLabel}</span>

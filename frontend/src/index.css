@@ -376,3 +376,29 @@ a,
     scroll-padding-bottom: 7.5rem;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Page shell. Every route used a different width (1200/1300/1440/1500/1600)
+ * and most used sm:w-[95%], so the gutter changed with the viewport and no two
+ * pages lined up. One shell, and the gutter matches the header's own padding
+ * so page content sits under the logo rather than near it.
+ * ------------------------------------------------------------------------- */
+@layer components {
+  .page-shell {
+    @apply mx-auto w-full max-w-[1600px] px-3 py-4 sm:px-5 sm:py-6;
+  }
+}
+
+@layer utilities {
+  /* Touch targets. Anything interactive gets 44px of height on a touch
+   * pointer even where the desktop layout wants it compact — a mis-tap on a
+   * trading control is not the same cost as a mis-tap on a blog. */
+  @media (pointer: coarse) {
+    button:not(.allow-compact),
+    a[role="button"]:not(.allow-compact),
+    [role="tab"]:not(.allow-compact),
+    summary:not(.allow-compact) {
+      min-height: 2.75rem;
+    }
+  }
+}

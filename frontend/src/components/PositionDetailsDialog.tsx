@@ -173,7 +173,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                 </div>
                                 <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
                                     <div className="text-2xs sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Current Price</div>
-                                    <div className={cn("text-base sm:text-lg font-mono font-bold tracking-tight", isProfit ? 'text-green-600' : 'text-red-600')}>
+                                    <div className={cn("text-base sm:text-lg font-mono font-bold tracking-tight", isProfit ? 'text-pnl-up' : 'text-pnl-down')}>
                                         {formatCurrency(position.current_price)}
                                     </div>
                                 </div>
@@ -193,7 +193,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                 </div>
                                 <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
                                     <div className="text-2xs sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Total Open P&L</div>
-                                    <div className={cn("text-base sm:text-lg font-mono font-bold pnl-pulse tracking-tight", isProfit ? 'text-green-600' : 'text-red-600')}>
+                                    <div className={cn("text-base sm:text-lg font-mono font-bold pnl-pulse tracking-tight", isProfit ? 'text-pnl-up' : 'text-pnl-down')}>
                                         {unrealizedPnl > 0 ? '+' : ''}{formatCurrency(unrealizedPnl)}
                                     </div>
                                 </div>
@@ -347,7 +347,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                                                 <td className="p-2 border-b font-mono">
                                                                     ${estOptionPrice.toFixed(2)}
                                                                 </td>
-                                                                <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                                     {estPnl >= 0 ? '+' : ''}${estPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                                                                     <span className="text-2xs ml-1 opacity-70">
                                                                         ({estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(1)}%)

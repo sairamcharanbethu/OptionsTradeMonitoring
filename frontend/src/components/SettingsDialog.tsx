@@ -1045,7 +1045,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 </SelectContent>
                                             </Select>
                                             {executionBroker === 'wealthsimple_snaptrade' && (
-                                                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-200">
+                                                <div className="rounded-md border border-sev-warn/35 bg-sev-warn-soft p-3 text-xs text-amber-700 dark:text-amber-200">
                                                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                                                         <div>
                                                             <div className="flex items-center gap-2 font-semibold">
@@ -1688,7 +1688,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         </Button>
                                     </div>
                                     {profileError && <p className="text-xs text-destructive">{profileError}</p>}
-                                    {profileSuccess && <p className="text-xs text-green-500 font-medium">{profileSuccess}</p>}
+                                    {profileSuccess && <p className="text-xs text-sev-info font-medium">{profileSuccess}</p>}
                                 </div>
                             </section>
 
@@ -1718,7 +1718,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         />
                                     </div>
                                     {pwError && <p className="text-xs text-destructive">{pwError}</p>}
-                                    {pwSuccess && <p className="text-xs text-green-500 font-medium">{pwSuccess}</p>}
+                                    {pwSuccess && <p className="text-xs text-sev-info font-medium">{pwSuccess}</p>}
                                     <Button
                                         variant="outline"
                                         className="w-full"

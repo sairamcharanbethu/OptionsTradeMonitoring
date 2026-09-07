@@ -43,7 +43,7 @@ function BulletList({ items }: { items: string[] }) {
 
 export default function StrategyGuidePage() {
   return (
-    <div className="mx-auto w-full max-w-[1300px] px-3 py-4 sm:w-[95%] sm:px-0">
+    <div className="page-shell">
       <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex min-w-0 items-start gap-3 sm:items-center">
           <div className="min-w-0">
@@ -56,7 +56,7 @@ export default function StrategyGuidePage() {
         </div>
       </div>
 
-      <div className="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-300">
+      <div className="mb-5 rounded-md border border-sev-warn/35 bg-sev-warn-soft p-4 text-sm text-amber-700 dark:text-amber-300">
         This page describes the app logic currently implemented in code. It is not financial advice and it does not change live settings or execution behavior.
       </div>
 

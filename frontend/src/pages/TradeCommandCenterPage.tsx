@@ -157,11 +157,11 @@ export default function TradeCommandCenterPage() {
 
   if (error || !data) {
     return (
-      <div className="mx-auto w-[95%] max-w-[1200px] py-6">
+      <div className="page-shell">
         <Button asChild variant="ghost" className="mb-4 gap-2 pl-0">
           <Link to="/trades"><ArrowLeft className="h-4 w-4" /> Back to Trades</Link>
         </Button>
-        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+        <div className="rounded-md border border-sev-critical/30 bg-sev-critical-soft px-4 py-3 text-sm text-sev-critical">
           {error || 'Trade command center not found'}
         </div>
       </div>
@@ -171,7 +171,7 @@ export default function TradeCommandCenterPage() {
   const { trade, signal, nextAction, riskPlan, brokerProof, events } = data;
 
   return (
-    <div className="mx-auto w-[95%] max-w-[1500px] py-4">
+    <div className="page-shell">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
           <Button asChild variant="ghost" size="icon" className="rounded-full">
@@ -206,7 +206,7 @@ export default function TradeCommandCenterPage() {
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:items-end">
-            <div className={`font-mono text-lg font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</div>
+            <div className={`font-mono text-lg font-semibold ${pnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(pnl)}</div>
             <Button
               asChild={nextAction.label.toLowerCase().includes('close')}
               size="sm"
@@ -317,7 +317,7 @@ export default function TradeCommandCenterPage() {
       )}
 
       {brokerProof.executionError && (
-        <div className="mt-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+        <div className="mt-4 rounded-md border border-sev-critical/30 bg-sev-critical-soft px-4 py-3 text-sm text-sev-critical">
           {brokerProof.executionError}
         </div>
       )}

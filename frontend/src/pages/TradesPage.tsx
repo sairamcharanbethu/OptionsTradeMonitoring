@@ -211,7 +211,7 @@ function ExecutionIssue({ message }: { message?: string | null }) {
       <summary className="cursor-pointer list-none text-amber-600 hover:text-amber-500 dark:text-amber-400 dark:hover:text-amber-300">
         Needs attention
       </summary>
-      <div className="mt-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-amber-700 dark:text-amber-200">
+      <div className="mt-1 rounded-md border border-sev-warn/35 bg-sev-warn-soft px-2 py-1.5 text-amber-700 dark:text-amber-200">
         {message}
       </div>
     </details>
@@ -393,7 +393,7 @@ export default function TradesPage({ user }: { user: User }) {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">
+    <div className="page-shell">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
           <div>
@@ -414,7 +414,7 @@ export default function TradesPage({ user }: { user: User }) {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+        <div className="mb-4 rounded-md border border-sev-critical/30 bg-sev-critical-soft px-4 py-3 text-sm text-sev-critical">
           {error}
         </div>
       )}
@@ -439,7 +439,7 @@ export default function TradesPage({ user }: { user: User }) {
               <SummaryTile label="Pending Checked" value={String(brokerHealth.lastResult?.checked ?? 0)} />
               <SummaryTile label="Watchdog Stale Entries" value={String(brokerHealth.lastWatchdogResult?.entryStale ?? 0)} tone={(brokerHealth.lastWatchdogResult?.entryStale ?? 0) > 0 ? 'red' : undefined} />
               {brokerHealth.lastError && (
-                <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500 md:col-span-4">
+                <div className="rounded-md border border-sev-critical/30 bg-sev-critical-soft px-4 py-3 text-sm text-sev-critical md:col-span-4">
                   {brokerHealth.lastError}
                 </div>
               )}
@@ -576,7 +576,7 @@ export default function TradesPage({ user }: { user: User }) {
                   <article key={`open-mobile-${trade.id}`} className="rounded-xl border border-border/70 bg-card/70 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div><div className="font-semibold">{contractLabel(trade)}</div><div className="mt-1 text-xs text-muted-foreground">{dteLabel(trade)} · {trade.quantity} contract{trade.quantity === 1 ? '' : 's'}</div></div>
-                      <div className={`text-right font-mono text-lg font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</div>
+                      <div className={`text-right font-mono text-lg font-semibold ${pnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(pnl)}</div>
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-y border-border/60 py-3 text-sm">
                       <div><div className="text-xs text-muted-foreground">Entry</div><div className="font-mono">{currency(trade.entry_price)}</div></div>
@@ -640,7 +640,7 @@ export default function TradesPage({ user }: { user: User }) {
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.entry_price)}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.current_price)}</td>
                         <td className="px-3 py-3 text-right">
-                          <div className={`font-mono font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</div>
+                          <div className={`font-mono font-semibold ${pnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(pnl)}</div>
                           {realizedTrimPnl !== 0 && (
                             <div className="text-2xs text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>
                           )}
@@ -739,7 +739,7 @@ export default function TradesPage({ user }: { user: User }) {
                     <div><div className="font-semibold">{contractLabel(trade)}</div><div className="mt-1 text-xs text-muted-foreground">{trade.status === 'VOIDED' ? 'Voided' : 'Closed'} {compactDate(trade.updated_at)}</div></div>
                     {trade.status === 'VOIDED'
                       ? <div className="text-right text-xs font-medium text-muted-foreground">Not counted</div>
-                      : <div className={`font-mono text-lg font-semibold ${(trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</div>}
+                      : <div className={`font-mono text-lg font-semibold ${(trade.realized_pnl || 0) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(trade.realized_pnl)}</div>}
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-3 border-y border-border/60 py-3 text-sm">
                     <div><div className="text-xs text-muted-foreground">Entry</div><div className="font-mono">{currency(trade.entry_price)}</div></div>
@@ -783,7 +783,7 @@ export default function TradesPage({ user }: { user: User }) {
                         <td className="px-3 py-3 text-right font-mono">{trade.quantity}</td>
                         <td className="px-3 py-3 text-right font-mono">{currency(trade.entry_price)}</td>
                         <td className="px-3 py-3 text-right font-mono">{trade.status === 'VOIDED' ? '-' : currency(trade.exit_price || trade.current_price)}</td>
-                        <td className={`px-3 py-3 text-right font-mono font-semibold ${trade.status === 'VOIDED' ? 'text-muted-foreground' : (trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                        <td className={`px-3 py-3 text-right font-mono font-semibold ${trade.status === 'VOIDED' ? 'text-muted-foreground' : (trade.realized_pnl || 0) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                           <div>{trade.status === 'VOIDED' ? 'Not counted' : currency(trade.realized_pnl)}</div>
                           {trade.status !== 'VOIDED' && realizedTrimPnl !== 0 && <div className="text-2xs font-normal text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>}
                         </td>
@@ -873,7 +873,7 @@ export default function TradesPage({ user }: { user: User }) {
           </DialogHeader>
           {voidingTrade && (
             <div className="space-y-4">
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+              <div className="rounded-md border border-sev-warn/35 bg-sev-warn-soft p-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-muted-foreground">Contract</span>
                   <span className="text-right font-medium">{contractLabel(voidingTrade)}</span>

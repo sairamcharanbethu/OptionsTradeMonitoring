@@ -140,7 +140,7 @@ export default function WealthsimplePortfolio() {
           title="Open PnL" 
           value={`$${totalOpenPnl.toLocaleString(undefined, { minimumFractionDigits: 2 })}`} 
           icon={TrendingUp} 
-          valueClassName={totalOpenPnl >= 0 ? 'text-green-500' : 'text-red-500'}
+          valueClassName={totalOpenPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}
         />
         <StatsCard 
           title="Active Positions" 
@@ -294,7 +294,7 @@ export default function WealthsimplePortfolio() {
               <article key={`mobile-${pos.id}`} className="rounded-xl border border-border/70 bg-background/60 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div><div className="font-bold text-primary">{pos.symbol}</div><Badge variant="outline" className="mt-1 text-2xs">{pos.asset_type}</Badge></div>
-                  <div className={`text-right font-mono text-lg font-bold ${Number(pos.open_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>${Number(pos.open_pnl).toFixed(2)}</div>
+                  <div className={`text-right font-mono text-lg font-bold ${Number(pos.open_pnl) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>${Number(pos.open_pnl).toFixed(2)}</div>
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-3 border-t border-border/60 pt-3 text-sm">
                   <div><div className="text-xs text-muted-foreground">Units</div><div className="font-mono">{Number(pos.units).toFixed(4)}</div></div>
@@ -342,7 +342,7 @@ export default function WealthsimplePortfolio() {
                         ${Number(pos.price).toFixed(2)}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <div className={`font-bold ${Number(pos.open_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        <div className={`font-bold ${Number(pos.open_pnl) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                           ${Number(pos.open_pnl).toFixed(2)}
                         </div>
                       </td>

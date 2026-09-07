@@ -178,7 +178,7 @@ export function PositionsTable({
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        <div className={cn("font-bold transition-premium p-1 rounded", getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500', priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
+                                        <div className={cn("font-bold transition-premium p-1 rounded", getPnL(pos) >= 0 ? 'text-pnl-up' : 'text-pnl-down', priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
                                             {getPnL(pos) >= 0 ? '+' : ''}{getPnL(pos).toFixed(2)}
                                             <div className="text-2xs opacity-70">
                                                 ({getRoi(pos) > 0 ? '+' : ''}{getRoi(pos).toFixed(2)}%)
@@ -264,10 +264,10 @@ export function PositionsTable({
                                         </p>
                                     </div>
                                     <div className="text-right">
-                                        <div className={cn("font-bold text-lg", getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500')}>
+                                        <div className={cn("font-bold text-lg", getPnL(pos) >= 0 ? 'text-pnl-up' : 'text-pnl-down')}>
                                             {getPnL(pos) >= 0 ? '+' : ''}{getPnL(pos).toFixed(2)}
                                         </div>
-                                        <div className={cn("text-xs opacity-80", getPnL(pos) >= 0 ? 'text-green-600' : 'text-red-600')}>
+                                        <div className={cn("text-xs opacity-80", getPnL(pos) >= 0 ? 'text-pnl-up' : 'text-pnl-down')}>
                                             {getRoi(pos) > 0 ? '+' : ''}{getRoi(pos).toFixed(1)}%
                                         </div>
                                     </div>

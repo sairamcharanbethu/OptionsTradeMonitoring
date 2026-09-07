@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, Goal, GoalEntry, GoalInsights } from '@/lib/api';
 import { useGoals, useGoalEntries, useGoalInsights, GOAL_QUERY_KEYS } from '@/hooks/useGoalData';
@@ -420,8 +421,30 @@ export default function GoalTracker() {
     const [inlineNotes, setInlineNotes] = useState('');
     const [inlineSaving, setInlineSaving] = useState(false);
 
-    // Auto-select first goal
-    const activeGoalId = selectedGoalId ?? (goals.length > 0 ? goals[0].id : null);
+    // Open on the goal that covers today, not whichever the API returned first
+    // — the page was showing July while the current period was already running.
+    const defaultGoalId = useMemo(() => {
+        if (!goals.length) return null;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const current = goals.find(goal => {
+            const start = parseGoalDate(goal.start_date);
+            const end = parseGoalDate(goal.end_date);
+            return start <= today && today <= end;
+        });
+        if (current) return current.id;
+        // Otherwise the period that ended most recently, then the soonest upcoming.
+        const past = goals
+            .filter(goal => parseGoalDate(goal.end_date) < today)
+            .sort((a, b) => parseGoalDate(b.end_date).getTime() - parseGoalDate(a.end_date).getTime());
+        if (past.length) return past[0].id;
+        const upcoming = [...goals].sort(
+            (a, b) => parseGoalDate(a.start_date).getTime() - parseGoalDate(b.start_date).getTime()
+        );
+        return upcoming[0].id;
+    }, [goals]);
+
+    const activeGoalId = selectedGoalId ?? defaultGoalId;
 
     const { data: entries = [], isLoading: entriesLoading } = useGoalEntries(activeGoalId);
     const { data: insights, isLoading: insightsLoading } = useGoalInsights(activeGoalId);
@@ -694,6 +717,11 @@ export default function GoalTracker() {
 
     return (
         <div className="space-y-4 sm:space-y-6">
+            <PageHeader
+                title="Goals"
+                description="Monthly profit targets, pace against plan, and the milestones behind them."
+            />
+
             {/* Goal Selector Bar */}
             <Card className="border-primary/20">
                 <CardContent className="py-4">
@@ -846,10 +874,10 @@ export default function GoalTracker() {
 
                                         <div className="flex flex-col gap-2 rounded-md border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
                                             <div className="flex items-center gap-2 text-sm">
-                                                <ArrowRight className={`h-4 w-4 ${paceDeltaIsAhead ? 'text-green-500' : 'text-red-500'}`} />
+                                                <ArrowRight className={`h-4 w-4 ${paceDeltaIsAhead ? 'text-pnl-up' : 'text-pnl-down'}`} />
                                                 <span className="font-medium">
                                                     {paceDeltaIsAhead ? 'Ahead by ' : 'Behind by '}
-                                                    <span className={paceDeltaIsAhead ? 'text-green-500' : 'text-red-500'}>
+                                                    <span className={paceDeltaIsAhead ? 'text-pnl-up' : 'text-pnl-down'}>
                                                         {formatCurrency(Math.abs(paceDeltaAmount), true, 2)}
                                                     </span>
                                                 </span>
@@ -889,7 +917,7 @@ export default function GoalTracker() {
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
                                                 <p className="text-2xs text-muted-foreground uppercase tracking-wider">Projected</p>
-                                                <p className={`break-words text-sm font-bold ${insights.projectedTotal >= insights.targetAmount ? 'text-green-500' : 'text-red-500'}`}>
+                                                <p className={`break-words text-sm font-bold ${insights.projectedTotal >= insights.targetAmount ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                     {formatCurrency(insights.projectedTotal, true, 2)}
                                                 </p>
                                             </div>
@@ -1031,7 +1059,7 @@ export default function GoalTracker() {
                                         <div className="flex-1">
                                             <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Win Rate</p>
                                             <div className="flex items-baseline gap-2">
-                                                <span className={`text-2xl sm:text-3xl font-bold ${insights.winRate >= 50 ? 'text-green-500' : 'text-red-500'}`}>
+                                                <span className={`text-2xl sm:text-3xl font-bold ${insights.winRate >= 50 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                     {insights.winRate.toFixed(1)}%
                                                 </span>
                                                 <span className="text-xs text-muted-foreground">
@@ -1062,7 +1090,7 @@ export default function GoalTracker() {
                                                 </div>
                                                 <div>
                                                     <p className="text-2xs text-muted-foreground uppercase">Profit Factor</p>
-                                                    <p className={`text-xs font-bold ${(insights.profitFactor ?? 0) >= 1 ? 'text-green-500' : 'text-red-500'}`}>
+                                                    <p className={`text-xs font-bold ${(insights.profitFactor ?? 0) >= 1 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                         {insights.profitFactor != null ? insights.profitFactor.toFixed(2) : '∞'}
                                                     </p>
                                                 </div>
@@ -1210,14 +1238,14 @@ export default function GoalTracker() {
                                             <div key={month.key} className="rounded-md border bg-background p-3">
                                                 <div className="flex items-center justify-between gap-3">
                                                     <span className="font-medium">{month.label}</span>
-                                                    <span className={`font-semibold ${month.delta >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                    <span className={`font-semibold ${month.delta >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                         {formatCurrency(month.delta, false, 2, month.delta > 0)}
                                                     </span>
                                                 </div>
                                                 <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
                                                     <div>
                                                         <p className="text-muted-foreground">Earned</p>
-                                                        <p className={`font-semibold ${month.earned >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                        <p className={`font-semibold ${month.earned >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                             {formatCurrency(month.earned, false, 2, month.earned > 0)}
                                                         </p>
                                                     </div>
@@ -1243,13 +1271,13 @@ export default function GoalTracker() {
                                                 {monthlyBreakdown.map(month => (
                                                     <tr key={month.key} className="border-b last:border-0 hover:bg-muted/40">
                                                         <td className="px-4 py-3 font-medium">{month.label}</td>
-                                                        <td className={`px-4 py-3 text-right font-semibold ${month.earned >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                        <td className={`px-4 py-3 text-right font-semibold ${month.earned >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                             {formatCurrency(month.earned, false, 2, month.earned > 0)}
                                                         </td>
                                                         <td className="px-4 py-3 text-right text-muted-foreground">
                                                             {formatCurrency(month.pace, false, 2)}
                                                         </td>
-                                                        <td className={`px-4 py-3 text-right font-semibold ${month.delta >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                        <td className={`px-4 py-3 text-right font-semibold ${month.delta >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                             {formatCurrency(month.delta, false, 2, month.delta > 0)}
                                                         </td>
                                                     </tr>
@@ -1357,7 +1385,7 @@ export default function GoalTracker() {
                                                                         className="mt-2 h-8 text-sm"
                                                                     />
                                                                 ) : (
-                                                                    <p className={`mt-1 text-lg font-bold ${entryAmount >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                                    <p className={`mt-1 text-lg font-bold ${entryAmount >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                                         {formatCurrency(entryAmount, true, 2, entryAmount >= 0)}
                                                                     </p>
                                                                 )}
@@ -1439,7 +1467,7 @@ export default function GoalTracker() {
                                                                     {isEditing ? (
                                                                         <Input type="number" step="0.01" value={inlineAmount} onChange={e => setInlineAmount(e.target.value)} className="h-8 w-[100px] text-xs" />
                                                                     ) : (
-                                                                        <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                                        <span className={`font-bold ${Number(entry.amount) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                                                                             {formatCurrency(Number(entry.amount), true, 2, Number(entry.amount) >= 0)}
                                                                         </span>
                                                                     )}

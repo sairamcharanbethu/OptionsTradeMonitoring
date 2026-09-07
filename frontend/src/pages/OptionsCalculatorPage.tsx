@@ -74,7 +74,7 @@ function NumberField({
         {affix && <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-2xs text-muted-foreground">{affix}</span>}
       </div>
       {error
-        ? <p id={`${id}-error`} className="text-2xs leading-4 text-red-600 dark:text-red-400">{error}</p>
+        ? <p id={`${id}-error`} className="text-2xs leading-4 text-sev-critical">{error}</p>
         : hint && <p id={`${id}-hint`} className="text-2xs leading-4 text-muted-foreground">{hint}</p>}
     </div>
   );
@@ -201,7 +201,7 @@ export default function OptionsCalculatorPage() {
     : `Planned loss is ${money(result.plannedLoss)}, or ${result.plannedLossPercent.toFixed(2)}% of the account.`;
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-3 py-6 sm:px-5 sm:py-8 xl:px-8">
+    <div className="page-shell">
       <header className="mb-7 grid gap-5 border-b pb-7 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.42fr)] lg:items-end">
         <div>
           <Badge variant="outline" className="mb-4 gap-2 border-emerald-500/20 bg-emerald-500/[0.06] text-2xs uppercase tracking-[0.15em] text-emerald-700 dark:text-emerald-300">

@@ -152,7 +152,7 @@ export default function ActionBar({ user }: { user: User }) {
       <div
         role="toolbar"
         aria-label="Operator actions"
-        className="fixed inset-x-2 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-background/95 p-2 shadow-lg backdrop-blur-xl lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-[4.25rem] lg:max-w-[min(64rem,calc(100vw-2rem))] lg:flex-nowrap"
+        className="fixed inset-x-2 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-background/95 p-2 shadow-lg backdrop-blur-xl lg:static lg:inset-auto lg:ml-auto lg:w-auto lg:flex-nowrap lg:gap-1.5 lg:rounded-none lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:backdrop-blur-none"
       >
         <span className="flex items-center gap-1.5 pl-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground" title={connected ? 'Live push connected' : 'Reconnecting — falling back to polling'}>
           <Radio className={cn('h-3.5 w-3.5', connected ? 'text-sev-ok-dot' : 'animate-pulse text-sev-warn')} aria-hidden="true" />
@@ -230,7 +230,7 @@ export default function ActionBar({ user }: { user: User }) {
         )}
       </div>
 
-      <div className="pointer-events-none fixed inset-x-2 bottom-[calc(8rem+env(safe-area-inset-bottom))] z-50 flex flex-col items-end gap-2 lg:inset-x-auto lg:bottom-auto lg:right-4 lg:top-[7.5rem]" aria-live="polite">
+      <div className="pointer-events-none fixed inset-x-2 bottom-[calc(8rem+env(safe-area-inset-bottom))] z-50 flex flex-col items-end gap-2 lg:inset-x-auto lg:bottom-4 lg:right-4 lg:top-auto" aria-live="polite">
         {toasts.map((toast) => (
           <div
             key={toast.id}

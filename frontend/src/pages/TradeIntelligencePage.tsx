@@ -52,8 +52,8 @@ const contractLabel = (trade: any) => {
 };
 
 const alertTone = (severity: string) => {
-  if (severity === 'critical') return 'border-red-500/30 bg-red-500/10 text-red-600';
-  if (severity === 'warning') return 'border-amber-500/30 bg-amber-500/10 text-amber-600';
+  if (severity === 'critical') return 'border-sev-critical/30 bg-sev-critical-soft text-red-600';
+  if (severity === 'warning') return 'border-sev-warn/35 bg-sev-warn-soft text-amber-600';
   return 'border-blue-500/30 bg-blue-500/10 text-blue-600';
 };
 
@@ -126,7 +126,7 @@ export default function TradeIntelligencePage() {
   const topAlerts = useMemo(() => alerts?.alerts.slice(0, 8) || [], [alerts]);
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] px-3 py-4 sm:w-[95%] sm:px-0">
+    <div className="page-shell">
       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
           <div>
@@ -169,10 +169,16 @@ export default function TradeIntelligencePage() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+        <div className="mb-4 rounded-md border border-sev-critical/30 bg-sev-critical-soft px-4 py-3 text-sm text-sev-critical">
           {error}
         </div>
       )}
+
+      <div className="mb-2 text-2xs text-muted-foreground">
+        Scope: <span className="font-semibold text-foreground">{scope === 'paper' ? 'Paper account' : 'Live account'}</span>
+        {' · '}{(RANGE_OPTIONS.find((option) => option.value === range)?.label || range).toLowerCase()}
+        {' · '}closed trades only. Portfolio shows all tracked positions for all time.
+      </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <MetricTile label="Closed trades" value={String(summary?.total ?? 0)} detail={`${summary?.wins ?? 0} wins / ${summary?.losses ?? 0} losses`} />
@@ -228,10 +234,10 @@ export default function TradeIntelligencePage() {
                         <td className="py-1.5 pr-3 font-medium">{row.strategy.replace(/_/g, ' ')}</td>
                         <td className="py-1.5 pr-3">{row.trades}</td>
                         <td className="py-1.5 pr-3">{(row.winRate * 100).toFixed(0)}%</td>
-                        <td className={`py-1.5 pr-3 font-semibold ${row.totalPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                        <td className={`py-1.5 pr-3 font-semibold ${row.totalPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                           {currency(row.totalPnl)}
                         </td>
-                        <td className={`pr-3 ${row.avgPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                        <td className={`pr-3 ${row.avgPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
                           {currency(row.avgPnl)}
                         </td>
                         <td className="text-muted-foreground">
@@ -253,7 +259,7 @@ export default function TradeIntelligencePage() {
                 {metrics.byHour.map((h) => (
                   <div
                     key={h.hourEt}
-                    className={`rounded-md border px-2.5 py-1.5 text-xs ${h.totalPnl >= 0 ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-red-500/30 bg-red-500/10'}`}
+                    className={`rounded-md border px-2.5 py-1.5 text-xs ${h.totalPnl >= 0 ? 'border-emerald-500/30 bg-emerald-500/10' : 'border-sev-critical/30 bg-sev-critical-soft'}`}
                     title={`${h.trades} trades, ${(h.winRate * 100).toFixed(0)}% win`}
                   >
                     <span className="font-semibold">{String(h.hourEt).padStart(2, '0')}:00</span>{' '}
@@ -287,9 +293,9 @@ export default function TradeIntelligencePage() {
                 <div key={`mobile-${row.symbol}`} className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div><div className="font-semibold">{row.symbol}</div><div className="text-xs text-muted-foreground">{row.total} trades · {row.winRate}% win rate</div></div>
-                    <div className={`font-mono font-semibold ${row.totalPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(row.totalPnl)}</div>
+                    <div className={`font-mono font-semibold ${row.totalPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(row.totalPnl)}</div>
                   </div>
-                  <div className="mt-2 text-xs text-muted-foreground">Average P&amp;L <span className={`font-mono ${row.averagePnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(row.averagePnl)}</span></div>
+                  <div className="mt-2 text-xs text-muted-foreground">Average P&amp;L <span className={`font-mono ${row.averagePnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(row.averagePnl)}</span></div>
                 </div>
               ))}
             </div>
@@ -312,8 +318,8 @@ export default function TradeIntelligencePage() {
                       <td className="px-4 py-2 font-semibold">{row.symbol}</td>
                       <td className="px-4 py-2 text-right font-mono">{row.total}</td>
                       <td className="px-4 py-2 text-right font-mono">{row.winRate}%</td>
-                      <td className={`px-4 py-2 text-right font-mono ${row.averagePnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(row.averagePnl)}</td>
-                      <td className={`px-4 py-2 text-right font-mono ${row.totalPnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(row.totalPnl)}</td>
+                      <td className={`px-4 py-2 text-right font-mono ${row.averagePnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(row.averagePnl)}</td>
+                      <td className={`px-4 py-2 text-right font-mono ${row.totalPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(row.totalPnl)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -330,7 +336,7 @@ export default function TradeIntelligencePage() {
                 <article key={`mobile-${trade.id}`} className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0"><Link to={`/trades/${trade.id}/command`} className="font-semibold">{contractLabel(trade)}</Link><div className="mt-1 text-xs text-muted-foreground">{trade.outcomeDriver}</div></div>
-                    <div className={`shrink-0 font-mono font-semibold ${(trade.realized_pnl ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</div>
+                    <div className={`shrink-0 font-mono font-semibold ${(trade.realized_pnl ?? 0) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(trade.realized_pnl)}</div>
                   </div>
                   <div className="mt-3 grid grid-cols-3 gap-2 border-t border-border/60 pt-3 text-xs">
                     <div><div className="text-muted-foreground">Entry</div><div className="font-mono">{currency(trade.entry_price)}</div></div>
@@ -363,7 +369,7 @@ export default function TradeIntelligencePage() {
                       </td>
                       <td className="px-4 py-2 text-right font-mono">{currency(trade.entry_price)}</td>
                       <td className="px-4 py-2 text-right font-mono">{currency(trade.exit_price)}</td>
-                      <td className={`px-4 py-2 text-right font-mono ${(trade.realized_pnl ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(trade.realized_pnl)}</td>
+                      <td className={`px-4 py-2 text-right font-mono ${(trade.realized_pnl ?? 0) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{currency(trade.realized_pnl)}</td>
                       <td className="px-4 py-2">{trade.outcomeDriver}</td>
                       <td className="px-4 py-2 text-xs text-muted-foreground">{compactDate(trade.updated_at)}</td>
                     </tr>

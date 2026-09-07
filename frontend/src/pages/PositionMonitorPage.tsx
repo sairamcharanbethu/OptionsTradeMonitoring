@@ -75,7 +75,7 @@ export default function PositionMonitorPage() {
   const hitCount = rows.filter((row) => row.hit).length;
 
   return (
-    <main className="mx-auto w-full max-w-[1440px] space-y-5 px-3 py-4 sm:px-0 sm:py-6">
+    <main className="page-shell space-y-5">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2"><Target className="h-5 w-5 text-primary" /><h1 className="text-2xl font-semibold">Position Monitor</h1></div>
