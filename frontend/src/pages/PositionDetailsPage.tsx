@@ -302,23 +302,23 @@ export default function PositionDetailsPage() {
                             </div>
                             <div className="grid grid-cols-5 gap-2 text-center">
                                 <div className="p-3 bg-blue-50/50 dark:bg-blue-900/10 rounded-lg">
-                                    <div className="text-[10px] sm:text-xs font-bold text-blue-600 uppercase mb-1">Delta</div>
+                                    <div className="text-2xs sm:text-xs font-bold text-blue-600 uppercase mb-1">Delta</div>
                                     <div className="font-mono text-sm sm:text-base">{position.delta?.toFixed(3) ?? '-'}</div>
                                 </div>
                                 <div className="p-3 bg-purple-50/50 dark:bg-purple-900/10 rounded-lg">
-                                    <div className="text-[10px] sm:text-xs font-bold text-purple-600 uppercase mb-1">Theta</div>
+                                    <div className="text-2xs sm:text-xs font-bold text-purple-600 uppercase mb-1">Theta</div>
                                     <div className="font-mono text-sm sm:text-base">{position.theta?.toFixed(3) ?? '-'}</div>
                                 </div>
                                 <div className="p-3 bg-emerald-50/50 dark:bg-emerald-900/10 rounded-lg">
-                                    <div className="text-[10px] sm:text-xs font-bold text-emerald-600 uppercase mb-1">Gamma</div>
+                                    <div className="text-2xs sm:text-xs font-bold text-emerald-600 uppercase mb-1">Gamma</div>
                                     <div className="font-mono text-sm sm:text-base">{position.gamma?.toFixed(3) ?? '-'}</div>
                                 </div>
                                 <div className="p-3 bg-orange-50/50 dark:bg-orange-900/10 rounded-lg">
-                                    <div className="text-[10px] sm:text-xs font-bold text-orange-600 uppercase mb-1">Vega</div>
+                                    <div className="text-2xs sm:text-xs font-bold text-orange-600 uppercase mb-1">Vega</div>
                                     <div className="font-mono text-sm sm:text-base">{position.vega?.toFixed(3) ?? '-'}</div>
                                 </div>
                                 <div className="p-3 bg-sky-50/50 dark:bg-sky-900/10 rounded-lg">
-                                    <div className="text-[10px] sm:text-xs font-bold text-sky-600 uppercase mb-1">IV</div>
+                                    <div className="text-2xs sm:text-xs font-bold text-sky-600 uppercase mb-1">IV</div>
                                     <div className="font-mono text-sm sm:text-base">{position.iv?.toFixed(1) ?? '-'}%</div>
                                 </div>
                             </div>
@@ -377,7 +377,7 @@ export default function PositionDetailsPage() {
                                             <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-900/10 rounded-lg border border-red-100 dark:border-red-900/30">
                                                 <div className="flex flex-col">
                                                     <span className="text-xs font-bold text-red-600 uppercase">Stop Loss</span>
-                                                    <span className="text-[10px] text-red-700/70">Based on ATR Volatility</span>
+                                                    <span className="text-2xs text-red-700/70">Based on ATR Volatility</span>
                                                 </div>
                                                 <span className="text-xl font-mono font-bold">{formatCurrency(position.suggested_stop_loss)}</span>
                                             </div>
@@ -385,7 +385,7 @@ export default function PositionDetailsPage() {
                                             <div className="flex justify-between items-center p-3 bg-green-50 dark:bg-green-900/10 rounded-lg border border-green-100 dark:border-green-900/30">
                                                 <div className="flex flex-col">
                                                     <span className="text-xs font-bold text-green-600 uppercase">Take Profit 1</span>
-                                                    <span className="text-[10px] text-green-700/70">Conservative Target (2.5x ATR)</span>
+                                                    <span className="text-2xs text-green-700/70">Conservative Target (2.5x ATR)</span>
                                                 </div>
                                                 <span className="text-xl font-mono font-bold">{formatCurrency(position.suggested_take_profit_1)}</span>
                                             </div>
@@ -393,7 +393,7 @@ export default function PositionDetailsPage() {
                                             <div className="flex justify-between items-center p-3 bg-emerald-50 dark:bg-emerald-900/10 rounded-lg border border-emerald-100 dark:border-emerald-900/30">
                                                 <div className="flex flex-col">
                                                     <span className="text-xs font-bold text-emerald-600 uppercase">Take Profit 2</span>
-                                                    <span className="text-[10px] text-emerald-700/70">Aggressive Target (4.0x ATR)</span>
+                                                    <span className="text-2xs text-emerald-700/70">Aggressive Target (4.0x ATR)</span>
                                                 </div>
                                                 <span className="text-xl font-mono font-bold">{formatCurrency(position.suggested_take_profit_2)}</span>
                                             </div>
@@ -487,13 +487,13 @@ export default function PositionDetailsPage() {
                                     </Button>
                                 </div>
                                 {position.underlying_price && (
-                                    <Badge variant="outline" className="text-[10px]">
+                                    <Badge variant="outline" className="text-2xs">
                                         Ref Price: ${position.underlying_price.toFixed(2)}
                                     </Badge>
                                 )}
                             </div>
                         </div>
-                        <p className="text-[11px] text-muted-foreground leading-snug">
+                        <p className="text-2xs text-muted-foreground leading-snug">
                             {simViewMode === 'table'
                                 ? "Estimates potential returns based on stock price movements using Delta, Gamma, and Theta."
                                 : "Profit Zone visualization. X-axis is stock move, Y-axis is days to expiration (Top=Now, Bottom=Exp)."}
@@ -547,7 +547,7 @@ export default function PositionDetailsPage() {
                                                             </td>
                                                             <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                                                 {estPnl >= 0 ? '+' : ''}${estPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                                                <span className="text-[10px] ml-1 opacity-70">
+                                                                <span className="text-2xs ml-1 opacity-70">
                                                                     ({estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(1)}%)
                                                                 </span>
                                                             </td>
@@ -559,7 +559,7 @@ export default function PositionDetailsPage() {
                                     </div>
                                 ) : (
                                     <div className="space-y-2">
-                                        <div className="grid grid-cols-8 gap-1 text-[9px] font-bold text-center text-muted-foreground mb-1">
+                                        <div className="grid grid-cols-8 gap-1 text-2xs font-bold text-center text-muted-foreground mb-1">
                                             <div>DTE</div>
                                             {[-10, -5, -2, 0, 2, 5, 10].map(p => <div key={p}>{p}%</div>)}
                                         </div>
@@ -569,7 +569,7 @@ export default function PositionDetailsPage() {
 
                                             return timePoints.map((d) => (
                                                 <div key={d} className="grid grid-cols-8 gap-1">
-                                                    <div className="flex items-center justify-center text-[10px] font-mono text-muted-foreground border-r">{d}d</div>
+                                                    <div className="flex items-center justify-center text-2xs font-mono text-muted-foreground border-r">{d}d</div>
                                                     {[-10, -5, -2, 0, 2, 5, 10].map((pct) => {
                                                         const stockPrice = position.underlying_price!;
                                                         const dS = stockPrice * (pct / 100);
@@ -588,7 +588,7 @@ export default function PositionDetailsPage() {
                                                         return (
                                                             <div
                                                                 key={pct}
-                                                                className={`h-9 flex flex-col items-center justify-center rounded text-[8px] sm:text-[9px] font-mono border border-black/5 transition-premium hover:ring-1 hover:ring-primary`}
+                                                                className={`h-9 flex flex-col items-center justify-center rounded text-2xs sm:text-2xs font-mono border border-black/5 transition-premium hover:ring-1 hover:ring-primary`}
                                                                 style={{
                                                                     backgroundColor: estPnlPct >= 0 ? `rgba(34, 197, 94, ${opacity})` : `rgba(239, 68, 68, ${opacity})`,
                                                                     color: opacity > 0.6 ? 'white' : 'inherit'

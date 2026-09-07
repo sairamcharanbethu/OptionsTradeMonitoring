@@ -824,7 +824,7 @@ export default function GoalTracker() {
                                                         className="absolute top-0 bottom-0 border-l-[1.5px] border-background z-10"
                                                         style={{ left: `${marker}%`, opacity: clampedProgressPercent > marker ? 0.3 : 0.6 }}
                                                     >
-                                                        <span className={`absolute -bottom-5 -translate-x-1/2 text-[10px] font-bold ${clampedProgressPercent >= marker ? 'text-foreground' : 'text-muted-foreground'}`}>{marker}%</span>
+                                                        <span className={`absolute -bottom-5 -translate-x-1/2 text-2xs font-bold ${clampedProgressPercent >= marker ? 'text-foreground' : 'text-muted-foreground'}`}>{marker}%</span>
                                                     </div>
                                                 ))}
                                             </div>
@@ -836,7 +836,7 @@ export default function GoalTracker() {
                                             />
                                         </div>
 
-                                        <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                                        <div className="flex items-center justify-between gap-2 text-2xs text-muted-foreground">
                                             <span>{format(parseISO(activeGoal.start_date), 'MMM d, yyyy')}</span>
                                             <span className="hidden items-center gap-1 sm:flex">
                                                 <div className="w-3 h-0.5 bg-foreground/40" /> Expected pace marker
@@ -880,21 +880,21 @@ export default function GoalTracker() {
                                     <>
                                         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
                                             <div className="p-2.5 rounded-lg bg-background border">
-                                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Daily Avg</p>
+                                                <p className="text-2xs text-muted-foreground uppercase tracking-wider">Daily Avg</p>
                                                 <p className="break-words text-sm font-bold">{formatCurrency(insights.dailyAverage, true, 2)}</p>
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
-                                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need/Day</p>
+                                                <p className="text-2xs text-muted-foreground uppercase tracking-wider">Need/Day</p>
                                                 <p className="break-words text-sm font-bold text-orange-500">{formatCurrency(insights.remainingPerDay, true, 2)}</p>
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
-                                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Projected</p>
+                                                <p className="text-2xs text-muted-foreground uppercase tracking-wider">Projected</p>
                                                 <p className={`break-words text-sm font-bold ${insights.projectedTotal >= insights.targetAmount ? 'text-green-500' : 'text-red-500'}`}>
                                                     {formatCurrency(insights.projectedTotal, true, 2)}
                                                 </p>
                                             </div>
                                             <div className="p-2.5 rounded-lg bg-background border">
-                                                <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Days Left</p>
+                                                <p className="text-2xs text-muted-foreground uppercase tracking-wider">Days Left</p>
                                                 <p className="text-sm font-bold">{insights.daysRemaining}</p>
                                             </div>
                                         </div>
@@ -925,19 +925,19 @@ export default function GoalTracker() {
                             <CardContent className="py-4">
                                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                     <div className="rounded-md border bg-background p-3">
-                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Remaining</p>
+                                        <p className="text-2xs text-muted-foreground uppercase tracking-wider">Remaining</p>
                                         <p className="mt-1 break-words text-lg font-bold">{formatCurrency(remainingAmount, true, 2)}</p>
                                     </div>
                                     <div className="rounded-md border bg-background p-3">
-                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Need / Trading Day</p>
+                                        <p className="text-2xs text-muted-foreground uppercase tracking-wider">Need / Trading Day</p>
                                         <p className="mt-1 break-words text-lg font-bold text-orange-500">{formatCurrency(insights.remainingPerDay, true, 2)}</p>
                                     </div>
                                     <div className="rounded-md border bg-background p-3">
-                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Required Monthly Pace</p>
+                                        <p className="text-2xs text-muted-foreground uppercase tracking-wider">Required Monthly Pace</p>
                                         <p className="mt-1 break-words text-lg font-bold">{formatCurrency(requiredMonthlyPace, true, 2)}</p>
                                     </div>
                                     <div className="rounded-md border bg-background p-3">
-                                        <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Forecast</p>
+                                        <p className="text-2xs text-muted-foreground uppercase tracking-wider">Forecast</p>
                                         <p className="mt-1 text-sm font-semibold leading-snug">{forecastText}</p>
                                     </div>
                                 </div>
@@ -1053,15 +1053,15 @@ export default function GoalTracker() {
 
                                             <div className="grid grid-cols-3 gap-2 mt-3">
                                                 <div>
-                                                    <p className="text-[10px] text-muted-foreground uppercase">Avg Win</p>
+                                                    <p className="text-2xs text-muted-foreground uppercase">Avg Win</p>
                                                     <p className="text-xs font-bold text-green-500">{formatCurrency(insights.avgWin, true, 2, true)}</p>
                                                 </div>
                                                 <div>
-                                                    <p className="text-[10px] text-muted-foreground uppercase">Avg Loss</p>
+                                                    <p className="text-2xs text-muted-foreground uppercase">Avg Loss</p>
                                                     <p className="text-xs font-bold text-red-500">{formatCurrency(-insights.avgLoss, true, 2)}</p>
                                                 </div>
                                                 <div>
-                                                    <p className="text-[10px] text-muted-foreground uppercase">Profit Factor</p>
+                                                    <p className="text-2xs text-muted-foreground uppercase">Profit Factor</p>
                                                     <p className={`text-xs font-bold ${(insights.profitFactor ?? 0) >= 1 ? 'text-green-500' : 'text-red-500'}`}>
                                                         {insights.profitFactor != null ? insights.profitFactor.toFixed(2) : '∞'}
                                                     </p>
@@ -1281,7 +1281,7 @@ export default function GoalTracker() {
                                             </div>
                                         ))}
                                     </div>
-                                    <div className="flex flex-col gap-2 text-[10px] text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+                                    <div className="flex flex-col gap-2 text-2xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
                                         <span>8 weeks</span>
                                         <div className="flex items-center gap-1">
                                             <span>Loss</span>

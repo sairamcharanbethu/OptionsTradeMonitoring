@@ -657,7 +657,7 @@ export default function ManualEntryPage() {
                   onChange={(e) => setSettingsDraft({ ...settingsDraft, syntheticTrailingPct: e.target.value ? Number(e.target.value) : 15 })}
                 />
               </div>
-              <p className="text-[10px] leading-relaxed text-muted-foreground">
+              <p className="text-2xs leading-relaxed text-muted-foreground">
                 Applies only to new manual long entries. The app follows fresh IBKR bids from the confirmed fill; existing positions and autonomous strategy settings are unchanged.
               </p>
             </div>
@@ -766,7 +766,7 @@ export default function ManualEntryPage() {
                       {quoteState}
                     </div>
                     <div className="mt-1 font-mono text-lg font-semibold">{currency(quoteMark(quote))}</div>
-                    <div className="mt-1 text-[11px] text-muted-foreground">{formatAge(quoteFreshnessMs)}</div>
+                    <div className="mt-1 text-2xs text-muted-foreground">{formatAge(quoteFreshnessMs)}</div>
                   </div>
                   <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
                     <div className="text-xs text-muted-foreground">Bid / Ask</div>
@@ -826,7 +826,7 @@ export default function ManualEntryPage() {
                       <div className="min-w-0">
                         <div className="break-words font-medium">{contractLabel(trade)}</div>
                         <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-                          <Badge variant="outline" className="h-5 text-[10px]">{entrySourceLabel(trade)}</Badge>
+                          <Badge variant="outline" className="h-5 text-2xs">{entrySourceLabel(trade)}</Badge>
                           <span className="break-all">Entry {trade.broker_order_id || '-'}</span>
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">{executionMessage(trade)}</div>
@@ -862,7 +862,7 @@ export default function ManualEntryPage() {
                       <div>
                         <div className="text-xs text-muted-foreground">TP / Active stop</div>
                         <div className="font-mono">{currency(trade.take_profit_trigger)} / {currency(trade.stop_loss_trigger ?? manualEntry?.stopLossDisplay)}</div>
-                        {syntheticTrail?.active && <div className="text-[10px] text-emerald-500">Synthetic {Number(syntheticTrail.pct || trade.trailing_stop_loss_pct).toFixed(1)}%</div>}
+                        {syntheticTrail?.active && <div className="text-2xs text-emerald-500">Synthetic {Number(syntheticTrail.pct || trade.trailing_stop_loss_pct).toFixed(1)}%</div>}
                       </div>
                     </div>
                     {trade.execution_error && <div className="mt-2 break-words text-xs text-amber-600">{trade.execution_error}</div>}
@@ -901,7 +901,7 @@ export default function ManualEntryPage() {
                         <td className="px-3 py-3">
                           <div className="font-medium">{contractLabel(trade)}</div>
                           <div className="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-                            <Badge variant="outline" className="h-5 text-[10px]">{entrySourceLabel(trade)}</Badge>
+                            <Badge variant="outline" className="h-5 text-2xs">{entrySourceLabel(trade)}</Badge>
                             <span className="break-all">Entry {trade.broker_order_id || '-'}</span>
                           </div>
                           <div className="text-xs text-muted-foreground">{executionMessage(trade)}</div>
@@ -914,7 +914,7 @@ export default function ManualEntryPage() {
                         <td className="px-3 py-3 text-right">
                           <div className="font-mono text-muted-foreground">{currency(trade.stop_loss_trigger ?? manualEntry?.stopLossDisplay)}</div>
                           {syntheticTrail?.active && (
-                            <div className="text-[10px] font-mono text-emerald-500">
+                            <div className="text-2xs font-mono text-emerald-500">
                               Trail {Number(syntheticTrail.pct || trade.trailing_stop_loss_pct).toFixed(1)}% · high {currency(syntheticTrail.highPremium ?? trade.trailing_high_price)}
                             </div>
                           )}

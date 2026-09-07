@@ -18,7 +18,7 @@ export default function WhySetupCard(props: Props) {
   } = props;
   return (
         <article className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Why this setup</div>
+          <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Why this setup</div>
           <h3 className="mt-1 text-base font-semibold text-zinc-100">Confirmations and GEX context</h3>
           <div className="mt-4 space-y-2">
             {confirmations.length > 0 ? confirmations.slice(0, 5).map((confirmation: any, index: number) => {
@@ -42,7 +42,7 @@ export default function WhySetupCard(props: Props) {
             <Metric label="Gamma flip" value={money(primaryGex.flip || primaryGex.gamma_flip)} />
             <Metric label="Provider age" value={Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'} />
           </div>
-          <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+          <p className="mt-3 text-2xs leading-relaxed text-zinc-500">
             Fresh authoritative GEX is an entry gate. Regime and gamma levels are context unless a confirmation or blocker names them explicitly.
           </p>
         </article>

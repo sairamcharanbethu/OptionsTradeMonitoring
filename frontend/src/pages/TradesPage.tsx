@@ -196,7 +196,7 @@ const closedTradeDateRange = (range: ClosedTradeRange) => {
 function SummaryTile({ label, value, tone }: { label: string; value: string; tone?: 'green' | 'red' }) {
   return (
     <div className="min-w-0 rounded-md border border-border/70 bg-card/80 px-2 py-3 sm:px-4">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-2xs uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className={`mt-1 break-words font-mono text-base font-semibold sm:text-lg ${tone === 'green' ? 'text-emerald-500' : tone === 'red' ? 'text-red-500' : ''}`}>
         {value}
       </div>
@@ -642,7 +642,7 @@ export default function TradesPage({ user }: { user: User }) {
                         <td className="px-3 py-3 text-right">
                           <div className={`font-mono font-semibold ${pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>{currency(pnl)}</div>
                           {realizedTrimPnl !== 0 && (
-                            <div className="text-[11px] text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>
+                            <div className="text-2xs text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>
                           )}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-red-500">{currency(trade.stop_loss_trigger)}</td>
@@ -785,7 +785,7 @@ export default function TradesPage({ user }: { user: User }) {
                         <td className="px-3 py-3 text-right font-mono">{trade.status === 'VOIDED' ? '-' : currency(trade.exit_price || trade.current_price)}</td>
                         <td className={`px-3 py-3 text-right font-mono font-semibold ${trade.status === 'VOIDED' ? 'text-muted-foreground' : (trade.realized_pnl || 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                           <div>{trade.status === 'VOIDED' ? 'Not counted' : currency(trade.realized_pnl)}</div>
-                          {trade.status !== 'VOIDED' && realizedTrimPnl !== 0 && <div className="text-[11px] font-normal text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>}
+                          {trade.status !== 'VOIDED' && realizedTrimPnl !== 0 && <div className="text-2xs font-normal text-muted-foreground">Trim {currency(realizedTrimPnl)}</div>}
                         </td>
                         <td className="px-3 py-3">
                           <div className="flex flex-wrap gap-1">

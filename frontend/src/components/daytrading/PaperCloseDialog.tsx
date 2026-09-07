@@ -65,21 +65,21 @@ export default function PaperCloseDialog(props: Props) {
               )}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="rounded-lg bg-zinc-950/65 p-3">
-                  <div className="text-[10px] text-zinc-500">Contract</div>
+                  <div className="text-2xs text-zinc-500">Contract</div>
                   <div className="mt-1 font-mono font-semibold text-zinc-100">
                     {paperClosePosition.symbol} {paperClosePosition.option_type} {money(paperClosePosition.strike_price)}
                   </div>
                 </div>
                 <div className="rounded-lg bg-zinc-950/65 p-3">
-                  <div className="text-[10px] text-zinc-500">Quantity</div>
+                  <div className="text-2xs text-zinc-500">Quantity</div>
                   <div className="mt-1 font-mono font-semibold text-zinc-100">{paperClosePosition.quantity}</div>
                 </div>
                 <div className="rounded-lg bg-zinc-950/65 p-3">
-                  <div className="text-[10px] text-zinc-500">Entry</div>
+                  <div className="text-2xs text-zinc-500">Entry</div>
                   <div className="mt-1 font-mono font-semibold text-zinc-100">{money(paperClosePosition.entry_price)}</div>
                 </div>
                 <div className="rounded-lg bg-zinc-950/65 p-3">
-                  <div className="text-[10px] text-zinc-500">Latest paper mark</div>
+                  <div className="text-2xs text-zinc-500">Latest paper mark</div>
                   <div className="mt-1 font-mono font-semibold text-zinc-100">{money(paperClosePosition.current_price)}</div>
                 </div>
               </div>

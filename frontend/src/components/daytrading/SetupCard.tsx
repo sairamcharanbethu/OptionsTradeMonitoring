@@ -31,7 +31,7 @@ interface Props {
 function Stat({ label, value, tone = 'muted', title }: { label: string; value: string; tone?: Tone | 'plain'; title?: string }) {
   return (
     <div className="min-w-0" title={title}>
-      <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</div>
+      <div className="text-2xs font-semibold uppercase tracking-[0.14em] text-zinc-500">{label}</div>
       <div className={cn('mt-0.5 truncate font-mono text-xs tabular-nums', tone === 'plain' ? 'text-zinc-200' : tone === 'good' ? 'text-emerald-300' : tone === 'warn' ? 'text-amber-300' : tone === 'bad' ? 'text-rose-300' : 'text-zinc-300')}>{value}</div>
     </div>
   );
@@ -124,12 +124,12 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
       {/* Status strip */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline" className={cn('font-mono text-[10px]', toneClass[stateTone])}>{lifecycle}</Badge>
+          <Badge variant="outline" className={cn('font-mono text-2xs', toneClass[stateTone])}>{lifecycle}</Badge>
           <span className="text-sm font-semibold text-zinc-100">{signal?.strategy || 'No setup'}</span>
-          {side && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300">{side}</Badge>}
-          {signal?.confidence_score != null && <span className="font-mono text-[10px] text-zinc-400" title="Engine confidence score">score {num(signal.confidence_score, 0)}</span>}
-          {setupId && <span className="font-mono text-[10px] text-zinc-500" title={setupId}>#{setupId.slice(0, 8)}</span>}
-          {vetoed && <Badge variant="outline" className={cn('font-mono text-[10px]', toneClass.warn)}>VETOED</Badge>}
+          {side && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-2xs text-zinc-300">{side}</Badge>}
+          {signal?.confidence_score != null && <span className="font-mono text-2xs text-zinc-400" title="Engine confidence score">score {num(signal.confidence_score, 0)}</span>}
+          {setupId && <span className="font-mono text-2xs text-zinc-500" title={setupId}>#{setupId.slice(0, 8)}</span>}
+          {vetoed && <Badge variant="outline" className={cn('font-mono text-2xs', toneClass.warn)}>VETOED</Badge>}
         </div>
         {setupId && (
           vetoed
@@ -137,7 +137,7 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
             : <HoldToConfirmButton label="Veto setup" hint="Block autonomous entry for this setup id" icon={<Ban className="h-3.5 w-3.5" />} tone="warn" busy={busy} onConfirm={veto} shortcut="Shift+V" />
         )}
       </div>
-      {note && <div className={cn('mt-2 rounded-md border px-2.5 py-1.5 text-[11px]', toneClass[note.tone])} role="status">{note.text}</div>}
+      {note && <div className={cn('mt-2 rounded-md border px-2.5 py-1.5 text-2xs', toneClass[note.tone])} role="status">{note.text}</div>}
 
       {/* Plan geometry */}
       {hasPlan && side ? (
@@ -160,16 +160,16 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
       <div className="mt-4 rounded-lg bg-zinc-950/55 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Contract</div>
+            <div className="text-2xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Contract</div>
             <div className="mt-0.5 text-sm font-semibold text-zinc-100">{humanContractName(option, side)}</div>
-            <div className="mt-0.5 select-all break-all font-mono text-[10px] text-zinc-500" title="Contract symbol">
+            <div className="mt-0.5 select-all break-all font-mono text-2xs text-zinc-500" title="Contract symbol">
               {option.local_symbol || contractName(option, side)}
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            {option.expiry != null && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300">{optionExpiryLabel(option.expiry)}</Badge>}
-            {dte && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-[10px] text-zinc-300">{dte}</Badge>}
-            <Badge variant="outline" className={cn('font-mono text-[10px]', eligible ? toneClass.good : toneClass.bad)}>{eligible ? 'eligible' : 'not eligible'}</Badge>
+            {option.expiry != null && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-2xs text-zinc-300">{optionExpiryLabel(option.expiry)}</Badge>}
+            {dte && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-2xs text-zinc-300">{dte}</Badge>}
+            <Badge variant="outline" className={cn('font-mono text-2xs', eligible ? toneClass.good : toneClass.bad)}>{eligible ? 'eligible' : 'not eligible'}</Badge>
           </div>
         </div>
         <div className="mt-3 grid grid-cols-3 gap-x-3 gap-y-2 sm:grid-cols-6">
@@ -187,13 +187,13 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
           <Stat label="Volume" value={integer(option.volume)} tone="plain" />
           <Stat label="Open interest" value={integer(option.openInterest ?? option.open_interest)} tone="plain" />
         </div>
-        <p className="mt-3 text-[11px] leading-relaxed text-zinc-500">
+        <p className="mt-3 text-2xs leading-relaxed text-zinc-500">
           {option.mark != null && Number.isFinite(Number(option.mark))
             ? 'Entry remains blocked when the quote is older than 15 seconds or the spread fails the strategy quality gate.'
             : 'IBKR did not provide a mark. Bid and ask can still support a protected planned limit, but entry remains blocked unless the complete quote passes freshness and spread checks.'}
         </p>
         {rejections.length > 0 && (
-          <ul className="mt-2 space-y-0.5 text-[11px] text-rose-300/90">
+          <ul className="mt-2 space-y-0.5 text-2xs text-rose-300/90">
             {rejections.map((r) => <li key={r}>• {r}</li>)}
           </ul>
         )}
@@ -202,31 +202,31 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
       {/* Blockers, AI verdict, warnings */}
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         <div>
-          <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Blockers {blockers.length ? `(${blockers.length})` : ''}</div>
+          <div className="text-2xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Blockers {blockers.length ? `(${blockers.length})` : ''}</div>
           {blockers.length ? (
             <ul className="mt-1.5 space-y-1">
-              {blockers.map((b) => <li key={b} className="rounded bg-zinc-950/55 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200/90">{b}</li>)}
+              {blockers.map((b) => <li key={b} className="rounded bg-zinc-950/55 px-2.5 py-1.5 text-2xs leading-relaxed text-amber-200/90">{b}</li>)}
             </ul>
-          ) : <div className="mt-1.5 text-[11px] text-emerald-300/80">No blockers.</div>}
+          ) : <div className="mt-1.5 text-2xs text-emerald-300/80">No blockers.</div>}
         </div>
         <div>
-          <div className="text-[9px] font-semibold uppercase tracking-[0.14em] text-zinc-500">AI gate</div>
+          <div className="text-2xs font-semibold uppercase tracking-[0.14em] text-zinc-500">AI gate</div>
           {aiVerdict ? (
-            <div className={cn('mt-1.5 rounded border px-2.5 py-1.5 text-[11px] leading-relaxed', aiVerdict.metadata?.decision === 'SKIP' ? toneClass.bad : toneClass.good)}>
+            <div className={cn('mt-1.5 rounded border px-2.5 py-1.5 text-2xs leading-relaxed', aiVerdict.metadata?.decision === 'SKIP' ? toneClass.bad : toneClass.good)}>
               <span className="font-mono font-semibold">{String(aiVerdict.metadata?.decision || '—')} · {String(aiVerdict.metadata?.risk_tier || '—')} · {String(aiVerdict.metadata?.source || '—')}</span>
               <div className="mt-0.5 opacity-90">{String(aiVerdict.metadata?.rationale || aiVerdict.message || '')}</div>
             </div>
-          ) : <div className="mt-1.5 text-[11px] text-zinc-500">No verdict yet for this setup (runs at entry time).</div>}
+          ) : <div className="mt-1.5 text-2xs text-zinc-500">No verdict yet for this setup (runs at entry time).</div>}
         </div>
       </div>
       {warnings.length > 0 && (
         <div className="mt-3">
-          <button type="button" onClick={() => setWarningsOpen((v) => !v)} aria-expanded={warningsOpen} className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500 hover:text-zinc-300">
+          <button type="button" onClick={() => setWarningsOpen((v) => !v)} aria-expanded={warningsOpen} className="inline-flex items-center gap-1 text-2xs font-semibold uppercase tracking-[0.14em] text-zinc-500 hover:text-zinc-300">
             Warnings ({warnings.length}) <ChevronDown className={cn('h-3 w-3 transition-transform', warningsOpen && 'rotate-180')} />
           </button>
           {warningsOpen && (
             <ul className="mt-1.5 space-y-1">
-              {warnings.map((w) => <li key={w} className="rounded bg-zinc-950/40 px-2.5 py-1 text-[11px] text-zinc-400">{w}</li>)}
+              {warnings.map((w) => <li key={w} className="rounded bg-zinc-950/40 px-2.5 py-1 text-2xs text-zinc-400">{w}</li>)}
             </ul>
           )}
         </div>

@@ -71,11 +71,11 @@ function NumberField({
             error && 'border-red-500/70 focus-visible:ring-red-500'
           )}
         />
-        {affix && <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-[11px] text-muted-foreground">{affix}</span>}
+        {affix && <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-2xs text-muted-foreground">{affix}</span>}
       </div>
       {error
-        ? <p id={`${id}-error`} className="text-[11px] leading-4 text-red-600 dark:text-red-400">{error}</p>
-        : hint && <p id={`${id}-hint`} className="text-[11px] leading-4 text-muted-foreground">{hint}</p>}
+        ? <p id={`${id}-error`} className="text-2xs leading-4 text-red-600 dark:text-red-400">{error}</p>
+        : hint && <p id={`${id}-hint`} className="text-2xs leading-4 text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -124,7 +124,7 @@ function InputSection({ index, title, description, children }: {
     <div className="double-bezel-shell">
       <section className="double-bezel-core p-5 sm:p-6">
         <div className="mb-6 flex items-start gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground/[0.05] font-mono text-[11px] font-bold text-emerald-600 dark:text-emerald-400">{index}</span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-foreground/[0.05] font-mono text-2xs font-bold text-emerald-600 dark:text-emerald-400">{index}</span>
           <div>
             <h2 className="text-base font-semibold tracking-tight">{title}</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
@@ -146,7 +146,7 @@ function MetricCard({ label, detail, value, subvalue, tone = 'neutral', classNam
 }) {
   return (
     <article className={cn('rounded-2xl border bg-card/70 p-5 shadow-sm', className)}>
-      <div className="mb-6 flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-[0.13em] text-muted-foreground">
+      <div className="mb-6 flex items-center justify-between gap-3 text-2xs font-bold uppercase tracking-[0.13em] text-muted-foreground">
         <span>{label}</span><span className="text-right">{detail}</span>
       </div>
       <div className={cn(
@@ -204,7 +204,7 @@ export default function OptionsCalculatorPage() {
     <div className="mx-auto w-full max-w-[1600px] px-3 py-6 sm:px-5 sm:py-8 xl:px-8">
       <header className="mb-7 grid gap-5 border-b pb-7 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.42fr)] lg:items-end">
         <div>
-          <Badge variant="outline" className="mb-4 gap-2 border-emerald-500/20 bg-emerald-500/[0.06] text-[10px] uppercase tracking-[0.15em] text-emerald-700 dark:text-emerald-300">
+          <Badge variant="outline" className="mb-4 gap-2 border-emerald-500/20 bg-emerald-500/[0.06] text-2xs uppercase tracking-[0.15em] text-emerald-700 dark:text-emerald-300">
             <Calculator className="h-3.5 w-3.5" /> Local planning only
           </Badge>
           <h1 className="max-w-3xl text-3xl font-semibold tracking-[-0.045em] sm:text-4xl lg:text-5xl">Options risk, made tangible.</h1>
@@ -245,7 +245,7 @@ export default function OptionsCalculatorPage() {
                 <Button type="button" variant="secondary" className="h-11 w-full rounded-xl sm:w-auto" onClick={() => updateNumber('highestPrice', inputs.currentPrice)}>
                   Use current price as high
                 </Button>
-                <p className="mt-2 text-[11px] text-muted-foreground">The high-water mark cannot be below the current option price.</p>
+                <p className="mt-2 text-2xs text-muted-foreground">The high-water mark cannot be below the current option price.</p>
               </div>
             </div>
           </InputSection>
@@ -315,7 +315,7 @@ export default function OptionsCalculatorPage() {
                   ['Spread percentage', `${result.spreadPercent.toFixed(2)}%`, null]
                 ].map(([label, value, tone]) => (
                   <div key={String(label)} className="bg-background p-4">
-                    <div className="text-[11px] text-muted-foreground">{label}</div>
+                    <div className="text-2xs text-muted-foreground">{label}</div>
                     <div className={cn('mt-1 font-mono text-sm font-semibold', typeof tone === 'number' && (tone >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'))}>{value}</div>
                   </div>
                 ))}
@@ -336,8 +336,8 @@ export default function OptionsCalculatorPage() {
                 <div><h2 className="font-semibold">Trailing Stop Planner</h2><p className="text-xs text-muted-foreground">Suggestions anchored to the {premium(result.highestPrice)} high-water mark.</p></div>
               </div>
               <div className="overflow-hidden rounded-xl border">
-                <table className="w-full table-fixed text-right text-[11px] sm:text-xs">
-                  <thead className="bg-muted/40 text-[9px] uppercase tracking-[0.08em] text-muted-foreground sm:text-[10px]">
+                <table className="w-full table-fixed text-right text-2xs sm:text-xs">
+                  <thead className="bg-muted/40 text-2xs uppercase tracking-[0.08em] text-muted-foreground sm:text-2xs">
                     <tr><th className="px-2 py-3 text-left sm:px-4">Trail</th><th className="px-2 py-3 sm:px-4">Amount</th><th className="px-2 py-3 sm:px-4">Trigger</th><th className="px-2 py-3 sm:px-4">P&L</th></tr>
                   </thead>
                   <tbody>{result.planner.map(row => (
@@ -368,7 +368,7 @@ export default function OptionsCalculatorPage() {
         </section>
       </div>
 
-      <footer className="mx-auto max-w-4xl px-4 pb-2 pt-8 text-center text-[11px] leading-5 text-muted-foreground">
+      <footer className="mx-auto max-w-4xl px-4 pb-2 pt-8 text-center text-2xs leading-5 text-muted-foreground">
         For planning and educational purposes only—not investment advice. Option contracts can lose their entire premium. Stop and limit orders may execute differently during volatile or illiquid markets.
       </footer>
     </div>

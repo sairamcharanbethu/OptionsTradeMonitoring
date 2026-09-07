@@ -50,7 +50,7 @@ export default function Auth({ onLogin }: AuthProps) {
                     </div>
                     <div className="pb-3 text-center">
                         <div className="text-lg font-extrabold tracking-tight">StrikePilot</div>
-                        <div className="mt-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Guarded Options Intelligence</div>
+                        <div className="mt-1 text-2xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Guarded Options Intelligence</div>
                     </div>
                     <CardTitle className="text-2xl text-center font-bold tracking-tight">
                         {isLogin ? 'Welcome Back' : 'Create Account'}

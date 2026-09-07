@@ -88,13 +88,13 @@ export default function LifecycleHero(props: Props) {
           <div className="grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-[0.18em] opacity-70">{lifecycleView.eyebrow}</span>
-                <span className="rounded-md border border-current/20 bg-black/15 px-2 py-1 font-mono text-[10px] font-semibold">{displayLifecycle.replace(/_/g, ' ')}</span>
+                <span className="text-2xs font-semibold uppercase tracking-[0.18em] opacity-70">{lifecycleView.eyebrow}</span>
+                <span className="rounded-md border border-current/20 bg-black/15 px-2 py-1 font-mono text-2xs font-semibold">{displayLifecycle.replace(/_/g, ' ')}</span>
                 {displayLifecycle === 'DISMISSED' && lifecycle === 'ACTIVE' && (
-                  <span className="text-[10px] font-medium text-zinc-500">Strategy engine ACTIVE</span>
+                  <span className="text-2xs font-medium text-zinc-500">Strategy engine ACTIVE</span>
                 )}
                 {side && (
-                  <span className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                  <span className={`rounded-md border px-2 py-1 text-2xs font-semibold ${
                     !directionConfirmed
                       ? 'border-amber-500/20 bg-amber-950/15 text-amber-200'
                       : side === 'CALL'
@@ -105,11 +105,11 @@ export default function LifecycleHero(props: Props) {
                   </span>
                 )}
                 {currentStrategyCode && (
-                  <span className="rounded-md border border-current/15 bg-black/10 px-2 py-1 text-[10px] font-medium">
+                  <span className="rounded-md border border-current/15 bg-black/10 px-2 py-1 text-2xs font-medium">
                     {currentStrategy.name}
                   </span>
                 )}
-                <a href="#setup-history" className="text-[10px] font-medium text-zinc-500 transition-colors hover:text-zinc-300">History ↓</a>
+                <a href="#setup-history" className="text-2xs font-medium text-zinc-500 transition-colors hover:text-zinc-300">History ↓</a>
               </div>
               <h2 className="mt-3 text-2xl font-semibold tracking-[-0.025em] text-zinc-50 sm:text-3xl">{lifecycleView.title}</h2>
               <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-400">{lifecycleView.description}</p>
@@ -122,7 +122,7 @@ export default function LifecycleHero(props: Props) {
                       : 'border-amber-500/20 bg-amber-950/10'
                 }`}>
                   <div className="min-w-0">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Broker execution</div>
+                    <div className="text-2xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Broker execution</div>
                     <div className="font-semibold text-zinc-200">
                       {brokerPositionOpen
                         ? 'Broker position linked'
@@ -135,7 +135,7 @@ export default function LifecycleHero(props: Props) {
                       {brokerOrderId ? ` · Order ${brokerOrderId}` : ''}
                     </div>
                   </div>
-                  <div className="font-mono text-[10px] text-zinc-500 sm:text-right">
+                  <div className="font-mono text-2xs text-zinc-500 sm:text-right">
                     Status updated {dateTime(brokerSyncAt)}
                   </div>
                   {brokerReportsFill && !brokerPositionOpen && (
@@ -176,11 +176,11 @@ export default function LifecycleHero(props: Props) {
                 />
               ) : (
                 <div className="mt-5 rounded-lg border border-zinc-800/80 bg-black/15 px-3 py-3 sm:mt-6 sm:px-4">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">No level plan yet</div>
+                  <div className="text-2xs font-semibold uppercase tracking-[0.14em] text-zinc-500">No level plan yet</div>
                   <p className="mt-1.5 text-xs leading-relaxed text-zinc-300">
                     {strategyBlockers[0] || 'The strategy is waiting for a qualified directional setup.'}
                   </p>
-                  <div className="mt-3 grid grid-cols-3 gap-2 border-t border-zinc-800/70 pt-3 font-mono text-[10px] tabular-nums text-zinc-500">
+                  <div className="mt-3 grid grid-cols-3 gap-2 border-t border-zinc-800/70 pt-3 font-mono text-2xs tabular-nums text-zinc-500">
                     <span>5m structure<br /><span className="text-zinc-300">{fiveMinuteStructure}</span></span>
                     <span>VWAP<br /><span className="text-zinc-300">{Number.isFinite(vwap) ? money(vwap) : 'Unavailable'}</span></span>
                     <span>SPY vs VWAP<br /><span className="text-zinc-300">{spotVsVwap}</span></span>
@@ -201,8 +201,8 @@ export default function LifecycleHero(props: Props) {
                             ? 'animate-pulse bg-emerald-400'
                             : freshSnapshot ? 'bg-amber-400' : 'bg-rose-400'
                       }`} />
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500">Setup heartbeat</span>
-                      <span className={`text-[10px] font-semibold ${
+                      <span className="text-2xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Setup heartbeat</span>
+                      <span className={`text-2xs font-semibold ${
                         dismissedActionableSetup || !strategyCanExecute
                           ? 'text-amber-300'
                           : 'text-emerald-300'
@@ -210,19 +210,19 @@ export default function LifecycleHero(props: Props) {
                     </div>
                     <p className="mt-1.5 max-w-2xl text-xs leading-relaxed text-zinc-300">{heartbeatSummary}</p>
                   </div>
-                  <div className="grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] tabular-nums text-zinc-500 sm:text-right">
+                  <div className="grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 font-mono text-2xs tabular-nums text-zinc-500 sm:text-right">
                     <span>Strategy {relativeAge(snapshotAge)}</span>
                     <span>Option quote {Number.isFinite(quoteAge) ? `${number(quoteAge, 1)}s` : optionSelected ? 'Unavailable' : 'Not selected'}</span>
                     <span>GEX {Number.isFinite(gexAge) ? `${number(gexAge, 1)}s` : '—'}</span>
                     <span>{directionConfirmed ? 'R/R' : 'Plan R/R'} {Number.isFinite(rewardRisk) ? `${number(rewardRisk)}:1` : '—'}</span>
                   </div>
                 </div>
-                <div className="mt-2 border-t border-zinc-800/70 pt-2 text-[10px] text-zinc-500">{marketSessionLabel}</div>
+                <div className="mt-2 border-t border-zinc-800/70 pt-2 text-2xs text-zinc-500">{marketSessionLabel}</div>
               </div>
 
               {!directionConfirmed && side && (
                 <details className="group mt-3 rounded-lg border border-zinc-800/70 bg-black/10">
-                  <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-[10px] font-medium text-zinc-500">
+                  <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-2xs font-medium text-zinc-500">
                     Compare CALL and PUT watch levels
                     <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
                   </summary>
@@ -232,11 +232,11 @@ export default function LifecycleHero(props: Props) {
                       ['PUT', strategySignal?.put_setup]
                     ] as const).map(([watchSide, watchSetup]) => (
                       <div key={watchSide} className="rounded-md bg-zinc-950/55 p-2.5">
-                        <div className="flex items-center justify-between text-[10px]">
+                        <div className="flex items-center justify-between text-2xs">
                           <span className="font-semibold text-zinc-300">{watchSide}</span>
                           <span className={side === watchSide ? 'text-amber-300' : 'text-zinc-600'}>{side === watchSide ? 'Current bias' : 'Alternate'}</span>
                         </div>
-                        <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px] tabular-nums text-zinc-500">
+                        <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-2xs tabular-nums text-zinc-500">
                           <span>Trigger<br /><span className="text-zinc-300">{money(watchSetup?.trigger)}</span></span>
                           <span>Stop<br /><span className="text-zinc-300">{money(watchSetup?.invalidation)}</span></span>
                           <span>T1<br /><span className="text-zinc-300">{money(watchSetup?.targets?.[0])}</span></span>
@@ -249,7 +249,7 @@ export default function LifecycleHero(props: Props) {
 
               {strategyBlockers.length > 0 && lifecycle !== 'ACTIVE' && (
                 <div className="mt-5 rounded-lg border border-amber-500/20 bg-black/15 px-3 py-3">
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-300">What is blocking entry</div>
+                  <div className="text-2xs font-semibold uppercase tracking-[0.14em] text-amber-300">What is blocking entry</div>
                   <div className="mt-2 space-y-1.5">
                     {strategyBlockers.slice(0, 4).map(blocker => (
                       <div key={blocker} className="flex items-start gap-2 text-xs leading-relaxed text-zinc-300">
@@ -263,7 +263,7 @@ export default function LifecycleHero(props: Props) {
             </div>
 
             <aside className="rounded-xl border border-zinc-800/90 bg-black/20 p-3.5 sm:p-4">
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Next action</div>
+              <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Next action</div>
               {dismissedActionableSetup && !brokerPositionOpen ? (
                 <>
                   <div className="mt-2 text-lg font-semibold text-zinc-50">No action available</div>

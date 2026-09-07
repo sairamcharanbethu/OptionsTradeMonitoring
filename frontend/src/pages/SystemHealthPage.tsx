@@ -409,14 +409,14 @@ const buildDiagnostics = (apiHealth: ApiHealth | null, services: ServiceHealth |
 function StatusPill({ status, ignored = false }: { status?: string | null; ignored?: boolean }) {
   if (ignored) {
     return (
-      <Badge variant="outline" className="border-border bg-muted/40 font-mono text-[10px] text-muted-foreground">
+      <Badge variant="outline" className="border-border bg-muted/40 font-mono text-2xs text-muted-foreground">
         IGNORED
       </Badge>
     );
   }
 
   return (
-    <Badge variant="outline" className={`font-mono text-[10px] ${statusTone(status)}`}>
+    <Badge variant="outline" className={`font-mono text-2xs ${statusTone(status)}`}>
       {status || 'N/A'}
     </Badge>
   );
@@ -427,7 +427,7 @@ function MetricCard({ label, value, detail, icon: Icon }: { label: string; value
     <div className="rounded-md border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase text-muted-foreground">{label}</div>
+          <div className="text-2xs font-semibold uppercase text-muted-foreground">{label}</div>
           <div className="mt-1 truncate font-mono text-xl font-semibold">{value}</div>
         </div>
         <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
@@ -440,7 +440,7 @@ function MetricCard({ label, value, detail, icon: Icon }: { label: string; value
 function EvidenceBlock({ value }: { value?: unknown }) {
   const text = compactValue(value);
   return (
-    <pre className="max-h-32 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/30 p-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+    <pre className="max-h-32 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted/30 p-2 font-mono text-2xs leading-relaxed text-muted-foreground">
       {text}
     </pre>
   );
@@ -448,7 +448,7 @@ function EvidenceBlock({ value }: { value?: unknown }) {
 
 function CommandBlock({ value }: { value: string }) {
   return (
-    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 px-2 py-1.5 font-mono text-[11px] leading-relaxed text-foreground">
+    <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/60 px-2 py-1.5 font-mono text-2xs leading-relaxed text-foreground">
       {value}
     </pre>
   );
@@ -476,7 +476,7 @@ function DiagnosticRow({
         <div className="mt-1 text-xs text-muted-foreground">{item.area} · {formatRelativeTime(item.lastSeen)}</div>
       </div>
       <div className="min-w-0">
-        <div className="text-[10px] font-semibold uppercase text-muted-foreground">Endpoint</div>
+        <div className="text-2xs font-semibold uppercase text-muted-foreground">Endpoint</div>
         <div className="mt-1 break-all font-mono text-xs">{item.endpoint || 'Internal runtime check'}</div>
         {item.latencyMs !== null && item.latencyMs !== undefined && (
           <div className="mt-1 text-xs text-muted-foreground">{item.latencyMs}ms latency</div>
@@ -486,17 +486,17 @@ function DiagnosticRow({
         )}
       </div>
       <div className="min-w-0">
-        <div className="text-[10px] font-semibold uppercase text-muted-foreground">{detailLabel}</div>
+        <div className="text-2xs font-semibold uppercase text-muted-foreground">{detailLabel}</div>
         <div className="mt-1 text-xs">{item.cause}</div>
         {hasEvidence && (
           <>
-            <div className="mt-2 text-[10px] font-semibold uppercase text-muted-foreground">Evidence</div>
+            <div className="mt-2 text-2xs font-semibold uppercase text-muted-foreground">Evidence</div>
             <div className="mt-1"><EvidenceBlock value={item.evidence} /></div>
           </>
         )}
         {item.actionCommand && (
           <>
-            <div className="mt-2 text-[10px] font-semibold uppercase text-muted-foreground">Run or check</div>
+            <div className="mt-2 text-2xs font-semibold uppercase text-muted-foreground">Run or check</div>
             <div className="mt-1 min-w-0"><CommandBlock value={item.actionCommand} /></div>
           </>
         )}
@@ -526,7 +526,7 @@ function RootCauseCard({ item }: { item: DiagnosticItem }) {
             <StatusPill status={item.status} />
           </div>
           <div className="mt-2 break-words text-xs">{item.cause}</div>
-          <div className="mt-2 break-all font-mono text-[11px] opacity-90">{item.endpoint || item.area}</div>
+          <div className="mt-2 break-all font-mono text-2xs opacity-90">{item.endpoint || item.area}</div>
           <div className="mt-3 text-xs font-medium">Next: {item.nextStep}</div>
         </div>
       </div>
@@ -671,7 +671,7 @@ export default function SystemHealthPage() {
               <div key={item.id} className="rounded-md border border-border bg-muted/10 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm font-medium">{item.title}</div>
-                  <Badge variant="outline" className={`text-[10px] ${severityTone(item.severity)}`}>{item.area}</Badge>
+                  <Badge variant="outline" className={`text-2xs ${severityTone(item.severity)}`}>{item.area}</Badge>
                 </div>
                 <EvidenceBlock value={item.evidence || item.cause} />
               </div>

@@ -61,7 +61,7 @@ function MetricTile({ label, value, detail, tone }: { label: string; value: stri
   const toneClass = tone === 'green' ? 'text-emerald-500' : tone === 'red' ? 'text-red-500' : tone === 'amber' ? 'text-amber-500' : '';
   return (
     <div className="rounded-md border border-border bg-card p-3 sm:p-4">
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className={`mt-1 break-words font-mono text-lg font-semibold sm:text-xl ${toneClass}`}>{value}</div>
       {detail && <div className="mt-2 text-xs text-muted-foreground">{detail}</div>}
     </div>

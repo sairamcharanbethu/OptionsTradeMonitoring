@@ -123,10 +123,10 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                         <DialogTitle className="flex flex-wrap items-center gap-2 pr-4">
                             <span className="font-bold text-lg sm:text-xl">{position.symbol}</span>
                             <div className="flex gap-1.5 flex-wrap">
-                                <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="uppercase text-[10px] h-5">
+                                <Badge variant={position.option_type === 'CALL' ? 'default' : 'secondary'} className="uppercase text-2xs h-5">
                                     {position.option_type} ${position.strike_price}
                                 </Badge>
-                                <Badge variant="outline" className={cn("pnl-pulse text-[10px] h-5", isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50')}>
+                                <Badge variant="outline" className={cn("pnl-pulse text-2xs h-5", isProfit ? 'text-green-600 border-green-200 bg-green-50' : 'text-red-600 border-red-200 bg-red-50')}>
                                     {unrealizedPnlPct > 0 ? '+' : ''}{unrealizedPnlPct.toFixed(2)}%
                                 </Badge>
                             </div>
@@ -168,31 +168,31 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             </div>
                             <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                                 <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Entry Price</div>
+                                    <div className="text-2xs sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Entry Price</div>
                                     <div className="text-base sm:text-lg font-mono font-bold tracking-tight">{formatCurrency(position.entry_price)}</div>
                                 </div>
                                 <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Current Price</div>
+                                    <div className="text-2xs sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Current Price</div>
                                     <div className={cn("text-base sm:text-lg font-mono font-bold tracking-tight", isProfit ? 'text-green-600' : 'text-red-600')}>
                                         {formatCurrency(position.current_price)}
                                     </div>
                                 </div>
                                 <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Break Even</div>
+                                    <div className="text-2xs sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Break Even</div>
                                     <div className="text-base sm:text-lg font-mono font-bold tracking-tight underline decoration-dotted underline-offset-4">
                                         {formatCurrency(breakEven)}
                                     </div>
                                 </div>
                                 <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Market Value</div>
+                                    <div className="text-2xs sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Market Value</div>
                                     <div className="text-base sm:text-lg font-mono font-bold tracking-tight">{formatCurrency(marketValue / 100)}</div>
                                 </div>
                                 <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Contracts</div>
+                                    <div className="text-2xs sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Contracts</div>
                                     <div className="text-base sm:text-lg font-mono font-bold tracking-tight">{position.quantity}</div>
                                 </div>
                                 <div className="p-2.5 sm:p-3 bg-muted/30 rounded-lg border">
-                                    <div className="text-[10px] sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Total Open P&L</div>
+                                    <div className="text-2xs sm:text-xs text-muted-foreground uppercase font-medium tracking-wider">Total Open P&L</div>
                                     <div className={cn("text-base sm:text-lg font-mono font-bold pnl-pulse tracking-tight", isProfit ? 'text-green-600' : 'text-red-600')}>
                                         {unrealizedPnl > 0 ? '+' : ''}{formatCurrency(unrealizedPnl)}
                                     </div>
@@ -206,23 +206,23 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             </div>
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                                 <div className="p-2 text-center rounded bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100">
-                                    <div className="text-[10px] uppercase text-blue-600 font-bold">Delta</div>
+                                    <div className="text-2xs uppercase text-blue-600 font-bold">Delta</div>
                                     <div className="font-mono text-sm">{position.delta != null ? Number(position.delta).toFixed(3) : '-'}</div>
                                 </div>
                                 <div className="p-2 text-center rounded bg-purple-50/50 dark:bg-purple-900/10 border border-purple-100">
-                                    <div className="text-[10px] uppercase text-purple-600 font-bold">Theta</div>
+                                    <div className="text-2xs uppercase text-purple-600 font-bold">Theta</div>
                                     <div className="font-mono text-sm">{position.theta != null ? Number(position.theta).toFixed(3) : '-'}</div>
                                 </div>
                                 <div className="p-2 text-center rounded bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100">
-                                    <div className="text-[10px] uppercase text-emerald-600 font-bold">Gamma</div>
+                                    <div className="text-2xs uppercase text-emerald-600 font-bold">Gamma</div>
                                     <div className="font-mono text-sm">{position.gamma != null ? Number(position.gamma).toFixed(3) : '-'}</div>
                                 </div>
                                 <div className="p-2 text-center rounded bg-orange-50/50 dark:bg-orange-900/10 border border-orange-100">
-                                    <div className="text-[10px] uppercase text-orange-600 font-bold">Vega</div>
+                                    <div className="text-2xs uppercase text-orange-600 font-bold">Vega</div>
                                     <div className="font-mono text-sm">{position.vega != null ? Number(position.vega).toFixed(3) : '-'}</div>
                                 </div>
                                 <div className="p-2 text-center rounded bg-slate-100 dark:bg-slate-800 border">
-                                    <div className="text-[10px] uppercase text-slate-600 font-bold">IV</div>
+                                    <div className="text-2xs uppercase text-slate-600 font-bold">IV</div>
                                     <div className="font-mono text-sm">{position.iv != null ? Number(position.iv).toFixed(1) + '%' : '-'}</div>
                                 </div>
                             </div>
@@ -234,26 +234,26 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                 <div className="p-2 sm:p-3 rounded-lg border bg-background">
-                                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
+                                    <div className="flex items-center gap-1 text-2xs text-muted-foreground mb-1">
                                         <TrendingDown className="h-3 w-3" /> Stop Loss
                                     </div>
                                     <div className="font-mono font-bold">{formatCurrency(position.stop_loss_trigger)}</div>
                                 </div>
                                 <div className="p-2 sm:p-3 rounded-lg border bg-background">
-                                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
+                                    <div className="flex items-center gap-1 text-2xs text-muted-foreground mb-1">
                                         <Target className="h-3 w-3" /> Take Profit
                                     </div>
                                     <div className="font-mono font-bold">{formatCurrency(position.take_profit_trigger)}</div>
                                 </div>
                                 <div className="p-2 sm:p-3 rounded-lg border bg-background">
-                                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground mb-1">
+                                    <div className="flex items-center gap-1 text-2xs text-muted-foreground mb-1">
                                         <TrendingUp className="h-3 w-3" /> Trailing Stop
                                     </div>
                                     <div className="font-mono font-bold text-blue-500">
                                         {position.trailing_stop_loss_pct ? `${position.trailing_stop_loss_pct}%` : '-'}
                                     </div>
                                     {position.trailing_high_price && (
-                                        <div className="text-[10px] text-muted-foreground mt-1">High: {formatCurrency(position.trailing_high_price)}</div>
+                                        <div className="text-2xs text-muted-foreground mt-1">High: {formatCurrency(position.trailing_high_price)}</div>
                                     )}
                                 </div>
                             </div>
@@ -289,13 +289,13 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                         </Button>
                                     </div>
                                     {position.underlying_price && (
-                                        <Badge variant="outline" className="text-[10px]">
+                                        <Badge variant="outline" className="text-2xs">
                                             Ref Price: ${position.underlying_price.toFixed(2)}
                                         </Badge>
                                     )}
                                 </div>
                             </div>
-                            <p className="text-[11px] text-muted-foreground leading-snug">
+                            <p className="text-2xs text-muted-foreground leading-snug">
                                 {viewMode === 'table'
                                     ? "Estimates potential returns based on stock price movements using Delta, Gamma, and Theta."
                                     : "Profit Zone visualization. X-axis is stock move, Y-axis is days to expiration (Top=Now, Bottom=Exp)."}
@@ -349,7 +349,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                                                 </td>
                                                                 <td className={`p-2 border-b font-mono text-right ${estPnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                                                                     {estPnl >= 0 ? '+' : ''}${estPnl.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                                                                    <span className="text-[10px] ml-1 opacity-70">
+                                                                    <span className="text-2xs ml-1 opacity-70">
                                                                         ({estPnlPct >= 0 ? '+' : ''}{estPnlPct.toFixed(1)}%)
                                                                     </span>
                                                                 </td>
@@ -361,13 +361,13 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                         </div>
                                     ) : (
                                         <div className="space-y-2">
-                                            <div className="grid grid-cols-8 gap-1 text-[9px] font-bold text-center text-muted-foreground mb-1">
+                                            <div className="grid grid-cols-8 gap-1 text-2xs font-bold text-center text-muted-foreground mb-1">
                                                 <div>DTE</div>
                                                 {[-10, -5, -2, 0, 2, 5, 10].map(p => <div key={p}>{p}%</div>)}
                                             </div>
                                             {[dte, Math.floor(dte * 0.75), Math.floor(dte * 0.5), Math.floor(dte * 0.25), 0].map((d) => (
                                                 <div key={d} className="grid grid-cols-8 gap-1">
-                                                    <div className="flex items-center justify-center text-[10px] font-mono text-muted-foreground border-r">{d}d</div>
+                                                    <div className="flex items-center justify-center text-2xs font-mono text-muted-foreground border-r">{d}d</div>
                                                     {[-10, -5, -2, 0, 2, 5, 10].map((pct) => {
                                                         const stockPrice = position.underlying_price!;
                                                         const dS = stockPrice * (pct / 100);
@@ -394,7 +394,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                                         return (
                                                             <div
                                                                 key={pct}
-                                                                className={`h-9 flex flex-col items-center justify-center rounded text-[8px] sm:text-[9px] font-mono border border-black/5 transition-premium hover:ring-1 hover:ring-primary`}
+                                                                className={`h-9 flex flex-col items-center justify-center rounded text-2xs sm:text-2xs font-mono border border-black/5 transition-premium hover:ring-1 hover:ring-primary`}
                                                                 style={{
                                                                     backgroundColor: estPnlPct >= 0 ? `rgba(34, 197, 94, ${opacity})` : `rgba(239, 68, 68, ${opacity})`,
                                                                     color: opacity > 0.6 ? 'white' : 'inherit'
@@ -407,7 +407,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                                     })}
                                                 </div>
                                             ))}
-                                            <div className="text-[9px] text-center text-muted-foreground pt-1 italic">
+                                            <div className="text-2xs text-center text-muted-foreground pt-1 italic">
                                                 Heatmap shows estimated PnL% relative to entry price.
                                             </div>
                                         </div>
@@ -436,15 +436,15 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                             <div className="text-xs font-semibold uppercase text-muted-foreground">Suggested Exits</div>
                                             <div className="grid grid-cols-2 gap-2">
                                                 <div className="bg-red-50 dark:bg-red-900/10 p-2 rounded border border-red-100 dark:border-red-900/30">
-                                                    <div className="text-[10px] text-red-600 font-bold uppercase">Stop Loss</div>
+                                                    <div className="text-2xs text-red-600 font-bold uppercase">Stop Loss</div>
                                                     <div className="font-mono font-bold text-base">{formatCurrency(position.suggested_stop_loss)}</div>
                                                 </div>
                                                 <div className="bg-green-50 dark:bg-green-900/10 p-2 rounded border border-green-100 dark:border-green-900/30">
-                                                    <div className="text-[10px] text-green-600 font-bold uppercase">Take Profit (L1)</div>
+                                                    <div className="text-2xs text-green-600 font-bold uppercase">Take Profit (L1)</div>
                                                     <div className="font-mono font-bold text-base">{formatCurrency(position.suggested_take_profit_1)}</div>
                                                 </div>
                                                 <div className="col-span-2 bg-green-50 dark:bg-green-900/10 p-2 rounded border border-green-100 dark:border-green-900/30 flex justify-between items-center">
-                                                    <div className="text-[10px] text-green-600 font-bold uppercase">Take Profit (L2)</div>
+                                                    <div className="text-2xs text-green-600 font-bold uppercase">Take Profit (L2)</div>
                                                     <div className="font-mono font-bold text-base">{formatCurrency(position.suggested_take_profit_2)}</div>
                                                 </div>
                                             </div>
@@ -456,17 +456,17 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                             <div className="text-xs font-semibold uppercase text-muted-foreground">Market Structure</div>
                                             <div className="grid grid-cols-2 gap-2">
                                                 <div className="bg-orange-50 dark:bg-orange-900/10 p-2 rounded border border-orange-100 dark:border-orange-900/30">
-                                                    <div className="text-[10px] text-orange-600 font-bold uppercase">Resistance</div>
+                                                    <div className="text-2xs text-orange-600 font-bold uppercase">Resistance</div>
                                                     <div className="font-mono font-bold text-base">{formatCurrency(position.analyzed_resistance)}</div>
                                                 </div>
                                                 <div className="bg-blue-50 dark:bg-blue-900/10 p-2 rounded border border-blue-100 dark:border-blue-900/30">
-                                                    <div className="text-[10px] text-blue-600 font-bold uppercase">Support</div>
+                                                    <div className="text-2xs text-blue-600 font-bold uppercase">Support</div>
                                                     <div className="font-mono font-bold text-base">{formatCurrency(position.analyzed_support)}</div>
                                                 </div>
                                             </div>
                                             {position.analysis_data && (
                                                 <div className="pt-2 border-t mt-2">
-                                                    <div className="text-[10px] text-muted-foreground mb-1 uppercase font-bold">Indicators</div>
+                                                    <div className="text-2xs text-muted-foreground mb-1 uppercase font-bold">Indicators</div>
                                                     <div className="grid grid-cols-2 gap-1 text-xs">
                                                         <div className="flex justify-between">
                                                             <span className="text-muted-foreground">EMA (9):</span>
@@ -589,7 +589,7 @@ export default function PositionDetailsDialog({ position: initialPosition, onClo
                                     </div>
 
                                     <div className="mt-6 flex flex-col gap-3">
-                                        <div className="text-[10px] text-muted-foreground bg-muted/50 p-2 rounded">
+                                        <div className="text-2xs text-muted-foreground bg-muted/50 p-2 rounded">
                                             Selling <strong>{saleQty}</strong> contracts at <strong>${salePrice}</strong> will result in a realized PnL of
                                             <strong> ${((parseFloat(salePrice) - position.entry_price) * parseInt(saleQty || '0') * 100).toFixed(2)}</strong>.
                                         </div>

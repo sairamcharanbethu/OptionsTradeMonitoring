@@ -22,10 +22,10 @@ export default function StrategyLanes(props: Props) {
               return (
                 <div key={lane} className={`rounded-lg border px-3 py-2.5 ${active ? 'border-emerald-500/30 bg-emerald-950/15' : 'border-zinc-800 bg-zinc-950/55'}`}>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-[11px] font-semibold text-zinc-200">{laneName}</span>
-                    <span className={`font-mono text-[9px] ${active ? 'text-emerald-300' : laneState === 'WATCH' ? 'text-amber-300' : 'text-zinc-500'}`}>{laneState}</span>
+                    <span className="truncate text-2xs font-semibold text-zinc-200">{laneName}</span>
+                    <span className={`font-mono text-2xs ${active ? 'text-emerald-300' : laneState === 'WATCH' ? 'text-amber-300' : 'text-zinc-500'}`}>{laneState}</span>
                   </div>
-                  <div className="mt-1 truncate text-[10px] text-zinc-500">
+                  <div className="mt-1 truncate text-2xs text-zinc-500">
                     {laneSide ? `${laneSide} · ` : ''}{laneBlocker || (setupId ? 'Independent setup tracked' : 'Waiting for its own entry event')}
                   </div>
                 </div>

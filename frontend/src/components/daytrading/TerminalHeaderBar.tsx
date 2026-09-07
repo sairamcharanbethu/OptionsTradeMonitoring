@@ -56,7 +56,7 @@ export default function TerminalHeaderBar(props: Props) {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-[0.18em] text-zinc-500">Day trading</span>
-              <Badge variant="outline" className="border-zinc-700 bg-zinc-900 text-[10px] text-zinc-300">SPY · signal-only-v2</Badge>
+              <Badge variant="outline" className="border-zinc-700 bg-zinc-900 text-2xs text-zinc-300">SPY · signal-only-v2</Badge>
             </div>
             <h1 className="mt-1 hidden text-2xl font-semibold tracking-[-0.03em] text-zinc-50 sm:block">One signal. One decision.</h1>
             <p className="mt-0.5 hidden max-w-2xl text-xs leading-relaxed text-zinc-500 sm:block">
@@ -66,7 +66,7 @@ export default function TerminalHeaderBar(props: Props) {
           <div className="grid shrink-0 grid-cols-3 gap-1.5 sm:gap-2">
             <Link
               to="/system-health"
-              className="inline-flex h-9 w-9 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
+              className="inline-flex h-9 w-9 items-center justify-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 text-2xs font-medium text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
               title="System health"
               aria-label="Open system health"
             >
@@ -78,7 +78,7 @@ export default function TerminalHeaderBar(props: Props) {
               variant="outline"
               size="sm"
               onClick={toggleBrowserAlerts}
-              className="h-9 w-9 border-zinc-800 bg-zinc-950 px-0 text-[11px] text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
+              className="h-9 w-9 border-zinc-800 bg-zinc-950 px-0 text-2xs text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
               title="Notify this browser when a setup becomes ARMED or ACTIVE"
               aria-label={browserAlertsEnabled ? 'Disable setup alerts' : 'Enable setup alerts'}
             >
@@ -90,7 +90,7 @@ export default function TerminalHeaderBar(props: Props) {
               size="sm"
               onClick={refreshAll}
               disabled={refreshing}
-              className="h-9 w-9 border-zinc-800 bg-zinc-950 px-0 text-[11px] text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
+              className="h-9 w-9 border-zinc-800 bg-zinc-950 px-0 text-2xs text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100 active:translate-y-px sm:w-auto sm:px-3"
               title="Refresh Day Trading data"
               aria-label="Refresh Day Trading data"
             >
@@ -111,7 +111,7 @@ export default function TerminalHeaderBar(props: Props) {
           healthLabel={strategyHealth?.status ? `Strategy engine ${strategyHealth.status}` : undefined}
         />
 
-        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2 text-[10px] sm:hidden">
+        <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2 text-2xs sm:hidden">
           <span className={freshSnapshot ? 'text-emerald-300' : 'text-amber-300'}>
             <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-current" />
             Strategy {strategyHealth?.status || (freshSnapshot ? 'LIVE' : 'STARTING')}
@@ -139,7 +139,7 @@ export default function TerminalHeaderBar(props: Props) {
               killSwitchUnavailable ? 'bg-amber-400' : liveHalted ? 'bg-rose-400' : executionMode.live ? 'bg-amber-400 animate-pulse' : 'bg-sky-400'
             }`} />
             <div className="min-w-0">
-              <div className={`text-[11px] font-semibold tracking-wide ${
+              <div className={`text-2xs font-semibold tracking-wide ${
                 killSwitchUnavailable ? 'text-amber-200' : liveHalted ? 'text-rose-200' : executionMode.live ? 'text-amber-200' : 'text-sky-200'
               }`}>
                 {killSwitchUnavailable
@@ -153,10 +153,10 @@ export default function TerminalHeaderBar(props: Props) {
                         : 'PAPER / SIMULATION — NO LIVE ORDERS'}
               </div>
               {!killSwitchUnavailable && liveHalted && liveKillSwitch?.reason && (
-                <div className="truncate text-[10px] text-rose-300/90">{liveKillSwitch.reason}</div>
+                <div className="truncate text-2xs text-rose-300/90">{liveKillSwitch.reason}</div>
               )}
               {!killSwitchUnavailable && liveKillSwitch?.enabled && (
-                <div className="font-mono text-[10px] text-zinc-400">
+                <div className="font-mono text-2xs text-zinc-400">
                   day P&L: realized {money(liveKillSwitch.dayRealizedPnl)} · open {money(liveKillSwitch.dayOpenPnl)} · total {money(liveKillSwitch.dayTotalPnl)} / limit -{money(liveKillSwitch.limit)}
                 </div>
               )}
@@ -167,7 +167,7 @@ export default function TerminalHeaderBar(props: Props) {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 border-amber-500/40 text-[11px] text-amber-200 hover:bg-amber-950/40"
+                className="h-7 border-amber-500/40 text-2xs text-amber-200 hover:bg-amber-950/40"
                 onClick={handleArmLive}
                 disabled={armToggling || killSwitchUnavailable}
               >
@@ -177,7 +177,7 @@ export default function TerminalHeaderBar(props: Props) {
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 border-rose-500/40 text-[11px] text-rose-200 hover:bg-rose-950/40"
+                className="h-7 border-rose-500/40 text-2xs text-rose-200 hover:bg-rose-950/40"
                 onClick={handleDisarmLive}
                 disabled={armToggling || killSwitchUnavailable}
               >

@@ -39,11 +39,11 @@ const PositionSummary = ({
     <section className="rounded-xl border border-sky-500/25 bg-sky-950/10 p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">
+          <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-sky-300">
             {simulated ? 'Shadow strategy position' : 'Linked autonomous position'}
           </div>
           <div className="mt-1 text-sm font-semibold text-zinc-100">{positionContract}</div>
-          <div className="mt-1 select-all break-all font-mono text-[10px] text-zinc-500" title="Contract symbol">{exactContract}</div>
+          <div className="mt-1 select-all break-all font-mono text-2xs text-zinc-500" title="Contract symbol">{exactContract}</div>
           <div className="mt-1 text-xs text-zinc-500">
             {position.quantity} contract{Number(position.quantity) === 1 ? '' : 's'} · {simulated ? 'simulation only' : positionBroker}
           </div>
@@ -52,7 +52,7 @@ const PositionSummary = ({
           <div className={`font-mono text-xl font-semibold tabular-nums ${openPnl === null ? 'text-amber-300' : openPnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
             {openPnl === null ? '—' : `${openPnl >= 0 ? '+' : ''}${money(openPnl)}`}
           </div>
-          <div className="text-[10px] text-zinc-500">{openPnl === null ? 'awaiting option quote' : 'estimated open P&L'}</div>
+          <div className="text-2xs text-zinc-500">{openPnl === null ? 'awaiting option quote' : 'estimated open P&L'}</div>
         </div>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-x-4 border-t border-sky-500/15 pt-3 sm:grid-cols-5">
@@ -62,7 +62,7 @@ const PositionSummary = ({
         <Metric label="Invalidation" value={money(invalidation)} detail={levelDistance(spot, invalidation)} tone="text-rose-200" />
         <Metric label="Target" value={money(target)} detail={levelDistance(spot, target)} tone="text-sky-200" />
       </div>
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-500/15 bg-zinc-950/40 px-3 py-2 text-[10px]">
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-500/15 bg-zinc-950/40 px-3 py-2 text-2xs">
         <span className="text-zinc-500">Broker state <span className="font-mono text-zinc-200">{position.execution_status || position.last_broker_order_status || position.status}</span></span>
         <span className="text-zinc-500">Lifecycle <span className="font-mono text-zinc-200">{position.strategy_lifecycle_status || 'MANAGE'}</span></span>
         <Link to={`/positions/${position.id}`} className="font-semibold text-sky-300 transition-colors hover:text-sky-200">Open details →</Link>

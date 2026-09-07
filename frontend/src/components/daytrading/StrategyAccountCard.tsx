@@ -49,15 +49,15 @@ export default function StrategyAccountCard(props: Props) {
           <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5 sm:pb-4">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-400">Day Trading paper controls</span>
-                <Badge variant="outline" className={`text-[10px] ${
+                <span className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-400">Day Trading paper controls</span>
+                <Badge variant="outline" className={`text-2xs ${
                   paperAccount.strategyAutomationStatus === 'ACTIVE'
                     ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-300'
                     : 'border-amber-500/30 bg-amber-950/20 text-amber-300'
                 }`}>
                   {paperAccount.strategyAutomationStatus}
                 </Badge>
-                <Badge variant="outline" className="border-zinc-700 bg-zinc-950 text-[10px] text-zinc-400">Shared $100k ledger · Paper only</Badge>
+                <Badge variant="outline" className="border-zinc-700 bg-zinc-950 text-2xs text-zinc-400">Shared $100k ledger · Paper only</Badge>
               </div>
               <h3 className="mt-1 text-lg font-semibold text-zinc-50">Autonomous strategy account</h3>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-400">
@@ -111,7 +111,7 @@ export default function StrategyAccountCard(props: Props) {
               <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
             </summary>
             <div className="border-t border-zinc-800 p-3">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-400">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-zinc-400">
                 <span>AI today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyCalls}/{paperAccount.aiUsage.dailyCallLimit}</span></span>
                 <span>Tokens today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyTokens.toLocaleString()}</span></span>
                 <span>Tokens this month <span className="font-mono text-zinc-200">{paperAccount.aiUsage.monthlyTokens.toLocaleString()}</span></span>
@@ -158,10 +158,10 @@ export default function StrategyAccountCard(props: Props) {
                       <div className="mt-1 text-xs text-zinc-400">
                         {position.quantity} contract{Number(position.quantity) === 1 ? '' : 's'} · {position.risk_tier || 'bounded'} risk · {String(position.exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
                       </div>
-                      <div className="mt-1 text-[11px] text-zinc-500">
+                      <div className="mt-1 text-2xs text-zinc-500">
                         Structural SL → TP1 protection/trim → TP2 · {Number(position.decision_trailing_stop_pct || paperAccount.limits.trailingStopPct)}% premium trail · {position.policy_version || paperAccount.limits.policyVersion}
                       </div>
-                      <div className="mt-1 select-all truncate font-mono text-[9px] text-zinc-600" title={position.strategy_setup_id || undefined}>
+                      <div className="mt-1 select-all truncate font-mono text-2xs text-zinc-600" title={position.strategy_setup_id || undefined}>
                         Trade #{position.id}{position.strategy_setup_id ? ` · ${position.strategy_setup_id}` : ' · no setup id'}
                       </div>
                     </div>
@@ -176,7 +176,7 @@ export default function StrategyAccountCard(props: Props) {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="mt-2 h-8 border-rose-500/25 bg-rose-950/15 px-2.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-950/35 hover:text-rose-100"
+                          className="mt-2 h-8 border-rose-500/25 bg-rose-950/15 px-2.5 text-2xs font-semibold text-rose-200 hover:bg-rose-950/35 hover:text-rose-100"
                           onClick={() => {
                             setActionMessage(null);
                             setPaperForceCloseAvailable(isExpiredOption(position.expiration_date));
@@ -233,7 +233,7 @@ export default function StrategyAccountCard(props: Props) {
               </summary>
               <div className="divide-y divide-zinc-800 border-t border-zinc-800 px-3">
                 {paperAccount.monthlyReports.slice(0, 6).map(item => (
-                  <div key={item.month} className="grid grid-cols-4 gap-2 py-2.5 font-mono text-[11px] text-zinc-400">
+                  <div key={item.month} className="grid grid-cols-4 gap-2 py-2.5 font-mono text-2xs text-zinc-400">
                     <span className="text-zinc-200">{item.month}</span>
                     <span>{money(item.report.closingEquity)}</span>
                     <span className={Number(item.report.returnPct) >= 0 ? 'text-emerald-300' : 'text-rose-300'}>{number(item.report.returnPct)}%</span>

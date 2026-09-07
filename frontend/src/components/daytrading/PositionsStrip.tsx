@@ -47,7 +47,7 @@ function Bar({ value, tone, label, title }: { value: number | null; tone: Tone; 
   const fill = tone === 'bad' ? 'bg-rose-400' : tone === 'warn' ? 'bg-amber-400' : tone === 'good' ? 'bg-emerald-400' : 'bg-zinc-500';
   return (
     <div className="min-w-[7rem]" title={title}>
-      <div className="flex items-center justify-between text-[9px] font-semibold uppercase tracking-[0.12em] text-zinc-500">
+      <div className="flex items-center justify-between text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">
         <span>{label}</span>
         <span className="font-mono normal-case tracking-normal text-zinc-400">{value == null ? '—' : `${pct}%`}</span>
       </div>
@@ -147,10 +147,10 @@ export default function PositionsStrip({ positions, paperPositions, paperCanMana
       <section aria-label="Open positions" className="rounded-xl border border-zinc-800 bg-[#101216] px-4 py-5 sm:px-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Open positions</div>
+            <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Open positions</div>
             <div className="mt-1 text-sm text-zinc-400">No open positions.</div>
           </div>
-          <div className="text-[11px] text-zinc-500">
+          <div className="text-2xs text-zinc-500">
             Same-direction slots <span className="font-mono text-zinc-300">CALL 0/{maxSameDirection}</span> · <span className="font-mono text-zinc-300">PUT 0/{maxSameDirection}</span>
           </div>
         </div>
@@ -161,8 +161,8 @@ export default function PositionsStrip({ positions, paperPositions, paperCanMana
   return (
     <section aria-label="Open positions" className="rounded-xl border border-zinc-800 bg-[#101216] p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Open positions ({rows.length})</div>
-        <div className="text-[11px] text-zinc-500" title={`max_same_direction_positions = ${maxSameDirection}`}>
+        <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Open positions ({rows.length})</div>
+        <div className="text-2xs text-zinc-500" title={`max_same_direction_positions = ${maxSameDirection}`}>
           Same-direction slots <span className={cn('font-mono', liveByDirection.CALL >= maxSameDirection ? 'text-amber-300' : 'text-zinc-300')}>CALL {liveByDirection.CALL}/{maxSameDirection}</span> · <span className={cn('font-mono', liveByDirection.PUT >= maxSameDirection ? 'text-amber-300' : 'text-zinc-300')}>PUT {liveByDirection.PUT}/{maxSameDirection}</span>
         </div>
       </div>
@@ -223,22 +223,22 @@ export default function PositionsStrip({ positions, paperPositions, paperCanMana
                 {/* Identity */}
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <Badge variant="outline" className={cn('font-mono text-[9px] uppercase', toneClass[kindTone])}>{kind}</Badge>
-                    <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-[9px] text-zinc-300">{side}</Badge>
-                    <span className="font-mono text-[10px] text-zinc-500">×{qty}</span>
-                    {position.strategy_snapshot?.strategy && <span className="truncate text-[10px] text-zinc-400" title="Strategy">{String(position.strategy_snapshot.strategy).replace(/_/g, ' ')}</span>}
+                    <Badge variant="outline" className={cn('font-mono text-2xs uppercase', toneClass[kindTone])}>{kind}</Badge>
+                    <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-2xs text-zinc-300">{side}</Badge>
+                    <span className="font-mono text-2xs text-zinc-500">×{qty}</span>
+                    {position.strategy_snapshot?.strategy && <span className="truncate text-2xs text-zinc-400" title="Strategy">{String(position.strategy_snapshot.strategy).replace(/_/g, ' ')}</span>}
                   </div>
                   <div className="mt-1 truncate text-sm font-semibold text-zinc-100" title={contractLabel(position, side)}>{contractLabel(position, side)}</div>
-                  <div className="mt-0.5 text-[10px] text-zinc-500">In at {etTimeOfDay(startedAt)} ET · held {Math.round(heldMinutes)}m{maxHold ? ` / ${maxHold}m` : ''}</div>
+                  <div className="mt-0.5 text-2xs text-zinc-500">In at {etTimeOfDay(startedAt)} ET · held {Math.round(heldMinutes)}m{maxHold ? ` / ${maxHold}m` : ''}</div>
                   <div className="mt-2"><Bar value={holdFraction} tone={holdTone} label="Hold" title={maxHold ? (expiresToday ? 'Same-day theta ladder 25/15/10 min by entry time' : `Multi-day max hold ${maxHold} min (strategy_multi_day_max_hold_minutes)`) : 'No time stop applies to this position'} /></div>
                 </div>
 
                 {/* Prices */}
                 <div className="grid grid-cols-3 gap-x-3 gap-y-1 lg:grid-cols-1">
-                  <div><div className="text-[9px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Entry</div><div className="font-mono text-xs text-zinc-300">{money(entry)}</div></div>
-                  <div><div className="text-[9px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Mark</div><div className="font-mono text-xs text-zinc-100">{money(mark)}</div></div>
+                  <div><div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Entry</div><div className="font-mono text-xs text-zinc-300">{money(entry)}</div></div>
+                  <div><div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Mark</div><div className="font-mono text-xs text-zinc-100">{money(mark)}</div></div>
                   <div>
-                    <div className="text-[9px] font-semibold uppercase tracking-[0.12em] text-zinc-500">P&amp;L</div>
+                    <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">P&amp;L</div>
                     <div className={cn('font-mono text-xs font-semibold', pnl == null ? 'text-zinc-500' : pnl >= 0 ? 'text-emerald-300' : 'text-rose-300')}>
                       {pnl == null ? '—' : `${signedMoney(pnl)}${pnlPct != null ? ` (${pnlPct >= 0 ? '+' : ''}${num(pnlPct, 1)}%)` : ''}`}
                     </div>
@@ -261,17 +261,17 @@ export default function PositionsStrip({ positions, paperPositions, paperCanMana
                       ariaLabel={`Underlying ladder${uStop != null ? `, stop ${money(uStop)}` : ''}${uT1 != null ? `, T1 ${money(uT1)}` : ''}${uT2 != null ? `, T2 ${money(uT2)}` : ''}${underlying != null ? `, underlying ${money(underlying)}` : ''}`}
                     />
                   ) : (
-                    <div className="text-[10px] text-zinc-500">No underlying levels on this row{underlying != null ? ` · SPY ${money(underlying)}` : ''}.</div>
+                    <div className="text-2xs text-zinc-500">No underlying levels on this row{underlying != null ? ` · SPY ${money(underlying)}` : ''}.</div>
                   )}
                 </div>
 
                 {/* Exit engine status */}
                 <div className="flex flex-wrap content-start gap-1.5">
-                  <Badge variant="outline" className={cn('font-mono text-[9px]', toneClass[statusTone(position.execution_status)])} title="Execution status">{String(position.execution_status || position.status).replace(/_/g, ' ')}</Badge>
-                  {smartStop && <Badge variant="outline" className={cn('font-mono text-[9px]', toneClass[smartStop.includes('CONFIRMED') || smartStop.includes('HARD') || smartStop.includes('EMERGENCY') ? 'bad' : 'warn'])} title="Smart stop state">{smartStop.replace(/_/g, ' ')}</Badge>}
-                  {syntheticTrail && <Badge variant="outline" className={cn('font-mono text-[9px]', toneClass.good)} title="Synthetic trailing stop active after TP1"><Flame className="mr-1 h-3 w-3" aria-hidden="true" />trail</Badge>}
-                  {trailingHigh != null && <span className="font-mono text-[10px] text-zinc-500" title="Trailing high">high {money(trailingHigh)}</span>}
-                  {position.exit_reason && <span className="text-[10px] text-zinc-500" title="Exit reason">{String(position.exit_reason).replace(/_/g, ' ')}</span>}
+                  <Badge variant="outline" className={cn('font-mono text-2xs', toneClass[statusTone(position.execution_status)])} title="Execution status">{String(position.execution_status || position.status).replace(/_/g, ' ')}</Badge>
+                  {smartStop && <Badge variant="outline" className={cn('font-mono text-2xs', toneClass[smartStop.includes('CONFIRMED') || smartStop.includes('HARD') || smartStop.includes('EMERGENCY') ? 'bad' : 'warn'])} title="Smart stop state">{smartStop.replace(/_/g, ' ')}</Badge>}
+                  {syntheticTrail && <Badge variant="outline" className={cn('font-mono text-2xs', toneClass.good)} title="Synthetic trailing stop active after TP1"><Flame className="mr-1 h-3 w-3" aria-hidden="true" />trail</Badge>}
+                  {trailingHigh != null && <span className="font-mono text-2xs text-zinc-500" title="Trailing high">high {money(trailingHigh)}</span>}
+                  {position.exit_reason && <span className="text-2xs text-zinc-500" title="Exit reason">{String(position.exit_reason).replace(/_/g, ' ')}</span>}
                 </div>
 
                 {/* Actions */}
@@ -284,12 +284,12 @@ export default function PositionsStrip({ positions, paperPositions, paperCanMana
                   ) : (
                     <HoldToConfirmButton label="Close" hint={`MARKET-close ${contractLabel(position, side)} ×${qty}`} icon={<CircleSlash2 className="h-3.5 w-3.5" aria-hidden="true" />} tone="danger" busy={busy === id} onConfirm={() => void closeLive(position)} />
                   )}
-                  <Link to={`/positions/${id}`} className="inline-flex items-center justify-center gap-1 text-[10px] text-zinc-400 hover:text-zinc-200" aria-label={`Open details for position ${id}`}>
+                  <Link to={`/positions/${id}`} className="inline-flex items-center justify-center gap-1 text-2xs text-zinc-400 hover:text-zinc-200" aria-label={`Open details for position ${id}`}>
                     details <ExternalLink className="h-3 w-3" aria-hidden="true" />
                   </Link>
                 </div>
               </div>
-              {note && <div className={cn('mt-2 rounded-md border px-2.5 py-1.5 text-[11px]', toneClass[note.tone])} role="status">{note.text}</div>}
+              {note && <div className={cn('mt-2 rounded-md border px-2.5 py-1.5 text-2xs', toneClass[note.tone])} role="status">{note.text}</div>}
             </article>
           );
         })}

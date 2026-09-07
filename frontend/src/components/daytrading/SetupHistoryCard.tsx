@@ -24,7 +24,7 @@ export default function SetupHistoryCard(props: Props) {
   return (
         <section id="setup-history" className="min-w-0 scroll-mt-4 rounded-xl border border-zinc-800 bg-[#101216]">
           <div className="hidden p-5 sm:block">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
+            <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
             <h3 className="mt-1 text-base font-semibold text-zinc-100">Plans, execution and outcome</h3>
           </div>
           <button
@@ -35,7 +35,7 @@ export default function SetupHistoryCard(props: Props) {
             aria-controls="setup-history-content"
           >
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
+              <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Setup history</div>
               <h3 className="mt-1 text-base font-semibold text-zinc-100">Plans, execution and outcome</h3>
               <p className="mt-1 text-xs text-zinc-500">Collapsed on mobile · expand for complete lifecycle records.</p>
             </div>
@@ -43,7 +43,7 @@ export default function SetupHistoryCard(props: Props) {
           </button>
           <div id="setup-history-content" className={`${historyExpanded ? 'block' : 'hidden'} border-t border-zinc-800 px-4 pb-4 sm:block sm:border-t-0 sm:px-5 sm:pb-5`}>
             <div className="flex justify-end pt-2 sm:pt-0">
-              <Button variant="ghost" size="sm" className="h-8 justify-start px-2 text-[10px] text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => refetchHistory()}>
+              <Button variant="ghost" size="sm" className="h-8 justify-start px-2 text-2xs text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => refetchHistory()}>
               <RefreshCw className="mr-1.5 h-3 w-3" /> Refresh history
               </Button>
             </div>

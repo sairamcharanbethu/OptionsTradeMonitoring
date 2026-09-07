@@ -68,7 +68,7 @@ function SummaryTile({ label, value, detail, icon: Icon }: { label: string; valu
     <div className="rounded-md border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+          <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
           <div className="mt-1 truncate font-mono text-lg font-semibold">{value}</div>
           {detail && <div className="mt-1 text-xs text-muted-foreground">{detail}</div>}
         </div>

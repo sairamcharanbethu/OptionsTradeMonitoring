@@ -59,21 +59,37 @@ export default function HoldToConfirmButton({
 
   useEffect(() => () => cancel(), [cancel]);
 
+  // Safety controls are the most consequential thing on the screen, so they get
+  // the most contrast — not the least. The old amber-600-on-white was 3.2:1,
+  // and disabled:opacity-40 dropped "Flatten all" to roughly 1.5:1, i.e. you
+  // could not read the kill switch you were being denied.
   const toneClass = tone === 'danger'
-    ? 'border-red-500/50 text-red-600 dark:text-red-400 hover:bg-red-500/10'
+    ? 'border-act-danger/60 text-act-danger hover:bg-act-danger/12'
     : tone === 'warn'
-      ? 'border-amber-500/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10'
+      ? 'border-transparent bg-act-warn text-act-warn-fg hover:bg-act-warn/90'
       : tone === 'good'
-        ? 'border-emerald-500/50 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10'
+        ? 'border-act-primary/60 text-act-primary hover:bg-act-primary/12'
         : 'border-border text-foreground hover:bg-accent';
-  const fillClass = tone === 'danger' ? 'bg-red-500/25' : tone === 'warn' ? 'bg-amber-500/25' : tone === 'good' ? 'bg-emerald-500/25' : 'bg-primary/20';
+  const fillClass = tone === 'danger'
+    ? 'bg-act-danger/30'
+    : tone === 'warn'
+      ? 'bg-black/20'
+      : tone === 'good'
+        ? 'bg-act-primary/30'
+        : 'bg-primary/20';
+
+  const isOff = Boolean(disabled) && !busy;
 
   return (
     <button
       type="button"
       className={cn(
-        'relative isolate flex h-10 min-w-[7.5rem] select-none items-center justify-center gap-1.5 overflow-hidden rounded-lg border px-3 text-xs font-semibold tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40',
-        toneClass
+        'relative isolate flex h-10 min-w-[7.5rem] select-none items-center justify-center gap-1.5 overflow-hidden rounded-md border px-3 text-xs font-semibold tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        // Unavailable, but still legible: you need to read why an action is
+        // off, especially when it is the one that closes your positions.
+        isOff
+          ? 'cursor-not-allowed border-act-disabled-line bg-act-disabled-bg text-act-disabled-fg'
+          : toneClass
       )}
       disabled={disabled || busy}
       title={`${hint}${shortcut ? ` (${shortcut})` : ''} — press and hold`}
@@ -87,7 +103,7 @@ export default function HoldToConfirmButton({
       <span className={cn('pointer-events-none absolute inset-y-0 left-0 -z-10 transition-none', fillClass)} style={{ width: `${progress * 100}%` }} aria-hidden="true" />
       {icon}
       <span>{busy ? 'Working…' : label}</span>
-      {count != null && <span className="rounded-full bg-foreground/10 px-1.5 text-[10px] tabular-nums">{count}</span>}
+      {count != null && <span className="num rounded-full bg-foreground/10 px-1.5 text-2xs">{count}</span>}
     </button>
   );
 }

@@ -40,7 +40,7 @@ const numberTone = (value: number | null | undefined, positive = 'text-emerald-5
 function Metric({ label, value, detail, tone = 'text-foreground' }: { label: string; value: string; detail?: string; tone?: string }) {
   return (
     <div className="rounded-md border border-border bg-muted/20 p-3">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
+      <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">{label}</div>
       <div className={`mt-1 font-mono text-lg font-semibold ${tone}`}>{value}</div>
       {detail && <div className="mt-1 text-xs text-muted-foreground">{detail}</div>}
     </div>
@@ -211,7 +211,7 @@ export default function ResearchPage() {
 
           <Card>
             <CardHeader className="pb-3"><CardTitle className="text-base">Scenario ledger</CardTitle></CardHeader>
-            <CardContent className="pt-0"><div className="hidden border-b border-border pb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground md:grid md:grid-cols-[1.2fr_repeat(5,minmax(0,1fr))] md:gap-2"><div>Scenario</div><div>Trades</div><div>Win rate</div><div>Raw P&amp;L</div><div>Realistic P&amp;L</div><div>Skipped</div></div>{report.scenarios.map((scenario) => <ScenarioRow key={scenario.name} scenario={scenario} />)}</CardContent>
+            <CardContent className="pt-0"><div className="hidden border-b border-border pb-2 text-2xs font-semibold uppercase tracking-[0.16em] text-muted-foreground md:grid md:grid-cols-[1.2fr_repeat(5,minmax(0,1fr))] md:gap-2"><div>Scenario</div><div>Trades</div><div>Win rate</div><div>Raw P&amp;L</div><div>Realistic P&amp;L</div><div>Skipped</div></div>{report.scenarios.map((scenario) => <ScenarioRow key={scenario.name} scenario={scenario} />)}</CardContent>
           </Card>
 
           {candidate && <Card><CardHeader className="pb-3"><CardTitle className="text-base">Candidate coverage</CardTitle></CardHeader><CardContent><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-md border border-border bg-muted/20 p-3"><div className="text-xs font-semibold text-muted-foreground">Why signals were excluded</div><div className="mt-2 space-y-1 text-sm">{Object.entries(candidate.skippedReasons).map(([reason, count]) => <div key={reason} className="flex justify-between gap-3"><span className="break-words text-muted-foreground">{reason.replace(/_/g, ' ')}</span><span className="font-mono">{count}</span></div>)}</div></div><div className="rounded-md border border-border bg-muted/20 p-3"><div className="text-xs font-semibold text-muted-foreground">Research notes</div><ul className="mt-2 space-y-1 text-sm text-muted-foreground">{report.research.notes.map((note) => <li key={note} className="flex gap-2"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/70" /><span>{note}</span></li>)}</ul></div></div></CardContent></Card>}

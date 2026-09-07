@@ -20,7 +20,7 @@ export default function ServicesCard(props: Props) {
   return (
         <section className="rounded-xl border border-zinc-800 bg-[#101216]">
           <div className="hidden p-5 sm:block">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
+            <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
             <h3 className="mt-1 text-base font-semibold text-zinc-100">Entry-critical services</h3>
           </div>
           <button
@@ -31,7 +31,7 @@ export default function ServicesCard(props: Props) {
             aria-controls="live-diagnostics-content"
           >
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
+              <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Live diagnostics</div>
               <h3 className="mt-1 text-base font-semibold text-zinc-100">Entry-critical services</h3>
               <p className="mt-1 text-xs text-zinc-500">Collapsed on mobile · provider-timestamp ages</p>
             </div>
@@ -39,7 +39,7 @@ export default function ServicesCard(props: Props) {
           </button>
           <div id="live-diagnostics-content" className={`${diagnosticsExpanded ? 'block' : 'hidden'} border-t border-zinc-800 px-4 pb-4 sm:block sm:border-t-0 sm:px-5 sm:pb-5`}>
             <div className="mt-3 flex justify-end">
-              <Link to="/system-health" className="text-[10px] font-semibold text-sky-300 hover:text-sky-200">Full health →</Link>
+              <Link to="/system-health" className="text-2xs font-semibold text-sky-300 hover:text-sky-200">Full health →</Link>
             </div>
             <div className="mt-1">
               {diagnostics.map(item => <DiagnosticRow key={item.label} {...item} />)}

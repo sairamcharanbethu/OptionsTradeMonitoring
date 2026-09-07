@@ -34,9 +34,9 @@ export default function PriceLadder({ side, marks, spot, footer, compact = false
       <div className={cn('relative rounded-full bg-gradient-to-r from-rose-500/30 via-zinc-700 to-emerald-500/30', compact ? 'mt-4 h-1.5' : 'mt-5 h-2')} role="img" aria-label={label}>
         {marks.map((m) => (
           <div key={`${m.label}-${m.price}`} className={cn('absolute flex -translate-x-1/2 flex-col items-center', compact ? '-top-3.5' : '-top-4')} style={{ left: x(m.price) }}>
-            <span className="text-[9px] font-semibold text-zinc-400">{m.label}</span>
+            <span className="text-2xs font-semibold text-zinc-400">{m.label}</span>
             <span className={cn('mt-0.5 w-0.5 rounded', compact ? 'h-3' : 'h-3.5', m.cls)} />
-            <span className={cn('font-mono text-[9px] text-zinc-400', compact ? 'mt-3' : 'mt-4')}>{num(m.price)}</span>
+            <span className={cn('font-mono text-2xs text-zinc-400', compact ? 'mt-3' : 'mt-4')}>{num(m.price)}</span>
           </div>
         ))}
         {spot != null && Number.isFinite(spot) && (
@@ -45,7 +45,7 @@ export default function PriceLadder({ side, marks, spot, footer, compact = false
           </div>
         )}
       </div>
-      {footer && <div className={cn('flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-zinc-400', compact ? 'mt-6' : 'mt-7')}>{footer}</div>}
+      {footer && <div className={cn('flex flex-wrap gap-x-4 gap-y-1 text-2xs text-zinc-400', compact ? 'mt-6' : 'mt-7')}>{footer}</div>}
     </div>
   );
 }

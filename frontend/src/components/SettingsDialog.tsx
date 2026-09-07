@@ -97,11 +97,11 @@ function RuntimeConfigPanel({
                     <div className="flex flex-wrap items-center gap-2">
                         <Server className="h-4 w-4 text-muted-foreground" />
                         <h4 className="text-sm font-semibold">Environment and runtime config</h4>
-                        <Badge variant={missingCount > 0 ? 'destructive' : 'secondary'} className="text-[10px]">
+                        <Badge variant={missingCount > 0 ? 'destructive' : 'secondary'} className="text-2xs">
                             {missingCount > 0 ? `${missingCount} missing` : 'OK'}
                         </Badge>
                     </div>
-                    <p className="mt-1 text-[10px] text-muted-foreground">
+                    <p className="mt-1 text-2xs text-muted-foreground">
                         Admin-only runtime status. Updated {formatRuntimeConfigTime(runtimeConfig?.generatedAt)}.
                     </p>
                 </div>
@@ -140,7 +140,7 @@ function RuntimeConfigPanel({
                             <div key={group} className="rounded-md border bg-muted/20 p-3">
                                 <div className="mb-3 flex items-center justify-between gap-3">
                                     <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group}</h5>
-                                    <Badge variant={groupMissingCount > 0 ? 'destructive' : 'outline'} className="text-[9px]">
+                                    <Badge variant={groupMissingCount > 0 ? 'destructive' : 'outline'} className="text-2xs">
                                         {groupMissingCount > 0 ? `${groupMissingCount} missing` : `${items.length} checks`}
                                     </Badge>
                                 </div>
@@ -151,16 +151,16 @@ function RuntimeConfigPanel({
                                                 <div className="min-w-0">
                                                     <div className="flex flex-wrap items-center gap-2">
                                                         <span className="text-sm font-medium">{item.label}</span>
-                                                        <Badge variant="outline" className="text-[9px] uppercase">{item.source}</Badge>
-                                                        {item.secret && <Badge variant="secondary" className="text-[9px]">Redacted</Badge>}
+                                                        <Badge variant="outline" className="text-2xs uppercase">{item.source}</Badge>
+                                                        {item.secret && <Badge variant="secondary" className="text-2xs">Redacted</Badge>}
                                                     </div>
-                                                    <p className="mt-1 text-[10px] leading-normal text-muted-foreground">{item.detail}</p>
+                                                    <p className="mt-1 text-2xs leading-normal text-muted-foreground">{item.detail}</p>
                                                 </div>
-                                                <Badge variant={runtimeStatusBadgeVariant(item.status)} className="w-fit text-[10px]">
+                                                <Badge variant={runtimeStatusBadgeVariant(item.status)} className="w-fit text-2xs">
                                                     {runtimeStatusLabel(item.status)}
                                                 </Badge>
                                             </div>
-                                            <div className="mt-2 break-all rounded bg-muted/50 px-2 py-1.5 text-[11px] font-medium text-foreground">
+                                            <div className="mt-2 break-all rounded bg-muted/50 px-2 py-1.5 text-2xs font-medium text-foreground">
                                                 {item.value || 'Not set'}
                                             </div>
                                         </div>
@@ -703,7 +703,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                          placeholder={provider === 'ollama' ? 'mistral:latest' : DEFAULT_AI_MODEL}
                                      />
                                      {provider === 'openrouter' && (
-                                         <p className="text-[10px] text-muted-foreground mt-1 leading-normal">
+                                         <p className="text-2xs text-muted-foreground mt-1 leading-normal">
                                              Recommended OpenRouter slugs:<br/>
                                              1. <strong>DeepSeek Chat</strong>: <code>{DEFAULT_AI_MODEL}</code><br/>
                                              2. <strong>DeepSeek R1</strong>: <code>deepseek/deepseek-r1</code><br/>
@@ -734,9 +734,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         <Label htmlFor="pollingToggle" className="flex items-center gap-2">
                                             Market Polling
                                             {pollingEnabled ? (
-                                                <Badge variant="default" className="text-[10px] h-5 bg-emerald-600">Active</Badge>
+                                                <Badge variant="default" className="text-2xs h-5 bg-emerald-600">Active</Badge>
                                             ) : (
-                                                <Badge variant="secondary" className="text-[10px] h-5">Paused</Badge>
+                                                <Badge variant="secondary" className="text-2xs h-5">Paused</Badge>
                                             )}
                                         </Label>
                                         <Switch
@@ -746,7 +746,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             disabled={!isAdmin}
                                         />
                                     </div>
-                                    <p className={`text-[10px] ${!pollingEnabled ? 'text-amber-500 font-semibold' : 'text-muted-foreground'}`}>
+                                    <p className={`text-2xs ${!pollingEnabled ? 'text-amber-500 font-semibold' : 'text-muted-foreground'}`}>
                                         {!isAdmin
                                             ? 'Admin-controlled master toggle for all server-side market data polling.'
                                             : !pollingEnabled
@@ -759,7 +759,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <Label htmlFor="pollInterval" className="flex items-center gap-2">
                                         Market Poll Interval
                                         {parseInt(pollInterval) < 30 && (
-                                            <Badge variant="destructive" className="text-[10px] h-5">High Risk</Badge>
+                                            <Badge variant="destructive" className="text-2xs h-5">High Risk</Badge>
                                         )}
                                     </Label>
                                     <Select value={pollInterval} onValueChange={setPollInterval} disabled={!isAdmin || !pollingEnabled}>
@@ -782,7 +782,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <Label htmlFor="posPollInterval" className="flex items-center gap-2">
                                         Position Detail Refresh Rate
                                         {parseInt(positionPollInterval) < 2 && (
-                                            <Badge variant="destructive" className="text-[10px] h-5">Max Load</Badge>
+                                            <Badge variant="destructive" className="text-2xs h-5">Max Load</Badge>
                                         )}
                                     </Label>
                                     <Select value={positionPollInterval} onValueChange={setPositionPollInterval}>
@@ -797,7 +797,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <SelectItem value="0">Manual Only (Disabled)</SelectItem>
                                         </SelectContent>
                                     </Select>
-                                    <p className="text-[10px] text-muted-foreground">
+                                    <p className="text-2xs text-muted-foreground">
                                         How often an individual Position page auto-refreshes data while open.
                                     </p>
                                 </div>
@@ -814,7 +814,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 <section className="rounded-lg border bg-card p-4 space-y-4">
                                     <div>
                                         <h4 className="text-sm font-semibold">Strategy signal</h4>
-                                        <p className="text-[10px] text-muted-foreground">The primary signal-only-v2 strategy monitors SPY and selects its own contract.</p>
+                                        <p className="text-2xs text-muted-foreground">The primary signal-only-v2 strategy monitors SPY and selects its own contract.</p>
                                     </div>
 
                                 <div className="grid gap-2">
@@ -822,9 +822,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                         <Label htmlFor="dtEnabledToggle" className="flex items-center gap-2">
                                             Day Trading
                                             {dayTradingEnabled ? (
-                                                <Badge variant="default" className="text-[10px] h-5 bg-emerald-600">Enabled</Badge>
+                                                <Badge variant="default" className="text-2xs h-5 bg-emerald-600">Enabled</Badge>
                                             ) : (
-                                                <Badge variant="secondary" className="text-[10px] h-5">Disabled</Badge>
+                                                <Badge variant="secondary" className="text-2xs h-5">Disabled</Badge>
                                             )}
                                         </Label>
                                         <Switch
@@ -846,7 +846,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 onChange={(e) => setStrategyMaxTotalDebitDollars(e.target.value)}
                                                 disabled={!isAdmin}
                                             />
-                                            <p className="text-[10px] text-muted-foreground">Global signal-only-v2 contract-selection budget.</p>
+                                            <p className="text-2xs text-muted-foreground">Global signal-only-v2 contract-selection budget.</p>
                                         </div>
 
                                         <div className="grid gap-2">
@@ -861,7 +861,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 onChange={(e) => setPaperTrailingStopPct(e.target.value)}
                                                 disabled={!isAdmin}
                                             />
-                                            <p className="text-[10px] text-muted-foreground">Applied after TP1. The value and paper-exit policy version are frozen on each new paper trade.</p>
+                                            <p className="text-2xs text-muted-foreground">Applied after TP1. The value and paper-exit policy version are frozen on each new paper trade.</p>
                                         </div>
 
                                         <div className="grid gap-2 md:col-span-2">
@@ -877,7 +877,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 onChange={(e) => setDailyLossLimitDollars(e.target.value)}
                                                 disabled={!isAdmin}
                                             />
-                                            <p className="text-[10px] text-muted-foreground">Once the day's realized loss plus the open (unrealized) loss on positions still held reaches this dollar amount, all new entries (paper, manual, and autonomous) are halted until the next ET session. Blank or 0 disables it.</p>
+                                            <p className="text-2xs text-muted-foreground">Once the day's realized loss plus the open (unrealized) loss on positions still held reaches this dollar amount, all new entries (paper, manual, and autonomous) are halted until the next ET session. Blank or 0 disables it.</p>
                                         </div>
 
                                         <div className="grid grid-cols-2 gap-3 md:col-span-2">
@@ -904,7 +904,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setStrategyMaxRiskPerTradeDollars(e.target.value)}
                                                     disabled={!isAdmin}
                                                 />
-                                                <p className="text-[10px] text-muted-foreground">Worst-case (premium-stop) loss allowed per paper trade. Trades whose one-contract risk exceeds this are SKIPPED — size it above ~$160 so ~3DTE setups can trade. Blank/0 falls back to $50.</p>
+                                                <p className="text-2xs text-muted-foreground">Worst-case (premium-stop) loss allowed per paper trade. Trades whose one-contract risk exceeds this are SKIPPED — size it above ~$160 so ~3DTE setups can trade. Blank/0 falls back to $50.</p>
                                             </div>
                                             <div className="grid gap-2">
                                                 <Label htmlFor="strategyMaxContracts">Contract Ceiling</Label>
@@ -929,7 +929,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setStrategyOptionExpiryDte(e.target.value)}
                                                     disabled={!isAdmin}
                                                 />
-                                                <p className="text-[10px] text-muted-foreground">Nearest listed SPY expiry at least this many calendar days out. 3 = default multi-day chain; 0 = same-day (0DTE, rolling to the next expiry at 1 PM ET). Applies on the engine's next chain refresh.</p>
+                                                <p className="text-2xs text-muted-foreground">Nearest listed SPY expiry at least this many calendar days out. 3 = default multi-day chain; 0 = same-day (0DTE, rolling to the next expiry at 1 PM ET). Applies on the engine's next chain refresh.</p>
                                             </div>
                                             <div className="grid gap-2">
                                                 <Label htmlFor="strategyMultiDayMaxHoldMinutes">Multi-day Max Hold (min)</Label>
@@ -942,7 +942,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setStrategyMultiDayMaxHoldMinutes(e.target.value)}
                                                     disabled={!isAdmin}
                                                 />
-                                                <p className="text-[10px] text-muted-foreground">Time stop for strategy positions on multi-day contracts (same-day contracts keep the 25/15/10-minute theta ladder). 0 disables.</p>
+                                                <p className="text-2xs text-muted-foreground">Time stop for strategy positions on multi-day contracts (same-day contracts keep the 25/15/10-minute theta ladder). 0 disables.</p>
                                             </div>
                                         </div>
 
@@ -952,30 +952,30 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 <section className="rounded-lg border bg-card p-4 space-y-4">
                                     <div>
                                         <h4 className="text-sm font-semibold">Entry Rules &amp; AI Gate</h4>
-                                        <p className="text-[10px] text-muted-foreground">Global, admin-only. When new entries may be taken, how many same-direction positions may stack, and whether the AI gate can veto or size an autonomous live entry.</p>
+                                        <p className="text-2xs text-muted-foreground">Global, admin-only. When new entries may be taken, how many same-direction positions may stack, and whether the AI gate can veto or size an autonomous live entry.</p>
                                     </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div className="grid gap-2">
                                             <Label htmlFor="entryOpenBufferMinutes">Opening buffer (min after 9:30 ET)</Label>
                                             <Input id="entryOpenBufferMinutes" type="number" min="0" max="120" value={entryOpenBufferMinutes} onChange={(e) => setEntryOpenBufferMinutes(e.target.value)} disabled={!isAdmin} />
-                                            <p className="text-[10px] text-muted-foreground">No new entries for this long after the open. 0 disables.</p>
+                                            <p className="text-2xs text-muted-foreground">No new entries for this long after the open. 0 disables.</p>
                                         </div>
                                         <div className="grid gap-2">
                                             <Label htmlFor="entryLastMinuteEt">Last entry (HH:MM ET)</Label>
                                             <Input id="entryLastMinuteEt" type="text" placeholder="11:00" value={entryLastMinuteEt} onChange={(e) => setEntryLastMinuteEt(e.target.value)} disabled={!isAdmin} />
-                                            <p className="text-[10px] text-muted-foreground">No new entries at or after this time (after 09:30, no later than 15:00). Also capped at 60 min before the close.</p>
+                                            <p className="text-2xs text-muted-foreground">No new entries at or after this time (after 09:30, no later than 15:00). Also capped at 60 min before the close.</p>
                                         </div>
                                         <div className="grid gap-2">
                                             <div className="flex items-center justify-between gap-3">
                                                 <Label htmlFor="eventBlackoutsEnabled">Event-day blackouts</Label>
                                                 <Switch id="eventBlackoutsEnabled" checked={eventBlackoutsEnabled} onCheckedChange={setEventBlackoutsEnabled} disabled={!isAdmin} />
                                             </div>
-                                            <p className="text-[10px] text-muted-foreground">FOMC decision days block 13:30 ET to the close; CPI and payroll days block the first 60 minutes.</p>
+                                            <p className="text-2xs text-muted-foreground">FOMC decision days block 13:30 ET to the close; CPI and payroll days block the first 60 minutes.</p>
                                         </div>
                                         <div className="grid gap-2">
                                             <Label htmlFor="maxSameDirectionPositions">Max same-direction positions</Label>
                                             <Input id="maxSameDirectionPositions" type="number" min="1" max="20" value={maxSameDirectionPositions} onChange={(e) => setMaxSameDirectionPositions(e.target.value)} disabled={!isAdmin} />
-                                            <p className="text-[10px] text-muted-foreground">Open SPY/QQQ positions of the same option type allowed at once.</p>
+                                            <p className="text-2xs text-muted-foreground">Open SPY/QQQ positions of the same option type allowed at once.</p>
                                         </div>
                                         <div className="grid gap-2 md:col-span-2">
                                             <Label htmlFor="eventBlackoutDates">Custom blackout dates (JSON)</Label>
@@ -987,7 +987,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 onChange={(e) => setEventBlackoutDates(e.target.value)}
                                                 disabled={!isAdmin}
                                             />
-                                            <p className="text-[10px] text-muted-foreground">Array of {'{'}date, label, start_minute_et?, end_minute_et?{'}'}; minutes after midnight ET. Without a window the whole session is blocked. Blank = none.</p>
+                                            <p className="text-2xs text-muted-foreground">Array of {'{'}date, label, start_minute_et?, end_minute_et?{'}'}; minutes after midnight ET. Without a window the whole session is blocked. Blank = none.</p>
                                         </div>
                                         <div className="grid gap-2">
                                             <Label htmlFor="autonomousLiveAiMode">Autonomous live AI gate</Label>
@@ -1009,7 +1009,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     <SelectItem value="skip">Skip the entry</SelectItem>
                                                 </SelectContent>
                                             </Select>
-                                            <p className="text-[10px] text-muted-foreground">Applies on timeout, provider error, malformed reply or exhausted budget.</p>
+                                            <p className="text-2xs text-muted-foreground">Applies on timeout, provider error, malformed reply or exhausted budget.</p>
                                         </div>
                                         <div className="grid gap-2">
                                             <Label htmlFor="liveAiDailyCallBudget">AI daily call budget</Label>
@@ -1021,13 +1021,13 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                 <section className="rounded-lg border bg-card p-4 space-y-4">
                                     <div>
                                         <h4 className="text-sm font-semibold">Execution and risk</h4>
-                                        <p className="text-[10px] text-muted-foreground">Choose simulation or live routing, then set the limits the strategy cannot exceed.</p>
+                                        <p className="text-2xs text-muted-foreground">Choose simulation or live routing, then set the limits the strategy cannot exceed.</p>
                                     </div>
 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Execution mode</h5>
-                                            <p className="text-[10px] text-muted-foreground">
+                                            <p className="text-2xs text-muted-foreground">
                                                 {autonomousLiveEntryEnabled && autonomousLiveEntryReady
                                                     ? 'Qualified signal-only-v2 entries are submitted automatically after every backend gate passes.'
                                                     : 'Live entries require explicit review in the Day Trading page unless autonomous entry is separately enabled.'}
@@ -1052,7 +1052,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                                 <AlertTriangle className="h-4 w-4" />
                                                                 Wealthsimple Live needs connection setup
                                                             </div>
-                                                            <div className="mt-2 grid gap-1 text-[11px]">
+                                                            <div className="mt-2 grid gap-1 text-2xs">
                                                                 <span className={snaptradeAutoTrade ? 'text-green-600 dark:text-green-300' : ''}>
                                                                     {snaptradeAutoTrade ? 'OK' : 'Missing'}: Enable live execution
                                                                 </span>
@@ -1076,12 +1076,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                         <span className="flex items-center gap-2">
                                                             Autonomous live strategy entries
                                                             {autonomousLiveEntryEnabled ? (
-                                                                <Badge variant="destructive" className="h-5 text-[10px]">Live auto</Badge>
+                                                                <Badge variant="destructive" className="h-5 text-2xs">Live auto</Badge>
                                                             ) : (
-                                                                <Badge variant="secondary" className="h-5 text-[10px]">Off</Badge>
+                                                                <Badge variant="secondary" className="h-5 text-2xs">Off</Badge>
                                                             )}
                                                         </span>
-                                                        <span className="text-[10px] font-normal text-muted-foreground">
+                                                        <span className="text-2xs font-normal text-muted-foreground">
                                                             Automatically submits one signal-only-v2 contract after every entry and risk gate passes.
                                                         </span>
                                                     </Label>
@@ -1091,11 +1091,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                         onCheckedChange={handleAutonomousLiveEntryChange}
                                                     />
                                                 </div>
-                                                <p className={`text-[10px] ${autonomousLiveEntryEnabled ? 'font-semibold text-amber-500' : 'text-muted-foreground'}`}>
+                                                <p className={`text-2xs ${autonomousLiveEntryEnabled ? 'font-semibold text-amber-500' : 'text-muted-foreground'}`}>
                                                     Orders are sized by the per-trade risk budget (never above the contract ceiling), one same-direction SPY/QQQ position is allowed at a time, and the AI gate reviews every entry. New entries stop at the configured last-entry time (default 11:00 AM ET) and inside no-trade windows (opening buffer, FOMC/CPI/NFP); every strategy position is flattened 40 minutes before the close whatever its expiry (primary chain is ~3 DTE). Disabling this switch stops new autonomous entries but does not stop management of an open position.
                                                 </p>
                                                 {!autonomousLiveEntryReady && (
-                                                    <p className="text-[10px] font-medium text-amber-500">
+                                                    <p className="text-2xs font-medium text-amber-500">
                                                         Complete the live execution, account, acknowledgement, and non-shadow prerequisites before enabling autonomous entry. You can always switch an existing configuration off.
                                                     </p>
                                                 )}
@@ -1106,7 +1106,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Safety limits</h5>
-                                            <p className="text-[10px] text-muted-foreground">Cap trade frequency and contract size before any broker order is attempted.</p>
+                                            <p className="text-2xs text-muted-foreground">Cap trade frequency and contract size before any broker order is attempted.</p>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <div className="grid gap-2">
@@ -1128,7 +1128,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     value={contractsPerTrade}
                                                     onChange={(e) => setContractsPerTrade(e.target.value)}
                                                 />
-                                                <p className="text-[10px] text-muted-foreground">The submitted quantity is the lower of this ceiling and the strategy plan.</p>
+                                                <p className="text-2xs text-muted-foreground">The submitted quantity is the lower of this ceiling and the strategy plan.</p>
                                             </div>
                                             <div className="grid gap-2">
                                                 <Label htmlFor="maxDailyLossDollars">Daily Loss Limit ($)</Label>
@@ -1149,7 +1149,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <div className="grid gap-2">
                                                 <Label htmlFor="maxCorrelatedPositions">Maximum Concurrent SPY/QQQ Positions</Label>
                                                 <Input id="maxCorrelatedPositions" type="number" min="1" value={maxCorrelatedPositions} onChange={(e) => setMaxCorrelatedPositions(e.target.value)} />
-                                                <p className="text-[10px] text-muted-foreground">Defaults to one position per MTF, ORB, and VWAP lane. Max Trades Per Day remains a separate daily frequency limit.</p>
+                                                <p className="text-2xs text-muted-foreground">Defaults to one position per MTF, ORB, and VWAP lane. Max Trades Per Day remains a separate daily frequency limit.</p>
                                             </div>
                                         </div>
                                         <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
@@ -1157,14 +1157,14 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <Label htmlFor="shadowTradingEnabled">Force Shadow Simulation</Label>
                                                 <Switch id="shadowTradingEnabled" checked={shadowTradingEnabled} onCheckedChange={setShadowTradingEnabled} />
                                             </div>
-                                            <p className="text-[10px] text-muted-foreground">Overrides the selected destination and creates simulated positions only. No broker order is sent.</p>
+                                            <p className="text-2xs text-muted-foreground">Overrides the selected destination and creates simulated positions only. No broker order is sent.</p>
                                         </div>
                                     </div>
 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Entry protection</h5>
-                                            <p className="text-[10px] text-muted-foreground">Entries use fresh IBKR bid/ask data and a server-enforced protected limit.</p>
+                                            <p className="text-2xs text-muted-foreground">Entries use fresh IBKR bid/ask data and a server-enforced protected limit.</p>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                             <div className="grid gap-2">
@@ -1181,7 +1181,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     value={entrySlippagePct}
                                                     onChange={(e) => setEntrySlippagePct(e.target.value)}
                                                 />
-                                                <p className="text-[10px] text-muted-foreground">Offset above the signal mark used to seed the limit before the live protected-limit check replaces it. Does not bypass the protected-limit or debit checks.</p>
+                                                <p className="text-2xs text-muted-foreground">Offset above the signal mark used to seed the limit before the live protected-limit check replaces it. Does not bypass the protected-limit or debit checks.</p>
                                             </div>
                                         </div>
                                     </div>
@@ -1189,7 +1189,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                     <div className="space-y-3 rounded-md border border-border/70 bg-muted/10 p-3">
                                         <div>
                                             <h5 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Risk exits</h5>
-                                            <p className="text-[10px] text-muted-foreground">Control automatic live-position exits for this user.</p>
+                                            <p className="text-2xs text-muted-foreground">Control automatic live-position exits for this user.</p>
                                         </div>
                                         <div className="grid gap-2 rounded-md border border-border bg-muted/20 p-3">
                                             <Label htmlFor="takeProfitPct">Automatic Premium Take Profit (%)</Label>
@@ -1203,7 +1203,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 onChange={(e) => setTakeProfitPct(e.target.value)}
                                                 placeholder="Blank = no premium override"
                                             />
-                                            <p className="text-[10px] text-muted-foreground">
+                                            <p className="text-2xs text-muted-foreground">
                                                 Live long positions can submit an automatic exit near this premium gain. Example: 10 turns a $0.49 fill into a $0.54 target. Autonomous strategy positions use TP1/TP2 instead while synthetic trailing is enabled. Leave blank to use strategy targets only.
                                             </p>
                                         </div>
@@ -1213,9 +1213,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <Label htmlFor="stopLossEngineToggle" className="flex items-center gap-2">
                                                     Automatic Stop-Loss Engine
                                                     {stopLossEngineEnabled ? (
-                                                        <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
+                                                        <Badge variant="default" className="h-5 bg-emerald-600 text-2xs">Enabled</Badge>
                                                     ) : (
-                                                        <Badge variant="secondary" className="h-5 text-[10px]">Paused</Badge>
+                                                        <Badge variant="secondary" className="h-5 text-2xs">Paused</Badge>
                                                     )}
                                                 </Label>
                                                 <Switch
@@ -1224,7 +1224,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onCheckedChange={setStopLossEngineEnabled}
                                                 />
                                             </div>
-                                            <p className={`text-[10px] ${stopLossEngineEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
+                                            <p className={`text-2xs ${stopLossEngineEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
                                                 {stopLossEngineEnabled
                                                     ? 'Emergency premium and underlying stops can submit exits automatically. Strategy lifecycle exits remain active.'
                                                     : 'Emergency stop automation is paused for this user. Terminal strategy lifecycle and target exits remain active.'}
@@ -1236,9 +1236,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <Label htmlFor="syntheticTrailingStopToggle" className="flex items-center gap-2">
                                                     Synthetic Premium Trailing Stop
                                                     {syntheticTrailingStopEnabled ? (
-                                                        <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
+                                                        <Badge variant="default" className="h-5 bg-emerald-600 text-2xs">Enabled</Badge>
                                                     ) : (
-                                                        <Badge variant="secondary" className="h-5 text-[10px]">Off</Badge>
+                                                        <Badge variant="secondary" className="h-5 text-2xs">Off</Badge>
                                                     )}
                                                 </Label>
                                                 <Switch
@@ -1260,7 +1260,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setSyntheticTrailingStopPct(e.target.value)}
                                                 />
                                             </div>
-                                            <p className="text-[10px] text-muted-foreground">
+                                            <p className="text-2xs text-muted-foreground">
                                                 App-managed only; no trailing order is sent to Wealthsimple. The saved policy is frozen onto new live positions: autonomous strategy trades follow TP1/TP2 and activate the trail after TP1 without a fixed premium take-profit override, while manual long entries activate from fill and keep configured take-profit exits inside the app monitor. Existing positions keep their entry-time policy. Protection requires a healthy backend and fresh IBKR quotes.
                                             </p>
                                         </div>
@@ -1285,7 +1285,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <div className="font-semibold text-foreground">Uses app AI service</div>
                                                 <div>Provider: {provider === 'openrouter' ? 'OpenRouter' : 'Local Ollama'}</div>
                                                 <div>Model: {model || DEFAULT_AI_MODEL}</div>
-                                                <p className="mt-2 text-[10px] leading-normal">
+                                                <p className="mt-2 text-2xs leading-normal">
                                                     Paper entries flagged as ambiguous are sent to this model for a TRADE/SKIP and size-tier verdict; the autonomous live AI gate is configured separately. Off = deterministic paper sizing, no model calls.
                                                 </p>
                                             </div>
@@ -1312,12 +1312,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                         <Server className="h-4 w-4 text-muted-foreground" />
                                                         <h4 className="text-sm font-semibold">MCP Trading Endpoint</h4>
                                                         {mcpTradingEnabled ? (
-                                                            <Badge variant="default" className="h-5 bg-emerald-600 text-[10px]">Enabled</Badge>
+                                                            <Badge variant="default" className="h-5 bg-emerald-600 text-2xs">Enabled</Badge>
                                                         ) : (
-                                                            <Badge variant="secondary" className="h-5 text-[10px]">Disabled</Badge>
+                                                            <Badge variant="secondary" className="h-5 text-2xs">Disabled</Badge>
                                                         )}
                                                     </div>
-                                                    <p className={`mt-1 text-[10px] ${mcpTradingEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
+                                                    <p className={`mt-1 text-2xs ${mcpTradingEnabled ? 'text-muted-foreground' : 'font-semibold text-amber-500'}`}>
                                                         {mcpTradingEnabled
                                                             ? 'JWT-authenticated MCP clients can reach the option trading tools.'
                                                             : 'Public MCP requests are blocked before auth and trade validation.'}
@@ -1365,7 +1365,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 placeholder="Leave blank to keep the configured key"
                                                 autoComplete="new-password"
                                             />
-                                            <p className="text-[10px] text-muted-foreground">
+                                            <p className="text-2xs text-muted-foreground">
                                                 Admin-only. Saved server-side and shared only with the ZeroGEX prefetch service.
                                             </p>
                                         </div>
@@ -1453,7 +1453,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                         />
                                                     </div>
                                                 </div>
-                                                <p className="text-[10px] text-muted-foreground leading-normal">
+                                                <p className="text-2xs text-muted-foreground leading-normal">
                                                     Live Gateway uses port 4003 in this Docker setup. Paper Gateway uses 4004. Saving restarts the IBKR stream with the selected port.
                                                 </p>
                                             </div>
@@ -1466,11 +1466,11 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                             <div className="min-w-0">
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <h5 className="font-medium text-sm">Wealthsimple (via SnapTrade)</h5>
-                                                    <Badge variant={wealthsimpleMissingItems.length > 0 ? "destructive" : "default"} className="text-[10px]">
+                                                    <Badge variant={wealthsimpleMissingItems.length > 0 ? "destructive" : "default"} className="text-2xs">
                                                         {wealthsimpleMissingItems.length > 0 ? `${wealthsimpleMissingItems.length} missing` : "Configured"}
                                                     </Badge>
                                                 </div>
-                                                <p className="mt-1 text-[10px] text-muted-foreground">
+                                                <p className="mt-1 text-2xs text-muted-foreground">
                                                     Broker connection, trading access, and live execution controls.
                                                 </p>
                                             </div>
@@ -1502,7 +1502,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     type="password"
                                                 />
                                             </div>
-                                            <p className="text-[10px] text-muted-foreground">
+                                            <p className="text-2xs text-muted-foreground">
                                                 Connect requests SnapTrade trading access. Reconnect if Wealthsimple was linked as read-only.
                                             </p>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1531,7 +1531,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <div className="flex items-center justify-between gap-3">
                                                     <div>
                                                         <p className="font-semibold">SnapTrade access</p>
-                                                        <p className="text-[10px] text-muted-foreground">
+                                                        <p className="text-2xs text-muted-foreground">
                                                             {snaptradeConnectionStatus?.selectedAuthorization
                                                                 ? `Selected connection: ${snaptradeConnectionStatus.selectedAuthorization.name}`
                                                                 : 'Check after connecting Wealthsimple.'}
@@ -1548,7 +1548,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 {snaptradeConnectionStatus?.wealthsimpleConnections?.length > 0 && (
                                                     <div className="space-y-1">
                                                         {snaptradeConnectionStatus.wealthsimpleConnections.map((connection: any) => (
-                                                            <div key={connection.id} className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                                                            <div key={connection.id} className="flex items-center justify-between gap-2 text-2xs text-muted-foreground">
                                                                 <span className="truncate">{connection.name || connection.brokerageName || connection.id}</span>
                                                                 <span className={connection.type === 'trade' ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-300'}>
                                                                     {connection.type || 'unknown'}
@@ -1584,7 +1584,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <div className="flex items-center justify-between">
                                                     <Label htmlFor="snaptrade-auto-trade" className="flex flex-col gap-1 cursor-pointer">
                                                         <span>Enable Wealthsimple Live Execution</span>
-                                                        <span className="text-[10px] font-normal text-muted-foreground">Places live single-leg option orders through SnapTrade when selected as the execution broker.</span>
+                                                        <span className="text-2xs font-normal text-muted-foreground">Places live single-leg option orders through SnapTrade when selected as the execution broker.</span>
                                                     </Label>
                                                     <Switch
                                                         id="snaptrade-auto-trade"
@@ -1619,12 +1619,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                                     <p className="font-semibold truncate">
                                                                         {selectedSnaptradeAccount.name || 'Wealthsimple Account'}
                                                                     </p>
-                                                                    <p className="text-[10px] text-muted-foreground truncate">
+                                                                    <p className="text-2xs text-muted-foreground truncate">
                                                                         {selectedSnaptradeAccount.number ? `Account ${selectedSnaptradeAccount.number}` : selectedSnaptradeAccount.id}
                                                                     </p>
                                                                 </div>
                                                                 <div className="text-right shrink-0">
-                                                                    <p className="text-[10px] text-muted-foreground">Cash Balance</p>
+                                                                    <p className="text-2xs text-muted-foreground">Cash Balance</p>
                                                                     <p className="font-bold text-green-600 dark:text-green-400">
                                                                         {formatAccountBalance(selectedSnaptradeAccount)}
                                                                     </p>
@@ -1633,7 +1633,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                         </div>
                                                     )}
                                                     {executionBroker === 'wealthsimple_snaptrade' && snaptradeAccounts.length === 0 && (
-                                                        <p className="text-[10px] text-amber-600 dark:text-amber-300">
+                                                        <p className="text-2xs text-amber-600 dark:text-amber-300">
                                                             No account is available yet. Connect Wealthsimple, then click Sync Accounts.
                                                         </p>
                                                     )}
@@ -1642,7 +1642,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <div className="flex items-center justify-between">
                                                     <Label htmlFor="live-trading-ack" className="flex flex-col gap-1 cursor-pointer">
                                                         <span>Live Trading Acknowledgement</span>
-                                                        <span className="text-[10px] font-normal text-muted-foreground">I understand Wealthsimple orders are real live trades and require account/options approval.</span>
+                                                        <span className="text-2xs font-normal text-muted-foreground">I understand Wealthsimple orders are real live trades and require account/options approval.</span>
                                                     </Label>
                                                     <Switch
                                                         id="live-trading-ack"

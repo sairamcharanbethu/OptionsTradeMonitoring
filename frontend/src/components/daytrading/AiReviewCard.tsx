@@ -35,7 +35,7 @@ export default function AiReviewCard(props: Props) {
       <section className="rounded-xl border border-zinc-800 bg-[#101216] p-3 sm:p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-300">
+            <div className="flex items-center gap-2 text-2xs font-semibold uppercase tracking-[0.16em] text-sky-300">
               <ShieldCheck className="h-3.5 w-3.5" />
               Optional AI review
             </div>
@@ -46,7 +46,7 @@ export default function AiReviewCard(props: Props) {
           </div>
           <div className="flex w-full items-center gap-2 sm:w-auto">
             {riskAssessment && (
-              <Badge variant="outline" className={`font-mono text-[10px] ${
+              <Badge variant="outline" className={`font-mono text-2xs ${
                 riskAssessment.verdict === 'ALIGNED'
                   ? 'border-emerald-500/30 bg-emerald-950/25 text-emerald-300'
                   : riskAssessment.verdict === 'CONFLICTED'
@@ -59,7 +59,7 @@ export default function AiReviewCard(props: Props) {
             <Button
               variant="outline"
               size="sm"
-              className="h-10 flex-1 border-sky-500/25 bg-sky-950/15 text-xs text-sky-200 hover:bg-sky-950/30 active:translate-y-px sm:h-8 sm:flex-none sm:text-[10px]"
+              className="h-10 flex-1 border-sky-500/25 bg-sky-950/15 text-xs text-sky-200 hover:bg-sky-950/30 active:translate-y-px sm:h-8 sm:flex-none sm:text-2xs"
               onClick={runAdHocRiskReview}
               disabled={!currentSignal || riskLoading || settings.day_trading_ai_enabled === 'false' || !reviewDataFresh}
               title={staleReviewReason || 'Review the current setup using all available strategy and GEX evidence'}
@@ -112,7 +112,7 @@ export default function AiReviewCard(props: Props) {
                 ['Failure', riskAssessment.ifWrong, 'text-rose-300']
               ].map(([label, statement, tone]) => (
                 <div key={label} className="grid gap-1 py-2.5 sm:grid-cols-[5rem_1fr] sm:gap-3">
-                  <div className={`text-[10px] font-semibold uppercase tracking-[0.12em] ${tone}`}>{label}</div>
+                  <div className={`text-2xs font-semibold uppercase tracking-[0.12em] ${tone}`}>{label}</div>
                   <div className="text-xs leading-relaxed text-zinc-300">{statement}</div>
                 </div>
               ))}
@@ -130,7 +130,7 @@ export default function AiReviewCard(props: Props) {
               </summary>
               <div className="grid gap-3 border-t border-zinc-800 p-3 sm:grid-cols-2">
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-300">Supporting data</div>
+                  <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-emerald-300">Supporting data</div>
                   <div className="mt-1.5 space-y-1 text-xs leading-relaxed text-zinc-300">
                     {riskAssessment.supportingFactors.length > 0
                       ? riskAssessment.supportingFactors.map((item, index) => <div key={`${item}-${index}`}>• {item}</div>)
@@ -138,7 +138,7 @@ export default function AiReviewCard(props: Props) {
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-rose-300">Risk flags</div>
+                  <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-rose-300">Risk flags</div>
                   <div className="mt-1.5 space-y-1 text-xs leading-relaxed text-zinc-300">
                     {riskAssessment.riskFlags.length > 0
                       ? riskAssessment.riskFlags.map((item, index) => <div key={`${item}-${index}`}>• {item}</div>)
@@ -147,7 +147,7 @@ export default function AiReviewCard(props: Props) {
                 </div>
               </div>
             </details>
-            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[10px] leading-relaxed text-zinc-600">
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs leading-relaxed text-zinc-600">
               <span>Reviewed {time(riskAssessment.generatedAt)}</span>
               <span>Strategy {relativeAge(snapshotAge)}</span>
               <span>GEX {Number.isFinite(gexAge) ? `${number(gexAge, 1)}s old` : 'age unavailable'}</span>

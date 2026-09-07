@@ -24,7 +24,7 @@ export function StatsCard({
         <div className={`double-bezel-shell hover-glow h-full min-w-0 ${className || ''}`}>
             <div className="double-bezel-core flex h-full min-w-0 flex-col justify-between border border-black/[0.02] bg-zinc-50/50 p-3 dark:border-white/[0.02] dark:bg-zinc-950/40 sm:p-6">
                 <div className="flex min-w-0 items-start justify-between gap-2">
-                    <span className="text-[10px] uppercase tracking-[0.15em] font-bold text-muted-foreground/90">{title}</span>
+                    <span className="text-2xs uppercase tracking-[0.15em] font-bold text-muted-foreground/90">{title}</span>
                     <div className="flex shrink-0 items-center justify-center rounded-lg border border-black/[0.03] bg-black/5 p-1.5 dark:border-white/[0.06] dark:bg-white/5">
                         <Icon className="h-3.5 w-3.5 text-foreground/85" />
                     </div>
@@ -34,7 +34,7 @@ export function StatsCard({
                         {value}
                     </div>
                     {description && (
-                        <p className="text-[10px] font-mono text-muted-foreground/75 mt-1">{description}</p>
+                        <p className="text-2xs font-mono text-muted-foreground/75 mt-1">{description}</p>
                     )}
                 </div>
             </div>

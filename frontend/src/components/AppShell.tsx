@@ -145,7 +145,7 @@ function GroupMenu({ group, pathname, search, user }: { group: NavGroup; pathnam
         <Button
           variant="ghost"
           className={cn(
-            'h-9 gap-1.5 rounded-md px-3 text-[13px] font-semibold text-muted-foreground transition-colors',
+            'h-9 gap-1.5 rounded-md px-3 text-xs font-semibold text-muted-foreground transition-colors',
             active && 'bg-foreground/[0.07] text-foreground dark:bg-white/[0.08]'
           )}
         >
@@ -167,7 +167,7 @@ function GroupMenu({ group, pathname, search, user }: { group: NavGroup; pathnam
               <Icon className="mt-0.5 h-4 w-4 text-muted-foreground" />
               <span className="min-w-0">
                 <span className="block text-sm font-medium text-foreground">{target.label}</span>
-                <span className="block text-[11px] leading-4 text-muted-foreground">{target.description}</span>
+                <span className="block text-2xs leading-4 text-muted-foreground">{target.description}</span>
               </span>
             </DropdownMenuItem>
           );
@@ -214,7 +214,7 @@ function MobileMenu({ label, icon: Icon, targets, pathname, search }: {
               <TargetIcon className="h-5 w-5 text-muted-foreground" />
               <span className="min-w-0">
                 <span className="block font-medium">{target.label}</span>
-                <span className="block text-[11px] text-muted-foreground">{target.description}</span>
+                <span className="block text-2xs text-muted-foreground">{target.description}</span>
               </span>
               {selected && <Check className="ml-auto h-4 w-4 shrink-0" />}
             </DropdownMenuItem>
@@ -301,7 +301,7 @@ export default function AppShell({ user, onUserUpdate, children }: {
             <Link
               to="/?tab=day-trading"
               className={cn(
-                'motion-press flex h-7 items-center rounded-full border px-2.5 text-[10px] font-bold tracking-wide focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                'motion-press flex h-7 items-center rounded-full border px-2.5 text-2xs font-bold tracking-wide focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 liveChip.className
               )}
               title={liveChip.title}
@@ -318,7 +318,7 @@ export default function AppShell({ user, onUserUpdate, children }: {
                 'h-2 w-2 rounded-full',
                 marketStatusLoading ? 'animate-pulse bg-zinc-400' : marketStatusUnavailable ? 'bg-amber-500' : dataConnected ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-red-500'
               )} aria-hidden="true" />
-              <span className="text-[10px] sm:text-xs md:hidden">{shortStatusLabel}</span>
+              <span className="text-2xs sm:text-xs md:hidden">{shortStatusLabel}</span>
               <span className="hidden md:inline">{statusLabel}</span>
             </Link>
             <SettingsDialog user={user} onUpdate={onUserUpdate} />
@@ -331,7 +331,7 @@ export default function AppShell({ user, onUserUpdate, children }: {
               <DropdownMenuContent align="end" className="w-56 rounded-xl p-1.5">
                 <DropdownMenuLabel className="px-3 py-2">
                   <span className="block text-sm font-semibold">{user.username}</span>
-                  <span className="block text-[11px] font-normal text-muted-foreground">{user.role}</span>
+                  <span className="block text-2xs font-normal text-muted-foreground">{user.role}</span>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuRadioGroup value={theme} onValueChange={(value) => setTheme(value as 'light' | 'dark' | 'system')}>

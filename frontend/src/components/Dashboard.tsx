@@ -435,7 +435,7 @@ export default function Dashboard({ user }: DashboardProps) {
             <div className="col-span-2 double-bezel-shell hover-glow">
               <div className="double-bezel-core flex flex-col justify-between h-full bg-zinc-50/50 dark:bg-zinc-950/40 border border-black/[0.02] dark:border-white/[0.02] p-6">
                 <div className="flex justify-between items-center pb-2">
-                  <span className="text-[10px] uppercase tracking-[0.15em] font-bold text-muted-foreground/90">Performance (Cumulative PnL)</span>
+                  <span className="text-2xs uppercase tracking-[0.15em] font-bold text-muted-foreground/90">Performance (Cumulative PnL)</span>
                   <div className="p-1.5 bg-black/5 dark:bg-white/5 rounded-lg border border-black/[0.03] dark:border-white/[0.06] flex items-center justify-center">
                     <BarChart3 className="h-3.5 w-3.5 text-foreground/85" />
                   </div>
@@ -554,7 +554,7 @@ export default function Dashboard({ user }: DashboardProps) {
                           setDebouncedTicker('');
                           setStatusFilter('ALL');
                         }}
-                        className="h-8 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+                        className="h-8 px-2 text-2xs text-muted-foreground hover:text-foreground"
                       >
                         Clear
                       </Button>
@@ -632,23 +632,23 @@ export default function Dashboard({ user }: DashboardProps) {
                         <tr key={pos.id} className="border-b hover:bg-muted/50 transition-colors">
                           <td className="px-4 py-3">
                             <div className="font-bold">{pos.symbol}</div>
-                            <div className="text-[10px] text-muted-foreground uppercase">{pos.option_type} ${pos.strike_price}</div>
+                            <div className="text-2xs text-muted-foreground uppercase">{pos.option_type} ${pos.strike_price}</div>
                           </td>
                           <td className="px-4 py-3 hidden md:table-cell text-xs text-muted-foreground">
                             {Math.floor((new Date(pos.updated_at).getTime() - new Date(pos.created_at).getTime()) / (1000 * 60 * 60 * 24))} days
                           </td>
-                          <td className="px-4 py-3"><Badge variant="outline" className="text-[10px]">CLOSED</Badge></td>
+                          <td className="px-4 py-3"><Badge variant="outline" className="text-2xs">CLOSED</Badge></td>
                           <td className="px-4 py-3">
                             <div className={`font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                               ${Number(pos.realized_pnl).toFixed(2)}
-                              <span className="ml-1 text-[10px] opacity-70">({getRoi(pos).toFixed(2)}%)</span>
+                              <span className="ml-1 text-2xs opacity-70">({getRoi(pos).toFixed(2)}%)</span>
                             </div>
                           </td>
                           <td className="px-4 py-3 hidden md:table-cell">
                             <span className="text-blue-500 font-medium text-xs">${Number(pos.loss_avoided || 0).toFixed(2)}</span>
                           </td>
                           <td className="px-4 py-3">
-                            <Button variant="ghost" size="sm" className="h-7 text-[10px] transition-opacity hover:bg-primary/10 hover:text-primary" onClick={() => api.reopenPosition(pos.id).then(() => { refetchPositions(); refetchClosedHistory(); })}>
+                            <Button variant="ghost" size="sm" className="h-7 text-2xs transition-opacity hover:bg-primary/10 hover:text-primary" onClick={() => api.reopenPosition(pos.id).then(() => { refetchPositions(); refetchClosedHistory(); })}>
                               <RefreshCw className="h-3 w-3 mr-1" /> Reopen
                             </Button>
                           </td>

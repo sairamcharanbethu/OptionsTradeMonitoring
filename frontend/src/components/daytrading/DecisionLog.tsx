@@ -150,14 +150,14 @@ export default function DecisionLog({ onHighlightPosition, highlightedId, curren
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-5">
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="inline-flex items-center gap-2 text-left">
           <ChevronDown className={cn('h-4 w-4 text-zinc-500 transition-transform', open && 'rotate-180')} aria-hidden="true" />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Decision log</span>
-          <span className="font-mono text-[10px] text-zinc-500">{filtered.length}/{events.length}</span>
-          {unread > 0 && <Badge variant="outline" className={cn('font-mono text-[9px]', toneClass.warn)}>{unread} new</Badge>}
+          <span className="text-2xs font-semibold uppercase tracking-[0.16em] text-zinc-500">Decision log</span>
+          <span className="font-mono text-2xs text-zinc-500">{filtered.length}/{events.length}</span>
+          {unread > 0 && <Badge variant="outline" className={cn('font-mono text-2xs', toneClass.warn)}>{unread} new</Badge>}
         </button>
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn('rounded-full border px-2 py-0.5 font-mono text-[9px]', toneClass[sourceTone])} title="History source: Redis stream (live) or Postgres fallback">{loading ? 'loading…' : lastSource || 'no history'}</span>
-          <span className={cn('rounded-full border px-2 py-0.5 font-mono text-[9px]', toneClass[connected ? 'good' : 'warn'])}>{connected ? 'streaming' : 'reconnecting'}</span>
-          <button type="button" onClick={() => setPaused((v) => !v)} aria-pressed={paused} className={cn('inline-flex h-7 items-center gap-1 rounded-md border px-2 text-[10px] font-semibold', paused ? toneClass.warn : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800')} title={paused ? 'Resume auto-scroll' : 'Pause auto-scroll while reading'}>
+          <span className={cn('rounded-full border px-2 py-0.5 font-mono text-2xs', toneClass[sourceTone])} title="History source: Redis stream (live) or Postgres fallback">{loading ? 'loading…' : lastSource || 'no history'}</span>
+          <span className={cn('rounded-full border px-2 py-0.5 font-mono text-2xs', toneClass[connected ? 'good' : 'warn'])}>{connected ? 'streaming' : 'reconnecting'}</span>
+          <button type="button" onClick={() => setPaused((v) => !v)} aria-pressed={paused} className={cn('inline-flex h-7 items-center gap-1 rounded-md border px-2 text-2xs font-semibold', paused ? toneClass.warn : 'border-zinc-700 text-zinc-300 hover:bg-zinc-800')} title={paused ? 'Resume auto-scroll' : 'Pause auto-scroll while reading'}>
             {paused ? <Play className="h-3 w-3" aria-hidden="true" /> : <Pause className="h-3 w-3" aria-hidden="true" />}
             {paused ? 'Resume' : 'Pause'}
           </button>
@@ -168,7 +168,7 @@ export default function DecisionLog({ onHighlightPosition, highlightedId, curren
         <div className="border-t border-zinc-800 px-4 pb-4 sm:px-5">
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
             {EVENT_CLASSES.map((c) => (
-              <button key={c.key} type="button" onClick={() => toggleClass(c.key)} aria-pressed={classes.has(c.key)} className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-opacity', c.cls, classes.has(c.key) ? 'opacity-100' : 'opacity-35')}>{c.label}</button>
+              <button key={c.key} type="button" onClick={() => toggleClass(c.key)} aria-pressed={classes.has(c.key)} className={cn('rounded-full border px-2 py-0.5 text-2xs font-semibold transition-opacity', c.cls, classes.has(c.key) ? 'opacity-100' : 'opacity-35')}>{c.label}</button>
             ))}
           </div>
           <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_8rem_9rem]">
@@ -179,10 +179,10 @@ export default function DecisionLog({ onHighlightPosition, highlightedId, curren
             <input value={positionFilter} onChange={(e) => setPositionFilter(e.target.value)} placeholder="Position id" aria-label="Filter by position id" inputMode="numeric" className="h-8 rounded-md border border-zinc-800 bg-zinc-950 px-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600" />
             <div className="flex gap-1">
               <input value={setupFilter} onChange={(e) => setSetupFilter(e.target.value)} placeholder="Setup / signal id" aria-label="Filter by setup or signal id" className="h-8 min-w-0 flex-1 rounded-md border border-zinc-800 bg-zinc-950 px-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-zinc-600" />
-              {currentSetupId && <button type="button" onClick={() => setSetupFilter(currentSetupId.slice(0, 8))} className="h-8 rounded-md border border-zinc-700 px-2 text-[10px] text-zinc-300 hover:bg-zinc-800" title={`Filter to the current setup ${currentSetupId}`}>this setup</button>}
+              {currentSetupId && <button type="button" onClick={() => setSetupFilter(currentSetupId.slice(0, 8))} className="h-8 rounded-md border border-zinc-700 px-2 text-2xs text-zinc-300 hover:bg-zinc-800" title={`Filter to the current setup ${currentSetupId}`}>this setup</button>}
             </div>
           </div>
-          {loadError && <div className={cn('mt-2 rounded-md border px-2.5 py-1.5 text-[11px]', toneClass.bad)} role="alert">{loadError} <button type="button" className="underline" onClick={() => void load(null)}>retry</button></div>}
+          {loadError && <div className={cn('mt-2 rounded-md border px-2.5 py-1.5 text-2xs', toneClass.bad)} role="alert">{loadError} <button type="button" className="underline" onClick={() => void load(null)}>retry</button></div>}
 
           <ol ref={listRef} className="mt-3 max-h-[28rem] space-y-1 overflow-y-auto pr-1" aria-live={paused ? 'off' : 'polite'}>
             {filtered.length === 0 && <li className="rounded-md border border-dashed border-zinc-800 px-3 py-4 text-center text-xs text-zinc-500">{events.length === 0 ? (loading ? 'Loading events…' : 'No events yet.') : 'No events match the current filters.'}</li>}
@@ -197,13 +197,13 @@ export default function DecisionLog({ onHighlightPosition, highlightedId, curren
               return (
                 <li key={key} className={cn('rounded-md border bg-zinc-950/55 px-2.5 py-1.5', isHighlighted ? 'border-sky-400/60' : 'border-zinc-800/80')}>
                   <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
-                    <span className="font-mono text-[10px] text-zinc-500" title={event.created_at}>{etTimeOfDay(event.created_at)}</span>
-                    <Badge variant="outline" className={cn('font-mono text-[9px]', meta.cls)}>{event.event_type.replace(/_/g, ' ')}</Badge>
+                    <span className="font-mono text-2xs text-zinc-500" title={event.created_at}>{etTimeOfDay(event.created_at)}</span>
+                    <Badge variant="outline" className={cn('font-mono text-2xs', meta.cls)}>{event.event_type.replace(/_/g, ' ')}</Badge>
                     {positionId != null && (
-                      <button type="button" onClick={() => onHighlightPosition(isHighlighted ? null : positionId)} className={cn('rounded border px-1.5 font-mono text-[9px]', isHighlighted ? 'border-sky-400/60 text-sky-300' : 'border-zinc-700 text-zinc-400 hover:text-zinc-200')} title="Highlight this position in the strip" aria-pressed={isHighlighted}>#{positionId}</button>
+                      <button type="button" onClick={() => onHighlightPosition(isHighlighted ? null : positionId)} className={cn('rounded border px-1.5 font-mono text-2xs', isHighlighted ? 'border-sky-400/60 text-sky-300' : 'border-zinc-700 text-zinc-400 hover:text-zinc-200')} title="Highlight this position in the strip" aria-pressed={isHighlighted}>#{positionId}</button>
                     )}
-                    {event.signal_id != null && <span className="font-mono text-[9px] text-zinc-600" title="Signal id">sig {event.signal_id}</span>}
-                    <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-200" title={event.message || ''}>{event.message || '—'}</span>
+                    {event.signal_id != null && <span className="font-mono text-2xs text-zinc-600" title="Signal id">sig {event.signal_id}</span>}
+                    <span className="min-w-0 flex-1 truncate text-2xs text-zinc-200" title={event.message || ''}>{event.message || '—'}</span>
                     {event.metadata && (
                       <button type="button" onClick={() => toggleExpanded(key)} aria-expanded={isExpanded} className="text-zinc-500 hover:text-zinc-300" title="Show metadata">
                         <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', isExpanded && 'rotate-180')} aria-hidden="true" />
@@ -211,12 +211,12 @@ export default function DecisionLog({ onHighlightPosition, highlightedId, curren
                     )}
                   </div>
                   {inline.length > 0 && (
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-zinc-400">
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-2xs text-zinc-400">
                       {inline.map(([label, value]) => <span key={label}><span className="text-zinc-600">{label}</span> <span className="font-mono text-zinc-300">{value.length > 140 ? `${value.slice(0, 140)}…` : value}</span></span>)}
                     </div>
                   )}
                   {isExpanded && event.metadata && (
-                    <pre className="mt-1.5 max-h-56 overflow-auto rounded bg-zinc-950 p-2 font-mono text-[10px] leading-relaxed text-zinc-400">{JSON.stringify(event.metadata, null, 2)}</pre>
+                    <pre className="mt-1.5 max-h-56 overflow-auto rounded bg-zinc-950 p-2 font-mono text-2xs leading-relaxed text-zinc-400">{JSON.stringify(event.metadata, null, 2)}</pre>
                   )}
                 </li>
               );

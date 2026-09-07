@@ -36,7 +36,7 @@ export default function PaperActivityPanel(props: Props) {
               <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
                   <h4 id="paper-activity-title" className="text-sm font-semibold text-zinc-200">Paper activity</h4>
-                  <p className="mt-0.5 text-[10px] leading-4 text-zinc-500">Start with a trade, then inspect its linked orders and system events.</p>
+                  <p className="mt-0.5 text-2xs leading-4 text-zinc-500">Start with a trade, then inspect its linked orders and system events.</p>
                 </div>
                 <div className="grid grid-cols-3 gap-1 rounded-lg border border-zinc-800 bg-[#0d0f12] p-1" role="tablist" aria-label="Paper activity views">
                   {([
@@ -51,7 +51,7 @@ export default function PaperActivityPanel(props: Props) {
                       id={`paper-tab-${tab}`}
                       aria-controls={`paper-panel-${tab}`}
                       aria-selected={paperActivityTab === tab}
-                      className={`min-h-9 rounded-md px-2 text-[10px] font-semibold transition-colors sm:px-3 ${
+                      className={`min-h-9 rounded-md px-2 text-2xs font-semibold transition-colors sm:px-3 ${
                         paperActivityTab === tab
                           ? 'bg-zinc-800 text-zinc-100'
                           : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300'
@@ -59,7 +59,7 @@ export default function PaperActivityPanel(props: Props) {
                       onClick={() => selectPaperActivityTab(tab)}
                     >
                       <span className="block sm:inline">{label}</span>
-                      <span className="ml-1 font-mono text-[9px] opacity-60">{count}</span>
+                      <span className="ml-1 font-mono text-2xs opacity-60">{count}</span>
                     </button>
                   ))}
                 </div>
@@ -94,9 +94,9 @@ export default function PaperActivityPanel(props: Props) {
             <div className="flex w-full items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2.5 text-left sm:px-4">
               <div>
                 <div className="text-xs font-semibold text-zinc-300">Paper orders</div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">Entry, trim, and exit instructions with their simulated cash effect</div>
+                <div className="mt-0.5 text-2xs text-zinc-500">Entry, trim, and exit instructions with their simulated cash effect</div>
               </div>
-              <span className="font-mono text-[10px] text-zinc-500">{filteredPaperOrders.length} shown</span>
+              <span className="font-mono text-2xs text-zinc-500">{filteredPaperOrders.length} shown</span>
             </div>
             <div>
               {filteredPaperOrders.length === 0 ? (
@@ -117,14 +117,14 @@ export default function PaperActivityPanel(props: Props) {
                               <div className="text-xs font-semibold text-zinc-200">
                                 {humanContractName({ strike: order.strike, expiry: order.expiration }, order.option_type)}
                               </div>
-                              <div className="mt-1 text-[10px] text-zinc-500">
+                              <div className="mt-1 text-2xs text-zinc-500">
                                 {order.intent.replace(/_/g, ' ')} · {order.action.replace(/_/g, ' ')} · {quantity} contract{quantity === 1 ? '' : 's'}
                               </div>
-                              <div className="mt-1 font-mono text-[9px] text-zinc-600">
+                              <div className="mt-1 font-mono text-2xs text-zinc-600">
                                 {order.position_id ? `Trade #${order.position_id}` : 'Unlinked trade'}{order.setup_id ? ` · ${order.setup_id}` : ''}
                               </div>
                             </div>
-                            <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[9px] ${
+                            <span className={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-2xs ${
                               status === 'FILLED'
                                 ? 'border-emerald-500/25 bg-emerald-950/20 text-emerald-300'
                                 : status === 'PENDING'
@@ -134,23 +134,23 @@ export default function PaperActivityPanel(props: Props) {
                                   : 'border-zinc-700 bg-zinc-900 text-zinc-400'
                             }`}>{status}</span>
                           </div>
-                          <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px] text-zinc-400">
+                          <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-2xs text-zinc-400">
                             <div><span className="block text-zinc-600">Limit</span>{Number.isFinite(limitPrice) && limitPrice > 0 ? money(limitPrice) : '—'}</div>
                             <div><span className="block text-zinc-600">Fill</span>{Number.isFinite(fillPrice) && fillPrice > 0 ? money(fillPrice) : '—'}</div>
                             <div><span className="block text-zinc-600">{cashEffect.label}</span>{cashEffect.amount > 0 ? money(cashEffect.amount) : '—'}</div>
                           </div>
-                          <div className="mt-2 flex items-center justify-between gap-3 text-[10px] text-zinc-600">
+                          <div className="mt-2 flex items-center justify-between gap-3 text-2xs text-zinc-600">
                             <span>{dateTime(order.filled_at || order.updated_at || order.created_at)}</span>
                             <span className="select-all truncate font-mono" title={order.osi_ticker}>{order.osi_ticker}</span>
                           </div>
-                          {order.failure_reason && <div className="mt-2 text-[10px] leading-relaxed text-rose-300">{order.failure_reason}</div>}
+                          {order.failure_reason && <div className="mt-2 text-2xs leading-relaxed text-rose-300">{order.failure_reason}</div>}
                         </article>
                       );
                     })}
                   </div>
                   <div className="hidden overflow-x-auto sm:block">
                     <table className="w-full min-w-[940px] text-xs">
-                      <thead className="bg-zinc-900/45 text-[10px] uppercase tracking-[0.08em] text-zinc-500">
+                      <thead className="bg-zinc-900/45 text-2xs uppercase tracking-[0.08em] text-zinc-500">
                         <tr>
                           <th className="px-3 py-2 text-left">Time</th>
                           <th className="px-3 py-2 text-left">Intent</th>
@@ -171,15 +171,15 @@ export default function PaperActivityPanel(props: Props) {
                           const cashEffect = paperOrderCashEffect(order);
                           return (
                             <tr key={order.id} className="transition-colors hover:bg-zinc-900/35">
-                              <td className="whitespace-nowrap px-3 py-2.5 text-[10px] text-zinc-500">{dateTime(order.filled_at || order.updated_at || order.created_at)}</td>
+                              <td className="whitespace-nowrap px-3 py-2.5 text-2xs text-zinc-500">{dateTime(order.filled_at || order.updated_at || order.created_at)}</td>
                               <td className="px-3 py-2.5">
                                 <div className="font-semibold text-zinc-300">{order.intent.replace(/_/g, ' ')}</div>
-                                <div className="mt-0.5 text-[10px] text-zinc-600">{order.action.replace(/_/g, ' ')}</div>
+                                <div className="mt-0.5 text-2xs text-zinc-600">{order.action.replace(/_/g, ' ')}</div>
                               </td>
                               <td className="px-3 py-2.5">
                                 <div className="font-medium text-zinc-300">{humanContractName({ strike: order.strike, expiry: order.expiration }, order.option_type)}</div>
-                                <div className="mt-0.5 max-w-48 select-all truncate font-mono text-[9px] text-zinc-600" title={order.osi_ticker}>{order.osi_ticker}</div>
-                                <div className="mt-0.5 max-w-64 select-all truncate font-mono text-[9px] text-zinc-600" title={order.setup_id || undefined}>
+                                <div className="mt-0.5 max-w-48 select-all truncate font-mono text-2xs text-zinc-600" title={order.osi_ticker}>{order.osi_ticker}</div>
+                                <div className="mt-0.5 max-w-64 select-all truncate font-mono text-2xs text-zinc-600" title={order.setup_id || undefined}>
                                   {order.position_id ? `Trade #${order.position_id}` : 'Unlinked trade'}{order.setup_id ? ` · ${order.setup_id}` : ''}
                                 </div>
                               </td>
@@ -188,9 +188,9 @@ export default function PaperActivityPanel(props: Props) {
                               <td className="px-3 py-2.5 text-right font-mono text-zinc-300">{Number.isFinite(fillPrice) && fillPrice > 0 ? money(fillPrice) : '—'}</td>
                               <td className="px-3 py-2.5 text-right">
                                 <div className="font-mono text-zinc-300">{cashEffect.amount > 0 ? money(cashEffect.amount) : '—'}</div>
-                                <div className="mt-0.5 text-[9px] text-zinc-600">{cashEffect.label}</div>
+                                <div className="mt-0.5 text-2xs text-zinc-600">{cashEffect.label}</div>
                               </td>
-                              <td className={`px-3 py-2.5 text-right font-mono text-[10px] ${status === 'FILLED' ? 'text-emerald-300' : status === 'PENDING' ? 'text-amber-300' : paperOrderNeedsAttention(order) ? 'text-rose-300' : 'text-zinc-500'}`}>{status}</td>
+                              <td className={`px-3 py-2.5 text-right font-mono text-2xs ${status === 'FILLED' ? 'text-emerald-300' : status === 'PENDING' ? 'text-amber-300' : paperOrderNeedsAttention(order) ? 'text-rose-300' : 'text-zinc-500'}`}>{status}</td>
                             </tr>
                           );
                         })}
@@ -206,9 +206,9 @@ export default function PaperActivityPanel(props: Props) {
             <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2.5 sm:px-4">
               <div>
                 <div className="text-xs font-semibold text-zinc-300">Trade history</div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">One trade with its decision, orders, lifecycle, risk policy, and outcome</div>
+                <div className="mt-0.5 text-2xs text-zinc-500">One trade with its decision, orders, lifecycle, risk policy, and outcome</div>
               </div>
-              <span className="font-mono text-[10px] text-zinc-500">
+              <span className="font-mono text-2xs text-zinc-500">
                 {filteredPaperPositions.length > 25 ? `25 of ${filteredPaperPositions.length} matching` : `${filteredPaperPositions.length} shown`}
               </span>
             </div>
@@ -251,19 +251,19 @@ export default function PaperActivityPanel(props: Props) {
                               <span className="font-semibold text-zinc-200">
                                 {humanContractName({ strike: position.strike_price, expiry: position.expiration_date }, position.option_type)}
                               </span>
-                              <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${
+                              <span className={`rounded border px-1.5 py-0.5 font-mono text-2xs ${
                                 isClosed
                                   ? 'border-zinc-700 bg-zinc-900 text-zinc-400'
                                   : 'border-sky-500/25 bg-sky-950/20 text-sky-300'
                               }`}>{position.status}</span>
                               {(positionAttention || attentionOrders.length > 0) && (
-                                <span className="rounded border border-rose-500/25 bg-rose-950/20 px-1.5 py-0.5 text-[9px] font-semibold text-rose-300">Needs attention</span>
+                                <span className="rounded border border-rose-500/25 bg-rose-950/20 px-1.5 py-0.5 text-2xs font-semibold text-rose-300">Needs attention</span>
                               )}
                             </div>
-                            <div className="mt-1 text-[10px] text-zinc-500">
+                            <div className="mt-1 text-2xs text-zinc-500">
                               {position.decision_source || 'Rules'} · {position.risk_tier || 'bounded'} risk · {String(position.exit_profile || 'balanced T2').replace(/_/g, ' ').toLowerCase()}
                             </div>
-                            <div className="mt-1 select-all truncate font-mono text-[9px] text-zinc-600" title={setupId || undefined}>
+                            <div className="mt-1 select-all truncate font-mono text-2xs text-zinc-600" title={setupId || undefined}>
                               Trade #{position.id}{setupId ? ` · ${setupId}` : ' · no setup id'} · {relatedOrders.length} orders · {relatedJournal.length} events
                             </div>
                           </div>
@@ -271,16 +271,16 @@ export default function PaperActivityPanel(props: Props) {
                             <div className={`font-mono text-sm font-semibold ${tradePnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
                               {tradePnl >= 0 ? '+' : ''}{money(tradePnl)}
                             </div>
-                            <div className="text-[9px] text-zinc-600">{isClosed ? 'realized' : 'unrealized'}</div>
+                            <div className="text-2xs text-zinc-600">{isClosed ? 'realized' : 'unrealized'}</div>
                           </div>
                           <div className="flex items-center justify-between gap-3 sm:justify-end">
-                            <span className="font-mono text-[10px] text-zinc-600">{dateTime(position.updated_at || position.created_at)}</span>
+                            <span className="font-mono text-2xs text-zinc-600">{dateTime(position.updated_at || position.created_at)}</span>
                             <ChevronDown className="h-3.5 w-3.5 text-zinc-500 transition-transform group-open/trade:rotate-180" />
                           </div>
                         </summary>
                         <div className="border-t border-zinc-800 p-3">
                           {(positionAttention || attentionOrders.length > 0) && (
-                            <div className="mb-3 rounded-lg border border-rose-500/25 bg-rose-950/15 px-3 py-2 text-[10px] leading-5 text-rose-200" role="alert">
+                            <div className="mb-3 rounded-lg border border-rose-500/25 bg-rose-950/15 px-3 py-2 text-2xs leading-5 text-rose-200" role="alert">
                               <div className="font-semibold">Trade attention required</div>
                               {positionAttention && <div>{positionAttention}</div>}
                               {attentionOrders.map(order => (
@@ -290,44 +290,44 @@ export default function PaperActivityPanel(props: Props) {
                           )}
                           <div className="grid gap-3 lg:grid-cols-3">
                             <div className="rounded-lg bg-zinc-950/65 p-3">
-                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Execution and outcome</div>
-                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] text-zinc-500">
+                              <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Execution and outcome</div>
+                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-2xs text-zinc-500">
                                 <div>Entry <span className="block font-mono text-xs text-zinc-200">{money(entryPrice)}</span></div>
                                 <div>{isClosed ? 'Exit' : 'Current'} <span className="block font-mono text-xs text-zinc-200">{money(isClosed ? position.exit_price : currentPrice)}</span></div>
                                 <div>Original size <span className="block font-mono text-xs text-zinc-200">{initialQuantity}</span></div>
                                 <div>Duration <span className="block font-mono text-xs text-zinc-200">{duration(position.created_at, isClosed ? position.updated_at : null)}</span></div>
                               </div>
-                              <div className="mt-2 border-t border-zinc-800 pt-2 text-[10px] text-zinc-500">
+                              <div className="mt-2 border-t border-zinc-800 pt-2 text-2xs text-zinc-500">
                                 Exit reason <span className="text-zinc-300">{String(position.exit_reason || 'Position remains open').replace(/_/g, ' ')}</span>
                               </div>
                             </div>
 
                             <div className="rounded-lg bg-zinc-950/65 p-3">
-                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Decision intelligence</div>
+                              <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Decision intelligence</div>
                               <div className="mt-2 text-xs leading-relaxed text-zinc-300">
                                 {position.decision_rationale || 'No decision rationale was recorded.'}
                               </div>
                               <div className="mt-2 flex flex-wrap gap-1.5">
-                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400">{position.decision_source || 'RULES'}</span>
-                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400">{position.ai_requested ? 'AI reviewed' : 'Rules only'}</span>
-                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-[9px] text-zinc-400">{String(evidence.strategyState || 'state unavailable')}</span>
+                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-2xs text-zinc-400">{position.decision_source || 'RULES'}</span>
+                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-2xs text-zinc-400">{position.ai_requested ? 'AI reviewed' : 'Rules only'}</span>
+                                <span className="rounded border border-zinc-800 px-1.5 py-0.5 text-2xs text-zinc-400">{String(evidence.strategyState || 'state unavailable')}</span>
                               </div>
                               {riskFlags.length > 0 && (
-                                <div className="mt-2 space-y-1 text-[10px] leading-relaxed text-amber-300">
+                                <div className="mt-2 space-y-1 text-2xs leading-relaxed text-amber-300">
                                   {riskFlags.map((flag, index) => <div key={`${flag}-${index}`}>• {flag}</div>)}
                                 </div>
                               )}
                             </div>
 
                             <div className="rounded-lg bg-zinc-950/65 p-3">
-                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Risk policy and baseline</div>
-                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] text-zinc-500">
+                              <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Risk policy and baseline</div>
+                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-2xs text-zinc-500">
                                 <div>Policy <span className="block font-mono text-xs text-zinc-200">{position.policy_version || 'paper-exit-v2'}</span></div>
                                 <div>Premium trail <span className="block font-mono text-xs text-zinc-200">{Number(position.decision_trailing_stop_pct || position.trailing_stop_loss_pct || 0) > 0 ? `${number(position.decision_trailing_stop_pct || position.trailing_stop_loss_pct)}%` : '—'}</span></div>
                                 <div>Underlying stop <span className="block font-mono text-xs text-rose-200">{money(position.underlying_stop_price || position.suggested_stop_loss)}</span></div>
                                 <div>Target 2 <span className="block font-mono text-xs text-sky-200">{money(position.suggested_take_profit_2)}</span></div>
                               </div>
-                              <div className="mt-2 border-t border-zinc-800 pt-2 text-[10px] text-zinc-500">
+                              <div className="mt-2 border-t border-zinc-800 pt-2 text-2xs text-zinc-500">
                                 1-contract baseline <span className="font-mono text-zinc-300">{hasBaseline ? money(baselinePnl) : '—'}</span>
                                 {isClosed && hasBaseline && (
                                   <span className={`ml-2 font-mono ${tradePnl - baselinePnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
@@ -340,8 +340,8 @@ export default function PaperActivityPanel(props: Props) {
 
                           <div className="mt-3 grid gap-3 lg:grid-cols-[0.75fr_1.25fr]">
                             <div className="rounded-lg border border-zinc-800 bg-zinc-950/35 p-3">
-                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Entry evidence</div>
-                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] text-zinc-500">
+                              <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Entry evidence</div>
+                              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-2xs text-zinc-500">
                                 <div>Bid <span className="block font-mono text-zinc-300">{money(evidence.bid)}</span></div>
                                 <div>Ask <span className="block font-mono text-zinc-300">{money(evidence.ask)}</span></div>
                                 <div>Quote age <span className="block font-mono text-zinc-300">{Number.isFinite(Number(evidence.quoteAgeSeconds)) ? `${number(evidence.quoteAgeSeconds, 1)}s` : '—'}</span></div>
@@ -350,35 +350,35 @@ export default function PaperActivityPanel(props: Props) {
                             </div>
                             <div className="rounded-lg border border-zinc-800 bg-zinc-950/35 p-3">
                               <div className="flex items-center justify-between gap-3">
-                                <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Trade timeline</div>
-                                <div className="font-mono text-[9px] text-zinc-600">{relatedOrders.length} orders · {relatedJournal.length} events</div>
+                                <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Trade timeline</div>
+                                <div className="font-mono text-2xs text-zinc-600">{relatedOrders.length} orders · {relatedJournal.length} events</div>
                               </div>
                               <div className="mt-2 max-h-48 space-y-2 overflow-y-auto pr-1">
                                 {relatedJournal.length > 0 ? [...relatedJournal].reverse().slice(-12).map(item => (
-                                  <div key={item.id} className="grid grid-cols-[4.5rem_1fr] gap-2 text-[10px]">
+                                  <div key={item.id} className="grid grid-cols-[4.5rem_1fr] gap-2 text-2xs">
                                     <span className="font-mono text-zinc-600">{time(item.created_at)}</span>
                                     <span className="leading-relaxed text-zinc-400"><span className="font-semibold text-zinc-300">{item.event_type.replace(/_/g, ' ')}</span> · {item.message}</span>
                                   </div>
                                 )) : (
-                                  <div className="text-[10px] text-zinc-600">No matching lifecycle events were recorded.</div>
+                                  <div className="text-2xs text-zinc-600">No matching lifecycle events were recorded.</div>
                                 )}
                               </div>
                             </div>
                           </div>
                           <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/35 p-3">
                             <div className="flex items-center justify-between gap-3">
-                              <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-zinc-500">Linked paper orders</div>
-                              <div className="font-mono text-[9px] text-zinc-600">{relatedOrders.length} total</div>
+                              <div className="text-2xs font-semibold uppercase tracking-[0.12em] text-zinc-500">Linked paper orders</div>
+                              <div className="font-mono text-2xs text-zinc-600">{relatedOrders.length} total</div>
                             </div>
                             {relatedOrders.length === 0 ? (
-                              <div className="mt-2 text-[10px] text-zinc-600">No entry, trim, or exit order is linked to this trade.</div>
+                              <div className="mt-2 text-2xs text-zinc-600">No entry, trim, or exit order is linked to this trade.</div>
                             ) : (
                               <div className="mt-2 divide-y divide-zinc-800">
                                 {relatedOrders.map(order => {
                                   const orderStatus = String(order.status || 'UNKNOWN').toUpperCase();
                                   const cashEffect = paperOrderCashEffect(order);
                                   return (
-                                    <div key={order.id} className="grid gap-1 py-2 text-[10px] sm:grid-cols-[4.5rem_minmax(0,1fr)_auto_auto] sm:items-center sm:gap-3">
+                                    <div key={order.id} className="grid gap-1 py-2 text-2xs sm:grid-cols-[4.5rem_minmax(0,1fr)_auto_auto] sm:items-center sm:gap-3">
                                       <span className="font-mono text-zinc-600">{time(order.filled_at || order.updated_at || order.created_at)}</span>
                                       <span className="min-w-0 text-zinc-400">
                                         <span className="font-semibold text-zinc-300">#{order.id} · {order.intent.replace(/_/g, ' ')}</span> · {order.action.replace(/_/g, ' ')} · {order.quantity} contract{Number(order.quantity) === 1 ? '' : 's'}
@@ -405,9 +405,9 @@ export default function PaperActivityPanel(props: Props) {
             <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2.5 sm:px-4">
               <div>
                 <div className="text-xs font-semibold text-zinc-300">System events</div>
-                <div className="mt-0.5 text-[10px] text-zinc-500">Strategy decisions, lifecycle transitions, protection changes, and diagnostics</div>
+                <div className="mt-0.5 text-2xs text-zinc-500">Strategy decisions, lifecycle transitions, protection changes, and diagnostics</div>
               </div>
-              <span className="font-mono text-[10px] text-zinc-500">{filteredPaperJournal.length} shown</span>
+              <span className="font-mono text-2xs text-zinc-500">{filteredPaperJournal.length} shown</span>
             </div>
             {filteredPaperJournal.length === 0 ? (
               <div className="px-3 py-8 text-center text-xs text-zinc-500">No system events match the current search and filter.</div>
@@ -417,14 +417,14 @@ export default function PaperActivityPanel(props: Props) {
                   const category = paperEventCategory(item.event_type);
                   return (
                     <div key={item.id} className="grid gap-1 py-2.5 sm:grid-cols-[150px_minmax(0,1fr)_auto] sm:gap-3">
-                      <span className={`font-mono text-[11px] ${category === 'ERROR' ? 'text-rose-300' : 'text-violet-300'}`}>{item.event_type.replace(/_/g, ' ')}</span>
+                      <span className={`font-mono text-2xs ${category === 'ERROR' ? 'text-rose-300' : 'text-violet-300'}`}>{item.event_type.replace(/_/g, ' ')}</span>
                       <span className="min-w-0 text-xs leading-relaxed text-zinc-300">
                         {item.message}
-                        <span className="mt-1 block select-all truncate font-mono text-[9px] text-zinc-600" title={item.setup_id || undefined}>
+                        <span className="mt-1 block select-all truncate font-mono text-2xs text-zinc-600" title={item.setup_id || undefined}>
                           {item.position_id ? `Trade #${item.position_id}` : 'Unlinked event'}{item.setup_id ? ` · ${item.setup_id}` : ''}{item.decision_id ? ` · decision ${item.decision_id}` : ''}
                         </span>
                       </span>
-                      <span className="font-mono text-[10px] text-zinc-500">{dateTime(item.created_at)}</span>
+                      <span className="font-mono text-2xs text-zinc-500">{dateTime(item.created_at)}</span>
                     </div>
                   );
                 })}

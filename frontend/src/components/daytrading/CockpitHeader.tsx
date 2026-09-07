@@ -92,7 +92,7 @@ function sessionSentence(session: Record<string, any> | null, nowMin: number): {
 
 function Chip({ label, value, tone, title }: { label: string; value: string; tone: Tone; title: string }) {
   return (
-    <span title={title} aria-label={`${label} ${value}. ${title}`} className={cn('inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[10px] leading-none', toneClass[tone])}>
+    <span title={title} aria-label={`${label} ${value}. ${title}`} className={cn('inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-2xs leading-none', toneClass[tone])}>
       <span className="font-sans font-semibold uppercase tracking-[0.12em] opacity-80">{label}</span>
       <span className="tabular-nums">{value}</span>
     </span>
@@ -142,7 +142,7 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
   return (
     <section aria-label="Session cockpit" className="border-b border-zinc-800 bg-[#0b0d10] px-3 py-3 sm:px-6">
       {/* Row 1: session timeline */}
-      <div className="flex items-center justify-between gap-3 text-[10px] text-zinc-500">
+      <div className="flex items-center justify-between gap-3 text-2xs text-zinc-500">
         <span className="font-semibold uppercase tracking-[0.16em]">Session</span>
         <span className="font-mono tabular-nums text-zinc-300">{etClock(now)}</span>
       </div>
@@ -154,7 +154,7 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
           <div className="absolute inset-y-[-2px] w-0.5 bg-zinc-50 shadow-[0_0_6px_rgba(255,255,255,0.8)]" style={{ left: pct(nowMin) }} aria-hidden="true" />
         )}
       </div>
-      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] font-mono text-zinc-500">
+      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-2xs font-mono text-zinc-500">
         <span>{minuteLabel(open).replace(' ET', '')}</span>
         <span className={cn('rounded px-1.5 py-0.5 font-sans font-medium', toneClass[sentence.tone])}>{sentence.text}</span>
         <span>{minuteLabel(close).replace(' ET', '')}</span>
@@ -173,7 +173,7 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
           <Chip label="Day P&L" value={pnl == null ? '—' : `${signedMoney(pnl)} / −$${Math.abs(limit || 0).toFixed(0)}`} tone={pnlTone} title="Realized + open live P&L against the kill-switch limit" />
           <Chip label="Trades" value={`${tradesUsed ?? '—'}/${tradesMax}`} tone={tradesUsed != null && tradesUsed >= tradesMax ? 'warn' : 'muted'} title="Live entries used today vs max_trades_per_day" />
           <Chip label="Dir" value={`C ${calls}/${sameDirectionMax} · P ${puts}/${sameDirectionMax}`} tone={calls >= sameDirectionMax || puts >= sameDirectionMax ? 'warn' : 'muted'} title="Open live positions per direction vs max_same_direction_positions" />
-          <Badge variant="outline" className={cn('h-[22px] rounded-md font-mono text-[10px]', toneClass[autonomous.tone])} title="Autonomous live entry state (same source as the action bar)">
+          <Badge variant="outline" className={cn('h-[22px] rounded-md font-mono text-2xs', toneClass[autonomous.tone])} title="Autonomous live entry state (same source as the action bar)">
             auto · {autonomous.text}
           </Badge>
         </div>

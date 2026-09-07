@@ -144,8 +144,8 @@ export function PositionsTable({
                                     <TableCell>
                                         <div className="flex flex-col">
                                             <span className="font-bold">{pos.symbol}</span>
-                                            <span className="text-[10px] text-muted-foreground uppercase">{pos.option_type} ${Number(pos.strike_price).toFixed(2)}</span>
-                                            <span className="text-[10px] text-muted-foreground font-medium">Exp: {parseLocalDate(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                                            <span className="text-2xs text-muted-foreground uppercase">{pos.option_type} ${Number(pos.strike_price).toFixed(2)}</span>
+                                            <span className="text-2xs text-muted-foreground font-medium">Exp: {parseLocalDate(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
                                         </div>
                                     </TableCell>
                                     <TableCell>
@@ -158,7 +158,7 @@ export function PositionsTable({
                                         </div>
                                     </TableCell>
                                     <TableCell>
-                                        <div className="text-[10px] space-y-1">
+                                        <div className="text-2xs space-y-1">
                                             <div className="text-red-500 font-medium whitespace-nowrap">
                                                 SL: ${typeof pos.stop_loss_trigger === 'number' ? pos.stop_loss_trigger.toFixed(2) : '-'}
                                             </div>
@@ -180,22 +180,22 @@ export function PositionsTable({
                                     <TableCell>
                                         <div className={cn("font-bold transition-premium p-1 rounded", getPnL(pos) >= 0 ? 'text-green-500' : 'text-red-500', priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
                                             {getPnL(pos) >= 0 ? '+' : ''}{getPnL(pos).toFixed(2)}
-                                            <div className="text-[10px] opacity-70">
+                                            <div className="text-2xs opacity-70">
                                                 ({getRoi(pos) > 0 ? '+' : ''}{getRoi(pos).toFixed(2)}%)
                                             </div>
                                         </div>
                                     </TableCell>
                                     <TableCell>
                                         {pos.status === 'PENDING_ORDER' ? (
-                                            <Badge variant="outline" className="text-[10px] px-1 py-0 border-amber-500/50 text-amber-600 dark:text-amber-300 animate-pulse">PENDING</Badge>
+                                            <Badge variant="outline" className="text-2xs px-1 py-0 border-amber-500/50 text-amber-600 dark:text-amber-300 animate-pulse">PENDING</Badge>
                                         ) : pos.status === 'STOP_TRIGGERED' ? (
-                                            <Badge variant="destructive" className="text-[10px] px-1 py-0 animate-pulse">STOP</Badge>
+                                            <Badge variant="destructive" className="text-2xs px-1 py-0 animate-pulse">STOP</Badge>
                                         ) : pos.status === 'PROFIT_TRIGGERED' ? (
-                                            <Badge className="bg-green-500 text-[10px] px-1 py-0 animate-pulse">PROFIT</Badge>
+                                            <Badge className="bg-green-500 text-2xs px-1 py-0 animate-pulse">PROFIT</Badge>
                                         ) : pos.status === 'CLOSED' ? (
-                                            <Badge variant="secondary" className="text-[10px] px-1 py-0">CLOSED</Badge>
+                                            <Badge variant="secondary" className="text-2xs px-1 py-0">CLOSED</Badge>
                                         ) : (
-                                            <Badge variant="outline" className="text-[10px] px-1 py-0">OPEN</Badge>
+                                            <Badge variant="outline" className="text-2xs px-1 py-0">OPEN</Badge>
                                         )}
                                     </TableCell>
                                     <TableCell className="text-right">
@@ -253,11 +253,11 @@ export function PositionsTable({
                                     <div>
                                         <div className="flex items-center gap-2">
                                             <span className="font-bold text-lg">{pos.symbol}</span>
-                                            <Badge variant={pos.option_type === 'CALL' ? 'default' : 'secondary'} className="text-[9px] h-4">
+                                            <Badge variant={pos.option_type === 'CALL' ? 'default' : 'secondary'} className="text-2xs h-4">
                                                 {pos.option_type}
                                             </Badge>
                                         </div>
-                                        <p className="text-[10px] text-muted-foreground">
+                                        <p className="text-2xs text-muted-foreground">
                                             ${Number(pos.strike_price).toFixed(2)} • <span className={cn(getDte(pos.expiration_date) < 7 && "text-red-500 font-bold")}>
                                                 {parseLocalDate(pos.expiration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                                             </span>
@@ -275,24 +275,24 @@ export function PositionsTable({
 
                                 <div className="grid grid-cols-2 gap-2 py-2 border-y border-muted/50 text-xs">
                                     <div>
-                                        <p className="text-[9px] text-muted-foreground uppercase">Current Price</p>
+                                        <p className="text-2xs text-muted-foreground uppercase">Current Price</p>
                                         <p className={cn("font-mono font-medium transition-colors duration-200 px-1 rounded", priceChanges[pos.id] === 'up' ? 'pulse-up' : priceChanges[pos.id] === 'down' ? 'pulse-down' : '')}>
                                             ${pos.current_price != null ? Number(pos.current_price).toFixed(2) : '-'}
                                         </p>
                                     </div>
                                     <div>
-                                        <p className="text-[9px] text-muted-foreground uppercase">Stop Loss</p>
+                                        <p className="text-2xs text-muted-foreground uppercase">Stop Loss</p>
                                         <p className="font-mono font-medium text-red-500">${pos.stop_loss_trigger?.toFixed(2)}</p>
                                     </div>
                                 </div>
 
                                 <div className="flex items-center justify-between pt-1">
                                     {pos.status === 'PENDING_ORDER' ? (
-                                        <Badge variant="outline" className="text-[9px] border-amber-500/50 text-amber-600 dark:text-amber-300 animate-pulse">PENDING</Badge>
+                                        <Badge variant="outline" className="text-2xs border-amber-500/50 text-amber-600 dark:text-amber-300 animate-pulse">PENDING</Badge>
                                     ) : pos.status === 'OPEN' ? (
-                                        <Badge variant="outline" className="text-[9px]">OPEN</Badge>
+                                        <Badge variant="outline" className="text-2xs">OPEN</Badge>
                                     ) : (
-                                        <Badge variant="destructive" className="text-[9px] animate-pulse">{pos.status === 'STOP_TRIGGERED' ? 'STOPPED' : 'PROFIT'}</Badge>
+                                        <Badge variant="destructive" className="text-2xs animate-pulse">{pos.status === 'STOP_TRIGGERED' ? 'STOPPED' : 'PROFIT'}</Badge>
                                     )}
                                     <div className="flex gap-2">
                                         <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500 hover:text-blue-600" onClick={() => navigate(`/positions/${pos.id}`)}>

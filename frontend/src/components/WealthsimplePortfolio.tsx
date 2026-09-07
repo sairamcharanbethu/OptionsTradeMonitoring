@@ -159,7 +159,7 @@ export default function WealthsimplePortfolio() {
                 Wealthsimple AI Manager
               </CardTitle>
               {lastReviewedAt && (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-2xs text-muted-foreground">
                   Last Reviewed: <span className="font-semibold text-primary">{new Date(lastReviewedAt).toLocaleString()}</span>
                 </p>
               )}
@@ -216,11 +216,11 @@ export default function WealthsimplePortfolio() {
                           <div className="flex items-center justify-between">
                             <span className="font-bold text-sm text-foreground">{action.symbol}</span>
                             <div className="flex items-center gap-1.5">
-                              <Badge className="bg-red-500 hover:bg-red-600 text-white border-none text-[10px] uppercase font-bold py-0.5">
+                              <Badge className="bg-red-500 hover:bg-red-600 text-white border-none text-2xs uppercase font-bold py-0.5">
                                 {action.verdict}
                               </Badge>
                               {action.amount && action.amount !== 'N/A' && (
-                                <Badge variant="outline" className="text-[10px] font-semibold">
+                                <Badge variant="outline" className="text-2xs font-semibold">
                                   {action.amount}
                                 </Badge>
                               )}
@@ -228,7 +228,7 @@ export default function WealthsimplePortfolio() {
                           </div>
                           <p className="text-xs text-muted-foreground">{action.actionPlan}</p>
                           {action.timeline && (
-                            <div className="text-[10px] font-mono text-red-500/80 bg-red-500/10 w-fit px-1.5 py-0.5 rounded">
+                            <div className="text-2xs font-mono text-red-500/80 bg-red-500/10 w-fit px-1.5 py-0.5 rounded">
                               Timeline: {action.timeline}
                             </div>
                           )}
@@ -254,13 +254,13 @@ export default function WealthsimplePortfolio() {
                         <div key={idx} className="p-3.5 rounded-xl border border-sky-500/10 bg-sky-500/5 dark:bg-sky-500/10 space-y-2">
                           <div className="flex items-center justify-between">
                             <span className="font-bold text-sm text-foreground">{hold.symbol}</span>
-                            <Badge className="bg-sky-500 hover:bg-sky-600 text-white border-none text-[10px] uppercase font-bold py-0.5">
+                            <Badge className="bg-sky-500 hover:bg-sky-600 text-white border-none text-2xs uppercase font-bold py-0.5">
                               {hold.verdict}
                             </Badge>
                           </div>
                           <p className="text-xs text-muted-foreground">{hold.actionPlan}</p>
                           {hold.timeline && (
-                            <div className="text-[10px] font-mono text-sky-600 dark:text-sky-400 bg-sky-500/10 w-fit px-1.5 py-0.5 rounded">
+                            <div className="text-2xs font-mono text-sky-600 dark:text-sky-400 bg-sky-500/10 w-fit px-1.5 py-0.5 rounded">
                               Timeframe: {hold.timeline}
                             </div>
                           )}
@@ -293,7 +293,7 @@ export default function WealthsimplePortfolio() {
             ) : positions.map((pos: any) => (
               <article key={`mobile-${pos.id}`} className="rounded-xl border border-border/70 bg-background/60 p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div><div className="font-bold text-primary">{pos.symbol}</div><Badge variant="outline" className="mt-1 text-[10px]">{pos.asset_type}</Badge></div>
+                  <div><div className="font-bold text-primary">{pos.symbol}</div><Badge variant="outline" className="mt-1 text-2xs">{pos.asset_type}</Badge></div>
                   <div className={`text-right font-mono text-lg font-bold ${Number(pos.open_pnl) >= 0 ? 'text-green-500' : 'text-red-500'}`}>${Number(pos.open_pnl).toFixed(2)}</div>
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-3 border-t border-border/60 pt-3 text-sm">
@@ -330,7 +330,7 @@ export default function WealthsimplePortfolio() {
                         <div className="font-bold text-primary">{pos.symbol}</div>
                       </td>
                       <td className="px-4 py-3">
-                        <Badge variant="outline" className="text-[10px]">{pos.asset_type}</Badge>
+                        <Badge variant="outline" className="text-2xs">{pos.asset_type}</Badge>
                       </td>
                       <td className="px-4 py-3 text-right font-medium">
                         {Number(pos.units).toFixed(4)}
