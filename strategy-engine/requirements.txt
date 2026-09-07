@@ -1,4 +1,5 @@
-ib-insync==0.9.86
+# Maintained fork of ib_insync (same API). trade_prefetch_service falls back to ib_insync if only that is installed.
+ib_async>=1.0.3,<3
 python-dotenv==1.0.1
 requests==2.32.4
 redis==8.0.1

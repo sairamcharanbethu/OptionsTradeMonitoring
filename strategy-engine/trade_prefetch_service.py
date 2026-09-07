@@ -18,9 +18,23 @@ from zoneinfo import ZoneInfo
 
 from typing import TYPE_CHECKING
 
+
+def _ib_module():
+    """Interactive Brokers client library: ``ib_async`` (maintained fork) with a
+    fallback to the original ``ib_insync``. Imported lazily so that tests and
+    the UW replay never need either package installed."""
+    try:
+        import ib_async as module  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        import ib_insync as module  # type: ignore[import-not-found]
+    return module
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ib_insync import Ticker
-else:  # ib_insync is only needed by the live process; tests and the UW replay import this module without it.
+    try:
+        from ib_async import Ticker
+    except ModuleNotFoundError:  # pragma: no cover
+        Ticker = _ib_module().Ticker
+else:  # ib_async/ib_insync is only needed by the live process; tests and the UW replay import this module without it.
     Ticker = Any  # type: ignore[misc,assignment]
 
 try:
@@ -499,7 +513,7 @@ def _policy_option_expiry_dte(policy: dict[str, Any] | None, default: int) -> in
 class TradePrefetcher:
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        from ib_insync import IB  # lazy: keep module import free of ib_insync
+        IB = _ib_module().IB
 
         self.ib = IB()
         self.stocks: dict[str, Any] = {}
@@ -652,7 +666,7 @@ class TradePrefetcher:
         self.last_bar_recovery_reason = None
 
     def connect(self) -> None:
-        # ib_insync ticker objects belong to the connection that created them.
+        # ib_async/ib_insync ticker objects belong to the connection that created them.
         # Reusing them after a reconnect leaves option quotes silently frozen.
         self._reset_option_state()
         self.ib.connect(
@@ -664,7 +678,7 @@ class TradePrefetcher:
         )
         self.ib.reqMarketDataType(DATA_TYPES[self.args.data_type])
         for symbol in self.args.symbols:
-            from ib_insync import Stock
+            Stock = _ib_module().Stock
 
             stock = Stock(symbol, DEFAULT_EXCHANGE, DEFAULT_CURRENCY)
             self.ib.qualifyContracts(stock)
@@ -1381,7 +1395,7 @@ class TradePrefetcher:
         """Self-restart on a silent hang.
 
         In-process IBKR reconnect handles dropped sockets, but a blocking
-        ib_insync call on a half-open socket can hang without raising — no
+        ib_async/ib_insync call on a half-open socket can hang without raising — no
         exception (so no reconnect) and no exit (so the container's restart
         policy, which only fires on exit, never triggers). This watchdog turns
         that stall into an exit: if the main loop makes no progress for
@@ -1718,7 +1732,7 @@ def main() -> None:
             "--zerogex-minute-bucket-grace-seconds must be between 0 and 60"
         )
     args.symbols = [symbol.upper() for symbol in args.symbols]
-    from ib_insync import util
+    util = _ib_module().util
 
     util.patchAsyncio()
     TradePrefetcher(args).run()

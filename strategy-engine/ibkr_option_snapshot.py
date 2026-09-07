@@ -20,9 +20,23 @@ from zoneinfo import ZoneInfo
 
 from typing import TYPE_CHECKING
 
+
+def _ib_module():
+    """Interactive Brokers client library: ``ib_async`` (maintained fork) with a
+    fallback to the original ``ib_insync``. Imported lazily so that tests and
+    the UW replay never need either package installed."""
+    try:
+        import ib_async as module  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        import ib_insync as module  # type: ignore[import-not-found]
+    return module
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ib_insync import Option
-else:  # lazy: importing this module must not require ib_insync (tests / UW replay)
+    try:
+        from ib_async import Option
+    except ModuleNotFoundError:  # pragma: no cover
+        Option = _ib_module().Option
+else:  # lazy: importing this module must not require ib_async/ib_insync (tests / UW replay)
     Option = Any  # type: ignore[misc,assignment]
 
 DEFAULT_HOST = "127.0.0.1"
@@ -119,7 +133,7 @@ def _select_strikes(strikes: list[float], spot: float, count: int) -> tuple[list
 
 
 def _contract(symbol: str, expiry: str, strike: float, right: str, trading_class: str) -> Option:
-    from ib_insync import Option
+    Option = _ib_module().Option
 
     return Option(
         symbol=symbol,
@@ -179,7 +193,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from ib_insync import IB, Stock
+    IB = _ib_module().IB
+
+    Stock = _ib_module().Stock
 
     symbol = args.underlying.upper()
     ib = IB()
@@ -220,7 +236,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    from ib_insync import util
+    util = _ib_module().util
 
     util.patchAsyncio()
     main()
