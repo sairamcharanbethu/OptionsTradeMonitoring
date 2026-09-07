@@ -1791,6 +1791,7 @@ export class SignalReplayBacktester {
   private engineGateCategory(gates: string[]): string {
     const first = String(gates[0] || '');
     if (first.includes('gamma flip')) return 'flip_no_mans_land';
+    if (first.includes('positive gamma')) return 'continuation_positive_gamma';
     if (first.includes('Positive/Range pin')) return 'momentum_in_positive_range';
     if (first.includes('incomplete signal')) return 'engine_incomplete_signal';
     if (first.includes('activation window')) return 'engine_activation_window_expired';

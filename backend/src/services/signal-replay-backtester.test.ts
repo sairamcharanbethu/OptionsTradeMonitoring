@@ -322,9 +322,14 @@ async function testStructureGateUsesLivePythonEngineGate() {
     volatility: { atr_5m: 1.0 },
     gex: { flip: 770.37, regime: 'Negative', gamma_regime: 'Trend' } });
   // Momentum setup in a Positive/Range pin, far from flip (trades #793/#794).
-  const pinMomentum = createSignal({ current_price: 771.24, strategy_name: 'CONTINUATION',
+  // Momentum (non-continuation) in a Positive/Range pin -> the pin gate.
+  const pinMomentum = createSignal({ current_price: 771.24, strategy_name: 'MTF_TREND_BREAK',
     volatility: { atr_5m: 1.0 },
     gex: { flip: 760.0, regime: 'Positive', gamma_regime: 'Range' } });
+  // CONTINUATION in ANY positive gamma -> its own gate (2026-09-06: dealer hedging dampens moves).
+  const positiveContinuation = createSignal({ current_price: 771.24, strategy_name: 'CONTINUATION',
+    volatility: { atr_5m: 1.0 },
+    gex: { flip: 760.0, regime: 'Positive', gamma_regime: 'Trend' } });
   // A fade in the same pin, far from flip, is exempt (meant to trade ranges).
   const pinFade = createSignal({ current_price: 771.24, strategy_name: 'GEX_WALL_BOUNCE',
     volatility: { atr_5m: 1.0 },
@@ -336,7 +341,7 @@ async function testStructureGateUsesLivePythonEngineGate() {
   // No strategy at all: the real engine's completeness gate refuses it.
   const noContext = createSignal({ current_price: null, strategy_name: null, gex: null, volatility: null });
 
-  const signals = [nearFlip, pinMomentum, pinFade, cleanTrend, noContext];
+  const signals = [nearFlip, pinMomentum, positiveContinuation, pinFade, cleanTrend, noContext];
   const status = await backtester.evaluateEngineGates(signals);
   assert(status.available === true, `The Python gate harness must run in tests (error: ${status.error})`);
   assert(status.evaluated === signals.length, `Every signal must receive an engine verdict (${status.evaluated}/${signals.length})`);
@@ -346,6 +351,8 @@ async function testStructureGateUsesLivePythonEngineGate() {
     'A directional entry hugging the gamma flip must be gated by the engine');
   assert(gate(pinMomentum) === 'momentum_in_positive_range',
     'A momentum setup in a Positive/Range pin must be gated by the engine');
+  assert(gate(positiveContinuation) === 'continuation_positive_gamma',
+    'CONTINUATION in positive gamma must be gated by the engine regardless of the pin flag');
   assert(gate(pinFade) === null,
     'A fade in a Positive/Range pin is not gated');
   assert(gate(cleanTrend) === null,

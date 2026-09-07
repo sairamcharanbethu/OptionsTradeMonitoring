@@ -21,6 +21,19 @@ export async function adminRoutes(fastify: FastifyInstance, options: FastifyPlug
     });
 
     // GET /api/admin/users - List all users
+    // ZeroGEX replay archive (frames roll off the vendor after ~30 sessions).
+    fastify.get('/zerogex-archive/status', async (request, reply) => {
+        const archive = (fastify as any).zerogexArchive;
+        if (!archive) return reply.code(503).send({ error: 'archive service unavailable' });
+        return archive.status(String((request.query as any)?.symbol || 'SPY'));
+    });
+    fastify.post('/zerogex-archive/backfill', async (request, reply) => {
+        const archive = (fastify as any).zerogexArchive;
+        if (!archive) return reply.code(503).send({ error: 'archive service unavailable' });
+        const body = (request.body as any) || {};
+        return archive.backfill({ symbol: body.symbol, limit: body.limit, force: body.force === true });
+    });
+
     fastify.get('/users', async (request, reply) => {
         try {
             const { rows } = await fastify.pg.query(

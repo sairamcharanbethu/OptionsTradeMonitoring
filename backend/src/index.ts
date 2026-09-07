@@ -1,3 +1,4 @@
+import { ZeroGexArchiveService } from './services/zerogex-archive-service';
 import Fastify from 'fastify';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -996,6 +997,9 @@ const start = async () => {
     const { MarketPoller } = await import('./services/market-poller');
     const poller = new MarketPoller(fastify);
     fastify.decorate('poller', poller);
+    await ZeroGexArchiveService.ensureSchema((fastify as any).pg);
+    const zerogexArchive = new ZeroGexArchiveService(fastify);
+    fastify.decorate('zerogexArchive', zerogexArchive);
 
     // Execution shim + status probes (the legacy scanner itself is retired).
     const { SignalExecutionService } = await import('./services/signal-execution-service');
@@ -1490,6 +1494,7 @@ const start = async () => {
     const startBackgroundServices = async () => {
       fastify.log.info('[System] Starting background services...');
       poller.start();
+      zerogexArchive.start();
       const brokerSyncTimer = setInterval(() => {
         runQueuedBrokerSync().catch((err: any) =>
           fastify.log.warn(`[BrokerSync] queued sync loop error: ${err?.message || String(err)}`));
