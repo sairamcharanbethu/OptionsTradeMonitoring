@@ -179,7 +179,8 @@ export default function DayTradingTerminal() {
   // The cockpit answers one question above the fold: act, or wait. Everything
   // below is evidence for that answer, and evidence should not cost a scroll
   // during an entry window — so it lives behind tabs rather than in a stack.
-  const openCount = (positions?.length || 0) + (paperAccount?.openPositions?.length || 0);
+  const openCount = (positions || []).filter((position: any) => String(position?.status || '').toUpperCase() === 'OPEN').length
+    + (paperAccount?.openPositions?.length || 0);
   const unhealthy = useMemo(
     () => (diagnostics || []).filter((row) => {
       const status = String(row?.status || '').toUpperCase();

@@ -18,6 +18,8 @@ import {
 import { api } from '../lib/api';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { severityOf } from '@/components/ui/semantics';
+import { cn } from '@/lib/utils';
 
 type ApiHealth = Awaited<ReturnType<typeof api.getSignalsHealth>>;
 type ServiceHealth = Awaited<ReturnType<typeof api.getServicesHealth>>;
@@ -82,16 +84,16 @@ const formatDurationMs = (value?: number | null) => {
 
 const statusTone = (status?: string | null) => {
   const normalized = String(status || '').toUpperCase();
-  if (['UP', 'RUNNING', 'SCANNING', 'CONNECTED', 'OK'].includes(normalized)) return 'text-emerald-500 border-emerald-500/30 bg-emerald-500/10';
-  if (['DEGRADED', 'MARKET_CLOSED', 'IDLE', 'STOPPED'].includes(normalized)) return 'text-amber-500 border-sev-warn/35 bg-sev-warn-soft';
+  if (['UP', 'RUNNING', 'SCANNING', 'CONNECTED', 'OK'].includes(normalized)) return 'text-sev-ok border-border bg-sev-ok-soft';
+  if (['DEGRADED', 'MARKET_CLOSED', 'IDLE', 'STOPPED'].includes(normalized)) return 'text-sev-warn border-sev-warn/35 bg-sev-warn-soft';
   if (['N/A', 'DISABLED'].includes(normalized)) return 'text-muted-foreground border-border bg-muted/40';
-  return 'text-red-500 border-sev-critical/30 bg-sev-critical-soft';
+  return 'text-sev-critical border-sev-critical/35 bg-sev-critical-soft';
 };
 
 const severityTone = (severity: HealthSeverity) => {
-  if (severity === 'critical') return 'border-sev-critical/30 bg-sev-critical-soft text-red-500';
-  if (severity === 'warning') return 'border-sev-warn/35 bg-sev-warn-soft text-amber-500';
-  if (severity === 'ok') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500';
+  if (severity === 'critical') return 'border-sev-critical/35 bg-sev-critical-soft text-sev-critical';
+  if (severity === 'warning') return 'border-sev-warn/35 bg-sev-warn-soft text-sev-warn';
+  if (severity === 'ok') return 'border-border bg-sev-ok-soft text-sev-ok';
   return 'border-border bg-muted/40 text-muted-foreground';
 };
 
@@ -423,12 +425,18 @@ function StatusPill({ status, ignored = false }: { status?: string | null; ignor
 }
 
 function MetricCard({ label, value, detail, icon: Icon }: { label: string; value: string; detail?: string; icon: any }) {
+  // "DOWN" and "Disconnected" rendered in the same plain white as "UP", so the
+  // tile row read as uniform until you actually read every word.
+  const severity = severityOf(value);
   return (
     <div className="rounded-md border border-border bg-card p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="text-2xs font-semibold uppercase text-muted-foreground">{label}</div>
-          <div className="mt-1 truncate font-mono text-xl font-semibold">{value}</div>
+          <div className={cn(
+            'mt-1 truncate font-mono text-xl font-semibold',
+            severity === 'critical' ? 'text-sev-critical' : severity === 'warn' ? 'text-sev-warn' : 'text-foreground'
+          )}>{value}</div>
         </div>
         <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
       </div>

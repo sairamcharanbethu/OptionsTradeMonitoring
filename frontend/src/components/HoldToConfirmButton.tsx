@@ -84,7 +84,7 @@ export default function HoldToConfirmButton({
     <button
       type="button"
       className={cn(
-        'relative isolate flex h-10 min-w-[7.5rem] select-none items-center justify-center gap-1.5 overflow-hidden rounded-md border px-3 text-xs font-semibold tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'relative isolate flex h-10 min-w-[5.5rem] shrink-0 select-none items-center justify-center gap-1.5 overflow-hidden rounded-md border px-2.5 text-xs font-semibold tracking-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-w-[7.5rem] sm:px-3',
         // Unavailable, but still legible: you need to read why an action is
         // off, especially when it is the one that closes your positions.
         isOff

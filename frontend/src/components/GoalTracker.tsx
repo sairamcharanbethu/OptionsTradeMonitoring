@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
+import { StatusChip } from '@/components/ui/semantics';
 import { useQueryClient } from '@tanstack/react-query';
 import { api, Goal, GoalEntry, GoalInsights } from '@/lib/api';
 import { useGoals, useGoalEntries, useGoalInsights, GOAL_QUERY_KEYS } from '@/hooks/useGoalData';
@@ -403,7 +404,7 @@ export default function GoalTracker() {
         
         return (
             <span>
-                {usdStr} <span className="text-[0.75em] text-muted-foreground font-normal">({cadStr})</span>
+                {usdStr} <span className="text-2xs text-muted-foreground font-normal">({cadStr})</span>
             </span>
         );
     };
@@ -445,6 +446,16 @@ export default function GoalTracker() {
     }, [goals]);
 
     const activeGoalId = selectedGoalId ?? defaultGoalId;
+
+    // Whether the goal on screen is a finished period. Without saying so, the
+    // page reads as "you are 95% behind" when the month simply ended.
+    const activeGoalEnded = useMemo(() => {
+        const goal = goals.find(g => g.id === activeGoalId);
+        if (!goal) return false;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return parseGoalDate(goal.end_date) < today;
+    }, [goals, activeGoalId]);
 
     const { data: entries = [], isLoading: entriesLoading } = useGoalEntries(activeGoalId);
     const { data: insights, isLoading: insightsLoading } = useGoalInsights(activeGoalId);
@@ -719,7 +730,9 @@ export default function GoalTracker() {
         <div className="space-y-4 sm:space-y-6">
             <PageHeader
                 title="Goals"
-                description="Monthly profit targets, pace against plan, and the milestones behind them."
+                description={activeGoalEnded
+                    ? 'No goal covers today. Showing the most recent completed period — create a new goal to track the current one.'
+                    : 'Monthly profit targets, pace against plan, and the milestones behind them.'}
             />
 
             {/* Goal Selector Bar */}
@@ -806,9 +819,11 @@ export default function GoalTracker() {
                             <CardHeader className="pb-3">
                                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                     <CardTitle className="min-w-0 text-sm font-medium text-muted-foreground">
-                                        Progress to {activeGoal.name}
+                                        {activeGoalEnded ? 'Final result for' : 'Progress to'} {activeGoal.name}
                                     </CardTitle>
-                                    {insights && <StatusBadge status={insights.status} />}
+                                    {activeGoalEnded
+                                        ? <StatusChip severity="muted">Period ended</StatusChip>
+                                        : insights && <StatusBadge status={insights.status} />}
                                 </div>
                             </CardHeader>
                             <CardContent className="space-y-4">
