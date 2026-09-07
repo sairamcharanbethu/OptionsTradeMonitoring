@@ -10,6 +10,8 @@ import { NoTradeWindow, findActiveNoTradeWindow, getEventNoTradeWindows, parseCu
 import { DiscordAlertService } from './discord-alert-service';
 import { StrategyLifecycleManager } from './strategy-lifecycle-manager';
 import { LiveAiGateService } from './live-ai-gate-service';
+import { TradeRedisService } from './trade-redis-service';
+import { publishRealtime } from '../lib/realtime';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
 
@@ -36,6 +38,10 @@ export class StrategyEngineAdapter {
   private currentSignals: Record<string, StrategySnapshot> = {};
   private currentHealth: StrategySnapshot | null = null;
   private currentSetupId: string | null = null;
+  // Operator vetoes: setup ids that must never be entered autonomously or
+  // through the manual execute path. A NEW frozen plan gets a new id and is
+  // not vetoed. Restored from signals.lifecycle_status='VETOED' on start.
+  private vetoedSetupIds = new Set<string>();
   private laneSetupIds: Record<string, string | null> = {};
   private currentPlanFingerprint: string | null = null;
   private lanePlanFingerprints: Record<string, string | null> = {};
@@ -138,6 +144,8 @@ export class StrategyEngineAdapter {
           : null,
         signal
       })),
+      setupVetoed: this.currentSetupId ? this.vetoedSetupIds.has(this.currentSetupId) : false,
+      vetoedSetupIds: Array.from(this.vetoedSetupIds),
       autonomousEntry: {
         lastAttemptAt: this.lastAutonomousEntryAt,
         lastResult: this.lastAutonomousEntryResult,
@@ -161,6 +169,78 @@ export class StrategyEngineAdapter {
 
   public noteEntryBlockState(halted: boolean, reason?: string | null): void {
     this.lastEntryBlock = { halted, reason: reason || null };
+  }
+
+  public getVetoedSetupIds(): string[] {
+    return Array.from(this.vetoedSetupIds);
+  }
+
+  public isSetupVetoed(setupId: string | null | undefined): boolean {
+    return Boolean(setupId) && this.vetoedSetupIds.has(String(setupId));
+  }
+
+  /**
+   * Operator veto of one frozen setup. Persists on every signal row that
+   * carries the setup id (so a restart restores it), records a trade event,
+   * and pushes the new state to the UI. Idempotent.
+   */
+  public async vetoSetup(setupId: string, input: { userId: number; reason?: string | null }): Promise<string[]> {
+    const id = String(setupId || '').trim();
+    if (!id) throw this.conflict('A setup id is required to veto');
+    this.vetoedSetupIds.add(id);
+    const live = this.liveSignalForSetup(id);
+    try {
+      await (this.fastify as any).pg.query(
+        `UPDATE signals
+         SET lifecycle_status = 'VETOED',
+             entry_allowed = FALSE,
+             status = CASE WHEN status IN ('PENDING', 'PENDING_TRIGGER') THEN 'CANCELLED' ELSE status END
+         WHERE strategy_setup_id = $1`,
+        [id]
+      );
+    } catch (err: any) {
+      this.fastify.log.warn(`[StrategyEngineAdapter] Veto persist failed for ${id}: ${err?.message || String(err)}`);
+    }
+    try {
+      await TradeRedisService.recordEvent((this.fastify as any).pg, {
+        userId: input.userId,
+        eventType: 'SETUP_VETOED',
+        message: `Operator vetoed setup ${id.slice(0, 8)}${input.reason ? `: ${input.reason}` : ''}`,
+        metadata: {
+          setup_id: id,
+          strategy: live?.strategy || null,
+          side: live?.favoring || null,
+          reason: input.reason || null
+        }
+      });
+    } catch (err: any) {
+      this.fastify.log.warn(`[StrategyEngineAdapter] Veto event record failed: ${err?.message || String(err)}`);
+    }
+    this.lastAutonomousEntryResult = `Blocked: setup ${id.slice(0, 8)} vetoed by operator`;
+    publishRealtime('STRATEGY_STATE', this.getCurrentState());
+    return this.getVetoedSetupIds();
+  }
+
+  public async unvetoSetup(setupId: string, input: { userId: number }): Promise<string[]> {
+    const id = String(setupId || '').trim();
+    if (!id) throw this.conflict('A setup id is required to clear a veto');
+    this.vetoedSetupIds.delete(id);
+    try {
+      await (this.fastify as any).pg.query(
+        `UPDATE signals SET lifecycle_status = 'ACTIVE' WHERE strategy_setup_id = $1 AND lifecycle_status = 'VETOED'`,
+        [id]
+      );
+      await TradeRedisService.recordEvent((this.fastify as any).pg, {
+        userId: input.userId,
+        eventType: 'SETUP_VETO_CLEARED',
+        message: `Operator cleared the veto on setup ${id.slice(0, 8)}`,
+        metadata: { setup_id: id }
+      });
+    } catch (err: any) {
+      this.fastify.log.warn(`[StrategyEngineAdapter] Unveto persist failed for ${id}: ${err?.message || String(err)}`);
+    }
+    publishRealtime('STRATEGY_STATE', this.getCurrentState());
+    return this.getVetoedSetupIds();
   }
 
   private startRedisSubscription(): void {
@@ -251,6 +331,9 @@ export class StrategyEngineAdapter {
     }
     if (!this.isCurrentSetup(setupId)) {
       throw this.conflict('The strategy setup changed after this signal was displayed');
+    }
+    if (this.vetoedSetupIds.has(setupId)) {
+      throw this.conflict('The current setup was vetoed by the operator');
     }
     const lifecycle = live.lifecycle || {};
     if (String(live.state) !== 'ACTIVE' || lifecycle.entry_allowed !== true) {
@@ -418,6 +501,7 @@ export class StrategyEngineAdapter {
         type: 'STRATEGY_STATE_CHANGED',
         data: this.getCurrentState()
       });
+      publishRealtime('STRATEGY_STATE', this.getCurrentState());
     } catch (error) {
       const displayLane = this.selectDisplayLane(this.currentSignals);
       this.currentSignal = this.currentSignals[displayLane] || this.currentSignal;
@@ -917,6 +1001,11 @@ export class StrategyEngineAdapter {
       this.lastAutonomousEntryResult = `Blocked: ${entryWindow.reason}`;
       return;
     }
+    const candidateSetupId = this.laneSetupIds[this.strategyLane(signal)] || this.currentSetupId;
+    if (candidateSetupId && this.vetoedSetupIds.has(candidateSetupId)) {
+      this.lastAutonomousEntryResult = `Blocked: setup ${candidateSetupId.slice(0, 8)} vetoed by operator`;
+      return;
+    }
 
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT DISTINCT user_id
@@ -1001,6 +1090,17 @@ export class StrategyEngineAdapter {
       this.currentPlanFingerprint = restoredLane
         ? this.lanePlanFingerprints[restoredLane]
         : null;
+      // Operator vetoes survive a restart for the current session.
+      const { rows: vetoRows } = await (this.fastify as any).pg.query(
+        `SELECT DISTINCT strategy_setup_id
+         FROM signals
+         WHERE lifecycle_status = 'VETOED'
+           AND strategy_setup_id IS NOT NULL
+           AND created_at >= NOW() - INTERVAL '1 day'`
+      );
+      for (const row of vetoRows || []) {
+        if (row?.strategy_setup_id) this.vetoedSetupIds.add(String(row.strategy_setup_id));
+      }
     } catch (err: any) {
       this.fastify.log.warn(`[StrategyEngineAdapter] Setup restore skipped: ${err.message || String(err)}`);
     }

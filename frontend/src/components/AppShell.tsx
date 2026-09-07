@@ -28,6 +28,8 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { User, api } from '@/lib/api';
 import { useKillSwitch, useMarketStatus, useSettings } from '@/hooks/useDashboardData';
+import { useRealtimeSync } from '@/hooks/useRealtimeSync';
+import ActionBar from '@/components/ActionBar';
 import { useTheme } from './ThemeProvider';
 import SettingsDialog from './SettingsDialog';
 import { Button } from './ui/button';
@@ -232,6 +234,8 @@ export default function AppShell({ user, onUserUpdate, children }: {
   const { data: marketStatus, isError: marketStatusUnavailable, isLoading: marketStatusLoading } = useMarketStatus();
   const { data: killSwitch, isError: killSwitchUnavailable } = useKillSwitch(10000);
   const { data: shellSettings = {} } = useSettings();
+  // Applies server pushes (strategy state, positions, kill switch, events) to the query caches app-wide.
+  useRealtimeSync();
   const { theme, setTheme } = useTheme();
   // One glanceable truth on every page: is this system armed for real money?
   const liveConfigured = shellSettings.shadow_trading_enabled !== 'true'
@@ -345,9 +349,10 @@ export default function AppShell({ user, onUserUpdate, children }: {
         </div>
       </header>
 
-      <main id="main-content" className="app-shell-content pb-[calc(5rem+env(safe-area-inset-bottom))] lg:pb-0">
+      <main id="main-content" className="app-shell-content pb-[calc(9rem+env(safe-area-inset-bottom))] lg:pb-0 lg:pt-14">
         {children}
       </main>
+      <ActionBar user={user} />
 
       <nav className="mobile-bottom-nav lg:hidden" aria-label="Mobile navigation">
         <Link

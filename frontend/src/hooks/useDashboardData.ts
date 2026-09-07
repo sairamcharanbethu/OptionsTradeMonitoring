@@ -1,6 +1,16 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, Position, Signal } from '@/lib/api';
 import { useRef, useEffect } from 'react';
+import { useRealtimeConnected } from '@/hooks/useWebSocket';
+
+// While the WebSocket is live the server pushes STRATEGY_STATE / POSITION_UPDATE /
+// KILL_SWITCH / TRADE_EVENT into these caches (see useRealtimeSync), so polling
+// only has to cover a dropped socket.
+function adaptiveInterval(fast: number, slow: number) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const connected = useRealtimeConnected();
+    return connected ? slow : fast;
+}
 
 // Keys
 export const QUERY_KEYS = {
@@ -22,38 +32,42 @@ export const QUERY_KEYS = {
 // currently possible. isError must be surfaced — an unreachable kill switch
 // is NOT the same as "not halted".
 export function useKillSwitch(refreshInterval = 5000) {
+    const interval = adaptiveInterval(refreshInterval, Math.max(refreshInterval, 30000));
     return useQuery({
         queryKey: QUERY_KEYS.killSwitch,
         queryFn: () => api.getKillSwitch(),
-        refetchInterval: refreshInterval,
+        refetchInterval: interval,
         staleTime: 2000,
         retry: 1,
     });
 }
 
 export function usePositions(refreshInterval = 30000) {
+    const interval = adaptiveInterval(refreshInterval, Math.max(refreshInterval, 60000));
     return useQuery({
         queryKey: QUERY_KEYS.positions,
         queryFn: () => api.getPositions(),
-        refetchInterval: refreshInterval,
+        refetchInterval: interval,
         staleTime: 10000,
     });
 }
 
 export function useSignals(refreshInterval = 5000) {
+    const interval = adaptiveInterval(refreshInterval, Math.max(refreshInterval, 30000));
     return useQuery({
         queryKey: QUERY_KEYS.signals,
         queryFn: () => api.getSignals(),
-        refetchInterval: refreshInterval,
+        refetchInterval: interval,
         staleTime: 2000,
     });
 }
 
 export function useStrategyState(refreshInterval = 10000) {
+    const interval = adaptiveInterval(refreshInterval, Math.max(refreshInterval, 30000));
     return useQuery({
         queryKey: QUERY_KEYS.strategyState,
         queryFn: () => api.getStrategyState(),
-        refetchInterval: refreshInterval,
+        refetchInterval: interval,
         staleTime: 500,
     });
 }

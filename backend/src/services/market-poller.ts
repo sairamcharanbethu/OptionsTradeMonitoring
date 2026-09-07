@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { publishRealtime } from '../lib/realtime';
 import { FastifyInstance } from 'fastify';
 import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
@@ -21,7 +22,7 @@ type ExitQuoteContext = {
   source?: string;
 };
 
-type ExitTriggerType = 'STOP_LOSS' | 'TRAILING_STOP' | 'TAKE_PROFIT' | 'THETA_STOP' | 'END_OF_DAY';
+export type ExitTriggerType = 'STOP_LOSS' | 'TRAILING_STOP' | 'TAKE_PROFIT' | 'THETA_STOP' | 'END_OF_DAY' | 'MANUAL_FLATTEN_ALL';
 
 export class MarketPoller {
   private fastify: FastifyInstance;
@@ -539,7 +540,7 @@ export class MarketPoller {
     });
   }
 
-  private async submitSnapTradeExit(
+  public async submitSnapTradeExit(
     position: any,
     orderType: 'LIMIT' | 'MARKET',
     limitPrice?: string,
@@ -565,6 +566,8 @@ export class MarketPoller {
         ? 'SYNTHETIC_TRAILING_STOP'
         : exitTriggerType === 'END_OF_DAY'
           ? 'MANDATORY_DAY_TRADE_FLATTEN'
+        : exitTriggerType === 'MANUAL_FLATTEN_ALL'
+          ? 'MANUAL_FLATTEN_ALL'
         : 'AUTO_EXIT';
     const claimNote = partialTrim
       ? ` [Profit trim claim created before SnapTrade ${orderType} ${exitAction} for ${exitQuantity}/${position.quantity} contracts]`
@@ -594,6 +597,7 @@ export class MarketPoller {
       this.fastify.log.info(`[MarketPoller] Exit/trim already pending or unavailable for position ${position.id}. Skipping duplicate ${exitAction}.`);
       return false;
     }
+    publishRealtime('POSITION_UPDATE', { id: position.id, kind: 'lifecycle', execution_status: nextExecutionStatus, exit_reason: nextExitReason }, { userId: position.user_id });
 
     let acceptedOrder: { orderId?: string | null; tradeId?: string | null } | null = null;
     try {
@@ -978,7 +982,7 @@ export class MarketPoller {
     return this.processUpdate(position, price, greeks, iv, underlyingPrice, quote);
   }
 
-  private hasUnresolvedExit(position: any): boolean {
+  public hasUnresolvedExit(position: any): boolean {
     const executionStatus = String(position?.execution_status || '');
     return TradeLifecycleService.isPendingExitStatus(executionStatus)
       || TradeLifecycleService.isBrokerExitReviewStatus(executionStatus);

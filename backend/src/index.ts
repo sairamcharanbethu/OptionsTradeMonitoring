@@ -1342,6 +1342,12 @@ const start = async () => {
 
     const wsClients = new Map<any, string>();
     const wsUserIds = new Map<any, number>();
+    const { configureRealtime } = await import('./lib/realtime');
+    configureRealtime({
+      getWebsocketServer: () => (fastify as any).websocketServer,
+      socketUserIds: wsUserIds,
+      log: fastify.log
+    });
 
     const getLegacyWsClientId = (req: any) => {
       const fingerprint = [

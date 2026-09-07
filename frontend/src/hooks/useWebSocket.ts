@@ -149,6 +149,36 @@ const disconnectGlobal = () => {
     }, 2000);
 };
 
+/** Connection status only (opens the shared socket if needed). Used to relax polling while live. */
+export const useRealtimeConnected = (url: string = '/api/ws') => {
+    const [isConnected, setIsConnected] = useState(wsState.isConnected);
+    useEffect(() => {
+        const handleStatus = (connected: boolean) => setIsConnected(connected);
+        wsState.statusSubscribers.add(handleStatus);
+        setIsConnected(wsState.isConnected);
+        connectGlobal(url);
+        return () => {
+            wsState.statusSubscribers.delete(handleStatus);
+            if (wsState.subscribers.size === 0 && wsState.statusSubscribers.size === 0 && wsState.authSubscribers.size === 0) {
+                disconnectGlobal();
+            }
+        };
+    }, [url]);
+    return isConnected;
+};
+
+/** Subscribe a raw message handler without re-rendering on every message. */
+export const subscribeRealtime = (handler: (msg: WebSocketMessage) => void, url: string = '/api/ws') => {
+    wsState.subscribers.add(handler);
+    connectGlobal(url);
+    return () => {
+        wsState.subscribers.delete(handler);
+        if (wsState.subscribers.size === 0 && wsState.statusSubscribers.size === 0 && wsState.authSubscribers.size === 0) {
+            disconnectGlobal();
+        }
+    };
+};
+
 export const useWebSocket = (url: string = '/api/ws') => {
     const [isConnected, setIsConnected] = useState(wsState.isConnected);
     const [isAuthenticated, setIsAuthenticated] = useState(wsState.isAuthenticated);

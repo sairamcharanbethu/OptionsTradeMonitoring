@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { publishRealtime } from '../lib/realtime';
 import { redis } from '../lib/redis';
 import { MarketDataWriteBufferService } from './market-data-write-buffer-service';
 
@@ -252,6 +253,21 @@ export class TradeRedisService {
         ...event,
         generatedAt: new Date().toISOString()
       }), 3600);
+    }
+
+    // Operator UI push. Every lifecycle transition records an event, so a
+    // position-linked event is also the signal to refresh that position.
+    publishRealtime('TRADE_EVENT', {
+      user_id: event.userId,
+      signal_id: event.signalId || null,
+      position_id: event.positionId || null,
+      event_type: event.eventType,
+      message: event.message || null,
+      metadata,
+      created_at: new Date().toISOString()
+    }, { userId: event.userId });
+    if (event.positionId) {
+      publishRealtime('POSITION_UPDATE', { id: event.positionId, kind: 'lifecycle', event_type: event.eventType }, { userId: event.userId });
     }
   }
 

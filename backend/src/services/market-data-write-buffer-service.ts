@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { publishRealtime } from '../lib/realtime';
 import crypto from 'crypto';
 import { FastifyInstance } from 'fastify';
 import { redis as defaultRedis } from '../lib/redis';
@@ -87,8 +88,23 @@ export class MarketDataWriteBufferService {
       }),
       this.redisClient.zadd(this.historyKey(positionId), Number.isFinite(score) ? score : Date.now(), history)
     ]);
+    this.publishQuote(input);
 
     return true;
+  }
+
+  /** Operator UI push of the latest mark/stop for a position (never throws). */
+  private publishQuote(input: QuoteTelemetry): void {
+    publishRealtime('POSITION_UPDATE', {
+      id: Number(input.positionId),
+      kind: 'quote',
+      current_price: input.price,
+      stop_loss_trigger: input.stopLossTrigger ?? null,
+      trailing_high_price: input.trailingHighPrice ?? null,
+      underlying_price: input.underlyingPrice ?? null,
+      delta: input.delta ?? null,
+      recorded_at: input.recordedAt || new Date().toISOString()
+    });
   }
 
   public async flushToDatabase(): Promise<FlushSummary> {
@@ -136,6 +152,7 @@ export class MarketDataWriteBufferService {
   public async writeThrough(input: QuoteTelemetry) {
     await this.updateCurrentPrice(input);
     await this.insertPriceHistory(input.positionId, input.price, input.recordedAt || new Date().toISOString());
+    this.publishQuote(input);
   }
 
   public async applyLatestToPositions<T extends { id: number | string; status?: string }>(positions: T[]): Promise<T[]> {

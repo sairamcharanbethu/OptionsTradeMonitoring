@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import { KillSwitchService } from '../services/kill-switch-service';
+import { publishRealtime } from '../lib/realtime';
 
 export async function killSwitchRoutes(fastify: FastifyInstance, _options: FastifyPluginOptions) {
   fastify.addHook('onRequest', fastify.authenticate);
@@ -23,13 +24,10 @@ export async function killSwitchRoutes(fastify: FastifyInstance, _options: Fasti
   });
 
   const setDisarmed = async (userId: number, disarmed: boolean) => {
-    await fastify.pg.query(
-      `INSERT INTO settings (user_id, key, value, updated_at)
-       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-       ON CONFLICT (user_id, key) DO UPDATE
-       SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-      [userId, KillSwitchService.DISARM_KEY, disarmed ? 'true' : 'false']
-    );
+    await KillSwitchService.setLiveDisarmed(fastify.pg, userId, disarmed);
+    const live = await KillSwitchService.evaluate(fastify.pg, 'live', userId);
+    publishRealtime('KILL_SWITCH', { live }, { userId });
+    return live;
   };
 
   // One-click disarm: blocks every new live entry (autonomous, AI, or manual)
@@ -43,9 +41,9 @@ export async function killSwitchRoutes(fastify: FastifyInstance, _options: Fasti
     }
   }, async (request) => {
     const { id: userId } = (request as any).user;
-    await setDisarmed(userId, true);
+    const live = await setDisarmed(userId, true);
     fastify.log.warn(`[KillSwitch] Live trading DISARMED by user ${userId}`);
-    return { live: await KillSwitchService.evaluate(fastify.pg, 'live', userId) };
+    return { live };
   });
 
   fastify.post('/live/arm', {
@@ -57,8 +55,8 @@ export async function killSwitchRoutes(fastify: FastifyInstance, _options: Fasti
     }
   }, async (request) => {
     const { id: userId } = (request as any).user;
-    await setDisarmed(userId, false);
+    const live = await setDisarmed(userId, false);
     fastify.log.warn(`[KillSwitch] Live trading re-armed by user ${userId}`);
-    return { live: await KillSwitchService.evaluate(fastify.pg, 'live', userId) };
+    return { live };
   });
 }

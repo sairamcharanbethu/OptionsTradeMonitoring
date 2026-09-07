@@ -345,6 +345,18 @@ async function runTests() {
     (error: Error) => assert(error.message.includes('No-trade window') && error.message.includes('CPI'), 'No-trade rejection must name the window')
   );
   reviewAdapter.currentSignal.session_policy.no_trade_windows = [];
+  // Operator veto: the current setup is refused until cleared; a new setup id is untouched.
+  const vetoedIds = await reviewAdapter.vetoSetup(reviewAdapter.currentSetupId, { userId: 7, reason: 'operator test' });
+  assert(vetoedIds.includes(reviewAdapter.currentSetupId), 'Veto records the setup id');
+  assert(reviewAdapter.getCurrentState().setupVetoed === true, 'State exposes the veto for the UI');
+  await reviewAdapter.assertSignalExecutable(7).then(
+    () => { throw new Error('A vetoed setup must block execution'); },
+    (error: Error) => assert(error.message.includes('vetoed'), 'Veto rejection must say the operator vetoed it')
+  );
+  assert(reviewAdapter.isSetupVetoed('some-other-setup') === false, 'A different (new) setup id is not vetoed');
+  await reviewAdapter.unvetoSetup(reviewAdapter.currentSetupId, { userId: 7 });
+  assert(reviewAdapter.getCurrentState().setupVetoed === false, 'Clearing the veto restores the state');
+  await reviewAdapter.assertSignalExecutable(7);
   const sessionPolicy = reviewAdapter.buildSessionPolicy(
     { entry_open_buffer_minutes: '15', entry_last_minute_et: '11:00', event_blackout_dates: '[{"date":"2026-09-16","label":"dup"}]' },
     '2026-09-16', { isWeekend: false, isHoliday: false }, 16 * 60

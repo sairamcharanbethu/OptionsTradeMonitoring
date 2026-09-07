@@ -564,6 +564,15 @@ const readApiJson = async (res: Response, fallbackMessage: string) => {
   }
 };
 
+const readErrorMessage = async (res: Response, fallback: string): Promise<string> => {
+  try {
+    const body = await res.json();
+    return body?.error || body?.message || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const authFetch = async (url: string, options: any = {}) => {
   const token = getToken();
   const headers: any = {
@@ -1478,6 +1487,34 @@ export const api = {
     return res.json();
   },
 
+  // Operator action bar: MARKET-exit every open live position, then disarm.
+  async flattenLivePositions(disarm = true): Promise<FlattenLiveSummary> {
+    const res = await authFetch(`${API_BASE}/positions/flatten-live`, {
+      method: 'POST',
+      body: JSON.stringify({ disarm }),
+    });
+    if (!res.ok) throw new Error(await readErrorMessage(res, 'Failed to flatten live positions'));
+    return res.json();
+  },
+
+  async vetoSetup(setupId: string, reason?: string): Promise<{ setupId: string; vetoed: boolean; vetoedSetupIds: string[] }> {
+    const res = await authFetch(`${API_BASE}/signals/strategy-state/veto`, {
+      method: 'POST',
+      body: JSON.stringify({ setup_id: setupId, reason }),
+    });
+    if (!res.ok) throw new Error(await readErrorMessage(res, 'Failed to veto the setup'));
+    return res.json();
+  },
+
+  async unvetoSetup(setupId: string): Promise<{ setupId: string; vetoed: boolean; vetoedSetupIds: string[] }> {
+    const res = await authFetch(`${API_BASE}/signals/strategy-state/unveto`, {
+      method: 'POST',
+      body: JSON.stringify({ setup_id: setupId }),
+    });
+    if (!res.ok) throw new Error(await readErrorMessage(res, 'Failed to clear the veto'));
+    return res.json();
+  },
+
   async getPerformanceMetrics(scope: 'paper' | 'live' = 'live', days = 30): Promise<PerformanceMetrics> {
     const res = await authFetch(`${API_BASE}/metrics/performance?scope=${scope}&days=${days}`);
     if (!res.ok) throw new Error('Failed to fetch performance metrics');
@@ -1909,6 +1946,16 @@ export interface StrategyEngineState {
   // Kill-switch overlay: null = not yet evaluated (e.g. a raw WS push).
   entryBlocked?: boolean | null;
   entryBlockedReason?: string | null;
+  // Operator veto of the current frozen setup (action bar).
+  setupVetoed?: boolean;
+  vetoedSetupIds?: string[];
+}
+
+export interface FlattenLiveSummary {
+  requested: number;
+  submitted: number;
+  skipped: Array<{ id: number; reason: string }>;
+  disarmed: boolean;
 }
 
 export interface Goal {

@@ -492,6 +492,56 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
     return state;
   });
 
+  // Operator veto of the current frozen setup (action bar). A new frozen plan
+  // gets a new setup id and is not affected.
+  fastify.post('/strategy-state/veto', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Veto a strategy setup for autonomous and manual entry',
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['setup_id'],
+        properties: { setup_id: { type: 'string' }, reason: { type: 'string' } }
+      }
+    }
+  }, async (request, reply) => {
+    const strategyEngine = (fastify as any).strategyEngine;
+    if (!strategyEngine?.vetoSetup) {
+      return (reply as any).code(503).send({ error: 'Strategy engine adapter not initialized' });
+    }
+    const { id: userId } = (request as any).user;
+    const body = request.body as { setup_id: string; reason?: string };
+    try {
+      const vetoedSetupIds = await strategyEngine.vetoSetup(body.setup_id, { userId, reason: body.reason || null });
+      return { setupId: body.setup_id, vetoed: true, vetoedSetupIds };
+    } catch (err: any) {
+      return (reply as any).code(err?.statusCode || 500).send({ error: err?.message || 'Veto failed' });
+    }
+  });
+
+  fastify.post('/strategy-state/unveto', {
+    schema: {
+      tags: ['Signals'],
+      summary: 'Clear an operator veto on a strategy setup',
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['setup_id'],
+        properties: { setup_id: { type: 'string' } }
+      }
+    }
+  }, async (request, reply) => {
+    const strategyEngine = (fastify as any).strategyEngine;
+    if (!strategyEngine?.unvetoSetup) {
+      return (reply as any).code(503).send({ error: 'Strategy engine adapter not initialized' });
+    }
+    const { id: userId } = (request as any).user;
+    const body = request.body as { setup_id: string };
+    const vetoedSetupIds = await strategyEngine.unvetoSetup(body.setup_id, { userId });
+    return { setupId: body.setup_id, vetoed: false, vetoedSetupIds };
+  });
+
   // PUT /api/signals/:id/status - Update signal status
   fastify.put('/:id/status', {
     schema: {

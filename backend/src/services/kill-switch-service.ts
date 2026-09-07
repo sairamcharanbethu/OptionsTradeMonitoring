@@ -1,4 +1,5 @@
 import { getGlobalSettings } from '../lib/settings-utils';
+import { publishRealtime } from '../lib/realtime';
 import { SHARED_PAPER_ACCOUNT_ID } from './paper-account-constants';
 
 export type KillSwitchScope = 'paper' | 'live';
@@ -29,6 +30,18 @@ function parseLimit(raw: unknown): number {
 export class KillSwitchService {
   static readonly SETTING_KEY = 'daily_loss_limit_dollars';
   static readonly DISARM_KEY = 'live_trading_disarmed';
+  private static lastHaltBroadcastAt = new Map<string, number>();
+
+  /** Persist the manual live disarm flag (shared by the kill-switch and flatten-all routes). */
+  static async setLiveDisarmed(pg: any, userId: number, disarmed: boolean): Promise<void> {
+    await pg.query(
+      `INSERT INTO settings (user_id, key, value, updated_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+       ON CONFLICT (user_id, key) DO UPDATE
+       SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+      [userId, KillSwitchService.DISARM_KEY, disarmed ? 'true' : 'false']
+    );
+  }
 
   // Statuses that still carry live option exposure whose loss is not yet realized.
   private static readonly OPEN_EXPOSURE_STATUSES = [
@@ -142,7 +155,7 @@ export class KillSwitchService {
     } else if (lossHalted) {
       reason = `Daily loss limit reached (realized ${dayRealizedPnl.toFixed(2)} + open ${dayOpenPnl.toFixed(2)} = ${dayTotalPnl.toFixed(2)} <= -${limit.toFixed(2)}). New entries are halted for the rest of the session.`;
     }
-    return {
+    const status: KillSwitchStatus = {
       scope,
       enabled,
       limit,
@@ -153,5 +166,16 @@ export class KillSwitchService {
       halted,
       reason
     };
+    if (lossHalted) {
+      // Push the halt to the operator UI, at most once per 30s per scope/user.
+      const key = `${scope}:${userId ?? 'shared'}`;
+      const now = Date.now();
+      const last = KillSwitchService.lastHaltBroadcastAt.get(key) || 0;
+      if (now - last > 30_000) {
+        KillSwitchService.lastHaltBroadcastAt.set(key, now);
+        publishRealtime('KILL_SWITCH', { [scope]: status }, { userId: scope === 'live' ? userId ?? null : null });
+      }
+    }
+    return status;
   }
 }

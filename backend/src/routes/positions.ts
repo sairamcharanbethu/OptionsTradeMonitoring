@@ -7,6 +7,9 @@ import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
 import { getSettingsWithGlobalFallback } from '../lib/settings-utils';
 import { MarketDataWriteBufferService } from '../services/market-data-write-buffer-service';
+import { flattenLivePositions } from '../services/flatten-live-service';
+import { KillSwitchService } from '../services/kill-switch-service';
+import { publishRealtime } from '../lib/realtime';
 
 function constructOSITicker(symbol: string, strike: number, type: 'CALL' | 'PUT', expiration: string | Date): string {
   const dateStr = expiration instanceof Date ? expiration.toISOString().split('T')[0] : String(expiration).split('T')[0];
@@ -506,6 +509,43 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
 
   // UPDATE position status (CLOSE)
   // CLOSE position (Manual)
+  // Operator action bar: one MARKET exit per open live position, then disarm.
+  fastify.post('/flatten-live', {
+    schema: {
+      tags: ['Positions'],
+      summary: 'Flatten every open live position (MARKET) and optionally disarm live entries',
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        properties: { disarm: { type: 'boolean', default: true } }
+      }
+    }
+  }, async (request, reply) => {
+    const { id: userId } = (request as any).user;
+    const body = (request.body || {}) as { disarm?: boolean };
+    const disarm = body.disarm !== false;
+    try {
+      const snaptradeService = new SnaptradeService(fastify);
+      await snaptradeService.syncPendingBrokerOrders(userId);
+    } catch (err: any) {
+      fastify.log.warn(`[FlattenLive] Broker status sync failed before flatten: ${err?.message || String(err)}`);
+    }
+    const summary = await flattenLivePositions(
+      { pg: fastify.pg, poller: (fastify as any).poller, log: fastify.log },
+      { userId, disarm }
+    );
+    fastify.log.warn(`[FlattenLive] user ${userId}: requested ${summary.requested}, submitted ${summary.submitted}, skipped ${summary.skipped.length}, disarmed ${summary.disarmed}`);
+    if (summary.disarmed) {
+      try {
+        const live = await KillSwitchService.evaluate(fastify.pg, 'live', userId);
+        publishRealtime('KILL_SWITCH', { live }, { userId });
+      } catch {
+        // status push is best-effort
+      }
+    }
+    return reply.send(summary);
+  });
+
   fastify.post('/:id/close', {
     schema: {
       tags: ['Positions'],
