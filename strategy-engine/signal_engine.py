@@ -3628,8 +3628,12 @@ def _wall_strike(value: Any) -> float | None:
 # (UW replay 2026-04-14..08-20: n=12, 17% win, mean -$40.42 ± $13.08 SE per
 # contract, ~3.1 SE below zero; see docs/uw-backtest-2026-04-14-to-08-20.md).
 # A bounce verdict therefore never maps to a strategy and never arms.
+# CALL_WALL_REJECTION_PUT (GEX_WALL_REJECTION) is also deliberately absent:
+# disabled 2026-09-06 after the corrected replay showed 0/10 wins on the 0DTE
+# chain and 2/10 on 3 DTE once wall levels came from the prior session
+# (docs/uw-backtest-2026-09-06-exit-policy-and-3dte.md, addendum). The
+# evaluator still grades it as a shadow verdict; it never arms.
 _GEX_WALL_STRATEGY_BY_SETUP = {
-    "CALL_WALL_REJECTION_PUT": "GEX_WALL_REJECTION",
     "CALL_WALL_FAILED_BREAKOUT_PUT": "GEX_WALL_BREAK_FAIL",
     "PUT_WALL_FAILED_BREAKDOWN_CALL": "GEX_WALL_BREAK_FAIL",
 }

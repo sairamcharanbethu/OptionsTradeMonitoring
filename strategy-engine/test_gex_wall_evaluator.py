@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import unittest
+from unittest import mock
 
+import signal_engine
 from gex_wall_evaluator import evaluate_gex_wall
 from signal_engine import (
     GEX_WALL_MAX_OFFSET,
@@ -146,13 +148,34 @@ class RegimePercentileAndVolumeTest(unittest.TestCase):
 class WallMergeIntoDayTradingTest(unittest.TestCase):
     """The wall engine, merged into build_signal as a native reaction candidate."""
 
-    # Production gex_ctx carries walls as {"strike", "stage"} dicts.
-    def test_participate_produces_native_candidate(self):
+    # Production gex_ctx carries walls as {"strike", "stage"} dicts. The merge is
+    # exercised on the failed-breakout setup (the wall-rejection setup no longer
+    # arms; see test_wall_strategy_policy). The evaluator's own grading is
+    # covered above, so the verdict is mocked here.
+    @staticmethod
+    def _break_fail_evaluation(confidence):
+        return {
+            "verdict": "PARTICIPATE",
+            "setup_type": "CALL_WALL_FAILED_BREAKOUT_PUT",
+            "side": "puts",
+            "confidence": confidence,
+            "direction": "PUT",
+            "invalidation": 535.5,
+            "regime": "Negative",
+            "reason": "test setup",
+            "macro": {"trend_15m": "down"},
+            "levels": {"call_wall": 535.0, "put_wall": 500.0},
+        }
+
+    def _break_fail_candidate(self, confidence, gex_ctx, spy=None, **kwargs):
         bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
-        candidate = _gex_wall_candidate(
-            {"atr_5m": 1.0},
-            bars[-1],
-            530.0,
+        with mock.patch.object(signal_engine, "evaluate_gex_wall",
+                               return_value=self._break_fail_evaluation(confidence)):
+            return _gex_wall_candidate(spy or {"atr_5m": 1.0}, bars[-1], 530.0, gex_ctx, bars, NOW, **kwargs)
+
+    def test_participate_produces_native_candidate(self):
+        candidate = self._break_fail_candidate(
+            "A+",
             {
                 "available": True,
                 "call_wall": {"strike": 535.0, "stage": "Active"},
@@ -160,12 +183,10 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
                 "flip": None,
                 "regime": "Negative",
             },
-            bars,
-            NOW,
             net_gex_percentile=5,
         )
         self.assertIsNotNone(candidate)
-        self.assertEqual(candidate["strategy"], "GEX_WALL_REJECTION")
+        self.assertEqual(candidate["strategy"], "GEX_WALL_BREAK_FAIL")
         self.assertIn(candidate["strategy"], __import__("signal_engine").FROZEN_SETUP_STRATEGIES)
         self.assertEqual(candidate["side"], "puts")
         self.assertEqual(candidate["score"], 85)
@@ -174,13 +195,9 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
         self.assertIn("targets", candidate["risk_plan"])
         self.assertTrue(candidate["risk_plan"]["targets"])
 
-    def _rejection_candidate(self, net_gex):
-        # Falling trend (15m down) + shooting star at the call wall.
-        bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
-        return _gex_wall_candidate(
-            {"atr_5m": 1.0},
-            bars[-1],
-            530.0,
+    def _graded_candidate(self, confidence, net_gex):
+        return self._break_fail_candidate(
+            confidence,
             {
                 "available": True,
                 "call_wall": {"strike": 535.0, "stage": "Active"},
@@ -189,31 +206,23 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
                 "regime": "Negative",
                 "net_gex": net_gex,
             },
-            bars,
-            NOW,
         )
 
-    def test_strong_negative_gamma_grades_a_plus(self):
-        # net_gex below -1.5e9 => strong negative gamma tailwind => A+ (score 85).
-        candidate = self._rejection_candidate(-2.0e9)
+    def test_a_plus_grade_maps_to_score_85(self):
+        candidate = self._graded_candidate("A+", -2.0e9)
         self.assertEqual(candidate["wall_evaluation"]["confidence"], "A+")
         self.assertEqual(candidate["score"], 85)
         self.assertTrue(candidate["a_plus"])
-        self.assertTrue(candidate["gex_alignment"]["regime"]["negative_gamma"])
 
-    def test_mild_negative_gamma_grades_a_not_a_plus(self):
-        # net_gex above the -1.5e9 magnitude gate => NOT strong negative gamma,
-        # so the same rejection grades A (75), matching the source strategy.
-        candidate = self._rejection_candidate(-0.5e9)
+    def test_a_grade_maps_to_score_75(self):
+        candidate = self._graded_candidate("A", -0.5e9)
         self.assertEqual(candidate["wall_evaluation"]["confidence"], "A")
         self.assertEqual(candidate["score"], 75)
         self.assertFalse(candidate["a_plus"])
-        self.assertFalse(candidate["gex_alignment"]["regime"]["negative_gamma"])
 
     def test_vwap_confluence_boosts_a_to_a_plus(self):
-        # 15m down + Positive gamma => rejection grades A (75). VWAP on the wall
-        # boosts to A+ (85); VWAP away from the wall leaves it at A.
-        bars = _trend_bars(60, 560, -0.5, last_override=(530.3, 535.0, 529.8, 530.0))
+        # An A-grade failed breakout with session VWAP sitting on the traded wall
+        # is boosted to A+ (85); VWAP away from the wall leaves it at A (75).
         gex_ctx = {
             "available": True,
             "call_wall": {"strike": 535.0, "stage": "Active"},
@@ -221,14 +230,10 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
             "flip": None,
             "regime": "Positive",
         }
-        confluent = _gex_wall_candidate(
-            {"atr_5m": 1.0, "vwap": 535.0}, bars[-1], 530.0, gex_ctx, bars, NOW
-        )
+        confluent = self._break_fail_candidate("A", gex_ctx, spy={"atr_5m": 1.0, "vwap": 535.0})
         self.assertEqual(confluent["score"], 85)
         self.assertTrue(confluent["gex_alignment"]["vwap_confluent"])
-        plain = _gex_wall_candidate(
-            {"atr_5m": 1.0, "vwap": 510.0}, bars[-1], 530.0, gex_ctx, bars, NOW
-        )
+        plain = self._break_fail_candidate("A", gex_ctx, spy={"atr_5m": 1.0, "vwap": 510.0})
         self.assertEqual(plain["score"], 75)
         self.assertFalse(plain["gex_alignment"]["vwap_confluent"])
 

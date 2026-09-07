@@ -49,10 +49,15 @@ class WallStrategyPolicyTest(unittest.TestCase):
     def test_bounce_setup_never_becomes_a_candidate(self):
         self.assertIsNone(_candidate("PUT_WALL_BOUNCE_CALL", "calls"))
 
-    def test_rejection_still_arms(self):
-        candidate = _candidate("CALL_WALL_REJECTION_PUT", "puts")
-        self.assertIsNotNone(candidate)
-        self.assertEqual(candidate["strategy"], "GEX_WALL_REJECTION")
+    def test_rejection_setup_never_becomes_a_candidate(self):
+        # Disabled 2026-09-06 on corrected replay evidence (0/10 wins on 0DTE).
+        self.assertIsNone(_candidate("CALL_WALL_REJECTION_PUT", "puts"))
+
+    def test_failed_break_setups_still_arm(self):
+        for setup, side in (("CALL_WALL_FAILED_BREAKOUT_PUT", "puts"), ("PUT_WALL_FAILED_BREAKDOWN_CALL", "calls")):
+            candidate = _candidate(setup, side)
+            self.assertIsNotNone(candidate, setup)
+            self.assertEqual(candidate["strategy"], "GEX_WALL_BREAK_FAIL")
 
     def test_failed_break_still_arms(self):
         candidate = _candidate("CALL_WALL_FAILED_BREAKOUT_PUT", "puts")
