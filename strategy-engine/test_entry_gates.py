@@ -38,11 +38,21 @@ class EntryGateTest(unittest.TestCase):
         self.assertEqual(r["blockers"], [])
 
     def test_momentum_in_positive_range_pin_blocks(self):
-        # CONTINUATION call in Positive/Range (a pin) far from flip -> blocked (793/794).
-        r = _enforce_entry_gates(_live(strategy="CONTINUATION", regime="Positive", gamma="Range"),
+        # A momentum setup in Positive/Range (a pin) far from flip -> blocked (793/794).
+        # CONTINUATION now trips the broader positive-gamma gate first, so the
+        # pin-specific text is asserted on MTF_TREND_BREAK.
+        r = _enforce_entry_gates(_live(strategy="MTF_TREND_BREAK", regime="Positive", gamma="Range"),
                                  spot=105.0, atr_5m=1.0)
         self.assertFalse(_allowed(r))
         self.assertTrue(any("Positive/Range" in b for b in r["blockers"]))
+
+    def test_continuation_blocked_in_any_positive_gamma(self):
+        # 2026-09-06: continuation only trades with dealer hedging flow (negative gamma).
+        for gamma in ("Range", "Trend"):
+            r = _enforce_entry_gates(_live(strategy="CONTINUATION", regime="Positive", gamma=gamma),
+                                     spot=105.0, atr_5m=1.0)
+            self.assertFalse(_allowed(r), gamma)
+            self.assertTrue(any("positive gamma" in b for b in r["blockers"]), r["blockers"])
 
     def test_fade_exempt_in_positive_range(self):
         # A mean-reversion fade is meant to trade ranges -> NOT blocked by the pin gate.

@@ -59,7 +59,7 @@ class ReplayGatesTest(unittest.TestCase):
         result = replay_gates.evaluate(record)
         self.assertFalse(result["entry_allowed"])
         self.assertEqual(len(result["gates"]), 1)
-        self.assertIn("Positive/Range pin", result["gates"][0])
+        self.assertIn("positive gamma", result["gates"][0])  # CONTINUATION's positive-gamma gate
         self.assertNotIn("pre-existing blocker from live run", result["gates"])
 
     def test_spot_and_atr_fall_back_to_snapshot_fields(self):

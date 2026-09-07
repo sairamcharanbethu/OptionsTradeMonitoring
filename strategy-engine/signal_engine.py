@@ -121,7 +121,18 @@ def _enforce_entry_gates(
     # and letting it hard-gate blocked every momentum setup on every
     # positive-gamma day the fallback was active. Warn instead of gate.
     local_oi_proxy = str(gex.get("source") or "") == "ibkr-local-oi-model"
-    if (
+    # CONTINUATION trades WITH dealer hedging flow: in negative gamma dealers
+    # amplify moves (the counterparty); in positive gamma they dampen them, so
+    # the mechanism is absent and long premium pays theta into mean reversion.
+    # Gate on the SIGN of net gamma from any source (the local OI model's sign
+    # is the mechanism itself, unlike its "Range" pin flag). Operator decision
+    # 2026-09-06 after the corrected replay.
+    if strategy == "CONTINUATION" and str(gex.get("regime")) == "Positive":
+        gates.append(
+            "CONTINUATION blocked in positive gamma: dealer hedging dampens moves, "
+            "no continuation mechanism"
+        )
+    elif (
         strategy in MOMENTUM_STRATEGIES
         and str(gex.get("regime")) == "Positive"
         and str(gex.get("gamma_regime")) == "Range"

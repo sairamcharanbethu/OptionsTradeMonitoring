@@ -64,7 +64,7 @@ export default function StrategyGuidePage() {
         <RuleCard title="Entry Strategy" detail="Only high-quality scanner setups should reach execution." icon={Workflow}>
           <BulletList
             items={[
-              'signal-only-v2 trades SPY only through four setups: trend continuation, multi-timeframe trend break, GEX heatmap-level rejection and GEX wall failed-break (wall rejection and wall bounce are graded but never traded). Completed 5-minute and 15-minute structure establishes a setup; completed 1-minute bars normally time activation.',
+              'signal-only-v2 trades SPY only through four setups: trend continuation (negative gamma only, where dealer hedging amplifies moves), multi-timeframe trend break, GEX heatmap-level rejection and GEX wall failed-break (wall rejection and wall bounce are graded but never traded). Completed 5-minute and 15-minute structure establishes a setup; completed 1-minute bars normally time activation.',
               'Continuation, multi-timeframe trend-break/reversal, and GEX-rejection plans freeze their trigger, invalidation, targets, and exact option contract before activation.',
               'ZeroGEX is authoritative for GEX regime, flip, and walls, but local price structure remains the activation authority. ZeroGEX STAND_DOWN is context, not a veto.',
               'The app blocks duplicate entries for the same user, symbol, side, strike, and expiration while an OPEN or PENDING_ORDER position already exists.',

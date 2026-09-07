@@ -10,6 +10,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from signal_engine import (
+    _enforce_entry_gates,
     _select_signal_option,
     _frozen_reversal,
     _mandatory_flatten_due,
@@ -2776,3 +2777,41 @@ class MarketDataReadinessTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+class PositiveGammaContinuationGateTest(unittest.TestCase):
+    """CONTINUATION only trades with dealer hedging flow (negative gamma)."""
+
+    @staticmethod
+    def _result(strategy, regime, gamma_regime="Trend", source="zerogex"):
+        return {
+            "state": "ACTIVE",
+            "strategy": strategy,
+            "favoring": "calls",
+            "lifecycle": {"entry_allowed": True},
+            "gex": {"regime": regime, "gamma_regime": gamma_regime, "flip": None, "source": source},
+            "warnings": [],
+            "blockers": [],
+        }
+
+    def test_continuation_blocked_in_positive_gamma_any_pin_flag(self):
+        for gamma_regime in ("Trend", "Range", None):
+            out = _enforce_entry_gates(self._result("CONTINUATION", "Positive", gamma_regime), spot=500.0, atr_5m=1.0)
+            self.assertFalse(out["lifecycle"]["entry_allowed"], gamma_regime)
+            self.assertTrue(any("positive gamma" in b for b in out["blockers"]), out["blockers"])
+
+    def test_continuation_blocked_on_local_oi_model_sign(self):
+        out = _enforce_entry_gates(self._result("CONTINUATION", "Positive", "Range", source="ibkr-local-oi-model"), spot=500.0, atr_5m=1.0)
+        self.assertFalse(out["lifecycle"]["entry_allowed"])
+
+    def test_continuation_allowed_in_negative_gamma(self):
+        out = _enforce_entry_gates(self._result("CONTINUATION", "Negative"), spot=500.0, atr_5m=1.0)
+        self.assertTrue(out["lifecycle"]["entry_allowed"])
+        self.assertEqual(out["blockers"], [])
+
+    def test_other_momentum_keeps_positive_range_rule(self):
+        trend = _enforce_entry_gates(self._result("MTF_TREND_BREAK", "Positive", "Trend"), spot=500.0, atr_5m=1.0)
+        self.assertTrue(trend["lifecycle"]["entry_allowed"])
+        pinned = _enforce_entry_gates(self._result("MTF_TREND_BREAK", "Positive", "Range"), spot=500.0, atr_5m=1.0)
+        self.assertFalse(pinned["lifecycle"]["entry_allowed"])
