@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { encryptSecret } from '../lib/secret-box';
 import { Snaptrade } from 'snaptrade-typescript-sdk';
 import { redis } from '../lib/redis';
 import crypto from 'crypto';
@@ -104,7 +105,7 @@ export class SnaptradeService {
                             ($1, 'snaptrade_user_id', $3, CURRENT_TIMESTAMP)
                      ON CONFLICT (user_id, key) DO UPDATE 
                      SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                    [userId, userSecret, snaptradeUserId]
+                    [userId, encryptSecret(String(userSecret)), snaptradeUserId]
                 );
                 await invalidateSettingsCache(userId, ['snaptrade_user_secret', 'snaptrade_user_id']);
             } catch (err: any) {

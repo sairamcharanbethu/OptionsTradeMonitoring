@@ -1,5 +1,6 @@
 import { redis } from './redis';
 import { parseCustomEconomicEvents, parseEtClockMinute } from './economic-calendar';
+import { revealSettingSecrets } from './secret-box';
 
 const GLOBAL_SETTING_KEYS = [
   'ai_provider',
@@ -81,7 +82,7 @@ function parseCachedSettings(value: string | null): Record<string, string> | nul
 
 export async function getGlobalSettings(pg: any): Promise<Record<string, string>> {
   const cached = parseCachedSettings(await redis.get(GLOBAL_SETTINGS_CACHE_KEY));
-  if (cached) return cached;
+  if (cached) return revealSettingSecrets(cached);
 
   const { rows } = await pg.query(
      `SELECT DISTINCT ON (s.key) s.key, s.value
@@ -103,14 +104,15 @@ export async function getGlobalSettings(pg: any): Promise<Record<string, string>
     return acc;
   }, {});
 
+  // The cache holds the stored (encrypted) form; secrets are revealed on the way out.
   await redis.set(GLOBAL_SETTINGS_CACHE_KEY, JSON.stringify(settings), SETTINGS_CACHE_TTL_SECONDS);
-  return settings;
+  return revealSettingSecrets(settings);
 }
 
 async function getUserSettings(pg: any, userId: number): Promise<Record<string, string>> {
   const cacheKey = userSettingsCacheKey(userId);
   const cached = parseCachedSettings(await redis.get(cacheKey));
-  if (cached) return cached;
+  if (cached) return revealSettingSecrets(cached);
 
   const { rows } = await pg.query('SELECT key, value FROM settings WHERE user_id = $1', [userId]);
   const settings = rows.reduce((acc: Record<string, string>, row: any) => {
@@ -119,7 +121,7 @@ async function getUserSettings(pg: any, userId: number): Promise<Record<string, 
   }, {});
 
   await redis.set(cacheKey, JSON.stringify(settings), SETTINGS_CACHE_TTL_SECONDS);
-  return settings;
+  return revealSettingSecrets(settings);
 }
 
 export async function getSettingsWithGlobalFallback(pg: any, userId: number): Promise<Record<string, string>> {

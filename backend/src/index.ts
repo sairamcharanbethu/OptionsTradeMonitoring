@@ -6,6 +6,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import { AUTH_RATE_LIMIT, GLOBAL_RATE_LIMIT, WS_MAX_PAYLOAD_BYTES, apiDocsEnabled, makeCorsOriginCheck, parseAllowedOrigins, resolveJwtExpiresIn } from './lib/security-config';
+import { logSecretsPosture } from './lib/secret-box';
 import postgres from '@fastify/postgres';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -935,6 +936,7 @@ const start = async () => {
       sign: { expiresIn: jwtExpiresIn }
     });
     fastify.log.info(`[Security] JWT lifetime: ${jwtExpiresIn}`);
+    logSecretsPosture(fastify.log);
 
     fastify.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
       try {

@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting, validateEntryOpenBufferMinutesSetting, validateEntryLastMinuteSetting, validateEventBlackoutDatesSetting, validateOptionExpiryDteSetting, validateMultiDayMaxHoldMinutesSetting, validateAutonomousLiveAiModeSetting, validateAutonomousLiveAiFallbackSetting, validateMaxSameDirectionPositionsSetting, validateLiveAiDailyCallBudgetSetting } from '../lib/settings-utils';
+import { protectSettingValue } from '../lib/secret-box';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
 type RuntimeConfigSource = 'env' | 'settings' | 'default' | 'runtime';
@@ -425,7 +426,7 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                          VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
                          ON CONFLICT (user_id, key) DO UPDATE 
                          SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                        [userId, key, trimmedValue]
+                        [userId, key, protectSettingValue(key, trimmedValue)]
                     );
                 }
 

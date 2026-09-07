@@ -1,4 +1,5 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
+import { protectSettingValue } from '../lib/secret-box';
 import YahooFinance from 'yahoo-finance2';
 import { z } from 'zod';
 import { getSettingsWithGlobalFallback, invalidateSettingsCache } from '../lib/settings-utils';
@@ -193,7 +194,7 @@ export async function manualEntryRoutes(fastify: FastifyInstance, options: Fasti
          VALUES ${placeholders}
          ON CONFLICT (user_id, key) DO UPDATE
          SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-        [userId, ...entries.flatMap(([key, value]) => [key, value])]
+        [userId, ...entries.flatMap(([key, value]) => [key, protectSettingValue(key, value)])]
       );
       await invalidateSettingsCache(userId, Object.keys(values));
       return normalizeSettings(values as Record<string, string>);
