@@ -6,6 +6,8 @@ import { redis as defaultRedis } from '../lib/redis';
 
 type QuoteTelemetry = {
   positionId: number | string;
+  /** Owner of the position; quote pushes are targeted to this user's sockets when present. */
+  userId?: number | null;
   price: number;
   delta?: number | null;
   theta?: number | null;
@@ -57,7 +59,11 @@ export class MarketDataWriteBufferService {
   private readonly lastCritical = new Map<string, { stop: number | null; trail: number | null; analysis: string | null }>();
   private criticalWriteThroughs = 0;
 
-  constructor(private fastify: FastifyInstance, private redisClient: any = defaultRedis) {}
+  constructor(
+    private fastify: FastifyInstance,
+    private redisClient: any = defaultRedis,
+    private publish: typeof publishRealtime = publishRealtime
+  ) {}
 
   public startEodFlushJob() {
     const schedule = process.env.MARKET_DATA_EOD_FLUSH_SCHEDULE || '15 16 * * 1-5';
@@ -198,7 +204,10 @@ export class MarketDataWriteBufferService {
 
   /** Operator UI push of the latest mark/stop for a position (never throws). */
   private publishQuote(input: QuoteTelemetry): void {
-    publishRealtime('POSITION_UPDATE', {
+    // Targeted to the position owner when the caller supplied the user id;
+    // broadcast only as a fallback (legacy callers without ownership context).
+    const userId = Number(input.userId);
+    this.publish('POSITION_UPDATE', {
       id: Number(input.positionId),
       kind: 'quote',
       current_price: input.price,
@@ -207,7 +216,7 @@ export class MarketDataWriteBufferService {
       underlying_price: input.underlyingPrice ?? null,
       delta: input.delta ?? null,
       recorded_at: input.recordedAt || new Date().toISOString()
-    });
+    }, { userId: Number.isInteger(userId) && userId > 0 ? userId : null });
   }
 
   public async flushToDatabase(): Promise<FlushSummary> {

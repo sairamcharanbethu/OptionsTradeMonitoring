@@ -82,6 +82,18 @@ function createFastifyMock(onQuery?: (sql: string, params?: any[]) => Promise<vo
   };
 }
 
+async function testQuotePushIsTargetedToTheOwner() {
+  const published: Array<{ type: string; data: any; options: any }> = [];
+  const publish = ((type: string, data: any, options: any = {}) => { published.push({ type, data, options }); return 1; }) as any;
+  const service = new MarketDataWriteBufferService(createFastifyMock().fastify, createRedisMock(), publish);
+  await service.recordQuote({ positionId: 501, userId: 7, price: 1.25, recordedAt: '2026-09-08T14:00:00.000Z' });
+  await service.recordQuote({ positionId: 502, price: 2.5, recordedAt: '2026-09-08T14:00:01.000Z' });
+  const quotes = published.filter((p) => p.type === 'POSITION_UPDATE' && p.data?.kind === 'quote');
+  assert(quotes.length === 2, `Expected two quote pushes, got ${quotes.length}`);
+  assert(quotes[0].options?.userId === 7, 'A quote with an owner is targeted to that user');
+  assert(quotes[1].options?.userId === null, 'A quote without an owner falls back to broadcast');
+}
+
 async function testCriticalFieldsWriteThroughOnChangeOnly() {
   const redis = createRedisMock();
   const { fastify, queries } = createFastifyMock();
@@ -265,6 +277,7 @@ async function testFlushPreservesQuoteThatArrivesDuringFlush() {
 
 async function runTests() {
   console.log('Running MarketDataWriteBufferService tests...');
+  await testQuotePushIsTargetedToTheOwner();
   await testCriticalFieldsWriteThroughOnChangeOnly();
   await testQuoteTelemetryBuffersUntilFlush();
   await testBufferedQuoteOverlaysDbPositionRows();

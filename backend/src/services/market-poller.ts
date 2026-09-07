@@ -1483,6 +1483,7 @@ export class MarketPoller {
 
     const quoteRecorded = await this.marketDataBuffer.recordQuote({
       positionId: position.id,
+      userId: Number(position.user_id) || null,
       price,
       delta: greeks?.delta ?? null,
       theta: greeks?.theta ?? null,
@@ -1505,6 +1506,7 @@ export class MarketPoller {
     if (!quoteRecorded) {
       await this.marketDataBuffer.writeThrough({
         positionId: position.id,
+        userId: Number(position.user_id) || null,
         price,
         delta: greeks?.delta ?? null,
         theta: greeks?.theta ?? null,
