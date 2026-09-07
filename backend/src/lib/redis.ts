@@ -249,6 +249,95 @@ class RedisClient {
             return null;
         }
     }
+
+    // ---- Pub/sub (realtime bus) -------------------------------------------
+
+    /** Fire-and-forget publish; returns subscriber count or null when Redis is unavailable. */
+    async publish(channel: string, message: string): Promise<number | null> {
+        if (!this.isConnected || !this.client) return null;
+        try {
+            return await this.client.publish(channel, message);
+        } catch (err) {
+            return null;
+        }
+    }
+
+    /**
+     * Subscribe on a DEDICATED connection (a subscribed ioredis client cannot
+     * issue other commands). Returns an unsubscribe function, or null when the
+     * client is unavailable. Reconnects follow ioredis' own retry strategy.
+     */
+    subscribe(channel: string, onMessage: (message: string) => void, onStatus?: (subscribed: boolean) => void): (() => Promise<void>) | null {
+        if (!this.client) return null;
+        try {
+            const subscriber = this.client.duplicate();
+            subscriber.on('error', () => onStatus?.(false));
+            subscriber.on('close', () => onStatus?.(false));
+            subscriber.on('ready', () => {
+                subscriber.subscribe(channel).then(() => onStatus?.(true)).catch(() => onStatus?.(false));
+            });
+            subscriber.on('message', (incomingChannel: string, message: string) => {
+                if (incomingChannel === channel) onMessage(message);
+            });
+            return async () => {
+                try { await subscriber.unsubscribe(channel); } catch { /* ignore */ }
+                try { await subscriber.quit(); } catch { /* ignore */ }
+            };
+        } catch (err) {
+            return null;
+        }
+    }
+
+    // ---- Streams (durable event log) ------------------------------------
+
+    /** XADD with approximate MAXLEN trimming; returns the stream id or null. */
+    async xadd(key: string, maxLen: number, fields: Record<string, string | number | null | undefined>): Promise<string | null> {
+        if (!this.isConnected || !this.client) return null;
+        try {
+            const flat: string[] = [];
+            for (const [field, value] of Object.entries(fields)) {
+                if (value === undefined) continue;
+                flat.push(field, value === null ? '' : String(value));
+            }
+            if (flat.length === 0) return null;
+            return await (this.client as any).xadd(key, 'MAXLEN', '~', String(maxLen), '*', ...flat);
+        } catch (err) {
+            return null;
+        }
+    }
+
+    /** Newest-first range. `start` defaults to '+', `end` to '-'. */
+    async xrevrange(key: string, start = '+', end = '-', count?: number): Promise<Array<[string, string[]]>> {
+        if (!this.isConnected || !this.client) return [];
+        try {
+            const args: any[] = [key, start, end];
+            if (count) args.push('COUNT', String(count));
+            return await (this.client as any).xrevrange(...args);
+        } catch (err) {
+            return [];
+        }
+    }
+
+    /** Oldest-first range (use '(' + id for an exclusive start). */
+    async xrange(key: string, start = '-', end = '+', count?: number): Promise<Array<[string, string[]]>> {
+        if (!this.isConnected || !this.client) return [];
+        try {
+            const args: any[] = [key, start, end];
+            if (count) args.push('COUNT', String(count));
+            return await (this.client as any).xrange(...args);
+        } catch (err) {
+            return [];
+        }
+    }
+
+    async xlen(key: string): Promise<number | null> {
+        if (!this.isConnected || !this.client) return null;
+        try {
+            return await (this.client as any).xlen(key);
+        } catch (err) {
+            return null;
+        }
+    }
 }
 
 export const redis = new RedisClient();

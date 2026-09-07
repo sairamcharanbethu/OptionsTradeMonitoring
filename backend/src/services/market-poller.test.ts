@@ -312,7 +312,11 @@ async function testSyntheticTrailActivatesAtTp1WithoutClosingOneContract() {
     source: 'ibkr'
   });
 
-  assert(queries.length === 0, `A one-contract TP1 activation should stay Redis-only, got ${queries.length} DB writes`);
+  // TP1 activation moves the stop to $1.02 and arms the synthetic trail: that is
+  // money-critical state, so exactly ONE durable write-through is expected (no
+  // price/history writes, no exit submission). Quotes themselves stay in Redis.
+  assert(queries.length === 1 && queries[0].includes('stop_loss_trigger = COALESCE($1'),
+    `A TP1 activation should write exactly one durable stop/analysis checkpoint, got ${queries.length}: ${JSON.stringify(queries)}`);
   const buffered = redisMock.getHash('market-data-buffer:current:53');
   const analysis = JSON.parse(buffered.analysisData || '{}');
   assert(analysis.syntheticTrailing?.active === true, 'TP1 should activate the synthetic trail');

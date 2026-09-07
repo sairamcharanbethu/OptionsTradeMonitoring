@@ -20,6 +20,7 @@ import { manualEntryRoutes } from './routes/manual-entry';
 import { paperAccountRoutes } from './routes/paper-account';
 import { positionMonitorRoutes } from './routes/position-monitor';
 import { killSwitchRoutes } from './routes/kill-switch';
+import { tradeEventsRoutes } from './routes/trade-events';
 import { metricsRoutes } from './routes/metrics';
 import { mcpRoutes } from './routes/mcp';
 import jwt from '@fastify/jwt';
@@ -964,6 +965,7 @@ const start = async () => {
 
     fastify.register(positionMonitorRoutes, { prefix: '/api/position-monitor' });
     fastify.register(killSwitchRoutes, { prefix: '/api/kill-switch' });
+    fastify.register(tradeEventsRoutes, { prefix: '/api/trade-events' });
     fastify.register(metricsRoutes, { prefix: '/api/metrics' });
 
     // Initialize poller BEFORE listen
@@ -1218,6 +1220,7 @@ const start = async () => {
             status: 'DEGRADED',
             connected: false,
             queueDepth: null,
+            eventStreamLength: null,
             metrics: {},
             lastError: 'Redis health check timed out'
           })
@@ -1342,12 +1345,17 @@ const start = async () => {
 
     const wsClients = new Map<any, string>();
     const wsUserIds = new Map<any, number>();
-    const { configureRealtime } = await import('./lib/realtime');
+    const { configureRealtime, startRealtimeBus } = await import('./lib/realtime');
     configureRealtime({
       getWebsocketServer: () => (fastify as any).websocketServer,
       socketUserIds: wsUserIds,
       log: fastify.log
     });
+    // Cross-instance fan-out: envelopes published by any backend replica reach
+    // this instance's sockets via Redis pub/sub (local delivery never depends on it).
+    if (!startRealtimeBus()) {
+      fastify.log.warn('[Realtime] Redis bus unavailable at startup; operating with local-only WebSocket fan-out');
+    }
 
     const getLegacyWsClientId = (req: any) => {
       const fingerprint = [

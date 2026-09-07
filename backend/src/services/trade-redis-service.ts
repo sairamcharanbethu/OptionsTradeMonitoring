@@ -33,11 +33,49 @@ type TradeEventInput = {
   metadata?: any;
 };
 
+export type TradeEventRecord = {
+  stream_id: string | null;
+  user_id: number;
+  signal_id: number | null;
+  position_id: number | null;
+  event_type: string;
+  message: string | null;
+  metadata: any;
+  created_at: string;
+};
+
+export type TradeEventsPage = {
+  source: 'redis' | 'db';
+  events: TradeEventRecord[];
+  /** Newest stream id in the page; pass back as `after` to fetch only newer events. */
+  cursor: string | null;
+};
+
+/** Subset of the Redis wrapper the event stream needs (injectable for tests). */
+type StreamClient = {
+  isReady: () => boolean;
+  xadd: (key: string, maxLen: number, fields: Record<string, any>) => Promise<string | null>;
+  xrevrange: (key: string, start?: string, end?: string, count?: number) => Promise<Array<[string, string[]]>>;
+  xrange: (key: string, start?: string, end?: string, count?: number) => Promise<Array<[string, string[]]>>;
+  xlen: (key: string) => Promise<number | null>;
+};
+
 export class TradeRedisService {
   private static readonly OPEN_TRADES_TTL_SECONDS = Number(process.env.REDIS_OPEN_TRADES_TTL_SECONDS || 8);
   private static readonly LOCK_TTL_SECONDS = Number(process.env.TRADE_LOCK_TTL_SECONDS || 30);
   private static readonly METRICS_TTL_SECONDS = 86400;
   private static readonly TRADE_STATE_TTL_SECONDS = 60;
+  /** Durable-enough operator event log: newest ~5000 events, approximate trimming. */
+  static readonly TRADE_EVENTS_STREAM = 'trade-events:stream';
+  static readonly TRADE_EVENTS_STREAM_MAXLEN = Number(process.env.TRADE_EVENTS_STREAM_MAXLEN || 5000);
+  /** Positions list cache (routes/positions GET) — short TTL, invalidated on lifecycle writes. */
+  static readonly POSITIONS_CACHE_TTL_SECONDS = Number(process.env.POSITIONS_CACHE_TTL_SECONDS || 5);
+  private static streamClient: StreamClient = redis as unknown as StreamClient;
+
+  /** Test seam: swap the stream client. */
+  static useStreamClient(client: StreamClient | null) {
+    this.streamClient = (client || redis) as StreamClient;
+  }
 
   static keys = {
     userOpenTrades: (userId: number) => `trades:open:user:${userId}`,
@@ -56,7 +94,33 @@ export class TradeRedisService {
       return `locks:entry-exposure:${userId}:${broker}:${exposureGroup}`;
     },
     metric: (name: string) => `metrics:trade-redis:${name}`,
+    positionsCache: (userId: number) => `USER_POSITIONS:${userId}`,
   };
+
+  /** Invalidate the positions-list cache for a user (call after any lifecycle write). */
+  static async invalidatePositionsCache(userId: number) {
+    await redis.del(this.keys.positionsCache(userId));
+  }
+
+  /** The exit engine's latest view of a position from the Redis write buffer (or null). */
+  static async getLatestQuote(positionId: number | string): Promise<Record<string, number | string | null> | null> {
+    if (!redis.isReady()) return null;
+    const latest = await redis.hgetall(`${MarketDataWriteBufferService.currentPrefix}:${positionId}`);
+    if (!latest?.price) return null;
+    const num = (value: string | undefined) => {
+      if (value === undefined || value === '') return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    return {
+      current_price: num(latest.price),
+      stop_loss_trigger: num(latest.stopLossTrigger),
+      trailing_high_price: num(latest.trailingHighPrice),
+      underlying_price: num(latest.underlyingPrice),
+      delta: num(latest.delta),
+      updated_at: latest.updatedAt || null
+    };
+  }
 
   static contractKey(input: {
     symbol: string;
@@ -248,31 +312,140 @@ export class TradeRedisService {
       // Telemetry must never prevent the primary trade event from being recorded.
     }
 
+    const createdAt = new Date().toISOString();
     if (event.positionId) {
       await redis.set(this.keys.latestTradeEvent(event.positionId), JSON.stringify({
         ...event,
-        generatedAt: new Date().toISOString()
+        generatedAt: createdAt
       }), 3600);
+      // A lifecycle event on a position means the cached positions list is stale.
+      await this.invalidatePositionsCache(event.userId);
+    }
+
+    // Append to the Redis stream (decision log / resumable operator feed).
+    // Postgres remains the durable record; the stream is the fast tail.
+    let streamId: string | null = null;
+    try {
+      streamId = await this.streamClient.xadd(this.TRADE_EVENTS_STREAM, this.TRADE_EVENTS_STREAM_MAXLEN, {
+        user_id: event.userId,
+        signal_id: event.signalId ?? null,
+        position_id: event.positionId ?? null,
+        event_type: event.eventType,
+        message: event.message ?? null,
+        metadata: JSON.stringify(metadata ?? {}),
+        created_at: createdAt
+      });
+    } catch {
+      streamId = null;
     }
 
     // Operator UI push. Every lifecycle transition records an event, so a
     // position-linked event is also the signal to refresh that position.
     publishRealtime('TRADE_EVENT', {
+      stream_id: streamId,
       user_id: event.userId,
       signal_id: event.signalId || null,
       position_id: event.positionId || null,
       event_type: event.eventType,
       message: event.message || null,
       metadata,
-      created_at: new Date().toISOString()
+      created_at: createdAt
     }, { userId: event.userId });
     if (event.positionId) {
       publishRealtime('POSITION_UPDATE', { id: event.positionId, kind: 'lifecycle', event_type: event.eventType }, { userId: event.userId });
     }
   }
 
+  /**
+   * Read recent trade events, newest first. Redis stream when available (with
+   * `after` = exclusive stream-id cursor for "only newer than"), Postgres
+   * trade_events otherwise. `userId` null means all users (admin).
+   */
+  static async readEvents(db: Queryable, options: {
+    userId: number | null;
+    limit?: number;
+    after?: string | null;
+    types?: string[] | null;
+  }): Promise<TradeEventsPage> {
+    const limit = Math.min(500, Math.max(1, Math.floor(options.limit || 200)));
+    const types = options.types && options.types.length ? new Set(options.types.map((t) => String(t).toUpperCase())) : null;
+    const matches = (row: TradeEventRecord) =>
+      (options.userId == null || Number(row.user_id) === Number(options.userId))
+      && (!types || types.has(String(row.event_type).toUpperCase()));
+
+    if (this.streamClient.isReady()) {
+      const after = options.after && /^\d+-\d+$/.test(options.after) ? options.after : null;
+      // Filtering happens client-side, so over-fetch to fill the page.
+      const fetchCount = Math.min(5000, limit * (options.userId == null && !types ? 1 : 5));
+      const raw = after
+        ? (await this.streamClient.xrange(this.TRADE_EVENTS_STREAM, `(${after}`, '+', fetchCount)).reverse()
+        : await this.streamClient.xrevrange(this.TRADE_EVENTS_STREAM, '+', '-', fetchCount);
+      const events: TradeEventRecord[] = [];
+      for (const entry of raw) {
+        const record = this.parseStreamEntry(entry);
+        if (record && matches(record)) events.push(record);
+        if (events.length >= limit) break;
+      }
+      return { source: 'redis', events, cursor: events[0]?.stream_id ?? (raw[0]?.[0] ?? null) };
+    }
+
+    const params: any[] = [];
+    const where: string[] = [];
+    if (options.userId != null) { params.push(options.userId); where.push(`user_id = $${params.length}`); }
+    if (types) { params.push(Array.from(types)); where.push(`UPPER(event_type) = ANY($${params.length})`); }
+    params.push(limit);
+    const { rows } = await db.query(
+      `SELECT id, user_id, signal_id, position_id, event_type, message, metadata, created_at
+         FROM trade_events
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        ORDER BY created_at DESC, id DESC
+        LIMIT $${params.length}`,
+      params
+    );
+    const events: TradeEventRecord[] = (rows || []).map((row: any) => ({
+      stream_id: null,
+      user_id: Number(row.user_id),
+      signal_id: row.signal_id == null ? null : Number(row.signal_id),
+      position_id: row.position_id == null ? null : Number(row.position_id),
+      event_type: String(row.event_type),
+      message: row.message ?? null,
+      metadata: row.metadata ?? {},
+      created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+    }));
+    return { source: 'db', events, cursor: null };
+  }
+
+  static async getEventStreamLength(): Promise<number | null> {
+    if (!this.streamClient.isReady()) return null;
+    return this.streamClient.xlen(this.TRADE_EVENTS_STREAM);
+  }
+
+  private static parseStreamEntry(entry: [string, string[]]): TradeEventRecord | null {
+    try {
+      const [id, flat] = entry;
+      const fields: Record<string, string> = {};
+      for (let i = 0; i + 1 < flat.length; i += 2) fields[flat[i]] = flat[i + 1];
+      const num = (value: string | undefined) => (value === undefined || value === '' ? null : Number(value));
+      let metadata: any = {};
+      try { metadata = fields.metadata ? JSON.parse(fields.metadata) : {}; } catch { metadata = { raw: fields.metadata }; }
+      return {
+        stream_id: id,
+        user_id: Number(fields.user_id),
+        signal_id: num(fields.signal_id),
+        position_id: num(fields.position_id),
+        event_type: String(fields.event_type || ''),
+        message: fields.message ? fields.message : null,
+        metadata,
+        created_at: fields.created_at || new Date(Number(id.split('-')[0])).toISOString()
+      };
+    } catch {
+      return null;
+    }
+  }
+
   static async getHealth() {
     const queueDepth = await redis.llen(this.keys.brokerSyncQueue());
+    const eventStreamLength = await this.getEventStreamLength();
     const metricNames = [
       'locks.acquired',
       'locks.denied',
@@ -289,6 +462,7 @@ export class TradeRedisService {
       status: redis.isReady() ? 'UP' : 'DEGRADED',
       connected: redis.isReady(),
       queueDepth: queueDepth ?? null,
+      eventStreamLength,
       metrics
     };
   }

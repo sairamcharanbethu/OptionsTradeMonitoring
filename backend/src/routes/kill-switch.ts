@@ -16,9 +16,10 @@ export async function killSwitchRoutes(fastify: FastifyInstance, _options: Fasti
     }
   }, async (request) => {
     const { id: userId } = (request as any).user;
+    // UI read: served from the short-TTL Redis cache (invalidated on arm/disarm/halt).
     const [paper, live] = await Promise.all([
-      KillSwitchService.evaluate(fastify.pg, 'paper'),
-      KillSwitchService.evaluate(fastify.pg, 'live', userId)
+      KillSwitchService.evaluate(fastify.pg, 'paper', undefined, { cache: true }),
+      KillSwitchService.evaluate(fastify.pg, 'live', userId, { cache: true })
     ]);
     return { paper, live };
   });

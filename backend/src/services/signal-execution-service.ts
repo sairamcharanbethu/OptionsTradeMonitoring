@@ -145,7 +145,24 @@ export class SignalExecutionService {
     }, !!settings.discord_webhook_url, settings.discord_webhook_url ? 'configured Discord webhook URL' : undefined, 'discord');
 
     const [yahoo, ibkr, openrouter, discord] = await Promise.all([yahooCheck, ibkrCheck, openrouterCheck, discordCheck]);
-    return { yahooFinance: yahoo, ibkr, openRouter: openrouter, discord };
+    let redisHealth: any = { status: 'UNKNOWN' };
+    try {
+      const { TradeRedisService } = await import('./trade-redis-service');
+      const { getRealtimeHealth } = await import('../lib/realtime');
+      const base = await TradeRedisService.getHealth();
+      const realtime = getRealtimeHealth();
+      redisHealth = {
+        ...base,
+        pubsubSubscribed: realtime.busSubscribed,
+        eventStreamLength: base.eventStreamLength,
+        lastPublishAt: realtime.lastPublishAt,
+        lastPublishAgeMs: realtime.lastPublishAgeMs,
+        realtime
+      };
+    } catch (err: any) {
+      redisHealth = { status: 'DEGRADED', connected: false, lastError: err?.message || String(err) };
+    }
+    return { yahooFinance: yahoo, ibkr, openRouter: openrouter, discord, redis: redisHealth };
   }
 
   private async executeSignalWithConfiguredBroker(input: {

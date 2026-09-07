@@ -21,6 +21,13 @@ type QuoteTelemetry = {
   stopLossTrigger?: number | null;
   analysisData?: Record<string, any> | null;
   recordedAt?: string;
+  /**
+   * The values already persisted for this position (from the position row the
+   * caller holds). Used only to seed change detection on first sight so an
+   * unchanged stop is not written through as if it were new.
+   */
+  baselineStopLossTrigger?: number | null;
+  baselineTrailingHighPrice?: number | null;
 };
 
 type FlushSummary = {
@@ -41,6 +48,14 @@ export class MarketDataWriteBufferService {
   private lastFlushAt: string | null = null;
   private lastFlushSummary: FlushSummary | null = null;
   private flushRunning = false;
+  /**
+   * Last money-critical values seen per position (stop, trailing high, analysis
+   * fingerprint). A change is written to Postgres immediately; quotes/MFE/MAE
+   * stay buffered until the EOD flush. Without this a Redis restart mid-session
+   * silently reverted stops to whatever the last flush left in the DB.
+   */
+  private readonly lastCritical = new Map<string, { stop: number | null; trail: number | null; analysis: string | null }>();
+  private criticalWriteThroughs = 0;
 
   constructor(private fastify: FastifyInstance, private redisClient: any = defaultRedis) {}
 
@@ -67,6 +82,7 @@ export class MarketDataWriteBufferService {
     const score = new Date(recordedAt).getTime();
     const history = JSON.stringify({ price, recordedAt });
 
+    await this.writeThroughCriticalIfChanged(positionId, input);
     await Promise.all([
       this.redisClient.sadd(this.pendingPositionsKey, positionId),
       this.redisClient.hset(this.currentKey(positionId), {
@@ -91,6 +107,93 @@ export class MarketDataWriteBufferService {
     this.publishQuote(input);
 
     return true;
+  }
+
+  /** Number of immediate Postgres writes triggered by stop/trail/analysis changes. */
+  public get criticalWriteThroughCount(): number {
+    return this.criticalWriteThroughs;
+  }
+
+  /**
+   * Persist stop_loss_trigger / trailing_high_price / analysis_data to Postgres
+   * as soon as they CHANGE (compared with the last value this process buffered;
+   * seeded from Redis on first sight). Never throws into the exit path.
+   */
+  private async writeThroughCriticalIfChanged(positionId: string, input: QuoteTelemetry): Promise<void> {
+    const incomingStop = this.finiteOrNull(input.stopLossTrigger);
+    const incomingTrail = this.finiteOrNull(input.trailingHighPrice);
+    const incomingAnalysis = input.analysisData === undefined || input.analysisData === null
+      ? null
+      : this.stableStringify(input.analysisData);
+    if (incomingStop === null && incomingTrail === null && incomingAnalysis === null) return;
+
+    let previous = this.lastCritical.get(positionId);
+    if (!previous) {
+      // Seed from what is already buffered in Redis, else from the caller's
+      // persisted row, so the first quote after a restart does not look like a change.
+      const latest = await this.redisClient.hgetall(this.currentKey(positionId));
+      previous = {
+        stop: this.optionalNumber(latest?.stopLossTrigger) ?? this.finiteOrNull(input.baselineStopLossTrigger),
+        trail: this.optionalNumber(latest?.trailingHighPrice) ?? this.finiteOrNull(input.baselineTrailingHighPrice),
+        analysis: latest?.analysisData ? this.stableStringify(this.optionalJsonObject(latest.analysisData) ?? null) : null
+      };
+      this.lastCritical.set(positionId, previous);
+    }
+
+    const stopChanged = incomingStop !== null && incomingStop !== previous.stop;
+    const trailChanged = incomingTrail !== null && incomingTrail !== previous.trail;
+    const analysisChanged = incomingAnalysis !== null && incomingAnalysis !== previous.analysis;
+    // The trailing high alone moves on every new tick high and decides nothing by
+    // itself; it rides along when the stop (or analysis state) changes. Only the
+    // stop and the analysis state are money-critical enough for an immediate write.
+    if (!stopChanged && !analysisChanged) {
+      if (trailChanged) this.lastCritical.set(positionId, { ...previous, trail: incomingTrail });
+      return;
+    }
+
+    const next = {
+      stop: stopChanged ? incomingStop : previous.stop,
+      trail: trailChanged ? incomingTrail : previous.trail,
+      analysis: analysisChanged ? incomingAnalysis : previous.analysis
+    };
+    try {
+      await (this.fastify as any).pg.query(
+        `UPDATE positions
+         SET stop_loss_trigger = COALESCE($1, stop_loss_trigger),
+             trailing_high_price = COALESCE($2, trailing_high_price),
+             analysis_data = COALESCE($3::jsonb, analysis_data),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $4 AND status = 'OPEN'`,
+        [
+          stopChanged ? incomingStop : null,
+          trailChanged ? incomingTrail : null,
+          analysisChanged ? incomingAnalysis : null,
+          positionId
+        ]
+      );
+      this.criticalWriteThroughs += 1;
+      this.lastCritical.set(positionId, next);
+    } catch (err: any) {
+      // Redis still holds the value; the EOD flush is the backstop. Do not
+      // update lastCritical so the next quote retries the write.
+      this.fastify.log.warn(`[MarketDataBuffer] Critical write-through failed for position ${positionId}: ${err?.message || String(err)}`);
+    }
+  }
+
+  private finiteOrNull(value: number | null | undefined): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  }
+
+  private stableStringify(value: Record<string, any> | null): string | null {
+    if (value === null) return null;
+    const sortKeys = (input: any): any => {
+      if (Array.isArray(input)) return input.map(sortKeys);
+      if (input && typeof input === 'object') {
+        return Object.keys(input).sort().reduce((acc: any, key) => { acc[key] = sortKeys(input[key]); return acc; }, {});
+      }
+      return input;
+    };
+    try { return JSON.stringify(sortKeys(value)); } catch { return null; }
   }
 
   /** Operator UI push of the latest mark/stop for a position (never throws). */
@@ -186,7 +289,8 @@ export class MarketDataWriteBufferService {
       status: this.redisClient.isReady?.() ? 'UP' : 'DEGRADED',
       lastFlushAt: this.lastFlushAt,
       lastFlushSummary: this.lastFlushSummary,
-      flushRunning: this.flushRunning
+      flushRunning: this.flushRunning,
+      criticalWriteThroughs: this.criticalWriteThroughs
     };
   }
 

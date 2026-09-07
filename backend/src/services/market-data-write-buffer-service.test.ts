@@ -82,6 +82,54 @@ function createFastifyMock(onQuery?: (sql: string, params?: any[]) => Promise<vo
   };
 }
 
+async function testCriticalFieldsWriteThroughOnChangeOnly() {
+  const redis = createRedisMock();
+  const { fastify, queries } = createFastifyMock();
+  const service = new MarketDataWriteBufferService(fastify, redis);
+  const critical = () => queries.filter((q) => q.sql.includes('UPDATE positions') && q.sql.includes('stop_loss_trigger = COALESCE($1'));
+
+  // First sight of a stop: written to Postgres immediately (before any EOD flush).
+  await service.recordQuote({ positionId: 7, price: 1.20, stopLossTrigger: 0.96, recordedAt: '2026-09-08T14:00:00.000Z' });
+  assert(critical().length === 1, `A new stop is written through immediately, got ${critical().length}`);
+  assert(critical()[0].params?.[0] === 0.96 && critical()[0].params?.[3] === '7', 'The stop value and position id are written');
+  assert(critical()[0].sql.includes("status = 'OPEN'"), 'Write-through never touches a closed position');
+
+  // Same stop on the next quotes: no DB write per quote.
+  await service.recordQuote({ positionId: 7, price: 1.18, stopLossTrigger: 0.96 });
+  await service.recordQuote({ positionId: 7, price: 1.25, stopLossTrigger: 0.96 });
+  assert(critical().length === 1, `Unchanged stop must not write per quote, got ${critical().length}`);
+  assert(queries.filter((q) => q.sql.includes('INSERT INTO price_history')).length === 0, 'Quotes themselves stay buffered');
+
+  // A new trailing high alone (stop unchanged) stays buffered: it decides nothing by itself.
+  await service.recordQuote({ positionId: 7, price: 1.30, stopLossTrigger: 0.96, trailingHighPrice: 1.30 });
+  assert(critical().length === 1, `A trailing-high move without a stop change stays Redis-only, got ${critical().length}`);
+
+  // Trailing stop ratchets: stop + high written once per change.
+  await service.recordQuote({ positionId: 7, price: 1.40, stopLossTrigger: 1.10, trailingHighPrice: 1.40 });
+  assert(critical().length === 2 && critical()[1].params?.[0] === 1.10 && critical()[1].params?.[1] === 1.40, 'A changed stop (with its trail) is written through once');
+
+  // analysis_data changes are written; a semantically identical object is not.
+  await service.recordQuote({ positionId: 7, price: 1.41, stopLossTrigger: 1.10, analysisData: { thetaStop: { startedAt: 'x' }, a: 1 } });
+  await service.recordQuote({ positionId: 7, price: 1.42, stopLossTrigger: 1.10, analysisData: { a: 1, thetaStop: { startedAt: 'x' } } });
+  assert(critical().length === 3, `analysis_data change writes once regardless of key order, got ${critical().length}`);
+  assert(service.criticalWriteThroughCount === 3, 'Health counter tracks write-throughs');
+
+  // First sight equal to the persisted baseline is NOT a change (restart / first quote of the day).
+  const seeded = new MarketDataWriteBufferService(createFastifyMock().fastify, createRedisMock());
+  const seededQueries: string[] = [];
+  (seeded as any).fastify.pg.query = async (sql: string) => { seededQueries.push(sql); return { rows: [], rowCount: 1 }; };
+  await seeded.recordQuote({ positionId: 9, price: 1.0, stopLossTrigger: 0.5, trailingHighPrice: 1.0, baselineStopLossTrigger: 0.5, baselineTrailingHighPrice: 1.0 });
+  assert(seeded.criticalWriteThroughCount === 0 && seededQueries.length === 0, 'An ordinary quote carrying the already-persisted stop does not write to Postgres');
+  await seeded.recordQuote({ positionId: 9, price: 1.1, stopLossTrigger: 0.55, trailingHighPrice: 1.1, baselineStopLossTrigger: 0.5, baselineTrailingHighPrice: 1.0 });
+  assert(seeded.criticalWriteThroughCount === 1, 'A ratchet after the seeded first sight is written through');
+
+  // A DB failure leaves Redis as the source and retries on the next quote.
+  const failing = createFastifyMock(async (sql) => { if (sql.includes('stop_loss_trigger = COALESCE($1')) throw new Error('db down'); });
+  const failingService = new MarketDataWriteBufferService(failing.fastify, createRedisMock());
+  const buffered = await failingService.recordQuote({ positionId: 8, price: 2.0, stopLossTrigger: 1.6 });
+  assert(buffered === true && failingService.criticalWriteThroughCount === 0, 'A failed write-through does not break buffering');
+}
+
 async function testQuoteTelemetryBuffersUntilFlush() {
   const redis = createRedisMock();
   const { fastify, queries } = createFastifyMock();
@@ -168,7 +216,11 @@ async function testFlushPersistsBufferedExitState() {
 
   await service.flushToDatabase();
 
-  const update = queries.find((query) => query.sql.includes('UPDATE positions'));
+  // The stop/trail/analysis change is written through immediately; the flush
+  // update is the one that carries current_price and the excursions.
+  const writeThrough = queries.find((query) => query.sql.includes('stop_loss_trigger = COALESCE($1'));
+  assert(Boolean(writeThrough) && writeThrough?.params?.[0] === 1.22 && writeThrough?.params?.[1] === 1.44, 'Stop and trailing high are written through before the flush');
+  const update = queries.find((query) => query.sql.includes('UPDATE positions') && query.sql.includes('current_price = $1'));
   assert(Boolean(update), 'Expected buffered position state to be flushed');
   assert(update?.params?.[7] === 1.44, `Expected favorable excursion in flush params, got ${update?.params?.[7]}`);
   assert(update?.params?.[8] === 0.82, `Expected adverse excursion in flush params, got ${update?.params?.[8]}`);
@@ -213,6 +265,7 @@ async function testFlushPreservesQuoteThatArrivesDuringFlush() {
 
 async function runTests() {
   console.log('Running MarketDataWriteBufferService tests...');
+  await testCriticalFieldsWriteThroughOnChangeOnly();
   await testQuoteTelemetryBuffersUntilFlush();
   await testBufferedQuoteOverlaysDbPositionRows();
   await testFlushPersistsBufferedExitState();

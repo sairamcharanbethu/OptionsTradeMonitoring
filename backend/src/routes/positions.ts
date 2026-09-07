@@ -134,16 +134,17 @@ export async function positionRoutes(fastify: FastifyInstance, options: FastifyP
     }
   }, async (request, reply) => {
     const { id: userId } = (request as any).user;
-    const CACHE_KEY = `USER_POSITIONS:${userId}`;
+    const CACHE_KEY = TradeRedisService.keys.positionsCache(userId);
 
-    // Try cache
+    // Try cache (short TTL; invalidated on every lifecycle write). The Redis
+    // write buffer is overlaid on top so current_price / stop / trailing high
+    // reflect the exit engine's live view rather than the last EOD flush.
     const cached = await redis.get(CACHE_KEY);
     if (cached) return marketDataBuffer.applyLatestToPositions(JSON.parse(cached));
 
     const { rows } = await fastify.pg.query('SELECT * FROM positions WHERE user_id = $1 ORDER BY created_at DESC', [userId]);
 
-    // Set cache (60 seconds)
-    await redis.set(CACHE_KEY, JSON.stringify(rows), 60);
+    await redis.set(CACHE_KEY, JSON.stringify(rows), TradeRedisService.POSITIONS_CACHE_TTL_SECONDS);
 
     return marketDataBuffer.applyLatestToPositions(rows);
   });

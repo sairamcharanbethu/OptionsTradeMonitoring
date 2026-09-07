@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import { publishRealtime } from '../lib/realtime';
+import { TradeRedisService } from './trade-redis-service';
 import { FastifyInstance } from 'fastify';
 import { StopLossEngine } from './stop-loss-engine';
 import { redis } from '../lib/redis';
@@ -598,6 +599,7 @@ export class MarketPoller {
       return false;
     }
     publishRealtime('POSITION_UPDATE', { id: position.id, kind: 'lifecycle', execution_status: nextExecutionStatus, exit_reason: nextExitReason }, { userId: position.user_id });
+    await TradeRedisService.invalidatePositionsCache(Number(position.user_id)).catch(() => undefined);
 
     let acceptedOrder: { orderId?: string | null; tradeId?: string | null } | null = null;
     try {
@@ -1494,7 +1496,10 @@ export class MarketPoller {
       maePct: excursion.maePct,
       trailingHighPrice: bufferedTrailingHighPrice,
       stopLossTrigger: bufferedStopLossTrigger,
-      analysisData: analysisDirty ? analysis : undefined
+      analysisData: analysisDirty ? analysis : undefined,
+      // Persisted values, so an unchanged stop is not written through on first sight.
+      baselineStopLossTrigger: position.stop_loss_trigger == null ? null : Number(position.stop_loss_trigger),
+      baselineTrailingHighPrice: position.trailing_high_price == null ? null : Number(position.trailing_high_price)
     });
 
     if (!quoteRecorded) {
