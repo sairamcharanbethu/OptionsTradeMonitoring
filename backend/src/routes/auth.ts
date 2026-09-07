@@ -1,5 +1,6 @@
 import { FastifyInstance, FastifyPluginOptions } from 'fastify';
 import bcrypt from 'bcrypt';
+import { AUTH_RATE_LIMIT } from '../lib/security-config';
 import { z } from 'zod';
 
 const AuthSchema = z.object({
@@ -64,6 +65,7 @@ async function authQuery(fastify: FastifyInstance, label: string, text: string, 
 
 export default async function authRoutes(fastify: FastifyInstance, options: FastifyPluginOptions) {
     fastify.post('/signup', {
+        config: { rateLimit: AUTH_RATE_LIMIT },
         schema: {
             tags: ['Auth'],
             summary: 'Create a new user account',
@@ -120,6 +122,7 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
     });
 
     fastify.post('/signin', {
+        config: { rateLimit: AUTH_RATE_LIMIT },
         schema: {
             tags: ['Auth'],
             summary: 'Sign in to get JWT token',
@@ -177,6 +180,7 @@ export default async function authRoutes(fastify: FastifyInstance, options: Fast
     });
 
     fastify.post('/change-password', {
+        config: { rateLimit: AUTH_RATE_LIMIT },
         onRequest: [fastify.authenticate],
         schema: {
             tags: ['Auth'],

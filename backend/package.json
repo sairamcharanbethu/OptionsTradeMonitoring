@@ -9,7 +9,7 @@
     "migrate:shared-paper": "node dist/scripts/migrate-shared-paper-account.js",
     "test:paper": "NODE_ENV=test ts-node src/services/paper-trading-service.test.ts",
     "test:paper:integration": "NODE_ENV=test ts-node src/services/paper-trading-service.integration.test.ts",
-    "test": "NODE_ENV=test ts-node src/lib/trading-events.test.ts && NODE_ENV=test ts-node src/lib/adapter-health.test.ts && NODE_ENV=test ts-node src/lib/market-calendar.test.ts && NODE_ENV=test ts-node src/lib/realtime.test.ts && NODE_ENV=test ts-node src/services/flatten-live-service.test.ts && NODE_ENV=test ts-node src/services/trade-events-stream.test.ts && NODE_ENV=test ts-node src/services/kill-switch-cache.test.ts && NODE_ENV=test ts-node src/lib/economic-calendar.test.ts && NODE_ENV=test ts-node src/services/stop-loss-engine.test.ts && NODE_ENV=test ts-node src/services/kill-switch-service.test.ts && NODE_ENV=test ts-node src/services/ibkr-market-data-service.test.ts && NODE_ENV=test ts-node src/services/ibkr-market-data-stream-service.test.ts && NODE_ENV=test ts-node src/services/live-exit-monitor-service.test.ts && NODE_ENV=test ts-node src/services/market-data-write-buffer-service.test.ts && NODE_ENV=test ts-node src/services/market-poller.test.ts && NODE_ENV=test ts-node src/services/strategy-engine-adapter.test.ts && NODE_ENV=test ts-node src/services/paper-trading-service.test.ts && NODE_ENV=test ts-node src/services/manual-option-order-service.test.ts && NODE_ENV=test ts-node src/services/signal-replay-backtester.test.ts && NODE_ENV=test ts-node src/services/option-market-history-capture-service.test.ts && NODE_ENV=test ts-node src/services/trade-redis-service.test.ts && NODE_ENV=test ts-node src/services/trade-lifecycle-service.test.ts && NODE_ENV=test ts-node src/services/trade-execution-service.test.ts && NODE_ENV=test ts-node src/services/live-ai-gate-service.test.ts && NODE_ENV=test ts-node src/services/snaptrade-service.test.ts && NODE_ENV=test ts-node src/services/order-watchdog-service.test.ts && NODE_ENV=test ts-node src/routes/settings.test.ts && NODE_ENV=test ts-node src/routes/paper-account.test.ts && TS_NODE_FILES=true NODE_ENV=test ts-node src/routes/manual-entry.test.ts && TS_NODE_FILES=true NODE_ENV=test ts-node src/routes/market-data.test.ts && TS_NODE_FILES=true NODE_ENV=test ts-node src/routes/signals.test.ts && NODE_ENV=test ts-node src/routes/trades.test.ts"
+    "test": "NODE_ENV=test ts-node src/lib/trading-events.test.ts && NODE_ENV=test ts-node src/lib/security-config.test.ts && NODE_ENV=test ts-node src/lib/adapter-health.test.ts && NODE_ENV=test ts-node src/lib/market-calendar.test.ts && NODE_ENV=test ts-node src/lib/realtime.test.ts && NODE_ENV=test ts-node src/services/flatten-live-service.test.ts && NODE_ENV=test ts-node src/services/trade-events-stream.test.ts && NODE_ENV=test ts-node src/services/kill-switch-cache.test.ts && NODE_ENV=test ts-node src/lib/economic-calendar.test.ts && NODE_ENV=test ts-node src/services/stop-loss-engine.test.ts && NODE_ENV=test ts-node src/services/kill-switch-service.test.ts && NODE_ENV=test ts-node src/services/ibkr-market-data-service.test.ts && NODE_ENV=test ts-node src/services/ibkr-market-data-stream-service.test.ts && NODE_ENV=test ts-node src/services/live-exit-monitor-service.test.ts && NODE_ENV=test ts-node src/services/market-data-write-buffer-service.test.ts && NODE_ENV=test ts-node src/services/market-poller.test.ts && NODE_ENV=test ts-node src/services/strategy-engine-adapter.test.ts && NODE_ENV=test ts-node src/services/paper-trading-service.test.ts && NODE_ENV=test ts-node src/services/manual-option-order-service.test.ts && NODE_ENV=test ts-node src/services/signal-replay-backtester.test.ts && NODE_ENV=test ts-node src/services/option-market-history-capture-service.test.ts && NODE_ENV=test ts-node src/services/trade-redis-service.test.ts && NODE_ENV=test ts-node src/services/trade-lifecycle-service.test.ts && NODE_ENV=test ts-node src/services/trade-execution-service.test.ts && NODE_ENV=test ts-node src/services/live-ai-gate-service.test.ts && NODE_ENV=test ts-node src/services/snaptrade-service.test.ts && NODE_ENV=test ts-node src/services/order-watchdog-service.test.ts && NODE_ENV=test ts-node src/routes/settings.test.ts && NODE_ENV=test ts-node src/routes/paper-account.test.ts && TS_NODE_FILES=true NODE_ENV=test ts-node src/routes/manual-entry.test.ts && TS_NODE_FILES=true NODE_ENV=test ts-node src/routes/market-data.test.ts && TS_NODE_FILES=true NODE_ENV=test ts-node src/routes/signals.test.ts && NODE_ENV=test ts-node src/routes/trades.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -20,16 +20,18 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
-    "@fastify/jwt": "^9.0.4",
+    "@fastify/helmet": "^13.1.1",
+    "@fastify/jwt": "^10.2.2",
     "@fastify/postgres": "^6.0.2",
+    "@fastify/rate-limit": "^11.2.0",
     "@fastify/swagger": "^9.6.1",
-    "@fastify/swagger-ui": "^5.2.4",
+    "@fastify/swagger-ui": "^6.1.1",
     "@fastify/websocket": "^11.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@stoqey/ib": "^1.6.3",
     "@types/ws": "^8.18.1",
-    "axios": "^1.13.2",
-    "bcrypt": "^5.1.1",
+    "axios": "^1.20.0",
+    "bcrypt": "^6.0.0",
     "fastify": "^5.6.2",
     "ioredis": "^5.8.2",
     "node-cron": "^4.2.1",
@@ -55,5 +57,8 @@
     "nodemon": "^3.1.11",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "axios": "$axios"
   }
 }

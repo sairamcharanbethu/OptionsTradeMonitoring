@@ -3,6 +3,9 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
+import { AUTH_RATE_LIMIT, GLOBAL_RATE_LIMIT, WS_MAX_PAYLOAD_BYTES, apiDocsEnabled, makeCorsOriginCheck, parseAllowedOrigins, resolveJwtExpiresIn } from './lib/security-config';
 import postgres from '@fastify/postgres';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -56,6 +59,8 @@ declare module 'fastify' {
 }
 
 const fastify = Fastify({
+  // Behind Traefik/Coolify: honour X-Forwarded-* so request.ip (rate limits, logs) is the client, not the proxy.
+  trustProxy: true,
   logger: {
     level: 'info',
     // transport: {
@@ -860,12 +865,25 @@ const start = async () => {
     // Verify and ensure all required database schema elements exist
     await ensureSchema(fastify);
 
+    // CORS allowlist (CORS_ALLOWED_ORIGINS, comma-separated). Requests without an
+    // Origin header (server-to-server, curl) are allowed; browsers from other
+    // origins are not.
+    const allowedOrigins = parseAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
     await fastify.register(cors, {
-      origin: true
+      origin: makeCorsOriginCheck(allowedOrigins)
     });
+    fastify.log.info(`[Security] CORS allowlist: ${allowedOrigins.join(', ')}`);
+    // Security headers. CSP is off because this process serves JSON and (in dev)
+    // the Swagger UI, not the SPA; nginx fronts the SPA.
+    await fastify.register(helmet, { contentSecurityPolicy: false });
+    // Global per-IP ceiling; credential routes carry a much stricter per-route
+    // limit (see routes/auth.ts, AUTH_RATE_LIMIT).
+    await fastify.register(rateLimit, { global: true, ...GLOBAL_RATE_LIMIT });
 
     // Swagger/OpenAPI configuration
-    await fastify.register(swagger, {
+    const serveApiDocs = apiDocsEnabled();
+    if (!serveApiDocs) fastify.log.info('[Security] API docs disabled (NODE_ENV=production; set ENABLE_API_DOCS=true to serve /docs)');
+    if (serveApiDocs) await fastify.register(swagger, {
       openapi: {
         openapi: '3.0.0',
         info: {
@@ -897,7 +915,7 @@ const start = async () => {
       }
     });
 
-    await fastify.register(swaggerUi, {
+    if (serveApiDocs) await fastify.register(swaggerUi, {
       routePrefix: '/docs',
       uiConfig: {
         docExpansion: 'list',
@@ -910,9 +928,13 @@ const start = async () => {
       throw new Error('JWT_SECRET environment variable is required');
     }
 
+    const jwtExpiresIn = resolveJwtExpiresIn(process.env.JWT_EXPIRES_IN);
     await fastify.register(jwt, {
-      secret: process.env.JWT_SECRET
+      secret: process.env.JWT_SECRET,
+      // Tokens used to be issued without a lifetime; a leaked token was valid forever.
+      sign: { expiresIn: jwtExpiresIn }
     });
+    fastify.log.info(`[Security] JWT lifetime: ${jwtExpiresIn}`);
 
     fastify.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
       try {
@@ -993,7 +1015,9 @@ const start = async () => {
     fastify.register(paperAccountRoutes, { prefix: '/api/paper-account' });
 
     // --- WebSocket & Streaming Setup ---
-    await fastify.register(import('@fastify/websocket'));
+    // Clients only send a token and small commands; cap frames so a hostile
+    // socket cannot buffer megabytes into the process.
+    await fastify.register(import('@fastify/websocket'), { options: { maxPayload: WS_MAX_PAYLOAD_BYTES } });
     const { redis } = await import('./lib/redis');
 
     const { IbkrMarketDataStreamService } = await import('./services/ibkr-market-data-stream-service');
