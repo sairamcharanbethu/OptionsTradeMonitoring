@@ -28,6 +28,13 @@ export async function flattenLivePositions(
 ): Promise<FlattenLiveSummary> {
   const recordEvent = deps.recordEvent || ((db: any, event: any) => TradeRedisService.recordEvent(db, event));
   const setLiveDisarmed = deps.setLiveDisarmed || ((pg: any, userId: number, disarmed: boolean) => KillSwitchService.setLiveDisarmed(pg, userId, disarmed));
+  // Disarm FIRST so the autonomous adapter cannot open a fresh position in the
+  // seconds it takes to submit the exits below.
+  let disarmed = false;
+  if (input.disarm) {
+    await setLiveDisarmed(deps.pg, input.userId, true);
+    disarmed = true;
+  }
   const { rows } = await deps.pg.query(
     `SELECT *
        FROM positions
@@ -73,9 +80,6 @@ export async function flattenLivePositions(
       }
     }
   }
-  if (input.disarm) {
-    await setLiveDisarmed(deps.pg, input.userId, true);
-    summary.disarmed = true;
-  }
+  summary.disarmed = disarmed;
   return summary;
 }
