@@ -125,7 +125,9 @@ export default function SetupCard({ signal, side, setup, option, setupId, vetoed
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" className={cn('font-mono text-2xs', toneClass[stateTone])}>{lifecycle}</Badge>
-          <span className="text-sm font-semibold text-zinc-100">{signal?.strategy || 'No setup'}</span>
+          <span className="text-sm font-semibold text-zinc-100">
+            {signal?.strategy || (setupId ? 'Setup armed' : 'No setup')}
+          </span>
           {side && <Badge variant="outline" className="border-zinc-700 bg-zinc-950 font-mono text-2xs text-zinc-300">{side}</Badge>}
           {signal?.confidence_score != null && <span className="font-mono text-2xs text-zinc-400" title="Engine confidence score">score {num(signal.confidence_score, 0)}</span>}
           {setupId && <span className="font-mono text-2xs text-zinc-500" title={setupId}>#{setupId.slice(0, 8)}</span>}
