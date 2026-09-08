@@ -320,6 +320,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
             try {
                 await client.query('BEGIN');
 
+                // Collected during validation, written in one statement below.
+                const pendingKeys: string[] = [];
+                const pendingValues: string[] = [];
+
                 for (const [key, value] of Object.entries(updates)) {
                     if (key === 'trading_economics_api_key') {
                         await client.query('ROLLBACK');
@@ -421,12 +425,18 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                             return reply.code(400).send({ error: validationError });
                         }
                     }
+                    pendingKeys.push(key);
+                    pendingValues.push(protectSettingValue(key, trimmedValue) as string);
+                }
+
+                if (pendingKeys.length > 0) {
                     await client.query(
-                        `INSERT INTO settings (user_id, key, value, updated_at) 
-                         VALUES ($1, $2, $3, CURRENT_TIMESTAMP) 
-                         ON CONFLICT (user_id, key) DO UPDATE 
+                        `INSERT INTO settings (user_id, key, value, updated_at)
+                         SELECT $1, k, v, CURRENT_TIMESTAMP
+                         FROM unnest($2::text[], $3::text[]) AS t(k, v)
+                         ON CONFLICT (user_id, key) DO UPDATE
                          SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
-                        [userId, key, protectSettingValue(key, trimmedValue)]
+                        [userId, pendingKeys, pendingValues]
                     );
                 }
 
