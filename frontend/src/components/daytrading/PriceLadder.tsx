@@ -31,7 +31,7 @@ export default function PriceLadder({ side, marks, spot, footer, compact = false
   const label = ariaLabel || `Price ladder: ${marks.map((m) => `${m.label} ${money(m.price)}`).join(', ')}${spot != null ? `, spot ${money(spot)}` : ''}`;
   return (
     <div>
-      <div className={cn('relative', compact ? 'mt-1 pb-10 pt-4' : 'mt-2 pb-11 pt-5')}>
+      <div className={cn('relative', compact ? 'mt-1 pb-11 pt-5' : 'mt-2 pb-12 pt-6')}>
       <div className={cn('relative rounded-full bg-gradient-to-r from-rose-500/30 via-zinc-700 to-emerald-500/30', compact ? 'h-1.5' : 'h-2')} role="img" aria-label={label}>
         {marks.map((m) => (
           <div key={`${m.label}-${m.price}`} className={cn('absolute flex -translate-x-1/2 flex-col items-center', compact ? '-top-3.5' : '-top-4')} style={{ left: x(m.price) }}>
