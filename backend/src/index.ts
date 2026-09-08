@@ -1270,10 +1270,16 @@ const start = async () => {
           .then(() => {
             const latencyMs = Date.now() - postgresStartedAt;
             const slow = latencyMs > POSTGRES_SLOW_MS;
+            const pool = (fastify.pg as any)?.pool;
             return normalizeAdapterHealth('postgres', {
               status: slow ? 'DEGRADED' : 'UP',
               latencyMs,
-              lastError: slow ? `Postgres responded in ${latencyMs}ms (slow, but healthy)` : null
+              poolTotal: pool?.totalCount ?? null,
+              poolIdle: pool?.idleCount ?? null,
+              poolWaiting: pool?.waitingCount ?? null,
+              lastError: slow
+                ? `Postgres responded in ${latencyMs}ms (slow, but healthy; pool ${pool?.totalCount ?? '?'} total / ${pool?.idleCount ?? '?'} idle / ${pool?.waitingCount ?? '?'} waiting)`
+                : null
             }, generatedAt);
           })
           .catch((err: any) => normalizeAdapterHealth('postgres', {
