@@ -1212,8 +1212,7 @@ const start = async () => {
         && strategyProviderAgeSeconds !== null
         && strategyProviderAgeSeconds <= 5;
       const strategyConnected = strategyHealth.health?.connected === true;
-      const postgresStartedAt = Date.now();
-      const [ibkrHealth, scannerHealth, tradeRedisHealth, postgresHealth] = await Promise.all([
+      const [ibkrHealth, scannerHealth, tradeRedisHealth] = await Promise.all([
         withTimeout(
           ibkrMarketData.getHealth().catch((err: any) => ({
             status: 'DOWN',
@@ -1258,31 +1257,37 @@ const start = async () => {
             metrics: {},
             lastError: 'Redis health check timed out'
           })
-        ),
-        withTimeout(
-          fastify.pg.query('SELECT 1')
-            .then(() => {
-              const latencyMs = Date.now() - postgresStartedAt;
-              const slow = latencyMs > POSTGRES_SLOW_MS;
-              return normalizeAdapterHealth('postgres', {
-                status: slow ? 'DEGRADED' : 'UP',
-                latencyMs,
-                lastError: slow ? `Postgres responded in ${latencyMs}ms (slow, but healthy)` : null
-              }, generatedAt);
-            })
-            .catch((err: any) => normalizeAdapterHealth('postgres', {
-              status: 'DOWN',
-              latencyMs: Date.now() - postgresStartedAt,
-              lastError: err.message || String(err)
-            }, generatedAt)),
-          POSTGRES_HEALTH_TIMEOUT_MS,
-          () => normalizeAdapterHealth('postgres', {
-            status: 'DOWN',
-            latencyMs: Date.now() - postgresStartedAt,
-            lastError: `Postgres health check timed out after ${POSTGRES_HEALTH_TIMEOUT_MS}ms`
-          }, generatedAt)
         )
       ]);
+
+      // Probed on its own. Inside the Promise.all its "latency" was wall clock
+      // from before the block until its .then ran, so it absorbed event-loop
+      // delay from the sibling checks — which is how SELECT 1 came out slower
+      // than /api/settings, a query that does real work.
+      const postgresStartedAt = Date.now();
+      const postgresHealth = await withTimeout(
+        fastify.pg.query('SELECT 1')
+          .then(() => {
+            const latencyMs = Date.now() - postgresStartedAt;
+            const slow = latencyMs > POSTGRES_SLOW_MS;
+            return normalizeAdapterHealth('postgres', {
+              status: slow ? 'DEGRADED' : 'UP',
+              latencyMs,
+              lastError: slow ? `Postgres responded in ${latencyMs}ms (slow, but healthy)` : null
+            }, generatedAt);
+          })
+          .catch((err: any) => normalizeAdapterHealth('postgres', {
+            status: 'DOWN',
+            latencyMs: Date.now() - postgresStartedAt,
+            lastError: err.message || String(err)
+          }, generatedAt)),
+        POSTGRES_HEALTH_TIMEOUT_MS,
+        () => normalizeAdapterHealth('postgres', {
+          status: 'DOWN',
+          latencyMs: Date.now() - postgresStartedAt,
+          lastError: `Postgres health check timed out after ${POSTGRES_HEALTH_TIMEOUT_MS}ms`
+        }, generatedAt)
+      );
 
       return {
         liveExitMonitor: normalizeAdapterHealth('liveExitMonitor', liveExitHealth, generatedAt),
