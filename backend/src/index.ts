@@ -845,6 +845,10 @@ const start = async () => {
     fastify.log.info(`[System] Active Database Host: ${activeDbUrl.includes('@') ? activeDbUrl.split('@')[1] : 'localhost'}`);
 
     const dbQueryTimeoutMs = Number(process.env.DB_QUERY_TIMEOUT_MS || 5000);
+    // Health-check thresholds. Sized against a remote database whose cold
+    // connections cost seconds and whose warm ones cost tens of milliseconds.
+    const POSTGRES_SLOW_MS = Number(process.env.DB_HEALTH_SLOW_MS || 750);
+    const POSTGRES_HEALTH_TIMEOUT_MS = Number(process.env.DB_HEALTH_TIMEOUT_MS || 5000);
     await fastify.register(postgres, {
       connectionString: activeDbUrl,
       ssl: activeDbUrl.includes('aivencloud') ? { rejectUnauthorized: false } : undefined,
@@ -1257,21 +1261,25 @@ const start = async () => {
         ),
         withTimeout(
           fastify.pg.query('SELECT 1')
-            .then(() => normalizeAdapterHealth('postgres', {
-              status: 'UP',
-              latencyMs: Date.now() - postgresStartedAt,
-              lastError: null
-            }, generatedAt))
+            .then(() => {
+              const latencyMs = Date.now() - postgresStartedAt;
+              const slow = latencyMs > POSTGRES_SLOW_MS;
+              return normalizeAdapterHealth('postgres', {
+                status: slow ? 'DEGRADED' : 'UP',
+                latencyMs,
+                lastError: slow ? `Postgres responded in ${latencyMs}ms (slow, but healthy)` : null
+              }, generatedAt);
+            })
             .catch((err: any) => normalizeAdapterHealth('postgres', {
               status: 'DOWN',
               latencyMs: Date.now() - postgresStartedAt,
               lastError: err.message || String(err)
             }, generatedAt)),
-          1500,
+          POSTGRES_HEALTH_TIMEOUT_MS,
           () => normalizeAdapterHealth('postgres', {
             status: 'DOWN',
             latencyMs: Date.now() - postgresStartedAt,
-            lastError: 'Postgres health check timed out'
+            lastError: `Postgres health check timed out after ${POSTGRES_HEALTH_TIMEOUT_MS}ms`
           }, generatedAt)
         )
       ]);
@@ -1489,37 +1497,73 @@ const start = async () => {
       fastify.log.error(`[System] strategyEngine.start() failed (continuing): ${err?.message || String(err)}`);
     }
     paperTrading.start();
+
+    // Background timers are created later, but the shutdown hook must be
+    // registered before listen(): Fastify throws FST_ERR_INSTANCE_ALREADY_
+    // LISTENING on addHook once the instance is up, and that throw used to
+    // abort the rest of background startup.
+    const backgroundTimers: NodeJS.Timeout[] = [];
+    fastify.addHook('onClose', async () => {
+      while (backgroundTimers.length) clearInterval(backgroundTimers.pop()!);
+    });
+
     await fastify.listen({ port, host: '0.0.0.0' });
+
+    // Each step is isolated. One failing subsystem must not silently skip the
+    // ones after it — that is exactly how the live exit monitor and the IBKR
+    // quote stream ended up permanently down while everything upstream of the
+    // failure looked healthy.
+    const startStep = (name: string, run: () => void | Promise<void>) => {
+      try {
+        const result = run();
+        if (result && typeof (result as Promise<void>).catch === 'function') {
+          return (result as Promise<void>).catch((err: any) => {
+            fastify.log.error(`[System] Background step "${name}" failed: ${err?.message || String(err)}`);
+          });
+        }
+      } catch (err: any) {
+        fastify.log.error(`[System] Background step "${name}" failed: ${err?.message || String(err)}`);
+      }
+      return Promise.resolve();
+    };
 
     const startBackgroundServices = async () => {
       fastify.log.info('[System] Starting background services...');
-      poller.start();
-      zerogexArchive.start();
-      const brokerSyncTimer = setInterval(() => {
-        runQueuedBrokerSync().catch((err: any) =>
-          fastify.log.warn(`[BrokerSync] queued sync loop error: ${err?.message || String(err)}`));
-      }, 3000);
-      const pendingOrderTimer = setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000);
-      fastify.addHook('onClose', async () => {
-        clearInterval(brokerSyncTimer);
-        clearInterval(pendingOrderTimer);
+      await startStep('poller', () => poller.start());
+      await startStep('zerogexArchive', () => zerogexArchive.start());
+
+      await startStep('timers', () => {
+        backgroundTimers.push(setInterval(() => {
+          runQueuedBrokerSync().catch((err: any) =>
+            fastify.log.warn(`[BrokerSync] queued sync loop error: ${err?.message || String(err)}`));
+        }, 3000));
+        backgroundTimers.push(setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000));
+
+        // The database is remote and the pool closes idle clients after 30s, so
+        // any request arriving on a cold pool pays TLS + handshake — measured at
+        // one to four seconds. Keep one connection warm; this is what actually
+        // stops the health check flapping, rather than just relabelling it.
+        backgroundTimers.push(setInterval(() => {
+          fastify.pg.query('SELECT 1').catch((err: any) =>
+            fastify.log.debug(`[System] Postgres keepalive failed: ${err?.message || String(err)}`));
+        }, Number(process.env.DB_KEEPALIVE_MS || 20000)));
       });
+
       runSnaptradePendingOrderSync().catch((err: any) => {
         fastify.log.warn(`[SnapTradePendingSync] Initial run failed: ${err.message}`);
       });
+
       // Keep the monitor attached while the IBKR stream performs its own
       // reconnect loop. A failed first connection must not leave it inactive.
-      liveExitMonitor.start('ibkr');
+      await startStep('liveExitMonitor', () => liveExitMonitor.start('ibkr'));
 
-      try {
+      await startStep('ibkrMarketDataStream', async () => {
         const ibkrStreamStarted = await ibkrMarketDataStreamer.start();
         if (ibkrStreamStarted) {
           fastify.log.info('[Stream] IBKR option market data stream enabled for live exit monitoring.');
         }
         await optionMarketHistoryCapture.rehydrateRecentSignals?.();
-      } catch (err: any) {
-        fastify.log.warn(`[Stream] IBKR option market data stream failed to start: ${err.message}`);
-      }
+      });
 
       if (!ibkrMarketDataStreamer.getHealth().connected) {
         fastify.log.warn('[Stream] IBKR quote stream is reconnecting; live exit monitor remains attached.');
@@ -1527,7 +1571,8 @@ const start = async () => {
 
       // Only now that the poller, exit monitor, watchdog, and broker sync loops
       // are running may the adapter submit autonomous live entries.
-      strategyEngine.markLiveEntriesReady?.();
+      await startStep('markLiveEntriesReady', () => strategyEngine.markLiveEntriesReady?.());
+      fastify.log.info('[System] Background services started.');
     };
 
     const backgroundStartDelayMs = Number(process.env.BACKGROUND_START_DELAY_MS || 15000);
