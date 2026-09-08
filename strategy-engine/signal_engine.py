@@ -5239,6 +5239,7 @@ def build_signal(
             result.update(
                 state=("ARMED" if option_ready and not result["blockers"] else "WATCH" if not option_ready else "WAIT"),
                 favoring=side,
+                strategy="CONTINUATION",
                 armed_until=previous_armed_until,
             )
             target_setup["status"] = (
@@ -5340,6 +5341,7 @@ def build_signal(
         result.update(
             state=("ARMED" if option_ready and not result["blockers"] else "WATCH" if not option_ready else "WAIT"),
             favoring="calls",
+            strategy="CONTINUATION",
             armed_until=now + ARM_LIFETIME_SECONDS,
         )
         result["call_setup"]["status"] = (
@@ -5364,6 +5366,7 @@ def build_signal(
         result.update(
             state=("ARMED" if option_ready and not result["blockers"] else "WATCH" if not option_ready else "WAIT"),
             favoring="puts",
+            strategy="CONTINUATION",
             armed_until=now + ARM_LIFETIME_SECONDS,
         )
         result["put_setup"]["status"] = (
