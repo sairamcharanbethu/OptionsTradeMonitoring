@@ -269,6 +269,13 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
   });
 
   // GET /api/signals - Fetch latest 100 signals
+  // Signal status reconciliation used to run on every GET /api/signals. The
+  // cockpit polls that endpoint, so a read was issuing three locking UPDATEs
+  // per poll. Throttled to once per interval, process-wide.
+  const RECONCILE_MS = Number(process.env.SIGNAL_RECONCILE_MS || 15000);
+  let lastSignalReconcileAtMs = 0;
+  let signalReconcileInFlight = false;
+
   fastify.get('/', {
     schema: {
       tags: ['Signals'],
@@ -339,50 +346,63 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
   }, async (request, reply) => {
     try {
       const { id: userId } = (request as any).user;
-      await fastify.pg.query(`
-        UPDATE signals older
-        SET status = 'CANCELLED'
-        WHERE older.status IN ('PENDING', 'PENDING_TRIGGER')
-          AND older.signal_type != 'NONE'
-          AND EXISTS (
-            SELECT 1
-            FROM signals newer
-            WHERE newer.symbol = older.symbol
-              AND newer.signal_type != 'NONE'
-              AND newer.status IN ('PENDING', 'PENDING_TRIGGER')
-              AND newer.created_at > older.created_at
-          )
-      `);
-      await fastify.pg.query(`
-        UPDATE signal_user_executions sue
-        SET status = 'CANCELLED',
-            updated_at = CURRENT_TIMESTAMP
-        FROM signals s
-        WHERE sue.signal_id = s.id
-          AND s.status = 'CANCELLED'
-          AND sue.status = 'PENDING'
-          AND sue.execution_broker IS NULL
-          AND sue.broker_order_id IS NULL
-          AND sue.execution_status IS NULL
-      `);
-      await fastify.pg.query(`
-        UPDATE signal_user_executions sue
-        SET status = CASE
-              WHEN p.execution_status IN ('FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED') THEN 'CANCELLED'
-              ELSE 'EXECUTED'
-            END,
-            execution_status = p.execution_status,
-            execution_error = p.execution_error,
-            broker_trade_id = COALESCE(sue.broker_trade_id, p.broker_trade_id),
-            updated_at = CURRENT_TIMESTAMP
-        FROM positions p
-        WHERE p.user_id = sue.user_id
-          AND p.broker_order_id = sue.broker_order_id
-          AND p.broker_order_id IS NOT NULL
-          AND sue.execution_broker = 'wealthsimple_snaptrade'
-          AND p.execution_broker = 'wealthsimple_snaptrade'
-          AND COALESCE(sue.execution_status, '') <> COALESCE(p.execution_status, '')
-      `);
+
+      // Housekeeping, throttled: see RECONCILE_MS above.
+      if (Date.now() - lastSignalReconcileAtMs >= RECONCILE_MS && !signalReconcileInFlight) {
+        signalReconcileInFlight = true;
+        try {
+        await fastify.pg.query(`
+          UPDATE signals older
+          SET status = 'CANCELLED'
+          WHERE older.status IN ('PENDING', 'PENDING_TRIGGER')
+            AND older.signal_type != 'NONE'
+            AND EXISTS (
+              SELECT 1
+              FROM signals newer
+              WHERE newer.symbol = older.symbol
+                AND newer.signal_type != 'NONE'
+                AND newer.status IN ('PENDING', 'PENDING_TRIGGER')
+                AND newer.created_at > older.created_at
+            )
+        `);
+        await fastify.pg.query(`
+          UPDATE signal_user_executions sue
+          SET status = 'CANCELLED',
+              updated_at = CURRENT_TIMESTAMP
+          FROM signals s
+          WHERE sue.signal_id = s.id
+            AND s.status = 'CANCELLED'
+            AND sue.status = 'PENDING'
+            AND sue.execution_broker IS NULL
+            AND sue.broker_order_id IS NULL
+            AND sue.execution_status IS NULL
+        `);
+        await fastify.pg.query(`
+          UPDATE signal_user_executions sue
+          SET status = CASE
+                WHEN p.execution_status IN ('FAILED', 'REJECTED', 'CANCELED', 'CANCELLED', 'PARTIAL_CANCELED', 'EXPIRED') THEN 'CANCELLED'
+                ELSE 'EXECUTED'
+              END,
+              execution_status = p.execution_status,
+              execution_error = p.execution_error,
+              broker_trade_id = COALESCE(sue.broker_trade_id, p.broker_trade_id),
+              updated_at = CURRENT_TIMESTAMP
+          FROM positions p
+          WHERE p.user_id = sue.user_id
+            AND p.broker_order_id = sue.broker_order_id
+            AND p.broker_order_id IS NOT NULL
+            AND sue.execution_broker = 'wealthsimple_snaptrade'
+            AND p.execution_broker = 'wealthsimple_snaptrade'
+            AND COALESCE(sue.execution_status, '') <> COALESCE(p.execution_status, '')
+        `);
+          lastSignalReconcileAtMs = Date.now();
+        } catch (err: any) {
+          fastify.log.warn(`[Signals] status reconciliation failed: ${err?.message || String(err)}`);
+        } finally {
+          signalReconcileInFlight = false;
+        }
+      }
+
       const query = `
         SELECT 
           s.id, 

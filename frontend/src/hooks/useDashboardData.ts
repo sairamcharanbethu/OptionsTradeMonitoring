@@ -59,6 +59,8 @@ export function useSignals(refreshInterval = 5000) {
         queryFn: () => api.getSignals(),
         refetchInterval: interval,
         staleTime: 2000,
+        retry: 1,
+        retryDelay: 5000,
     });
 }
 
