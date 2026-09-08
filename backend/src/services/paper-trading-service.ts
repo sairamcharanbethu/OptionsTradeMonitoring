@@ -856,8 +856,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           const raw = await new AIService(this.fastify).askTradingJSON(prompt, undefined, 140, 15000);
           tokenUsage = PaperTradingService.normalizeTokenUsage(raw?.usage);
           bounded = PaperTradingService.normalizeAIDecision(raw) || fallback;
-        } catch {
-          bounded = fallback;
+        } catch (err: any) {
+          const detail = String(err?.message || err || 'unknown error').replace(/\s+/g, ' ').slice(0, 160);
+          this.fastify.log.error(
+            `[PaperTrading] AI review call failed (provider=${settings.ai_provider || 'unset'} model=${settings.ai_model || 'unset'}): ${detail}`
+          );
+          bounded = guardedFallback(
+            `AI review failed (${detail}); one-contract fallback applied.`,
+            ['AI sizing unavailable', `ai_error: ${detail}`]
+          );
         }
       } else {
         bounded = guardedFallback(
