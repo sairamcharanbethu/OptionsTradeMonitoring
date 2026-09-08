@@ -199,7 +199,7 @@ export default function DayTradingTerminal() {
   const [panel, setPanel] = usePanelTab('strikepilot.cockpit.panel', panels, 'plan');
 
   return (
-    <main className="day-trading-terminal page-shell space-y-3 pb-[calc(1rem+env(safe-area-inset-bottom))] text-zinc-100 sm:space-y-4">
+    <main className="day-trading-terminal page-shell space-y-3 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 text-zinc-100 sm:space-y-4 sm:pt-3">
       {/* ---- Decision surface. Pinned, never behind a tab, never below a fold. -- */}
       <section className="overflow-hidden rounded-xl border border-zinc-800/90 bg-[#0d0f12] shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
         <TerminalHeaderBar

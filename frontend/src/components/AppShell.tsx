@@ -382,7 +382,7 @@ export default function AppShell({ user, onUserUpdate, children }: {
         </div>
       </div>
 
-      <main id="main-content" className="app-shell-content pb-[calc(var(--action-bar-h,3.5rem)+5rem+env(safe-area-inset-bottom))] pt-3 lg:pb-10">
+      <main id="main-content" className="app-shell-content pb-[calc(var(--action-bar-h,3.5rem)+5rem+env(safe-area-inset-bottom))] pt-3 lg:pb-10 lg:pt-0">
         {children}
       </main>
 

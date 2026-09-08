@@ -75,6 +75,18 @@ const segmentClass: Record<Segment['kind'], string> = {
   event: 'bg-fuchsia-500/60'
 };
 
+// "until 11:00 AM ET" makes you subtract the current time in your head, during
+// the exact window where that is most expensive. Say how long is left.
+function remaining(nowMin: number, untilMin: number): string {
+  const mins = Math.max(0, Math.round(untilMin - nowMin));
+  if (mins >= 60) {
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return m ? `${h}h ${m}m left` : `${h}h left`;
+  }
+  return `${mins}m left`;
+}
+
 function sessionSentence(session: Record<string, any> | null, nowMin: number): { text: string; tone: Tone } {
   if (!session || session.valid === false) return { text: 'Calendar policy unavailable — entries blocked', tone: 'bad' };
   if (session.is_trading_day === false) return { text: 'Not a trading day — entries blocked', tone: 'muted' };
@@ -86,8 +98,13 @@ function sessionSentence(session: Record<string, any> | null, nowMin: number): {
   const windows: Window[] = Array.isArray(session.no_trade_windows) ? session.no_trade_windows : [];
   const active = windows.find((w) => nowMin >= Number(w.start_minute_et) && nowMin < Number(w.end_minute_et));
   if (active) return { text: `No-trade window: ${active.reason || 'blocked'} until ${minuteLabel(active.end_minute_et)}`, tone: 'warn' };
-  if (nowMin >= cutoff) return { text: `Entries closed (cutoff ${minuteLabel(cutoff)}) — flatten at ${minuteLabel(flatten)}`, tone: 'warn' };
-  return { text: `Entries open until ${minuteLabel(cutoff)} ET`, tone: 'good' };
+  if (nowMin >= cutoff) return { text: `Entries closed (cutoff ${minuteLabel(cutoff)}) — flatten at ${minuteLabel(flatten)} · ${remaining(nowMin, flatten)}`, tone: 'warn' };
+  // Inside the last 15 minutes this is the most consequential number on screen.
+  const left = cutoff - nowMin;
+  return {
+    text: `Entries open until ${minuteLabel(cutoff)} ET · ${remaining(nowMin, cutoff)}`,
+    tone: left <= 15 ? 'warn' : 'good'
+  };
 }
 
 function Chip({ label, value, tone, title }: { label: string; value: string; tone: Tone; title: string }) {
