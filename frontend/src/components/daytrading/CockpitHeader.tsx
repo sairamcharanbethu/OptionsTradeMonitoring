@@ -102,7 +102,7 @@ function sessionSentence(session: Record<string, any> | null, nowMin: number): {
   // Inside the last 15 minutes this is the most consequential number on screen.
   const left = cutoff - nowMin;
   return {
-    text: `Entries open until ${minuteLabel(cutoff)} ET · ${remaining(nowMin, cutoff)}`,
+    text: `Entries open until ${minuteLabel(cutoff)} · ${remaining(nowMin, cutoff)}`,
     tone: left <= 15 ? 'warn' : 'good'
   };
 }
