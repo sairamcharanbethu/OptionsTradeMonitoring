@@ -441,7 +441,6 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
           s.entry_allowed,
           s.activated_at,
           s.policy_fingerprint,
-          s.strategy_snapshot,
           s.created_at 
         FROM signals s
         LEFT JOIN signal_user_executions sue
