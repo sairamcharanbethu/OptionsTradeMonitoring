@@ -510,6 +510,19 @@ def _policy_option_expiry_dte(policy: dict[str, Any] | None, default: int) -> in
     return dte if 0 <= dte <= 10 else int(default)
 
 
+def _con_id(contract: Any) -> int | None:
+    """conId of a contract, or None when the contract is missing or unqualified.
+
+    IBKR leaves contracts unqualified (conId 0) when contract details do not
+    come back, and tickers surviving a reconnect can lose their contract
+    entirely. Both must be treated as "not usable", never dereferenced.
+    """
+    if contract is None:
+        return None
+    con_id = getattr(contract, "conId", None)
+    return int(con_id) if con_id else None
+
+
 class TradePrefetcher:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -682,6 +695,11 @@ class TradePrefetcher:
 
             stock = Stock(symbol, DEFAULT_EXCHANGE, DEFAULT_CURRENCY)
             self.ib.qualifyContracts(stock)
+            if not _con_id(stock):
+                # qualifyContracts mutates in place and returns nothing usable
+                # when contract details do not come back; the unqualified stock
+                # would otherwise be cached and fail every later refresh.
+                raise RuntimeError(f"{symbol} contract did not qualify against IBKR (no conId returned)")
             self.stocks[symbol] = stock
             self.tickers[symbol] = self.ib.reqMktData(stock, "233", False, False)
             self._subscribe_bars(symbol)
@@ -765,7 +783,13 @@ class TradePrefetcher:
         stock = self.stocks["SPY"]
         spot = self._option_anchor_price()
         if self.option_chain is None or force_chain:
-            chains = self.ib.reqSecDefOptParams("SPY", "", stock.secType, stock.conId)
+            stock_con_id = _con_id(stock)
+            if not stock_con_id:
+                # Requesting option params with conId 0 fails opaquely inside
+                # IBKR; say what is actually wrong so the next reconnect
+                # attempt is diagnosable.
+                raise RuntimeError("SPY contract is not qualified (no conId); IBKR contract details did not return")
+            chains = self.ib.reqSecDefOptParams("SPY", "", stock.secType, stock_con_id)
             self.option_chain = _select_chain(chains, "SPY")
         chain = self.option_chain
         previous_signal = _read_gex(self.args.output_dir / "signal.json")
@@ -814,17 +838,29 @@ class TradePrefetcher:
             _contract("SPY", expiry, strike, right, chain.tradingClass)
             for expiry, strike, right in sorted(contract_specs)
         ]
-        qualified = self.ib.qualifyContracts(*contracts)
-        old_by_con_id = {ticker.contract.conId: ticker for ticker in self.option_tickers}
+        qualified = [contract for contract in self.ib.qualifyContracts(*contracts) if _con_id(contract)]
+        old_by_con_id = {
+            _con_id(ticker.contract): ticker
+            for ticker in self.option_tickers
+            if _con_id(getattr(ticker, "contract", None))
+        }
         new_tickers = []
         for contract in qualified:
-            ticker = old_by_con_id.get(contract.conId)
+            ticker = old_by_con_id.get(_con_id(contract))
             if ticker is None:
                 ticker = self.ib.reqMktData(contract, "100,101,106", False, False)
             new_tickers.append(ticker)
-        new_con_ids = {ticker.contract.conId for ticker in new_tickers}
+        new_con_ids = {
+            _con_id(ticker.contract)
+            for ticker in new_tickers
+            if _con_id(getattr(ticker, "contract", None))
+        }
         for ticker in self.option_tickers:
-            if ticker.contract.conId not in new_con_ids:
+            con_id = _con_id(getattr(ticker, "contract", None))
+            if not con_id:
+                # Nothing to cancel and nothing to match; a reconnect dropped it.
+                continue
+            if con_id not in new_con_ids:
                 self.ib.cancelMktData(ticker.contract)
         self.option_tickers = new_tickers
         self.option_expiry = preferred_expiry

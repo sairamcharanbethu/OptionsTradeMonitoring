@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from zoneinfo import ZoneInfo
 
+import trade_prefetch_service
 from trade_prefetch_service import (
     TradePrefetcher,
     _read_gex,
@@ -677,3 +678,22 @@ class TradePrefetchHelpersTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConIdGuardTests(unittest.TestCase):
+    """A ticker surviving an IBKR reconnect can come back without a contract.
+
+    Dereferencing .conId on it raised "AttributeError: 'NoneType' object has no
+    attribute 'conId'", which killed the option refresh loop and stalled signal
+    publishing for twelve hours while the engine still looked alive.
+    """
+
+    def test_missing_contract_yields_none(self):
+        self.assertIsNone(trade_prefetch_service._con_id(None))
+
+    def test_unqualified_contract_yields_none(self):
+        self.assertIsNone(trade_prefetch_service._con_id(SimpleNamespace(conId=0)))
+        self.assertIsNone(trade_prefetch_service._con_id(SimpleNamespace()))
+
+    def test_qualified_contract_yields_int(self):
+        self.assertEqual(trade_prefetch_service._con_id(SimpleNamespace(conId=756733)), 756733)
