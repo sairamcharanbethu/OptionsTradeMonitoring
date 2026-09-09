@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import type { KillSwitchResponse, Position, StrategyEngineState, TradeUsageResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { Num } from '@/components/ui/semantics';
 import { useTick } from '@/hooks/useTick';
 import { etClock, etMinuteOfDay, freshnessTone, minuteLabel, seconds, signedMoney, toneClass, type Tone } from './format';
 
@@ -108,6 +109,11 @@ function sessionSentence(session: Record<string, any> | null, nowMin: number): {
   };
 }
 
+function spyQuoteAgeIsStale(ageSeconds: unknown): boolean {
+  const age = Number(ageSeconds);
+  return Number.isFinite(age) ? age > GATES.spyQuoteSeconds : true;
+}
+
 function Chip({ label, value, tone, title, flashOn }: { label: string; value: string; tone: Tone; title: string; flashOn?: number | null }) {
   const tick = useTick(flashOn ?? null);
   return (
@@ -137,6 +143,14 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
   const span = Math.max(1, close - open);
   const pct = (minute: number) => `${Math.min(100, Math.max(0, ((minute - open) / span) * 100))}%`;
   const sentence = sessionSentence(session, nowMin);
+
+  // Live underlying. The engine's own spot, so the header shows the price the
+  // strategy is acting on rather than a second, slightly different feed.
+  const spot = Number(signal?.spot);
+  const spotValid = Number.isFinite(spot) && spot > 0;
+  const vwap = Number(signal?.market_data_readiness?.vwap);
+  const vsVwap = spotValid && Number.isFinite(vwap) && vwap > 0 ? spot - vwap : null;
+  const spotStale = spyQuoteAgeIsStale(signal?.market_data_readiness?.quote_age_seconds);
 
   // Freshness (all in seconds).
   const spyQuoteAge = signal?.market_data_readiness?.quote_age_seconds ?? null;
@@ -168,8 +182,26 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
   return (
     <section aria-label="Session cockpit" className="border-b border-zinc-800 bg-[#0b0d10] px-3 py-3 sm:px-6">
       {/* Row 1: session timeline */}
-      <div className="flex items-center justify-between gap-3 text-2xs text-zinc-500">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-2xs text-zinc-500">
         <span className="font-semibold uppercase tracking-[0.16em]">Session</span>
+        <div className="flex items-baseline gap-2" aria-live="off">
+          <span className="font-semibold uppercase tracking-[0.16em] text-zinc-500">SPY</span>
+          <Num
+            value={spotValid ? spot : null}
+            flash
+            size="xl"
+            tone={spotStale ? 'flat' : 'plain'}
+            title={spotStale ? 'SPY quote is stale — entries are gated on freshness' : 'Live SPY spot the strategy is acting on'}
+          >
+            {spotValid ? spot.toFixed(2) : '—'}
+          </Num>
+          {vsVwap !== null && (
+            <span className={cn('num text-2xs', vsVwap >= 0 ? 'text-pnl-up' : 'text-pnl-down')} title={`VWAP ${vwap.toFixed(2)}`}>
+              {vsVwap >= 0 ? '+' : ''}{vsVwap.toFixed(2)} vs VWAP
+            </span>
+          )}
+          {spotStale && <span className="text-2xs font-semibold uppercase tracking-[0.12em] text-sev-warn">stale</span>}
+        </div>
         <span className="font-mono tabular-nums text-zinc-300">{etClock(now)}</span>
       </div>
       <div className="relative mt-1.5 h-3 w-full overflow-hidden rounded-full bg-zinc-900 ring-1 ring-zinc-800" role="img" aria-label={segments.map((s) => s.label).join('; ') || 'No session policy'}>
