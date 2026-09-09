@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import type { KillSwitchResponse, Position, StrategyEngineState, TradeUsageResponse } from '@/lib/api';
 import { cn } from '@/lib/utils';
+import { useTick } from '@/hooks/useTick';
 import { etClock, etMinuteOfDay, freshnessTone, minuteLabel, seconds, signedMoney, toneClass, type Tone } from './format';
 
 /**
@@ -107,9 +108,17 @@ function sessionSentence(session: Record<string, any> | null, nowMin: number): {
   };
 }
 
-function Chip({ label, value, tone, title }: { label: string; value: string; tone: Tone; title: string }) {
+function Chip({ label, value, tone, title, flashOn }: { label: string; value: string; tone: Tone; title: string; flashOn?: number | null }) {
+  const tick = useTick(flashOn ?? null);
   return (
-    <span title={title} aria-label={`${label} ${value}. ${title}`} className={cn('inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-2xs leading-none', toneClass[tone])}>
+    <span title={title} aria-label={`${label} ${value}. ${title}`} className={cn('relative isolate inline-flex items-center gap-1.5 overflow-hidden rounded-md border px-2 py-1 font-mono text-2xs leading-none', toneClass[tone])}>
+      {tick.direction && (
+        <span
+          key={tick.nonce}
+          aria-hidden="true"
+          className={cn('pointer-events-none absolute inset-0 -z-10', tick.direction === 'up' ? 'tick-up' : 'tick-down')}
+        />
+      )}
       <span className="font-sans font-semibold uppercase tracking-[0.12em] opacity-80">{label}</span>
       <span className="tabular-nums">{value}</span>
     </span>
@@ -168,7 +177,7 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
           <div key={`${seg.kind}-${index}`} title={seg.label} className={cn('absolute inset-y-0', segmentClass[seg.kind])} style={{ left: pct(seg.from), width: `calc(${pct(seg.to)} - ${pct(seg.from)})` }} />
         ))}
         {nowMin >= open && nowMin <= close && (
-          <div className="absolute inset-y-[-2px] w-0.5 bg-zinc-50 shadow-[0_0_6px_rgba(255,255,255,0.8)]" style={{ left: pct(nowMin) }} aria-hidden="true" />
+          <div className="rail-glide absolute inset-y-[-2px] w-0.5 bg-zinc-50 shadow-[0_0_6px_rgba(255,255,255,0.8)]" style={{ left: pct(nowMin) }} aria-hidden="true" />
         )}
       </div>
       <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-2xs font-mono text-zinc-500">
@@ -187,7 +196,7 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
           <Chip label="Gateway" value={healthy == null ? '…' : healthy ? 'up' : 'down'} tone={healthy == null ? 'muted' : healthy ? 'good' : 'bad'} title={healthLabel || 'Strategy engine + IBKR gateway health'} />
         </div>
         <div className="flex flex-wrap gap-1.5" aria-label="Risk state">
-          <Chip label="Day P&L" value={pnl == null ? '—' : `${signedMoney(pnl)} / −$${Math.abs(limit || 0).toFixed(0)}`} tone={pnlTone} title="Realized + open live P&L against the kill-switch limit" />
+          <Chip label="Day P&L" value={pnl == null ? '—' : `${signedMoney(pnl)} / −$${Math.abs(limit || 0).toFixed(0)}`} tone={pnlTone} title="Realized + open live P&L against the kill-switch limit" flashOn={pnl} />
           <Chip label="Trades" value={`${tradesUsed ?? '—'}/${tradesMax}`} tone={tradesUsed != null && tradesUsed >= tradesMax ? 'warn' : 'muted'} title="Live entries used today vs max_trades_per_day" />
           <Chip label="Dir" value={`C ${calls}/${sameDirectionMax} · P ${puts}/${sameDirectionMax}`} tone={calls >= sameDirectionMax || puts >= sameDirectionMax ? 'warn' : 'muted'} title="Open live positions per direction vs max_same_direction_positions" />
           <Badge variant="outline" className={cn('h-[22px] rounded-md font-mono text-2xs', toneClass[autonomous.tone])} title="Autonomous live entry state (same source as the action bar)">

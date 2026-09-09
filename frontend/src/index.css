@@ -402,3 +402,69 @@ a,
     }
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Motion.
+ *
+ * One rule governs everything here: motion may never make a number wrong.
+ * A count-up animation renders values the system never held, and an operator
+ * reading a mid-tween P&L or fill price is reading a lie. So numbers never
+ * interpolate — they change instantly and the *background* carries the motion.
+ * Only geometry that is already derived (a marker's position along a rail)
+ * is interpolated, because tweening it misstates nothing.
+ *
+ * Durations are short on purpose. Quotes arrive ~50/s; anything longer than
+ * about 400ms turns a fast tape into mush and adds perceived latency to the
+ * one screen that must feel immediate.
+ * ------------------------------------------------------------------------- */
+@layer utilities {
+  /* A value changed. Tint behind it, never the digits themselves. */
+  .tick-up {
+    animation: tick-up-flash 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .tick-down {
+    animation: tick-down-flash 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @keyframes tick-up-flash {
+    0% { background-color: hsl(var(--pnl-up) / 0); }
+    18% { background-color: hsl(var(--pnl-up) / 0.22); }
+    100% { background-color: hsl(var(--pnl-up) / 0); }
+  }
+
+  @keyframes tick-down-flash {
+    0% { background-color: hsl(var(--pnl-down) / 0); }
+    18% { background-color: hsl(var(--pnl-down) / 0.22); }
+    100% { background-color: hsl(var(--pnl-down) / 0); }
+  }
+
+  /* Markers that slide along a rail: stop, trigger, targets, spot, the session
+   * clock. Position is derived from price/time, so interpolating reads as the
+   * market moving rather than the UI redrawing. */
+  .rail-glide {
+    transition-property: left, right, width, transform;
+    transition-duration: 320ms;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* The live spot marker earns a shorter one — it should feel attached to the
+   * tape, not trailing it. */
+  .rail-glide-live {
+    transition-property: left, transform;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.33, 1, 0.68, 1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tick-up,
+    .tick-down {
+      animation: none;
+    }
+
+    .rail-glide,
+    .rail-glide-live {
+      transition: none;
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useTick } from '@/hooks/useTick';
 import { cn } from '@/lib/utils';
 
 /**
@@ -48,6 +49,7 @@ export function Num({
   tone = 'plain',
   size = 'md',
   value,
+  flash = false,
   className,
   ...props
 }: React.HTMLAttributes<HTMLSpanElement> & {
@@ -55,6 +57,9 @@ export function Num({
   size?: NumSize;
   /** When tone is "auto", the sign of this decides up / down / flat. */
   value?: number | null;
+  /** Tint the background when `value` changes. Requires `value`. The digits
+   *  themselves never animate — see the motion note in index.css. */
+  flash?: boolean;
 }) {
   const resolved: Exclude<NumTone, 'auto'> =
     tone !== 'auto'
@@ -65,8 +70,31 @@ export function Num({
           ? 'up'
           : 'down';
 
+  const tick = useTick(flash ? value : null);
+
   return (
-    <span className={cn('num', NUM_SIZE[size], NUM_TONE[resolved], className)} {...props}>
+    <span
+      className={cn(
+        'num',
+        NUM_SIZE[size],
+        NUM_TONE[resolved],
+        flash && 'relative isolate rounded-xs px-0.5',
+        className
+      )}
+      {...props}
+    >
+      {flash && tick.direction && (
+        // Keyed so a repeated tick in the same direction restarts the flash.
+        // Sits behind the digits, so the text never repaints or shifts.
+        <span
+          key={tick.nonce}
+          aria-hidden="true"
+          className={cn(
+            'pointer-events-none absolute inset-0 -z-10 rounded-xs',
+            tick.direction === 'up' ? 'tick-up' : 'tick-down'
+          )}
+        />
+      )}
       {children}
     </span>
   );

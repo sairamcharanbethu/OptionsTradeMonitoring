@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { Num } from '@/components/ui/semantics';
 import { type OptionDetailsJSON, type Position } from '@/lib/api';
 import { money, humanContractName, levelDistance } from './terminalModel';
 import Metric from './Metric';
@@ -49,8 +50,15 @@ const PositionSummary = ({
           </div>
         </div>
         <div className="text-left sm:text-right">
-          <div className={`font-mono text-xl font-semibold tabular-nums ${openPnl === null ? 'text-pnl-flat' : openPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
-            {openPnl === null ? '—' : `${openPnl >= 0 ? '+' : ''}${money(openPnl)}`}
+          <div>
+            <Num
+              value={openPnl}
+              flash
+              size="xl"
+              tone={openPnl === null ? 'flat' : openPnl >= 0 ? 'up' : 'down'}
+            >
+              {openPnl === null ? '—' : `${openPnl >= 0 ? '+' : ''}${money(openPnl)}`}
+            </Num>
           </div>
           <div className="text-2xs text-zinc-500">{openPnl === null ? 'awaiting option quote' : 'estimated open P&L'}</div>
         </div>
