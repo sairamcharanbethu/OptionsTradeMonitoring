@@ -680,7 +680,11 @@ export const api = {
 
   async getMe(): Promise<User> {
     const res = await authFetch(`${API_BASE}/auth/me`);
-    if (!res.ok) throw new Error('Not authenticated');
+    if (!res.ok) {
+      const error = new Error(res.status === 401 || res.status === 403 ? 'Not authenticated' : `Session check failed (${res.status})`) as Error & { status?: number };
+      error.status = res.status;
+      throw error;
+    }
     return res.json();
   },
 

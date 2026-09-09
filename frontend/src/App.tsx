@@ -49,6 +49,7 @@ function NotFoundPage() {
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authDegraded, setAuthDegraded] = useState(false);
   const devTradeTestsEnabled = import.meta.env.DEV || import.meta.env.VITE_ENABLE_DEV_TRADING_TESTS === 'true';
 
   useEffect(() => {
@@ -57,9 +58,20 @@ function App() {
         try {
           const userData = await api.getMe();
           setUser(userData);
-        } catch (err) {
-          console.error('Session restoration failed:', err);
-          api.logout();
+        } catch (err: any) {
+          const status = Number(err?.status);
+          if (status === 401 || status === 403) {
+            api.logout();
+          } else {
+            console.error('Session check failed; keeping the session and retrying:', err);
+            try {
+              const retried = await api.getMe();
+              setUser(retried);
+            } catch (retryErr: any) {
+              if (Number(retryErr?.status) === 401 || Number(retryErr?.status) === 403) api.logout();
+              else setAuthDegraded(true);
+            }
+          }
         }
       }
       setLoading(false);
@@ -71,6 +83,20 @@ function App() {
     return (
       <div className="flex min-h-[100dvh] items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user && authDegraded) {
+    return (
+      <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-background px-6 text-center">
+        <div className="text-2xs font-semibold uppercase tracking-[0.16em] text-sev-warn">Server unreachable</div>
+        <h2 className="text-xl font-semibold tracking-tight">You are still signed in.</h2>
+        <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
+          StrikePilot could not reach the backend to confirm your session. Your sign-in has been kept.
+          This is usually brief — retry once the service responds.
+        </p>
+        <Button className="mt-1 h-11 px-5" onClick={() => window.location.reload()}>Retry</Button>
       </div>
     );
   }
