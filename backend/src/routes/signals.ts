@@ -348,8 +348,10 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
       const { id: userId } = (request as any).user;
 
       // Housekeeping, throttled: see RECONCILE_MS above.
+      let reconcileMs = 0;
       if (Date.now() - lastSignalReconcileAtMs >= RECONCILE_MS && !signalReconcileInFlight) {
         signalReconcileInFlight = true;
+        const reconcileStartedAt = Date.now();
         try {
         await fastify.pg.query(`
           UPDATE signals older
@@ -399,6 +401,7 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
         } catch (err: any) {
           fastify.log.warn(`[Signals] status reconciliation failed: ${err?.message || String(err)}`);
         } finally {
+          reconcileMs = Date.now() - reconcileStartedAt;
           signalReconcileInFlight = false;
         }
       }
@@ -449,8 +452,11 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
         ORDER BY s.created_at DESC 
         LIMIT 100
       `;
+      const queryStartedAt = Date.now();
       const { rows } = await fastify.pg.query(query, [userId]);
-      return rows.map((row: any) => {
+      const queryMs = Date.now() - queryStartedAt;
+      const mapStartedAt = Date.now();
+      const mapped = rows.map((row: any) => {
         const execution = row.user_execution_status
           || row.execution_broker
           || row.broker_order_id
@@ -469,6 +475,11 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
           : null;
         return { ...row, execution };
       });
+      (reply as any).header(
+        'Server-Timing',
+        `reconcile;dur=${reconcileMs}, query;dur=${queryMs}, map;dur=${Date.now() - mapStartedAt}, rows;dur=${rows.length}`
+      );
+      return mapped;
     } catch (err: any) {
       fastify.log.error(err);
       return (reply as any).code(500).send({ error: 'Failed to fetch trade signals' });
