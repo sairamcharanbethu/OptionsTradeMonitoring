@@ -109,6 +109,15 @@ function sessionSentence(session: Record<string, any> | null, nowMin: number): {
   };
 }
 
+// The staleness that matters here spans seconds to hours, and "700m ago"
+// does not read as half a day.
+function ageLabel(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const hours = seconds / 3600;
+  return hours < 24 ? `${hours.toFixed(hours < 10 ? 1 : 0)}h` : `${Math.round(hours / 24)}d`;
+}
+
 function spyQuoteAgeIsStale(ageSeconds: unknown): boolean {
   const age = Number(ageSeconds);
   return Number.isFinite(age) ? age > GATES.spyQuoteSeconds : true;
@@ -144,14 +153,6 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
   const pct = (minute: number) => `${Math.min(100, Math.max(0, ((minute - open) / span) * 100))}%`;
   const sentence = sessionSentence(session, nowMin);
 
-  // Live underlying. The engine's own spot, so the header shows the price the
-  // strategy is acting on rather than a second, slightly different feed.
-  const spot = Number(signal?.spot);
-  const spotValid = Number.isFinite(spot) && spot > 0;
-  const vwap = Number(signal?.market_data_readiness?.vwap);
-  const vsVwap = spotValid && Number.isFinite(vwap) && vwap > 0 ? spot - vwap : null;
-  const spotStale = spyQuoteAgeIsStale(signal?.market_data_readiness?.quote_age_seconds);
-
   // Freshness (all in seconds).
   const spyQuoteAge = signal?.market_data_readiness?.quote_age_seconds ?? null;
   const side = signal?.favoring === 'puts' ? 'put_setup' : signal?.favoring === 'calls' ? 'call_setup' : null;
@@ -159,6 +160,24 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
   const gexAge = signal?.gex?.provider_age_seconds ?? signal?.zerogex_shadow?.provider_age_seconds ?? null;
   const generatedAt = Number(signal?.generated_at || 0);
   const signalAge = generatedAt > 0 ? now.getTime() / 1000 - generatedAt : strategyState?.ageSeconds ?? null;
+
+  // Live underlying. The engine's own spot, so the header shows the price the
+  // strategy is acting on rather than a second, slightly different feed.
+  const spot = Number(signal?.spot);
+  const spotValid = Number.isFinite(spot) && spot > 0;
+  const vwap = Number(signal?.market_data_readiness?.vwap);
+  const vsVwap = spotValid && Number.isFinite(vwap) && vwap > 0 ? spot - vwap : null;
+  // The price is only trustworthy if the quote was fresh AND the snapshot
+  // carrying it is recent. Judging it on quote_age_seconds alone was wrong:
+  // that field lives inside the snapshot, so when publishing stalled it froze
+  // at its last value and kept claiming freshness. A 12h-old price then read
+  // as current on the header. Snapshot age is measured against the browser
+  // clock, which cannot freeze with the payload.
+  const snapshotStale = signalAge == null || signalAge > GATES.signalSeconds;
+  const spotStale = snapshotStale || spyQuoteAgeIsStale(spyQuoteAge);
+  const spotStaleReason = snapshotStale
+    ? `strategy snapshot is ${signalAge == null ? 'unavailable' : `${ageLabel(signalAge)} old`} — this price is not live`
+    : 'SPY quote is past the freshness gate — entries are gated on it';
 
   // Risk row.
   const live = killSwitch?.live;
@@ -191,7 +210,7 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
             flash
             size="xl"
             tone={spotStale ? 'flat' : 'plain'}
-            title={spotStale ? 'SPY quote is stale — entries are gated on freshness' : 'Live SPY spot the strategy is acting on'}
+            title={spotStale ? spotStaleReason : 'Live SPY spot the strategy is acting on'}
           >
             {spotValid ? spot.toFixed(2) : '—'}
           </Num>
@@ -200,7 +219,11 @@ export default function CockpitHeader({ strategyState, killSwitch, killSwitchUna
               {vsVwap >= 0 ? '+' : ''}{vsVwap.toFixed(2)} vs VWAP
             </span>
           )}
-          {spotStale && <span className="text-2xs font-semibold uppercase tracking-[0.12em] text-sev-warn">stale</span>}
+          {spotStale && (
+            <span className="status-chip border-sev-warn/35 bg-sev-warn-soft text-sev-warn" title={spotStaleReason}>
+              not live{signalAge != null && signalAge > GATES.signalSeconds ? ` · ${ageLabel(signalAge)} old` : ''}
+            </span>
+          )}
         </div>
         <span className="font-mono tabular-nums text-zinc-300">{etClock(now)}</span>
       </div>
