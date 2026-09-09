@@ -250,6 +250,11 @@ CREATE TABLE IF NOT EXISTS paper_baseline_trades (
     UNIQUE (account_id, decision_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_signals_recent
+    ON signals (created_at DESC)
+    WHERE signal_type <> 'NONE';
+CREATE INDEX IF NOT EXISTS idx_signal_user_executions_signal_user
+    ON signal_user_executions (signal_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_positions_paper_account_status
     ON positions (paper_account_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_paper_orders_account_status

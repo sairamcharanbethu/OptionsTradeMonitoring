@@ -353,6 +353,17 @@ const ensureSchema = async (instance: any) => {
     `);
 
     await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_signals_recent
+        ON signals (created_at DESC)
+        WHERE signal_type <> 'NONE';
+    `);
+
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_signal_user_executions_signal_user
+        ON signal_user_executions (signal_id, user_id);
+    `);
+
+    await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS paper_accounts (
         id VARCHAR(50) PRIMARY KEY,
         name VARCHAR(120) NOT NULL,
