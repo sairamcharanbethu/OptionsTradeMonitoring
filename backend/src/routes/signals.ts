@@ -276,6 +276,102 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
   let lastSignalReconcileAtMs = 0;
   let signalReconcileInFlight = false;
 
+  // Hoisted so /_diagnostics/list-plan explains exactly this SQL.
+  const SIGNALS_LIST_QUERY = `
+        SELECT 
+          s.id, 
+          s.symbol, 
+          s.signal_type, 
+          s.trade_bias, 
+          s.current_price::double precision, 
+          s.entry_trigger::double precision, 
+          s.stop_loss::double precision, 
+          s.target_price::double precision, 
+          s.confidence_score, 
+          s.setup_grade, 
+          s.status AS status,
+          s.indicators, 
+          s.gex, 
+          s.volatility, 
+          s.no_trade_reasons, 
+          s.option_expiration_date, 
+          s.market_date, 
+          s.news_context,
+          s.ai_coach_commentary,
+          s.token_usage,
+          s.ml_probability::double precision AS ml_probability,
+          s.option_details,
+          sue.status AS user_execution_status,
+          sue.execution_broker,
+          sue.broker_order_id,
+          sue.broker_trade_id,
+          sue.execution_status,
+          sue.execution_error,
+          sue.contracts_requested,
+          s.engine_version,
+          s.strategy_name,
+          s.strategy_setup_id,
+          s.lifecycle_status,
+          s.entry_allowed,
+          s.activated_at,
+          s.policy_fingerprint,
+          s.created_at 
+        FROM signals s
+        LEFT JOIN signal_user_executions sue
+          ON sue.signal_id = s.id AND sue.user_id = $1
+        WHERE s.signal_type != 'NONE'
+        ORDER BY s.created_at DESC 
+        LIMIT 100
+      `;
+
+  // Admin-only, read-only. GET /api/signals is the cockpit's hottest call and
+  // its Server-Timing says the whole cost is inside pg.query (query=2238ms,
+  // reconcile=0, map=1). Three hypotheses about why have now been wrong —
+  // payload size, TOAST detoasting, a missing index — so this returns the
+  // planner's own account instead of another guess: the plan for the exact
+  // list query, the indexes that exist, and whether anything is using them.
+  fastify.get('/_diagnostics/list-plan', async (request, reply) => {
+    const { role } = (request as any).user || {};
+    if (role !== 'ADMIN') return reply.code(403).send({ error: 'Admin access required' });
+    const { id: userId } = (request as any).user;
+
+    try {
+      const [plan, counts, indexes, usage] = await Promise.all([
+        fastify.pg.query(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${SIGNALS_LIST_QUERY}`, [userId]),
+        fastify.pg.query(`
+          SELECT
+            (SELECT count(*) FROM signals) AS signals_rows,
+            (SELECT count(*) FROM signals WHERE signal_type <> 'NONE') AS signals_tradeable_rows,
+            (SELECT count(*) FROM signal_user_executions) AS executions_rows,
+            pg_size_pretty(pg_total_relation_size('signals')) AS signals_total_size,
+            pg_size_pretty(pg_relation_size('signals')) AS signals_heap_size
+        `),
+        fastify.pg.query(`
+          SELECT indexname, indexdef FROM pg_indexes
+          WHERE tablename IN ('signals', 'signal_user_executions')
+          ORDER BY tablename, indexname
+        `),
+        fastify.pg.query(`
+          SELECT relname AS table_name, indexrelname AS index_name, idx_scan
+          FROM pg_stat_user_indexes
+          WHERE relname IN ('signals', 'signal_user_executions')
+          ORDER BY relname, indexrelname
+        `)
+      ]);
+
+      return {
+        plan: plan.rows[0]?.['QUERY PLAN'] ?? plan.rows[0],
+        counts: counts.rows[0],
+        indexes: indexes.rows,
+        indexUsage: usage.rows,
+        generatedAt: new Date().toISOString()
+      };
+    } catch (err: any) {
+      fastify.log.error(`[Signals] list-plan diagnostic failed: ${err?.message || String(err)}`);
+      return reply.code(500).send({ error: err?.message || 'Diagnostic failed' });
+    }
+  });
+
   fastify.get('/', {
     schema: {
       tags: ['Signals'],
@@ -406,52 +502,7 @@ Respond ONLY with this JSON shape. Each sentence must be 22 words or fewer and u
         }
       }
 
-      const query = `
-        SELECT 
-          s.id, 
-          s.symbol, 
-          s.signal_type, 
-          s.trade_bias, 
-          s.current_price::double precision, 
-          s.entry_trigger::double precision, 
-          s.stop_loss::double precision, 
-          s.target_price::double precision, 
-          s.confidence_score, 
-          s.setup_grade, 
-          s.status AS status,
-          s.indicators, 
-          s.gex, 
-          s.volatility, 
-          s.no_trade_reasons, 
-          s.option_expiration_date, 
-          s.market_date, 
-          s.news_context,
-          s.ai_coach_commentary,
-          s.token_usage,
-          s.ml_probability::double precision AS ml_probability,
-          s.option_details,
-          sue.status AS user_execution_status,
-          sue.execution_broker,
-          sue.broker_order_id,
-          sue.broker_trade_id,
-          sue.execution_status,
-          sue.execution_error,
-          sue.contracts_requested,
-          s.engine_version,
-          s.strategy_name,
-          s.strategy_setup_id,
-          s.lifecycle_status,
-          s.entry_allowed,
-          s.activated_at,
-          s.policy_fingerprint,
-          s.created_at 
-        FROM signals s
-        LEFT JOIN signal_user_executions sue
-          ON sue.signal_id = s.id AND sue.user_id = $1
-        WHERE s.signal_type != 'NONE'
-        ORDER BY s.created_at DESC 
-        LIMIT 100
-      `;
+      const query = SIGNALS_LIST_QUERY;
       const queryStartedAt = Date.now();
       const { rows } = await fastify.pg.query(query, [userId]);
       const queryMs = Date.now() - queryStartedAt;
