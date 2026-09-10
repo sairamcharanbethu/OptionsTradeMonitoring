@@ -70,6 +70,12 @@ function runtimeItem(item: RuntimeConfigItem) {
     return item;
 }
 
+const RETIRED_SETTING_KEYS = new Set([
+    'day_trading_ai_provider',
+    'day_trading_ai_model',
+    'day_trading_coach_model'
+]);
+
 export async function settingsRoutes(fastify: FastifyInstance) {
     fastify.addHook('onRequest', fastify.authenticate);
 
@@ -325,6 +331,10 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                 const pendingValues: string[] = [];
 
                 for (const [key, value] of Object.entries(updates)) {
+                    // A browser running the previous bundle still posts these.
+                    // Drop them quietly: rejecting would fail the whole save
+                    // over keys nothing reads.
+                    if (RETIRED_SETTING_KEYS.has(key)) continue;
                     if (key === 'trading_economics_api_key') {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'Trading Economics is no longer used' });

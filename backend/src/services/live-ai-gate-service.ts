@@ -165,7 +165,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const streak = LiveAiGateService.consecutiveAiFailures(rows);
       if (streak < LiveAiGateService.FAILURE_ALERT_THRESHOLD) return;
 
-      const model = input.settings?.day_trading_ai_model || input.settings?.ai_model || 'unset';
+      const model = input.settings?.ai_model || 'unset';
       // Under the default trade_cautious fallback a dead model does not stop
       // trading, it stops reviewing — the more dangerous of the two, and the
       // one an operator is least likely to notice.

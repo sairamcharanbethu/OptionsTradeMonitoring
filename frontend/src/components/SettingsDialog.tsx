@@ -600,10 +600,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 day_trading_enabled: dayTradingEnabled ? 'true' : 'false',
                 discord_alerts_enabled: discordAlertsEnabled ? 'true' : 'false',
                 discord_webhook_url: discordWebhookUrl,
-                day_trading_ai_enabled: dayTradingAiEnabled ? 'true' : 'false',
-                day_trading_ai_provider: provider,
-                day_trading_ai_model: model,
-                day_trading_coach_model: model
+                day_trading_ai_enabled: dayTradingAiEnabled ? 'true' : 'false'
             };
             if (isAdmin) {
                 settingsPayload.market_poll_interval = pollInterval;

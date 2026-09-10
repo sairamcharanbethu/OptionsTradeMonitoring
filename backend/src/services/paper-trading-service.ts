@@ -918,7 +918,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
        ON CONFLICT (account_id, setup_id) DO NOTHING RETURNING *`,
       [ACCOUNT_ID, setupId, signalRow.rows[0]?.id || null, bounded.decision, bounded.riskTier, bounded.exitProfile,
         bounded.source, quantity, sizing.maxAffordable, 0, protectedLimit,
-        settings.day_trading_ai_model || settings.ai_model || null, PROMPT_VERSION,
+        settings.ai_model || null, PROMPT_VERSION,
         PAPER_POLICY_VERSION, trailingStopPct,
         aiRequested, JSON.stringify(aiReasons), tokenUsage.promptTokens, tokenUsage.completionTokens, tokenUsage.totalTokens,
         bounded.rationale, JSON.stringify(bounded.riskFlags), JSON.stringify({ generatedAt, quoteAgeSeconds, bid, ask, mid, strategyState: signal.state }), STRATEGY_NAME]
@@ -932,7 +932,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         { riskTier: bounded.riskTier, exitProfile: bounded.exitProfile, riskFlags: bounded.riskFlags, aiReasons }
       );
       if (PaperTradingService.aiErrorDetail(bounded.riskFlags)) {
-        await this.alertOnAiErrorStreak(settings.day_trading_ai_model || settings.ai_model || null);
+        await this.alertOnAiErrorStreak(settings.ai_model || null);
       }
     }
     if (!decisionRow || bounded.decision === 'SKIP') return;

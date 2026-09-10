@@ -224,6 +224,19 @@ const ensureSchema = async (instance: any) => {
       instance.log.info('[Database] Removed retired Trading Economics setting');
     }
 
+    // ai_provider/ai_model are the only keys any AI call reads. The
+    // day_trading_* trio was written alongside them from the same UI controls
+    // and read by nothing, so three rows could disagree about the model while
+    // only one of them mattered — which is exactly how a bad model id hid in
+    // plain sight. Retire them rather than leave the ambiguity lying around.
+    const retiredAiModelSettings = await instance.pg.query(
+      `DELETE FROM settings WHERE key = ANY($1::text[])`,
+      [['day_trading_ai_provider', 'day_trading_ai_model', 'day_trading_coach_model']]
+    );
+    if (retiredAiModelSettings.rowCount) {
+      instance.log.info(`[Database] Removed ${retiredAiModelSettings.rowCount} duplicate AI model setting(s); ai_model is authoritative`);
+    }
+
     await instance.pg.query(`
       ALTER TABLE signals
         ADD COLUMN IF NOT EXISTS engine_version VARCHAR(50),
