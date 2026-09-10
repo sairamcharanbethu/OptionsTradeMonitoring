@@ -79,6 +79,39 @@ async function runTests() {
   const bv = await budget.decide({ userId: 7, signalId: 8, signal, settings: {} });
   assert(bv.source === 'BUDGET' && bv.aiRequested === false && bv.decision === 'TRADE', 'Budget exhaustion skips the call and applies the fallback');
 
+  // A run of FALLBACK verdicts means the provider itself is down.
+  const failRow = { metadata: { ai_requested: 'true', source: 'FALLBACK' } };
+  const okRow = { metadata: { ai_requested: 'true', source: 'AI' } };
+  const budgetRow = { metadata: { ai_requested: 'false', source: 'BUDGET' } };
+  assert(LiveAiGateService.consecutiveAiFailures([failRow, failRow]) === 2, 'Two failed reviews in a row is a streak of two');
+  assert(LiveAiGateService.consecutiveAiFailures([failRow, okRow, failRow]) === 1, 'A healthy review breaks the streak');
+  assert(LiveAiGateService.consecutiveAiFailures([okRow, failRow]) === 0, 'A recovered model must not alert on stale failures');
+  assert(LiveAiGateService.consecutiveAiFailures([failRow, budgetRow, failRow]) === 2, 'Budget verdicts never reached the provider, so they neither break nor extend the streak');
+  assert(LiveAiGateService.consecutiveAiFailures([]) === 0, 'No history is not a failure');
+  assert(LiveAiGateService.consecutiveAiFailures([failRow]) === 1, 'One bad call stays below the alert threshold');
+
+  // The alert must never break the entry path: a streak lookup still returns
+  // the verdict, and a failing lookup is swallowed.
+  const streakFastify = createFastify();
+  streakFastify.pg.query = async (sql: string) => {
+    if (sql.includes('COUNT(*)')) return { rows: [{ count: 0 }] };
+    if (sql.includes("event_type = 'AI_LIVE_GATE'")) return { rows: [failRow, failRow] };
+    return { rows: [] };
+  };
+  const streaking = new LiveAiGateService(streakFastify, async () => { throw new Error('400 invalid model id'); });
+  const streakVerdict = await streaking.decide({ userId: 7, signalId: 9, signal, settings: {} });
+  assert(streakVerdict.source === 'FALLBACK' && streakVerdict.decision === 'TRADE', 'The streak alert must not change the verdict');
+
+  const brokenFastify = createFastify();
+  brokenFastify.pg.query = async (sql: string) => {
+    if (sql.includes('COUNT(*)')) return { rows: [{ count: 0 }] };
+    if (sql.includes("event_type = 'AI_LIVE_GATE'")) throw new Error('db down');
+    return { rows: [] };
+  };
+  const broken = new LiveAiGateService(brokenFastify, async () => { throw new Error('timeout'); });
+  const brokenVerdict = await broken.decide({ userId: 7, signalId: 10, signal, settings: {} });
+  assert(brokenVerdict.source === 'FALLBACK', 'A failing alert lookup must not break the entry path');
+
   console.log('All LiveAiGateService tests passed!');
 }
 

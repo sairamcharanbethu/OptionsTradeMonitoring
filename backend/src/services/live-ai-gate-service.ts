@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { AIService } from './ai-service';
+import { DiscordAlertService } from './discord-alert-service';
 import { PaperTradingService, PaperDecision } from './paper-trading-service';
 import { TradeRedisService } from './trade-redis-service';
 
@@ -23,7 +24,10 @@ import { TradeRedisService } from './trade-redis-service';
  * the entry through at one contract and flags it; `skip` blocks it.
  *
  * Every verdict is written to trade_events (AI_LIVE_GATE) with the signal id,
- * so verdicts can be joined to outcomes and the gate's value measured.
+ * so verdicts can be joined to outcomes and the gate's value measured. A run of
+ * FALLBACK verdicts means the model itself is down, which under the default
+ * trade_cautious policy is silent: entries keep flowing, unreviewed. That earns
+ * an alert of its own.
  */
 export type LiveAiGateMode = 'off' | 'advisory' | 'gate';
 export type LiveAiFallback = 'trade_cautious' | 'skip';
@@ -56,6 +60,8 @@ export class LiveAiGateService {
   static readonly DEFAULT_DAILY_BUDGET = 30;
   static readonly TIMEOUT_MS = 15_000;
   static readonly PROMPT_VERSION = 'live-gate-v1';
+  /** Consecutive failed reviews before the operator is paged. One bad call is noise. */
+  static readonly FAILURE_ALERT_THRESHOLD = 2;
 
   constructor(private fastify: FastifyInstance, private ask?: AskFn) {}
 
@@ -127,6 +133,58 @@ export class LiveAiGateService {
 Rules: SKIP when the supplied facts show degraded edge (thin/late tape, GEX conflict with direction, event risk, wide spread, stale quote, weak reward/risk, warnings that undercut the setup). Prefer CAUTIOUS when uncertain. Never invent facts.
 Facts: ${JSON.stringify(facts)}
 Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL","exit_profile":"CONSERVATIVE_T1|BALANCED_T2","rationale":"one sentence","risk_flags":["short"]}`;
+  }
+
+  /**
+   * Leading run of failed AI reviews in `rows` (AI_LIVE_GATE metadata, most
+   * recent first). Only verdicts that actually called the model count: BUDGET
+   * and OFF verdicts never reached the provider, so they are neither evidence
+   * of health nor of failure and must not break or extend the streak.
+   */
+  static consecutiveAiFailures(rows: any[]): number {
+    let streak = 0;
+    for (const row of rows || []) {
+      const meta = row?.metadata || row || {};
+      if (String(meta.ai_requested) !== 'true') continue;
+      if (meta.source !== 'FALLBACK') break;
+      streak += 1;
+    }
+    return streak;
+  }
+
+  private async alertOnFailureStreak(input: LiveAiGateInput, verdict: LiveAiVerdict): Promise<void> {
+    try {
+      const { rows } = await (this.fastify as any).pg.query(
+        `SELECT metadata FROM trade_events
+          WHERE user_id = $1
+            AND event_type = 'AI_LIVE_GATE'
+            AND (metadata->>'ai_requested') = 'true'
+          ORDER BY created_at DESC LIMIT $2`,
+        [input.userId, LiveAiGateService.FAILURE_ALERT_THRESHOLD]
+      );
+      const streak = LiveAiGateService.consecutiveAiFailures(rows);
+      if (streak < LiveAiGateService.FAILURE_ALERT_THRESHOLD) return;
+
+      const model = input.settings?.day_trading_ai_model || input.settings?.ai_model || 'unset';
+      // Under the default trade_cautious fallback a dead model does not stop
+      // trading, it stops reviewing — the more dangerous of the two, and the
+      // one an operator is least likely to notice.
+      const consequence = verdict.blocks
+        ? 'Live entries are being blocked by the fallback policy.'
+        : 'Live entries are still going through at one contract, unreviewed.';
+      await new DiscordAlertService(this.fastify).send({
+        userId: input.userId,
+        title: 'LIVE AI GATE FAILING',
+        message: `${streak} consecutive live AI reviews failed (model ${model}). ${consequence} Check the model id in settings. Last error: ${verdict.rationale}`,
+        severity: 'critical',
+        category: 'live-ai-gate-error',
+        signalId: input.signalId,
+        dedupeKey: `live-ai-gate-failure:${input.userId}:${model}`,
+        dedupeSeconds: 60 * 60
+      });
+    } catch (err: any) {
+      this.fastify.log.warn(`[LiveAiGate] Failure streak alert failed: ${err?.message || String(err)}`);
+    }
   }
 
   private async callsToday(userId: number, now: Date): Promise<number> {
@@ -221,6 +279,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         usage
       }
     }).catch((err: any) => this.fastify.log.warn(`[LiveAiGate] Failed to record verdict: ${err?.message || String(err)}`));
+    if (verdict.source === 'FALLBACK' && verdict.aiRequested) await this.alertOnFailureStreak(input, verdict);
     return verdict;
   }
 }
