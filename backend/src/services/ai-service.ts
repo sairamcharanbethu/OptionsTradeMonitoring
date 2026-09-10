@@ -6,6 +6,13 @@ import { getGlobalSettings, getSettingsWithGlobalFallback } from '../lib/setting
 const yahooFinance = new YahooFinance({ suppressNotices: ['ripHistorical', 'yahooSurvey'] });
 export const DEFAULT_AI_PROVIDER = 'openrouter';
 export const DEFAULT_AI_MODEL = 'deepseek/deepseek-chat';
+// Reasoning models bill their thinking against max_tokens and return it outside
+// `content`, so a small budget comes back as an empty answer. The paper gate
+// asks for 140 tokens and the live gate 200 — fine for a plain model, nothing
+// at all for a reasoning one. Keep a floor under the budget for models that
+// ignore the reasoning-off flag. It is a cap, not a spend: a short JSON reply
+// still costs what it costs.
+const MIN_OPENROUTER_COMPLETION_TOKENS = 512;
 
 function toCavemanStyle(text: string): string {
     if (!text) return '';
@@ -327,6 +334,21 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 
                 let response: any;
                 let useJsonFormat = true;
+                // `reasoning: { enabled: false }` keeps a reasoning model from
+                // spending the whole completion budget thinking and handing back
+                // an empty `content` (deepseek/deepseek-v4-flash at 140 tokens did
+                // exactly that, silently skipping every setup). OpenRouter ignores
+                // the field for models that do not reason.
+                const openRouterBody = {
+                    model: settings.ai_model,
+                    messages: [
+                        { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
+                        { role: 'user', content: prompt }
+                    ],
+                    temperature: 0,
+                    max_tokens: Math.max(maxTokens, MIN_OPENROUTER_COMPLETION_TOKENS),
+                    reasoning: { enabled: false }
+                };
                 
                 try {
                     response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -338,16 +360,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                             'X-Title': 'OptionsTradeMonitor',
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({
-                            model: settings.ai_model,
-                            messages: [
-                                { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
-                                { role: 'user', content: prompt }
-                            ],
-                            response_format: { type: 'json_object' },
-                            temperature: 0,
-                            max_tokens: maxTokens
-                        })
+                        body: JSON.stringify({ ...openRouterBody, response_format: { type: 'json_object' } })
                     });
 
                     if (!response.ok) {
@@ -377,15 +390,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                             'X-Title': 'OptionsTradeMonitor',
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({
-                            model: settings.ai_model,
-                            messages: [
-                                { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON.' },
-                                { role: 'user', content: prompt }
-                            ],
-                            temperature: 0,
-                            max_tokens: maxTokens
-                        })
+                        body: JSON.stringify(openRouterBody)
                     });
 
                     if (!response.ok) {
@@ -397,7 +402,14 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                 const data = await response.json() as any;
                 if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
                 providerUsage = data.usage || null;
-                text = data.choices[0].message?.content;
+                const message = data.choices?.[0]?.message;
+                text = message?.content;
+                // Last resort: a model that will not honor reasoning-off can still
+                // leave `content` empty and put the answer in `reasoning`. Better a
+                // parsed verdict than a skipped setup.
+                if ((text === undefined || text === null || String(text).trim() === '') && message?.reasoning) {
+                    text = String(message.reasoning);
+                }
             } else {
                 const response = await fetch(`${this.ollamaUrl}/api/generate`, {
                     method: 'POST',
@@ -497,6 +509,18 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
 
         let response: any;
         let useJsonFormat = true;
+        // Same reasoning-model trap as generateJSONInternal: think the budget
+        // away, return empty content. See MIN_OPENROUTER_COMPLETION_TOKENS.
+        const openRouterBody = {
+            model: model,
+            messages: [
+                { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON. Keep messages short.' },
+                { role: 'user', content: prompt }
+            ],
+            temperature: 0,
+            max_tokens: Math.max(maxTokens, MIN_OPENROUTER_COMPLETION_TOKENS),
+            reasoning: { enabled: false }
+        };
 
         try {
             response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -507,16 +531,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                     'X-Title': 'OptionsTradeMonitor',
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    model: model,
-                    messages: [
-                        { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON. Keep messages short.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    response_format: { type: 'json_object' },
-                    temperature: 0,
-                    max_tokens: maxTokens
-                })
+                body: JSON.stringify({ ...openRouterBody, response_format: { type: 'json_object' } })
             });
 
             if (!response.ok) {
@@ -542,15 +557,7 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
                     'X-Title': 'OptionsTradeMonitor',
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    model: model,
-                    messages: [
-                        { role: 'system', content: 'You are a concise trading bot. Respond ONLY with valid JSON. Keep messages short.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    temperature: 0,
-                    max_tokens: maxTokens
-                })
+                body: JSON.stringify(openRouterBody)
             });
 
             if (!response.ok) {
@@ -566,7 +573,11 @@ Do NOT include any extra keys or explanations outside the JSON. All JSON fields 
         if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
             throw new Error(`OpenRouter response structure invalid. Response: ${JSON.stringify(data)}`);
         }
-        const text = data.choices[0].message?.content;
+        const message = data.choices[0].message;
+        const text = (message?.content === undefined || message?.content === null || String(message?.content).trim() === '')
+            && message?.reasoning
+            ? String(message.reasoning)
+            : message?.content;
         if (text === undefined || text === null) {
             throw new Error(`OpenRouter choice message content missing. Response: ${JSON.stringify(data)}`);
         }
