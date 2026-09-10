@@ -934,6 +934,23 @@ async function run() {
   assert.equal(hybridStopClose?.[3], 'INVALIDATION', 'a confirmed engine invalidation must retain its auditable exit intent');
   assert.deepEqual(hybridStopClose?.[4], { invalidationExit: { reason: 'one_minute_close' } }, 'the exit journal must retain the engine confirmation evidence');
 
+  // A dead AI model must be detectable from the decision row alone: the
+  // `ai_error:` risk flag survives as JSON in paper_trade_decisions.
+  assert.equal(PaperTradingService.aiErrorDetail(['AI sizing unavailable', 'ai_error: 400 bad model']), '400 bad model');
+  assert.equal(PaperTradingService.aiErrorDetail('["ai_error: timeout"]'), 'timeout');
+  assert.equal(PaperTradingService.aiErrorDetail(['ai_error:']), 'unknown error');
+  assert.equal(PaperTradingService.aiErrorDetail(['risk-capped: ~$600/contract vs $500 budget']), null);
+  assert.equal(PaperTradingService.aiErrorDetail(null), null, 'a decision with no risk flags is not an AI failure');
+  assert.equal(PaperTradingService.aiErrorDetail('not json'), null, 'unparseable risk flags must not read as an AI failure');
+
+  const aiError = { decision: 'SKIP', risk_flags: ['ai_error: 400 not a valid model ID'] };
+  const aiOk = { decision: 'TRADE', risk_flags: [] };
+  assert.equal(PaperTradingService.consecutiveAiErrors([aiError, aiError]), 2);
+  assert.equal(PaperTradingService.consecutiveAiErrors([aiError, aiOk, aiError]), 1, 'a healthy review must break the streak');
+  assert.equal(PaperTradingService.consecutiveAiErrors([aiOk, aiError]), 0, 'a recovered model must not alert on stale failures');
+  assert.equal(PaperTradingService.consecutiveAiErrors([]), 0);
+  assert.equal(PaperTradingService.consecutiveAiErrors([aiError]), 1, 'one bad call is below the alert threshold');
+
   console.log('All PaperTradingService tests passed!');
 }
 

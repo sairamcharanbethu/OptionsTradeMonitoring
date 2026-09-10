@@ -16,6 +16,12 @@ export const PAPER_POLICY_VERSION = 'paper-exit-v2';
 // silently dropping the AI risk gate for the rest of the session. Still a
 // runaway-cost guardrail, just sized for a normal signal count.
 const MAX_DAILY_AI_CALLS = 12;
+// A dead AI model is silent: every review throws, the one-contract fallback
+// fires, and the unadjudicated-risk rule skips the setup anyway. The day then
+// looks like clean abstention (0 trades, no error surfaced) while nothing can
+// ever enter. Alert once the failure is a streak rather than one bad call.
+const AI_ERROR_ALERT_THRESHOLD = 2;
+const AI_ERROR_FLAG_PREFIX = 'ai_error:';
 const DEFAULT_PAPER_TRAILING_STOP_PCT = 15;
 const MAX_MANUAL_EXIT_QUOTE_AGE_MS = 15_000;
 // Reason keys emitted by aiReviewReasons. The edge-degrading subset
@@ -925,6 +931,9 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         decisionRow, null, protectedLimit,
         { riskTier: bounded.riskTier, exitProfile: bounded.exitProfile, riskFlags: bounded.riskFlags, aiReasons }
       );
+      if (PaperTradingService.aiErrorDetail(bounded.riskFlags)) {
+        await this.alertOnAiErrorStreak(settings.day_trading_ai_model || settings.ai_model || null);
+      }
     }
     if (!decisionRow || bounded.decision === 'SKIP') return;
     if (quantity < 1) {
@@ -1817,6 +1826,59 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       [ACCOUNT_ID, setupId, decisionId, positionId, eventType, policyVersion, message, premium,
         source?.underlying_price || null, metadata.quantity ?? source?.quantity ?? null, JSON.stringify(metadata), STRATEGY_NAME]
     );
+  }
+
+  /** The provider error carried by an `ai_error:` risk flag, or null when the review succeeded. */
+  static aiErrorDetail(riskFlags: any): string | null {
+    let flags: any[] = [];
+    if (Array.isArray(riskFlags)) flags = riskFlags;
+    else if (typeof riskFlags === 'string') {
+      try { const parsed = JSON.parse(riskFlags); if (Array.isArray(parsed)) flags = parsed; } catch { flags = []; }
+    }
+    const hit = flags.find((flag) => typeof flag === 'string' && flag.startsWith(AI_ERROR_FLAG_PREFIX));
+    return hit ? String(hit).slice(AI_ERROR_FLAG_PREFIX.length).trim() || 'unknown error' : null;
+  }
+
+  /** Leading run of failed AI reviews in `rows` (AI-attempted decisions, most recent first). */
+  static consecutiveAiErrors(rows: any[]): number {
+    let streak = 0;
+    for (const row of rows || []) {
+      if (!PaperTradingService.aiErrorDetail(row?.risk_flags)) break;
+      streak += 1;
+    }
+    return streak;
+  }
+
+  private async alertOnAiErrorStreak(model: string | null): Promise<void> {
+    try {
+      // Only AI-attempted decisions count. Ones that never consulted the model
+      // (no ambiguity, or the daily budget was spent) are neither evidence of
+      // health nor of failure, so they must not break or extend the streak.
+      const { rows } = await (this.fastify as any).pg.query(
+        `SELECT decision, risk_flags FROM paper_trade_decisions
+         WHERE account_id=$1 AND ai_requested=TRUE
+         ORDER BY created_at DESC LIMIT $2`,
+        [ACCOUNT_ID, AI_ERROR_ALERT_THRESHOLD]
+      );
+      const streak = PaperTradingService.consecutiveAiErrors(rows);
+      if (streak < AI_ERROR_ALERT_THRESHOLD) return;
+
+      const admin = await (this.fastify as any).pg.query(`SELECT id FROM users WHERE role='ADMIN' ORDER BY id LIMIT 1`);
+      if (!admin.rows[0]) return;
+      const skipped = rows.filter((row: any) => row?.decision === 'SKIP').length;
+      const detail = PaperTradingService.aiErrorDetail(rows[0]?.risk_flags) || 'unknown error';
+      await new DiscordAlertService(this.fastify).send({
+        userId: Number(admin.rows[0].id),
+        title: 'PAPER AI REVIEW FAILING',
+        message: `${streak} consecutive AI risk reviews failed (model ${model || 'unset'}) and ${skipped} of them skipped the setup. Entries stay suppressed until this is fixed \u2014 check the model id in settings. Last error: ${detail}`,
+        severity: 'critical',
+        category: 'paper-ai-error',
+        dedupeKey: `paper:ai-error-streak:${model || 'unset'}`,
+        dedupeSeconds: 60 * 60
+      });
+    } catch (error: any) {
+      this.fastify.log.warn(`[PaperTrading] AI error streak alert failed: ${error.message || String(error)}`);
+    }
   }
 
   private async notifyPaperEvent(eventType: string, source: any, message: string): Promise<void> {
