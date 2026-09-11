@@ -91,5 +91,61 @@ class EntryGateTest(unittest.TestCase):
         self.assertTrue(_allowed(r))
 
 
+class DeadTapeGateTest(unittest.TestCase):
+    """The 2026-09-11 failure: ATR(5m) $0.31, RVOL 0.44, three entries, -$92.
+
+    Both floors must be configured and both breached, and the gate must be a
+    no-op while the thresholds are unset (the shipped default) so live entries
+    are unchanged until the UW replay promotes a value.
+    """
+
+    def _tape(self, atr, rvol, strategy="CONTINUATION"):
+        base = _live(strategy=strategy, flip=900.0, regime="Negative", gamma="Trend")
+        base["market_context"] = {"atr_5m": atr, "rvol_1m": rvol}
+        return base
+
+    def _with_floors(self, result, atr_floor, rvol_floor, spot=765.0, atr_5m=0.31):
+        import signal_engine
+        prev = (signal_engine.MOMENTUM_MIN_ATR_5M, signal_engine.MOMENTUM_MIN_RVOL_1M)
+        signal_engine.MOMENTUM_MIN_ATR_5M = atr_floor
+        signal_engine.MOMENTUM_MIN_RVOL_1M = rvol_floor
+        try:
+            return _enforce_entry_gates(result, spot=spot, atr_5m=atr_5m)
+        finally:
+            signal_engine.MOMENTUM_MIN_ATR_5M, signal_engine.MOMENTUM_MIN_RVOL_1M = prev
+
+    def test_disabled_by_default_is_a_no_op(self):
+        r = _enforce_entry_gates(self._tape(0.31, 0.44), spot=765.0, atr_5m=0.31)
+        self.assertTrue(_allowed(r), 'the unset gate must not block anything')
+        self.assertEqual(r["blockers"], [])
+
+    def test_both_floors_breached_blocks(self):
+        r = self._with_floors(self._tape(0.31, 0.44), 0.45, 0.70)
+        self.assertFalse(_allowed(r))
+        self.assertTrue(any("dead tape" in b for b in r["blockers"]))
+
+    def test_low_atr_with_healthy_volume_allows(self):
+        # A quiet drift can still trend; ATR alone must not gate.
+        r = self._with_floors(self._tape(0.31, 1.40), 0.45, 0.70)
+        self.assertTrue(_allowed(r))
+
+    def test_low_volume_with_wide_range_allows(self):
+        # A thin but wide news tape has range to work with; RVOL alone must not gate.
+        r = self._with_floors(self._tape(1.20, 0.44), 0.45, 0.70, atr_5m=1.20)
+        self.assertTrue(_allowed(r))
+
+    def test_fade_strategies_are_exempt(self):
+        # Fades are meant to trade ranges — a dead tape is their habitat.
+        r = self._with_floors(self._tape(0.31, 0.44, strategy="GEX_WALL_BREAK_FAIL"), 0.45, 0.70)
+        self.assertTrue(_allowed(r))
+
+    def test_missing_tape_data_is_permissive(self):
+        # Availability outages must never halt entries (same rule as the pin gate).
+        base = self._tape(0.31, 0.44)
+        base["market_context"] = {}
+        r = self._with_floors(base, 0.45, 0.70, atr_5m=None)
+        self.assertTrue(_allowed(r))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

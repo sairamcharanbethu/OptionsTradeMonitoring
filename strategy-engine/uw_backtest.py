@@ -743,6 +743,10 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
                     "trigger": _num((setup or {}).get("trigger")),
                     "stop": _num((setup or {}).get("invalidation")) or _num((setup or {}).get("stop")),
                     "targets": [t for t in ((setup or {}).get("targets") or []) if _num(t) is not None][:3],
+                    # Tape conditions at entry, so a threshold sweep can be
+                    # measured from recorded trades instead of re-run guesses.
+                    "atr_5m": _num((signal.get("market_context") or {}).get("atr_5m")),
+                    "rvol_1m": _num((signal.get("market_context") or {}).get("rvol_1m")),
                 }
                 if trade["stop"] is None or not trade["targets"] or trade["trigger"] is None:
                     continue

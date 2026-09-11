@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import statistics
 import time
 from datetime import datetime
@@ -71,6 +72,25 @@ MOMENTUM_STRATEGIES = {"CONTINUATION", "MTF_TREND_BREAK"}
 # so it both adapts to volatility and holds a floor on ultra-low-ATR pins.
 FLIP_PROXIMITY_ATR = 1.0
 FLIP_PROXIMITY_PCT = 0.0020   # 0.20% of spot floor
+# Momentum-in-a-dead-tape gate (2026-09-11). A momentum setup's stop is
+# ATR-scaled, so in extreme compression it shrinks below the tick noise while
+# its first target still needs real follow-through: on 2026-09-11 ATR(5m) was
+# $0.31, RVOL 0.44, SPY's whole 10:45-13:23 range was $1.14, and all three
+# entries died in 3-19 minutes for -$92. Both conditions must trip -- a low ATR
+# alone can be a quiet drift that trends fine, and a low RVOL alone can be a
+# wide news-gap day. Read from the environment and DEFAULT TO OFF (0 disables)
+# so the thresholds can be swept in the UW replay before anything trades on
+# them; the values are only promoted into these defaults once the replay says so.
+def _env_float(name: str, default: float) -> float:
+    try:
+        parsed = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) and parsed >= 0 else default
+
+
+MOMENTUM_MIN_ATR_5M = _env_float("MOMENTUM_MIN_ATR_5M", 0.0)
+MOMENTUM_MIN_RVOL_1M = _env_float("MOMENTUM_MIN_RVOL_1M", 0.0)
 
 
 def _enforce_entry_gates(
@@ -127,6 +147,29 @@ def _enforce_entry_gates(
     # Gate on the SIGN of net gamma from any source (the local OI model's sign
     # is the mechanism itself, unlike its "Range" pin flag). Operator decision
     # 2026-09-06 after the corrected replay.
+    # Dead-tape gate: both floors must be configured AND both breached.
+    if (
+        strategy in MOMENTUM_STRATEGIES
+        and MOMENTUM_MIN_ATR_5M > 0
+        and MOMENTUM_MIN_RVOL_1M > 0
+    ):
+        market_context = result.get("market_context") or {}
+        rvol_raw = market_context.get("rvol_1m")
+        atr_raw = atr_5m if _number(atr_5m) else market_context.get("atr_5m")
+        if (
+            _number(atr_raw)
+            and _number(rvol_raw)
+            and float(atr_raw) > 0
+            and float(rvol_raw) > 0
+            and float(atr_raw) < MOMENTUM_MIN_ATR_5M
+            and float(rvol_raw) < MOMENTUM_MIN_RVOL_1M
+        ):
+            gates.append(
+                f"{strategy} blocked in a dead tape: ATR(5m) ${float(atr_raw):.2f} "
+                f"< ${MOMENTUM_MIN_ATR_5M:.2f} and RVOL {float(rvol_raw):.2f} "
+                f"< {MOMENTUM_MIN_RVOL_1M:.2f} — the ATR-scaled stop sits inside the noise"
+            )
+
     if strategy == "CONTINUATION" and str(gex.get("regime")) == "Positive":
         gates.append(
             "CONTINUATION blocked in positive gamma: dealer hedging dampens moves, "
