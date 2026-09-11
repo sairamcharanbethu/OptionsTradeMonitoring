@@ -951,6 +951,25 @@ async function run() {
   assert.equal(PaperTradingService.consecutiveAiErrors([]), 0);
   assert.equal(PaperTradingService.consecutiveAiErrors([aiError]), 1, 'one bad call is below the alert threshold');
 
+  // Daily AI budget accounting. Failed reviews used to be counted against the
+  // 12-adjudication budget, so a broken model spent the day by mid-morning and
+  // every later flagged setup was force-skipped for a reason unrelated to the
+  // trade (49 of 82 skips between 2026-08-14 and 2026-09-11). Only replies that
+  // actually resolved risk may spend the budget.
+  assert.deepEqual(PaperTradingService.aiBudgetGate(0, 0), { allowed: true, exhausted: null });
+  assert.deepEqual(PaperTradingService.aiBudgetGate(11, 11), { allowed: true, exhausted: null },
+    'the last adjudication in the budget must still be allowed');
+  assert.deepEqual(PaperTradingService.aiBudgetGate(12, 12), { allowed: false, exhausted: 'BUDGET' },
+    'twelve real adjudications exhaust the daily budget');
+  assert.deepEqual(PaperTradingService.aiBudgetGate(0, 12), { allowed: true, exhausted: null },
+    'twelve failed reviews must leave the whole adjudication budget intact');
+  assert.deepEqual(PaperTradingService.aiBudgetGate(3, 20), { allowed: true, exhausted: null },
+    'failures must not consume the budget the successful calls have not spent');
+  assert.deepEqual(PaperTradingService.aiBudgetGate(0, 24), { allowed: false, exhausted: 'ATTEMPTS' },
+    'a hard-down model must still stop being called once the attempt ceiling is hit');
+  assert.deepEqual(PaperTradingService.aiBudgetGate(12, 0), { allowed: false, exhausted: 'BUDGET' },
+    'the budget is checked ahead of the attempt ceiling so the operator sees the real cause');
+
   console.log('All PaperTradingService tests passed!');
 }
 

@@ -16,6 +16,11 @@ export const PAPER_POLICY_VERSION = 'paper-exit-v2';
 // silently dropping the AI risk gate for the rest of the session. Still a
 // runaway-cost guardrail, just sized for a normal signal count.
 const MAX_DAILY_AI_CALLS = 12;
+// Only adjudications (a reply that parsed into a real decision) count against
+// MAX_DAILY_AI_CALLS — an empty, off-spec or errored reply resolved nothing, so
+// it must not spend the day's judgement. This ceiling is the separate backstop
+// that keeps a hard-down model from being called once per setup all session.
+const MAX_DAILY_AI_ATTEMPTS = MAX_DAILY_AI_CALLS * 2;
 // A dead AI model is silent: every review throws, the one-contract fallback
 // fires, and the unadjudicated-risk rule skips the setup anyway. The day then
 // looks like clean abstention (0 trades, no error surfaced) while nothing can
@@ -160,7 +165,8 @@ export class PaperTradingService {
       ),
       (this.fastify as any).pg.query(
         `SELECT
-           COUNT(*) FILTER (WHERE ai_requested AND (created_at AT TIME ZONE 'America/New_York')::date=$2::date)::int AS daily_calls,
+           COUNT(*) FILTER (WHERE source='AI' AND (created_at AT TIME ZONE 'America/New_York')::date=$2::date)::int AS daily_calls,
+           COUNT(*) FILTER (WHERE ai_requested AND (created_at AT TIME ZONE 'America/New_York')::date=$2::date)::int AS daily_attempts,
            COALESCE(SUM(total_tokens) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date=$2::date),0)::int AS daily_tokens,
            COUNT(*) FILTER (WHERE ai_requested AND date_trunc('month', created_at AT TIME ZONE 'America/New_York')=date_trunc('month', NOW() AT TIME ZONE 'America/New_York'))::int AS monthly_calls,
            COALESCE(SUM(total_tokens) FILTER (WHERE date_trunc('month', created_at AT TIME ZONE 'America/New_York')=date_trunc('month', NOW() AT TIME ZONE 'America/New_York')),0)::int AS monthly_tokens
@@ -221,9 +227,13 @@ export class PaperTradingService {
         pnlPct: startOfDayEquity > 0 ? Number((((equity - startOfDayEquity) / startOfDayEquity) * 100).toFixed(2)) : 0
       },
       aiUsage: {
+        // dailyCalls is adjudications — what the budget actually governs.
+        // dailyAttempts exposes the failing calls that no longer spend it.
         dailyCalls: Number(aiUsage.rows[0]?.daily_calls || 0),
         dailyCallLimit: MAX_DAILY_AI_CALLS,
         dailyCallsRemaining: Math.max(0, MAX_DAILY_AI_CALLS - Number(aiUsage.rows[0]?.daily_calls || 0)),
+        dailyAttempts: Number(aiUsage.rows[0]?.daily_attempts || 0),
+        dailyAttemptLimit: MAX_DAILY_AI_ATTEMPTS,
         dailyTokens: Number(aiUsage.rows[0]?.daily_tokens || 0),
         monthlyCalls: Number(aiUsage.rows[0]?.monthly_calls || 0),
         monthlyTokens: Number(aiUsage.rows[0]?.monthly_tokens || 0)
@@ -678,6 +688,20 @@ export class PaperTradingService {
       : 20;
   }
 
+  // Budget gate for the AI risk review. Adjudications (replies that parsed into
+  // a real decision) spend the daily budget; a failed call resolved nothing and
+  // only spends the attempt ceiling, so a broken model can no longer exhaust
+  // the day's judgement and force-skip every later setup. Static so the
+  // accounting is unit-testable without a database.
+  public static aiBudgetGate(adjudications: number, attempts: number): {
+    allowed: boolean;
+    exhausted: 'BUDGET' | 'ATTEMPTS' | null;
+  } {
+    if (adjudications >= MAX_DAILY_AI_CALLS) return { allowed: false, exhausted: 'BUDGET' };
+    if (attempts >= MAX_DAILY_AI_ATTEMPTS) return { allowed: false, exhausted: 'ATTEMPTS' };
+    return { allowed: true, exhausted: null };
+  }
+
   public static normalizeAIDecision(raw: any): PaperDecision | null {
     const decision = String(raw?.decision || raw?.verdict || '').toUpperCase();
     const riskTier = String(raw?.risk_tier || raw?.riskTier || '').toUpperCase();
@@ -845,14 +869,24 @@ export class PaperTradingService {
       // outage coupling, and no silent sample-thinning skips.
       bounded = PaperTradingService.deterministicFlaggedDecision(aiReasons);
     } else if (aiReasons.length > 0) {
+      // Two ceilings, because a failing model must not be able to spend the
+      // decision budget. `adjudications` counts only the calls that came back
+      // with a usable decision (source='AI'); a failed one resolved no risk, so
+      // it leaves the 12 intact. `attempts` still bounds provider spend when
+      // every call is failing.
       const calls = await (this.fastify as any).pg.query(
-        `SELECT COUNT(*)::int AS count FROM paper_trade_decisions
-         WHERE account_id=$1 AND ai_requested=TRUE
+        `SELECT
+           COUNT(*) FILTER (WHERE source='AI')::int AS adjudications,
+           COUNT(*) FILTER (WHERE ai_requested)::int AS attempts
+         FROM paper_trade_decisions
+         WHERE account_id=$1
            AND (created_at AT TIME ZONE 'America/New_York')::date=$2::date`,
         [ACCOUNT_ID, today]
       );
-      const underBudget = Number(calls.rows[0]?.count || 0) < MAX_DAILY_AI_CALLS;
-      if (underBudget) {
+      const adjudications = Number(calls.rows[0]?.adjudications || 0);
+      const attempts = Number(calls.rows[0]?.attempts || 0);
+      const budget = PaperTradingService.aiBudgetGate(adjudications, attempts);
+      if (budget.allowed) {
         aiRequested = true;
         try {
           const prompt = `Resolve paper-risk ambiguity only. Never change the contract, SL, TP1, or TP2.
@@ -873,10 +907,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
           );
         }
       } else {
-        bounded = guardedFallback(
-          `Daily AI call budget of ${MAX_DAILY_AI_CALLS} reached; one-contract fallback applied.`,
-          ['Daily AI call budget reached']
-        );
+        bounded = budget.exhausted === 'BUDGET'
+          ? guardedFallback(
+            `Daily AI call budget of ${MAX_DAILY_AI_CALLS} reached; one-contract fallback applied.`,
+            ['Daily AI call budget reached']
+          )
+          : guardedFallback(
+            `AI review attempted ${attempts} times today without a usable decision (ceiling ${MAX_DAILY_AI_ATTEMPTS}); one-contract fallback applied.`,
+            ['Daily AI attempt ceiling reached after repeated failures']
+          );
       }
     }
     const availableCash = Number(account.cash_balance) - Number(account.reserved_cash);

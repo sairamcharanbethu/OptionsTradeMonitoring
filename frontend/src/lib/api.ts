@@ -301,7 +301,7 @@ export interface PaperAccountSummary {
   }>;
   session: { entries: number; entriesRemaining: number | null; pnl: number; pnlPct: number };
   limits: { maxDebitPct: number | null; dailyLossPct: number | null; maxTradesPerDay: number | null; maxOpenPositions: number | null; maxContracts: number | null; trailingStopPct: number; policyVersion: string };
-  aiUsage: { dailyCalls: number; dailyCallLimit: number; dailyCallsRemaining: number; dailyTokens: number; monthlyCalls: number; monthlyTokens: number };
+  aiUsage: { dailyCalls: number; dailyCallLimit: number; dailyCallsRemaining: number; dailyAttempts: number; dailyAttemptLimit: number; dailyTokens: number; monthlyCalls: number; monthlyTokens: number };
   baseline: { name: string; closedTrades: number; openTrades: number; wins: number; winRate: number; realizedPnl: number; managedRealizedPnl: number; valueAdded: number };
   strategyControls: Array<{ strategy_name: 'DAY_TRADING' | 'WALL_REACTION'; automation_status: 'ACTIVE' | 'PAUSED' }>;
   strategyAutomationStatus: 'ACTIVE' | 'PAUSED';

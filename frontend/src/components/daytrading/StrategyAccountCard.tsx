@@ -113,6 +113,12 @@ export default function StrategyAccountCard(props: Props) {
             <div className="border-t border-zinc-800 p-3">
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-zinc-400">
                 <span>AI today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyCalls}/{paperAccount.aiUsage.dailyCallLimit}</span></span>
+                {paperAccount.aiUsage.dailyAttempts > paperAccount.aiUsage.dailyCalls && (
+                  <span className="text-amber-400">
+                    Failed reviews <span className="font-mono">{paperAccount.aiUsage.dailyAttempts - paperAccount.aiUsage.dailyCalls}</span>
+                    <span className="text-zinc-500"> (attempts {paperAccount.aiUsage.dailyAttempts}/{paperAccount.aiUsage.dailyAttemptLimit})</span>
+                  </span>
+                )}
                 <span>Tokens today <span className="font-mono text-zinc-200">{paperAccount.aiUsage.dailyTokens.toLocaleString()}</span></span>
                 <span>Tokens this month <span className="font-mono text-zinc-200">{paperAccount.aiUsage.monthlyTokens.toLocaleString()}</span></span>
                 <span>Exit policy <span className="font-mono text-zinc-200">{paperAccount.limits.policyVersion} · {paperAccount.limits.trailingStopPct}%</span></span>
