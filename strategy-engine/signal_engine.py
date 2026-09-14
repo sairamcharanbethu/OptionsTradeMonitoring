@@ -72,22 +72,23 @@ GEX_WALL_MAX_OFFSET = 1         # ... through one strike OTM
 GEX_WALL_PREFERRED_OFFSET = 0   # bias to ATM
 GEX_WALL_TARGET_DELTA = 0.50    # near-the-money delta
 GEX_WALL_MIN_ABS_DELTA = 0.35   # reject anything too far OTM for a wall setup
-FROZEN_SETUP_STRATEGIES = {
-    "MTF_REVERSAL",
-    "MTF_TREND_BREAK",
-    "GEX_REJECTION",
-    *GEX_WALL_STRATEGY_NAMES,
-}
+# Frozen-trigger (reaction) setups the engine may arm. MTF_TREND_BREAK and the
+# heatmap GEX_REJECTION were retired on 2026-09-13 (operator decision on the
+# corrected replay: MTF_TREND_BREAK negative on every chain and stop variant,
+# PF 0.23-0.40; heatmap rejection never produced replay evidence). Any frozen
+# setup carrying a retired name is dropped by _frozen_reversal and never re-arms.
+FROZEN_SETUP_STRATEGIES = {*GEX_WALL_STRATEGY_NAMES}
+RETIRED_STRATEGIES = {"MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION", "GEX_WALL_REJECTION"}
 CONTINUATION_OPEN_STATES = {"ACTIVE", "MANAGE", "EXTENDED"}
 WATCH_STATES = {"WATCH", "ARMED"}
 
 # --- Late entry gates (see _enforce_entry_gates) ----------------------------
 # Applied once at the single build_signal choke point on the *finalized* signal.
-# MOMENTUM_STRATEGIES are the trend/breakout/continuation family that gets
-# whipsawed in a gamma pin; fades (MTF_REVERSAL, GEX_REJECTION, and the
-# GEX_WALL_* reactions) are deliberately NOT listed — they are meant to trade
-# ranges.
-MOMENTUM_STRATEGIES = {"CONTINUATION", "MTF_TREND_BREAK"}
+# MOMENTUM_STRATEGIES are the trend/continuation family that gets whipsawed in
+# a gamma pin; fades (the GEX_WALL_* reactions) are deliberately NOT listed —
+# they are meant to trade ranges. MTF_TREND_BREAK left this set when it was
+# retired (2026-09-13).
+MOMENTUM_STRATEGIES = {"CONTINUATION"}
 # No directional entry inside a band around the gamma flip: at the flip dealer
 # gamma changes sign and price whipsaws (the 0/8 pin-day tape all fired within
 # ~0.25% of the flip, 0.3–1.8 pts away). The band is max(ATR-scaled, %-of-spot)
@@ -3439,33 +3440,6 @@ def _continuation_confidence(
     }
 
 
-def _nearest_heatmap_node(
-    nodes: list[dict[str, Any]],
-    spot: float,
-    atr_5m: float,
-) -> dict[str, Any] | None:
-    valid = [
-        node for node in nodes
-        if _number(node.get("strike")) and _number(node.get("gex"))
-    ]
-    if not valid:
-        return None
-    node = min(valid, key=lambda item: abs(float(item["strike"]) - spot))
-    distance_atr = abs(float(node["strike"]) - spot) / max(atr_5m, 0.01)
-    max_magnitude = max(abs(float(item["gex"])) for item in valid)
-    magnitude_ratio = (
-        float(node.get("magnitude_ratio"))
-        if _number(node.get("magnitude_ratio"))
-        else abs(float(node["gex"])) / max_magnitude
-    )
-    return {
-        **node,
-        "distance_atr": round(distance_atr, 2),
-        "magnitude_ratio": round(magnitude_ratio, 3),
-        "trend": node.get("trend") or "stable",
-    }
-
-
 def _structure_plan(
     entry: float,
     side: str,
@@ -3590,220 +3564,6 @@ def _gex_target_levels(gex_ctx: dict[str, Any]) -> list[Any]:
     ]
 
 
-def _mtf_reversal_candidate(
-    spy: dict[str, Any],
-    latest: dict[str, Any],
-    spot: float,
-    gex_ctx: dict[str, Any],
-) -> dict[str, Any] | None:
-    directions = {
-        timeframe: _trend_direction(spy, timeframe)
-        for timeframe in ("5m", "15m", "60m")
-    }
-    atr_5m = spy.get("atr_5m")
-    vwap = spy.get("vwap")
-    if not (_number(atr_5m) and _number(vwap)):
-        return None
-
-    bearish_bar = float(latest["close"]) < float(latest["open"])
-    bullish_bar = float(latest["close"]) > float(latest["open"])
-    negative_gex = gex_ctx.get("regime") == "Negative"
-    positive_gex = gex_ctx.get("regime") == "Positive"
-    trend_regime = gex_ctx.get("gamma_regime") == "Trend"
-    ceiling_down = gex_ctx.get("rolling") == "CEILING_DOWN"
-    floor_up = gex_ctx.get("rolling") == "FLOOR_UP"
-    heatmap = gex_ctx.get("heatmap") or {}
-    heatmap_fresh = heatmap.get("fresh") is True
-    positive_node = _nearest_heatmap_node(
-        heatmap.get("positive_nodes") or [], spot, float(atr_5m)
-    ) if heatmap_fresh else None
-    negative_node = _nearest_heatmap_node(
-        heatmap.get("negative_nodes") or [], spot, float(atr_5m)
-    ) if heatmap_fresh else None
-    flip = heatmap.get("flip") if heatmap_fresh else gex_ctx.get("flip")
-    migration = heatmap.get("dominant_migration") or {}
-    migration_not_away = migration.get("toward_spot") is not False
-    structural_levels = _gex_target_levels(gex_ctx)
-
-    # A positive high-magnitude node can act like a trampoline. It becomes a
-    # rejection setup only after the bar and 5m/15m structure turn away from it.
-    if (
-        positive_node
-        and float(positive_node["distance_atr"]) <= 0.50
-        and float(positive_node["magnitude_ratio"]) >= 0.50
-        and positive_node.get("trend") != "fading"
-        and migration_not_away
-    ):
-        node_strike = float(positive_node["strike"])
-        node_below = node_strike <= spot
-        node_above = node_strike >= spot
-        call_touch_reject = (
-            float(latest["low"]) <= node_strike + float(atr_5m) * 0.10
-            and float(latest["close"]) >= node_strike + float(atr_5m) * 0.20
-        )
-        put_touch_reject = (
-            float(latest["high"]) >= node_strike - float(atr_5m) * 0.10
-            and float(latest["close"]) <= node_strike - float(atr_5m) * 0.20
-        )
-        rejection_score = 30
-        rejection_side = None
-        if (
-            node_below
-            and call_touch_reject
-            and bullish_bar
-            and directions["5m"] == directions["15m"] == "up"
-            and spot > vwap
-        ):
-            rejection_side = "calls"
-            rejection_score += 15 + 15 + 10
-            rejection_score += 10 if positive_gex else 0
-        elif (
-            node_above
-            and put_touch_reject
-            and bearish_bar
-            and directions["5m"] == directions["15m"] == "down"
-            and spot < vwap
-        ):
-            rejection_side = "puts"
-            rejection_score += 15 + 15 + 10
-            rejection_score += 10 if positive_gex else 0
-        if rejection_side:
-            rejection_score += 5 if positive_node.get("trend") == "building" else 0
-            rejection_score += 5 if migration.get("toward_spot") is True else 0
-        if rejection_side and rejection_score >= 70:
-            entry = round(
-                float(latest["high"]) + 0.01
-                if rejection_side == "calls"
-                else float(latest["low"]) - 0.01,
-                2,
-            )
-            return {
-                "strategy": "GEX_REJECTION",
-                "side": rejection_side,
-                "score": rejection_score,
-                "base_score": rejection_score,
-                "quality": "HIGH" if rejection_score >= 80 else "MEDIUM",
-                "timeframes": directions,
-                "setup": (
-                    f"fresh +GEX node {node_strike:g} rejected with 5m + 15m confirmation"
-                ),
-                "gex_alignment": {
-                    "node": positive_node,
-                    "flip": flip,
-                    "heatmap_status": "fresh",
-                },
-                "a_plus": (
-                    positive_gex
-                    and rejection_score >= 80
-                    and float(positive_node["magnitude_ratio"]) >= 0.50
-                ),
-                "risk_plan": _structure_plan(
-                    entry,
-                    rejection_side,
-                    float(atr_5m),
-                    (
-                        min(node_strike, float(latest["low"])) - float(atr_5m) * 0.15
-                        if rejection_side == "calls"
-                        else max(node_strike, float(latest["high"])) + float(atr_5m) * 0.15
-                    ),
-                    structural_levels,
-                ),
-            }
-
-    short_score = sum(
-        (
-            15 if directions["5m"] == "down" else 0,
-            15 if directions["15m"] == "down" else 0,
-            15 if directions["60m"] == "down" else 0,
-            15 if spot < vwap else 0,
-            10 if bearish_bar else 0,
-            10 if negative_gex else 0,
-            5 if trend_regime else 0,
-            5 if ceiling_down else 0,
-            5 if _number(flip) and spot < float(flip) else 0,
-        )
-    )
-    long_score = sum(
-        (
-            15 if directions["5m"] == "up" else 0,
-            15 if directions["15m"] == "up" else 0,
-            15 if directions["60m"] == "up" else 0,
-            15 if spot > vwap else 0,
-            10 if bullish_bar else 0,
-            10 if negative_gex else 0,
-            5 if trend_regime else 0,
-            5 if floor_up else 0,
-            5 if _number(flip) and spot > float(flip) else 0,
-        )
-    )
-
-    if short_score >= 70 and directions["5m"] == directions["15m"] == directions["60m"] == "down":
-        entry = round(float(latest["low"]) - 0.01, 2)
-        return {
-            "strategy": "MTF_TREND_BREAK",
-            "side": "puts",
-            "score": short_score,
-            "base_score": short_score,
-            "quality": "HIGH" if short_score >= 80 else "MEDIUM",
-            "timeframes": directions,
-            "setup": "5m + 15m aligned breakdown with 1h downtrend",
-            "gex_alignment": {
-                "node": negative_node,
-                "flip": flip,
-                "heatmap_status": "fresh" if heatmap_fresh else "unavailable",
-            },
-            "a_plus": bool(
-                negative_node
-                and float(negative_node["distance_atr"]) <= 0.50
-                and float(negative_node["magnitude_ratio"]) >= 0.50
-                and negative_node.get("trend") != "fading"
-                and migration_not_away
-                and negative_gex
-                and (_number(flip) and spot < float(flip))
-            ),
-            "risk_plan": _structure_plan(
-                entry,
-                "puts",
-                float(atr_5m),
-                float(latest["high"]) + float(atr_5m) * 0.15,
-                structural_levels,
-            ),
-        }
-    if long_score >= 70 and directions["5m"] == directions["15m"] == directions["60m"] == "up":
-        entry = round(float(latest["high"]) + 0.01, 2)
-        return {
-            "strategy": "MTF_TREND_BREAK",
-            "side": "calls",
-            "score": long_score,
-            "base_score": long_score,
-            "quality": "HIGH" if long_score >= 80 else "MEDIUM",
-            "timeframes": directions,
-            "setup": "5m + 15m aligned breakout with 1h uptrend",
-            "gex_alignment": {
-                "node": negative_node,
-                "flip": flip,
-                "heatmap_status": "fresh" if heatmap_fresh else "unavailable",
-            },
-            "a_plus": bool(
-                negative_node
-                and float(negative_node["distance_atr"]) <= 0.50
-                and float(negative_node["magnitude_ratio"]) >= 0.50
-                and negative_node.get("trend") != "fading"
-                and migration_not_away
-                and negative_gex
-                and (_number(flip) and spot > float(flip))
-            ),
-            "risk_plan": _structure_plan(
-                entry,
-                "calls",
-                float(atr_5m),
-                float(latest["low"]) - float(atr_5m) * 0.15,
-                structural_levels,
-            ),
-        }
-    return None
-
-
 def _wall_strike(value: Any) -> float | None:
     """Normalize a GEX wall (scalar or {"strike": ...} dict) to a number."""
     if isinstance(value, dict):
@@ -3925,20 +3685,6 @@ def _gex_wall_candidate(
             for key in ("setup_type", "verdict", "confidence", "invalidation")
         },
     }
-
-
-def _higher_score_candidate(
-    left: dict[str, Any] | None,
-    right: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Pick the higher-conviction reaction candidate; ties keep ``left``."""
-    if left is None:
-        return right
-    if right is None:
-        return left
-    left_score = int(left.get("base_score", left.get("score", 0)))
-    right_score = int(right.get("base_score", right.get("score", 0)))
-    return left if left_score >= right_score else right
 
 
 def _frozen_reversal(previous_signal: dict[str, Any], now: float, spot: float) -> dict[str, Any] | None:
@@ -4566,22 +4312,20 @@ def build_signal(
 
     reversal = _frozen_reversal(previous_signal, now, float(spot))
     if reversal is None and cooldown_until <= now:
-        # Cooldown-gated reaction setups: MTF reversal and the merged GEX
-        # wall-reaction engine. Prefer the higher-conviction candidate.
-        reversal = _higher_score_candidate(
-            _mtf_reversal_candidate(spy, latest, float(spot), gex_ctx),
-            _gex_wall_candidate(
-                spy, latest, float(spot), gex_ctx, completed, now,
-                previous_walls=previous_signal.get("gex_walls"),
-                net_gex_percentile=(
-                    (zerogex_decision.get("gex_history") or {}).get(
-                        "net_gex_30d_percentile"
-                    )
-                ),
-                # Multi-day bars so the 15m macro filter and PDH/PDL/ONH/ONL
-                # levels are defined from the open, not only after ~13:15 ET.
-                history_completed=_completed_bars(spy_bars),
+        # Cooldown-gated reaction setup: the GEX wall-reaction engine is the
+        # only frozen-trigger candidate left (MTF_TREND_BREAK and the heatmap
+        # GEX_REJECTION were retired 2026-09-13).
+        reversal = _gex_wall_candidate(
+            spy, latest, float(spot), gex_ctx, completed, now,
+            previous_walls=previous_signal.get("gex_walls"),
+            net_gex_percentile=(
+                (zerogex_decision.get("gex_history") or {}).get(
+                    "net_gex_30d_percentile"
+                )
             ),
+            # Multi-day bars so the 15m macro filter and PDH/PDL/ONH/ONL
+            # levels are defined from the open, not only after ~13:15 ET.
+            history_completed=_completed_bars(spy_bars),
         )
         if reversal:
             reversal["armed_at"] = now
@@ -5309,7 +5053,7 @@ def build_signal(
         result.update(
             state=state,
             favoring=side,
-            strategy=reversal.get("strategy") or "MTF_TREND_BREAK",
+            strategy=reversal.get("strategy") or "GEX_WALL_BREAK_FAIL",
             confidence_score=reversal["score"],
         )
         result["confirmations"] = [

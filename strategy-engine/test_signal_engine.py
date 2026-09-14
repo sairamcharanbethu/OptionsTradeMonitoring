@@ -14,7 +14,6 @@ from signal_engine import (
     _select_signal_option,
     _frozen_reversal,
     _mandatory_flatten_due,
-    _mtf_reversal_candidate,
     _estimated_option_stop_risk,
     _invalidation_exit_decision,
     _plan_quality,
@@ -710,238 +709,6 @@ class ZeroGEXShadowContextTest(unittest.TestCase):
             )
         )
         self.assertTrue(decision["gates"]["puts"]["entry_allowed"])
-
-
-class MultiTimeframeReversalTest(unittest.TestCase):
-    def setUp(self) -> None:
-        # Observed near the July 20 14:20 ET SPY reversal.
-        self.spy = {
-            "vwap": 745.69,
-            "atr_5m": 0.54,
-            "ema9_5m": 744.77,
-            "ema21_5m": 744.85,
-            "ema9_15m": 744.85,
-            "ema21_15m": 745.64,
-            "ema9_60m": 745.22,
-            "ema21_60m": 745.44,
-        }
-        self.latest = {
-            "open": 745.15,
-            "high": 745.19,
-            "low": 744.82,
-            "close": 744.98,
-        }
-        self.gex = {
-            "gamma_regime": "Trend",
-            "regime": "Negative",
-            "rolling": "CEILING_DOWN",
-        }
-
-    def test_744_81_short_is_detected_before_continuation_chase(self) -> None:
-        setup = _mtf_reversal_candidate(self.spy, self.latest, 744.81, self.gex)
-
-        self.assertIsNotNone(setup)
-        self.assertEqual(setup["strategy"], "MTF_TREND_BREAK")
-        self.assertEqual(setup["side"], "puts")
-        self.assertEqual(setup["score"], 90)
-        self.assertEqual(setup["risk_plan"]["entry"], 744.81)
-        self.assertEqual(setup["risk_plan"]["stop"], 745.27)
-        self.assertEqual(setup["risk_plan"]["targets"], [744.35, 744.0, 743.54])
-        self.assertEqual(
-            setup["risk_plan"]["method"],
-            "structure+0.15x_5m_atr_buffer",
-        )
-
-    def test_trigger_remains_frozen_during_pullback(self) -> None:
-        setup = _mtf_reversal_candidate(self.spy, self.latest, 744.81, self.gex)
-        setup.update(armed_at=1_000.0, frozen_until=1_900.0)
-        previous = {"reversal_setup": setup}
-
-        frozen = _frozen_reversal(previous, now=1_300.0, spot=744.30)
-
-        self.assertIsNotNone(frozen)
-        self.assertEqual(frozen["risk_plan"]["entry"], 744.81)
-
-    def test_frozen_setup_expires_at_stop(self) -> None:
-        setup = _mtf_reversal_candidate(self.spy, self.latest, 744.81, self.gex)
-        setup.update(armed_at=1_000.0, frozen_until=1_900.0)
-
-        self.assertIsNone(
-            _frozen_reversal({"reversal_setup": setup}, now=1_300.0, spot=745.62)
-        )
-
-    def test_fresh_positive_node_rejection_is_separate_strategy(self) -> None:
-        spy = {
-            "vwap": 100.0,
-            "atr_5m": 0.50,
-            "ema9_5m": 100.20,
-            "ema21_5m": 100.00,
-            "ema9_15m": 100.15,
-            "ema21_15m": 100.00,
-            "ema9_60m": 100.00,
-            "ema21_60m": 99.90,
-        }
-        latest = {
-            "open": 100.05,
-            "high": 100.25,
-            "low": 99.98,
-            "close": 100.20,
-        }
-        gex = {
-            "gamma_regime": "Range",
-            "regime": "Positive",
-            "rolling": "FLOOR_UP",
-            "heatmap": {
-                "fresh": True,
-                "positive_nodes": [{"strike": 100.0, "gex": 5_000_000}],
-                "negative_nodes": [],
-                "flip": 99.5,
-            },
-        }
-
-        setup = _mtf_reversal_candidate(spy, latest, 100.20, gex)
-
-        self.assertIsNotNone(setup)
-        self.assertEqual(setup["strategy"], "GEX_REJECTION")
-        self.assertEqual(setup["side"], "calls")
-        self.assertTrue(setup["a_plus"])
-
-    def test_trend_break_is_a_plus_only_with_negative_node_and_flip(self) -> None:
-        gex = {
-            **self.gex,
-            "heatmap": {
-                "fresh": True,
-                "positive_nodes": [],
-                "negative_nodes": [{"strike": 744.8, "gex": -4_000_000}],
-                "flip": 745.0,
-            },
-        }
-
-        setup = _mtf_reversal_candidate(self.spy, self.latest, 744.81, gex)
-
-        self.assertEqual(setup["strategy"], "MTF_TREND_BREAK")
-        self.assertTrue(setup["a_plus"])
-
-    def test_positive_node_requires_actual_touch_and_rejection(self) -> None:
-        spy = {
-            "vwap": 100.0, "atr_5m": 0.50,
-            "ema9_5m": 100.20, "ema21_5m": 100.00,
-            "ema9_15m": 100.15, "ema21_15m": 100.00,
-            "ema9_60m": 100.10, "ema21_60m": 100.00,
-        }
-        latest = {"open": 100.40, "high": 100.60, "low": 100.35, "close": 100.55}
-        gex = {
-            "gamma_regime": "Range", "regime": "Positive", "rolling": "FLOOR_UP",
-            "heatmap": {
-                "fresh": True,
-                "positive_nodes": [{
-                    "strike": 100.25, "gex": 5_000_000,
-                    "magnitude_ratio": 1.0, "trend": "building",
-                }],
-                "negative_nodes": [],
-                "dominant_migration": {"toward_spot": True},
-                "flip": 99.5,
-            },
-        }
-
-        setup = _mtf_reversal_candidate(spy, latest, 100.55, gex)
-
-        self.assertNotEqual((setup or {}).get("strategy"), "GEX_REJECTION")
-
-    def test_fading_or_low_magnitude_node_cannot_create_rejection(self) -> None:
-        spy = {
-            "vwap": 100.0, "atr_5m": 0.50,
-            "ema9_5m": 100.20, "ema21_5m": 100.00,
-            "ema9_15m": 100.15, "ema21_15m": 100.00,
-            "ema9_60m": 100.10, "ema21_60m": 100.00,
-        }
-        latest = {"open": 100.05, "high": 100.25, "low": 99.98, "close": 100.20}
-        for trend, ratio in (("fading", 1.0), ("building", 0.25)):
-            gex = {
-                "gamma_regime": "Range", "regime": "Positive", "rolling": "FLOOR_UP",
-                "heatmap": {
-                    "fresh": True,
-                    "positive_nodes": [{
-                        "strike": 100.0, "gex": 5_000_000,
-                        "magnitude_ratio": ratio, "trend": trend,
-                    }],
-                    "negative_nodes": [],
-                    "dominant_migration": {"toward_spot": True},
-                    "flip": 99.5,
-                },
-            }
-            setup = _mtf_reversal_candidate(spy, latest, 100.20, gex)
-            self.assertNotEqual((setup or {}).get("strategy"), "GEX_REJECTION")
-
-    def test_whipsaw_is_warning_not_veto_for_aligned_reversal(self) -> None:
-        now = TEST_SESSION_NOW
-        minute = int(now // 60) * 60
-        bars = []
-        for index in range(30):
-            close = 746.0 - index * 0.03
-            bars.append(
-                {
-                    "time": minute - (30 - index) * 60,
-                    "open": close + 0.05,
-                    "high": close + 0.10,
-                    "low": close - 0.10,
-                    "close": close,
-                    "volume": 10_000,
-                }
-            )
-        bars[-1].update(open=745.15, high=745.19, low=744.82, close=744.98)
-        market = {
-            "generated_at": now,
-            "symbols": {"SPY": {"spot": 744.90, "quote_age_seconds": 0.1, "bars": bars}},
-        }
-        indicators = {
-            "SPY": {
-                **self.spy,
-                "completed_bar_age_seconds": 60,
-                "rvol": 0.9,
-                "ema9_5m": 744.77,
-                "ema21_5m": 744.85,
-            }
-        }
-        options = {
-            "expiry": TEST_SESSION_EXPIRY,
-            "contracts": [
-                liquid_contract(
-                    right,
-                    strike,
-                    expiry=TEST_SESSION_EXPIRY,
-                )
-                for strike in range(741, 749)
-                for right in ("C", "P")
-            ],
-        }
-        gex = {
-            "fetched_at": now,
-            "data": {
-                "SPY": {
-                    "gamma_regime": "Trend",
-                    "regime": "Negative",
-                    "rolling": "CEILING_DOWN",
-                    "call_wall": {"strike": 745.0, "stage": "Spent"},
-                    "put_wall": {"strike": 742.0, "stage": "Fresh"},
-                },
-                "VIX": {"gamma_regime": "Whipsaw"},
-            },
-        }
-
-        with patch("signal_engine.time.time", return_value=now), patch(
-            "signal_engine._regular_session_open", return_value=True
-        ), patch(
-            "signal_engine._new_entry_window_open", return_value=True
-        ), patch("signal_engine._mandatory_flatten_due", return_value=False):
-            signal = build_signal(market, indicators, options, gex)
-
-        self.assertEqual(signal["state"], "ARMED")
-        self.assertEqual(signal["strategy"], "MTF_TREND_BREAK")
-        self.assertEqual(signal["favoring"], "puts")
-        self.assertEqual(signal["confidence_score"], 75)
-        self.assertFalse(signal["blockers"])
-        self.assertTrue(any("stronger confirmation" in warning for warning in signal["warnings"]))
 
 
 class OtmOptionSelectionTest(unittest.TestCase):
@@ -1845,7 +1612,7 @@ class ContinuationStateTest(unittest.TestCase):
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=True
         ), patch("signal_engine._mandatory_flatten_due", return_value=False), patch(
-            "signal_engine._mtf_reversal_candidate", return_value=None
+            "signal_engine._gex_wall_candidate", return_value=None
         ):
             return build_signal(
                 self.market,
@@ -2203,7 +1970,7 @@ class ContinuationStateTest(unittest.TestCase):
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=False
         ), patch("signal_engine._mandatory_flatten_due", return_value=False), patch(
-            "signal_engine._mtf_reversal_candidate", return_value=None
+            "signal_engine._gex_wall_candidate", return_value=None
         ):
             blocked = build_signal(self.market, self.indicators, self.options, self.gex)
         self.assertEqual(blocked["state"], "WAIT")
@@ -2217,7 +1984,7 @@ class ContinuationStateTest(unittest.TestCase):
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=False
         ), patch("signal_engine._mandatory_flatten_due", return_value=True), patch(
-            "signal_engine._mtf_reversal_candidate", return_value=None
+            "signal_engine._gex_wall_candidate", return_value=None
         ):
             exited = build_signal(
                 self.market,
@@ -2495,7 +2262,7 @@ class ContinuationStateTest(unittest.TestCase):
         self.indicators["SPY"]["rvol"] = 0.9
         self.gex["data"]["VIX"]["gamma_regime"] = "Whipsaw"
         candidate = {
-            "strategy": "MTF_REVERSAL",
+            "strategy": "GEX_WALL_BREAK_FAIL",
             "side": "calls",
             "score": 70,
             "base_score": 70,
@@ -2512,10 +2279,10 @@ class ContinuationStateTest(unittest.TestCase):
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=True
         ), patch("signal_engine._mandatory_flatten_due", return_value=False), patch(
-            "signal_engine._mtf_reversal_candidate", return_value=candidate
+            "signal_engine._gex_wall_candidate", return_value=candidate
         ):
             signal = build_signal(self.market, self.indicators, self.options, self.gex)
-        self.assertNotEqual(signal.get("strategy"), "MTF_REVERSAL")
+        self.assertNotEqual(signal.get("strategy"), "GEX_WALL_BREAK_FAIL")
         self.assertTrue(any("below 70" in warning for warning in signal["warnings"]))
 
     def test_gex_older_than_20_seconds_blocks_new_entry(self) -> None:
@@ -2642,7 +2409,7 @@ class ContinuationStateTest(unittest.TestCase):
 
     def test_mtf_trigger_requires_1m_alignment_at_medium_score(self) -> None:
         candidate = {
-            "strategy": "MTF_REVERSAL", "side": "calls", "score": 75, "base_score": 75,
+            "strategy": "GEX_WALL_BREAK_FAIL", "side": "calls", "score": 75, "base_score": 75,
             "quality": "MEDIUM", "timeframes": {"5m": "up", "15m": "up", "60m": "up"},
             "setup": "test aligned setup",
             "risk_plan": {"entry": 100.20, "stop": 99.60, "targets": [100.80, 101.20, 101.80], "method": "1.5x_5m_atr"},
@@ -2651,7 +2418,7 @@ class ContinuationStateTest(unittest.TestCase):
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=True
         ), patch("signal_engine._mandatory_flatten_due", return_value=False), patch(
-            "signal_engine._mtf_reversal_candidate", return_value=candidate
+            "signal_engine._gex_wall_candidate", return_value=candidate
         ):
             signal = build_signal(self.market, self.indicators, self.options, self.gex)
         self.assertEqual(signal["state"], "ARMED")
@@ -2659,7 +2426,7 @@ class ContinuationStateTest(unittest.TestCase):
 
     def test_local_gex_cannot_bypass_mtf_one_minute_confirmation(self) -> None:
         candidate = {
-            "strategy": "MTF_REVERSAL", "side": "calls", "score": 85, "base_score": 85,
+            "strategy": "GEX_WALL_BREAK_FAIL", "side": "calls", "score": 85, "base_score": 85,
             "quality": "HIGH", "timeframes": {"5m": "up", "15m": "up", "60m": "up"},
             "setup": "test high-quality setup",
             "risk_plan": {"entry": 100.20, "stop": 99.60, "targets": [100.80, 101.20, 101.80], "method": "1.5x_5m_atr"},
@@ -2670,7 +2437,7 @@ class ContinuationStateTest(unittest.TestCase):
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=True
         ), patch("signal_engine._mandatory_flatten_due", return_value=False), patch(
-            "signal_engine._mtf_reversal_candidate", return_value=candidate
+            "signal_engine._gex_wall_candidate", return_value=candidate
         ):
             signal = build_signal(self.market, self.indicators, self.options, self.gex)
         self.assertEqual(signal["state"], "ARMED")
@@ -2678,7 +2445,7 @@ class ContinuationStateTest(unittest.TestCase):
 
     def test_primary_gex_high_score_cannot_bypass_one_minute_confirmation(self) -> None:
         candidate = {
-            "strategy": "GEX_REJECTION", "side": "calls", "score": 90, "base_score": 90,
+            "strategy": "GEX_WALL_BREAK_FAIL", "side": "calls", "score": 90, "base_score": 90,
             "quality": "HIGH", "a_plus": True,
             "timeframes": {"5m": "up", "15m": "up", "60m": "up"},
             "setup": "test A+ setup",
@@ -2688,7 +2455,7 @@ class ContinuationStateTest(unittest.TestCase):
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=True
         ), patch("signal_engine._mandatory_flatten_due", return_value=False), patch(
-            "signal_engine._mtf_reversal_candidate", return_value=candidate
+            "signal_engine._gex_wall_candidate", return_value=candidate
         ):
             signal = build_signal(self.market, self.indicators, self.options, self.gex)
         self.assertEqual(signal["state"], "ARMED")
@@ -2697,7 +2464,7 @@ class ContinuationStateTest(unittest.TestCase):
 
     def test_active_mtf_position_never_reverts_to_armed(self) -> None:
         candidate = {
-            "strategy": "MTF_REVERSAL", "side": "calls", "score": 75, "base_score": 75,
+            "strategy": "GEX_WALL_BREAK_FAIL", "side": "calls", "score": 75, "base_score": 75,
             "quality": "MEDIUM", "timeframes": {"5m": "up", "15m": "up", "60m": "up"},
             "setup": "test aligned setup",
             "risk_plan": {"entry": 100.20, "stop": 99.60, "targets": [100.80, 101.20, 101.80], "method": "1.5x_5m_atr"},
@@ -2706,14 +2473,14 @@ class ContinuationStateTest(unittest.TestCase):
         with patch("signal_engine._regular_session_open", return_value=True), patch(
             "signal_engine._new_entry_window_open", return_value=True
         ), patch("signal_engine._mandatory_flatten_due", return_value=False), patch(
-            "signal_engine._mtf_reversal_candidate", return_value=candidate
+            "signal_engine._gex_wall_candidate", return_value=candidate
         ):
             active = build_signal(self.market, self.indicators, self.options, self.gex)
         self.assertEqual(active["state"], "ACTIVE")
         self.assertEqual(active["call_setup"]["risk_dollars"], 0.60)
         held = self.build(previous=active, spot=100.10)
         self.assertEqual(held["state"], "ACTIVE")
-        self.assertEqual(held["strategy"], "MTF_REVERSAL")
+        self.assertEqual(held["strategy"], "GEX_WALL_BREAK_FAIL")
 
     def test_locked_option_tracks_paper_premium_milestones(self) -> None:
         first = self.build()
@@ -2812,8 +2579,3 @@ class PositiveGammaContinuationGateTest(unittest.TestCase):
         self.assertTrue(out["lifecycle"]["entry_allowed"])
         self.assertEqual(out["blockers"], [])
 
-    def test_other_momentum_keeps_positive_range_rule(self):
-        trend = _enforce_entry_gates(self._result("MTF_TREND_BREAK", "Positive", "Trend"), spot=500.0, atr_5m=1.0)
-        self.assertTrue(trend["lifecycle"]["entry_allowed"])
-        pinned = _enforce_entry_gates(self._result("MTF_TREND_BREAK", "Positive", "Range"), spot=500.0, atr_5m=1.0)
-        self.assertFalse(pinned["lifecycle"]["entry_allowed"])

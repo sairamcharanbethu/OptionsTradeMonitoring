@@ -420,8 +420,11 @@ def _symmetric_strikes(strikes: list[float], spot: float, per_side: int) -> list
 def _locked_option_spec(signal: dict[str, Any] | None, expiry: str) -> tuple[float, str] | None:
     """Return the open continuation's activation contract for subscription retention."""
     signal = signal or {}
+    # Live strategies plus the retired names, so a position opened before a
+    # retirement keeps its contract subscribed until it closes.
     if signal.get("state") not in CONTINUATION_OPEN_STATES or signal.get("strategy") not in {
-        "CONTINUATION", "MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION",
+        "CONTINUATION", "GEX_WALL_BREAK_FAIL", "GEX_WALL_REJECTION",
+        "MTF_REVERSAL", "MTF_TREND_BREAK", "GEX_REJECTION",
     }:
         return None
     side = signal.get("favoring")

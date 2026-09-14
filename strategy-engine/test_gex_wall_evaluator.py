@@ -12,7 +12,6 @@ from signal_engine import (
     GEX_WALL_PREFERRED_OFFSET,
     GEX_WALL_TARGET_DELTA,
     _gex_wall_candidate,
-    _higher_score_candidate,
     _select_signal_option,
 )
 
@@ -269,16 +268,6 @@ class WallMergeIntoDayTradingTest(unittest.TestCase):
             bars, NOW,
         )
         self.assertIsNone(candidate)
-
-    def test_higher_score_candidate_selection(self):
-        low = {"strategy": "MTF_TREND_BREAK", "base_score": 75}
-        high = {"strategy": "GEX_WALL_REJECTION", "base_score": 85}
-        self.assertIs(_higher_score_candidate(low, high), high)
-        self.assertIs(_higher_score_candidate(high, low), high)  # tie-break keeps left only on equal
-        self.assertIs(_higher_score_candidate(low, None), low)
-        self.assertIs(_higher_score_candidate(None, high), high)
-        self.assertIsNone(_higher_score_candidate(None, None))
-
 
 def _call_option(strike, delta, mid=1.5):
     return {
