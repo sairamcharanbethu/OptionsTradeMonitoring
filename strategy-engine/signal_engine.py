@@ -25,6 +25,28 @@ try:
 except Exception:  # pragma: no cover - optional strategy module
     evaluate_gex_wall = None  # type: ignore[assignment]
 
+try:
+    # Optional Rust kernel for the hot indicator math (see se_kernel/README.md).
+    # Every kernel call is bit-identical to the ``*_py`` reference body it
+    # replaces; the reference stays here and is what the parity tests compare
+    # against. SE_KERNEL=python forces the reference, SE_KERNEL=rust requires
+    # the extension, the default ``auto`` uses it when installed.
+    import se_kernel as _se_kernel
+except Exception:  # pragma: no cover - extension not installed
+    _se_kernel = None
+
+_KERNEL_MODE = os.environ.get("SE_KERNEL", "auto").strip().lower()
+if _KERNEL_MODE not in {"auto", "python", "rust"}:
+    _KERNEL_MODE = "auto"
+if _KERNEL_MODE == "rust" and _se_kernel is None:
+    raise ImportError("SE_KERNEL=rust but the se_kernel extension is not installed")
+_USE_RUST = _se_kernel is not None and _KERNEL_MODE != "python"
+
+
+def kernel_backend() -> str:
+    """Which implementation serves the indicator math: ``rust`` or ``python``."""
+    return "rust" if _USE_RUST else "python"
+
 ET = ZoneInfo("America/New_York")
 ENGINE_VERSION = "signal-only-v2"
 MAX_GEX_ENTRY_AGE_SECONDS = 20
@@ -656,6 +678,13 @@ def compact_signal_for_journal(signal: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ema(values: list[float], period: int) -> float | None:
+    if _USE_RUST:
+        result = _se_kernel.ema(values, period)
+        return None if result is None else round(result, 4)
+    return _ema_py(values, period)
+
+
+def _ema_py(values: list[float], period: int) -> float | None:
     if not values:
         return None
     alpha = 2 / (period + 1)
@@ -666,6 +695,16 @@ def _ema(values: list[float], period: int) -> float | None:
 
 
 def _session_bars(
+    bars: list[dict[str, Any]],
+    *,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    if _USE_RUST:
+        return _se_kernel.session_bars(bars, time.time() if now is None else now)
+    return _session_bars_py(bars, now=now)
+
+
+def _session_bars_py(
     bars: list[dict[str, Any]],
     *,
     now: float | None = None,
@@ -684,11 +723,23 @@ def _session_bars(
 
 
 def _completed_bars(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if _USE_RUST:
+        return _se_kernel.completed_bars(bars, time.time())
+    return _completed_bars_py(bars)
+
+
+def _completed_bars_py(bars: list[dict[str, Any]]) -> list[dict[str, Any]]:
     minute_start = int(time.time() // 60) * 60
     return [bar for bar in bars if float(bar.get("time", 0)) < minute_start]
 
 
 def _aggregate_bars(bars: list[dict[str, Any]], minutes: int) -> list[dict[str, Any]]:
+    if _USE_RUST:
+        return _se_kernel.aggregate_bars(bars, minutes, time.time())
+    return _aggregate_bars_py(bars, minutes)
+
+
+def _aggregate_bars_py(bars: list[dict[str, Any]], minutes: int) -> list[dict[str, Any]]:
     groups: dict[int, list[dict[str, Any]]] = {}
     seconds = minutes * 60
     for bar in bars:
@@ -739,6 +790,16 @@ def _normalized_completed_structure_bars(
 
 
 def _completed_vwap(
+    bars: list[dict[str, Any]],
+    cutoff: float,
+) -> float | None:
+    if _USE_RUST:
+        result = _se_kernel.completed_vwap(bars, cutoff)
+        return None if result is None else round(result, 4)
+    return _completed_vwap_py(bars, cutoff)
+
+
+def _completed_vwap_py(
     bars: list[dict[str, Any]],
     cutoff: float,
 ) -> float | None:
@@ -934,6 +995,13 @@ def calculate_entry_structure_context(
 
 
 def _atr(bars: list[dict[str, Any]], period: int = 14) -> float | None:
+    if _USE_RUST:
+        result = _se_kernel.atr(bars, period)
+        return None if result is None else round(result, 4)
+    return _atr_py(bars, period)
+
+
+def _atr_py(bars: list[dict[str, Any]], period: int = 14) -> float | None:
     if len(bars) < 2:
         return None
     ranges = []
@@ -1059,6 +1127,12 @@ def _invalidation_exit_decision(
 
 
 def _median_volume(completed: list[dict[str, Any]], window: int = 20) -> float | None:
+    if _USE_RUST:
+        return _se_kernel.median_volume(completed, window)
+    return _median_volume_py(completed, window)
+
+
+def _median_volume_py(completed: list[dict[str, Any]], window: int = 20) -> float | None:
     volumes = [float(bar.get("volume", 0)) for bar in completed[-window:] if bar.get("volume", 0) > 0]
     if not volumes:
         return None
@@ -1074,6 +1148,17 @@ def _time_of_day_rvol(
     minute_tolerance: int = 2,
 ) -> tuple[float | None, int]:
     """Compare the latest minute with prior sessions at the same time of day."""
+    if _USE_RUST:
+        return _se_kernel.time_of_day_rvol(latest, all_completed, minute_tolerance)
+    return _time_of_day_rvol_py(latest, all_completed, minute_tolerance=minute_tolerance)
+
+
+def _time_of_day_rvol_py(
+    latest: dict[str, Any] | None,
+    all_completed: list[dict[str, Any]],
+    *,
+    minute_tolerance: int = 2,
+) -> tuple[float | None, int]:
     if not latest or not _number(latest.get("time")):
         return None, 0
     latest_stamp = datetime.fromtimestamp(float(latest["time"]), ET)
@@ -1099,6 +1184,57 @@ def _time_of_day_rvol(
 
 
 def calculate_indicators(bars: list[dict[str, Any]]) -> dict[str, Any]:
+    if _USE_RUST:
+        return _assemble_indicators(_se_kernel.indicator_core(bars, time.time()))
+    return _calculate_indicators_py(bars)
+
+
+def _assemble_indicators(raw: dict[str, Any]) -> dict[str, Any]:
+    """Round and lay out the raw kernel values exactly like the Python body.
+
+    Key order matters: ``signal.json`` is serialized without ``sort_keys``.
+    """
+
+    def _round(value: float | None, digits: int) -> float | None:
+        return None if value is None else round(value, digits)
+
+    historical_rvol = raw["historical_rvol"]
+    rvol = historical_rvol if historical_rvol is not None else raw["rolling_rvol"]
+    median_volume = raw["median_volume"]
+    return {
+        "bars_1m": raw["bars_1m"],
+        "completed_1m": raw["completed_1m"],
+        "completed_5m": raw["completed_5m"],
+        "last_completed_at": raw["last_completed_at"],
+        "completed_bar_age_seconds": _round(raw["completed_bar_age_seconds"], 1),
+        "last_close": raw["last_close"],
+        "atr_1m": _round(raw["atr_1m"], 4),
+        "ema9": _round(raw["ema9"], 4),
+        "ema21": _round(raw["ema21"], 4),
+        "vwap": _round(raw["vwap"], 4),
+        "median_volume_20": round(median_volume, 0) if median_volume else None,
+        "last_volume": raw["last_volume"],
+        "rvol": round(rvol, 2) if rvol else None,
+        "rvol_method": "historical_same_time" if historical_rvol is not None else "rolling_20",
+        "rvol_reference_samples": raw["historical_samples"],
+        "ema9_5m": _round(raw["ema9_5m"], 4),
+        "ema21_5m": _round(raw["ema21_5m"], 4),
+        "last_completed_5m_at": raw["last_completed_5m_at"],
+        "last_close_5m": raw["last_close_5m"],
+        "ema9_15m": _round(raw["ema9_15m"], 4),
+        "ema21_15m": _round(raw["ema21_15m"], 4),
+        "last_completed_15m_at": raw["last_completed_15m_at"],
+        "last_close_15m": raw["last_close_15m"],
+        "ema9_60m": _round(raw["ema9_60m"], 4),
+        "ema21_60m": _round(raw["ema21_60m"], 4),
+        "last_close_60m": raw["last_close_60m"],
+        "atr_5m": _round(raw["atr_5m"], 4),
+        "recent_high_5m": _round(raw["recent_high_5m"], 4),
+        "recent_low_5m": _round(raw["recent_low_5m"], 4),
+    }
+
+
+def _calculate_indicators_py(bars: list[dict[str, Any]]) -> dict[str, Any]:
     session = _session_bars(bars)
     completed = _completed_bars(session)
     all_completed = _completed_bars(bars)

@@ -56,6 +56,7 @@ from signal_engine import (
     _regular_session_open,
     build_signal,
     calculate_indicators,
+    kernel_backend,
     compact_signal_for_journal,
     market_data_readiness,
     provider_timestamp_freshness,
@@ -1222,6 +1223,7 @@ class TradePrefetcher:
             self.args.output_dir / "health.json",
             {
                 "updated_at": generated_at,
+                "kernel": kernel_backend(),
                 "status": (
                     "closed"
                     if not regular_session_open
@@ -1484,6 +1486,7 @@ class TradePrefetcher:
                         self.args.output_dir / "health.json",
                         {
                             "updated_at": time.time(),
+                            "kernel": kernel_backend(),
                             "status": "error",
                             "connected": self.ib.isConnected(),
                             "readonly": True,
