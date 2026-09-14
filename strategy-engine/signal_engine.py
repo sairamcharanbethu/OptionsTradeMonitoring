@@ -4330,6 +4330,18 @@ def build_signal(
         if reversal:
             reversal["armed_at"] = now
             reversal["frozen_until"] = now + 15 * 60
+    # SHADOW-ONLY candidates: graded and journaled for replay attribution,
+    # never read back into state/strategy/entry. Isolated so a bug here can
+    # never disturb the live signal.
+    try:
+        from sweep_reversal import STRATEGY as _SWEEP, sweep_reclaim_candidate
+        shadow_sweep = sweep_reclaim_candidate(
+            _completed_bars(spy_bars), spot=float(spot), atr_5m=atr_5m, now=now, gex_ctx=gex_ctx,
+        )
+        if shadow_sweep:
+            result["shadow_setups"] = {_SWEEP: shadow_sweep}
+    except Exception as exc:  # pragma: no cover - shadow must never break live
+        result["shadow_setups"] = {"error": f"{type(exc).__name__}: {exc}"}
     if reversal:
         reversal["score"] = int(reversal.get("base_score", reversal["score"]))
         if gex_ctx.get("vix_gamma_regime") == "Whipsaw":

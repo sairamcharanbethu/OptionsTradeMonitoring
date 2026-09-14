@@ -39,6 +39,7 @@ import signal_engine
 from signal_engine import build_signal
 # The exact wall-expiry selection the live loop uses — never approximate it.
 from trade_prefetch_service import _preferred_option_expiry, _wall_option_expiry
+from sweep_reversal import STRATEGY as SWEEP_STRATEGY
 
 ET = ZoneInfo("America/New_York")
 API_BASE = "https://api.unusualwhales.com/api"
@@ -643,6 +644,14 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
     ]
     blocker_counts: dict[str, int] = {}
     state_minutes: dict[str, int] = {}
+    # SHADOW executor for the sweep-and-reclaim reversal: independent of the
+    # live variants (its own caps, never competes with or blocks them). A fresh
+    # candidate arms a frozen trigger for 15 minutes; a 1m open through the
+    # trigger fills the default OTM-2 contract at the ask. Max 2 shadow entries
+    # per session, one open at a time, same last-entry cutoff as the loop.
+    shadow_pending: dict | None = None
+    shadow_trades: list[dict] = []
+    shadow_seen: set[float] = set()
 
     real_time = time.time
     try:
@@ -705,6 +714,50 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
                     wall_options=wall_options,
                 )
                 previous[lane] = signal
+                # --- shadow sweep executor -------------------------------
+                shadow_cand = (signal.get("shadow_setups") or {}).get(SWEEP_STRATEGY)
+                if (
+                    shadow_cand and shadow_pending is None and len(shadow_trades) < 2
+                    and shadow_cand.get("detected_at") not in shadow_seen
+                ):
+                    shadow_seen.add(shadow_cand.get("detected_at"))
+                    shadow_pending = shadow_cand
+                if shadow_pending is not None:
+                    s_plan = shadow_pending["risk_plan"]
+                    s_calls = shadow_pending["side"] == "calls"
+                    s_spot = float(spy["spot"])
+                    invalid = s_spot <= s_plan["stop"] if s_calls else s_spot >= s_plan["stop"]
+                    expired = sim_now > float(shadow_pending.get("frozen_until") or 0)
+                    triggered = s_spot >= s_plan["entry"] if s_calls else s_spot <= s_plan["entry"]
+                    if invalid or expired:
+                        shadow_pending = None
+                    elif triggered:
+                        quote = signal_engine._select_otm_option(options, "C" if s_calls else "P", s_spot, steps=2)
+                        if quote and quote.get("eligible") and quote.get("local_symbol") and _num(quote.get("ask")):
+                            shadow_trades.append({
+                                "date": date, "lane": "shadow",
+                                "strategy": SWEEP_STRATEGY,
+                                "confidence": _num(shadow_pending.get("score")),
+                                "side": "CALL" if s_calls else "PUT",
+                                "entry_time": sim_now,
+                                "entry_et": datetime.fromtimestamp(sim_now, ET).strftime("%H:%M"),
+                                "contract": quote["local_symbol"],
+                                "entry_price": float(quote["mid"] if MID_FILLS else quote["ask"]),
+                                "contracts": 1,
+                                "trigger": float(s_plan["entry"]),
+                                "stop": float(s_plan["stop"]),
+                                "targets": [float(t) for t in s_plan["targets"][:3]],
+                                "level": shadow_pending.get("level"),
+                                "regime": (shadow_pending.get("gex_alignment") or {}).get("regime"),
+                                "a_plus": bool(shadow_pending.get("a_plus")),
+                                "atr_5m": _num((signal.get("market_context") or {}).get("atr_5m")),
+                            })
+                            if verbose:
+                                print(f"  ENTRY[shadow_sweep] {shadow_trades[-1]['entry_et']} shadow {SWEEP_STRATEGY} "
+                                      f"{shadow_trades[-1]['side']} {quote['local_symbol']} @ ${shadow_trades[-1]['entry_price']:.2f} "
+                                      f"stop {s_plan['stop']} targets {s_plan['targets']}")
+                        shadow_pending = None
+                # ----------------------------------------------------------
                 state = str(signal.get("state") or "WAIT").upper()
                 state_minutes[state] = state_minutes.get(state, 0) + 1
                 for blocker in signal.get("blockers") or []:
@@ -772,6 +825,10 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
                                       exit_at_target=variant.get("exit_at_target"),
                                       exit_policy=variant.get("exit_policy", "live")))
         variant_trades[variant["name"]] = rows
+    variant_trades["shadow_sweep"] = [
+        simulate_exit(trade, spy_bars, option_data.get(trade["contract"], {}), close_at, flatten_at)
+        for trade in shadow_trades
+    ]
 
     return {"date": date, "variants": variant_trades, "blockers": blocker_counts, "states": state_minutes}
 
@@ -893,7 +950,7 @@ def main() -> None:
             print(f"  cached {result.get('fetched', 0)} option contracts + bars/GEX")
             continue
         for name, day_trades in result["variants"].items():
-            all_by_variant[name].extend(day_trades)
+            all_by_variant.setdefault(name, []).extend(day_trades)
             tag = "" if name == "baseline" else f" [{name}]"
             for trade in day_trades:
                 print(f"  {trade['entry_et']} {trade['lane']:<10} {str(trade['strategy']):<20} {trade['side']} "
