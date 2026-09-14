@@ -1,3 +1,6 @@
 __pycache__/
 .pytest_cache/
 test_*.py
+se_kernel/target/
+uw_cache/
+uw_results/

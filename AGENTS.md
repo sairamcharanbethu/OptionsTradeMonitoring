@@ -69,6 +69,8 @@ Strong success criteria reduce unnecessary changes, overcomplication, and late c
 - Backend build: `cd backend && npm run build`
 - Backend tests: `cd backend && npm test`
 - Frontend build: `cd frontend && npm run build`
+- Strategy engine tests: `cd strategy-engine && python3 -m unittest discover -p 'test_*.py'` (run once with `SE_KERNEL=python` and once with `SE_KERNEL=rust` when touching indicator math)
+- Strategy engine Rust kernel: `cd strategy-engine/se_kernel && maturin build --release && python3 -m pip install --user --force-reinstall --no-deps target/wheels/*.whl`; parity: `cd strategy-engine && ./kernel_parity_check.sh /tmp/parity both`
 - Full Docker runtime: `docker-compose up -d --build`
 
 Run the narrowest relevant verification for the files changed. If a command cannot be run, report why.

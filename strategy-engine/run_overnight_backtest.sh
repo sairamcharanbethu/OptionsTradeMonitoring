@@ -15,10 +15,13 @@
 # forever, but un-fetched days age out permanently.
 #
 # Needs UW_TOKEN in the environment or in ../.env. Rough cost: ~60 API calls
-# per uncached session (throttled to ~2/s), ~1-2 min of engine simulation per
-# session. A full year is roughly 6-9 hours; already-cached days re-run in
-# simulation time only. Safe to re-run after an interruption — every API
-# response is cached on disk under uw_cache/ and picked up where it left off.
+# per uncached session (throttled to ~2/s, so ~30 s of fetching), then engine
+# simulation: ~8 s per session in pure Python, ~2 s with the se_kernel Rust
+# extension installed (see se_kernel/README.md; SE_KERNEL=python forces the
+# reference implementation). A full cached year is therefore ~30 min in Python
+# or ~8 min with the kernel; uncached, add the API time. Safe to re-run after
+# an interruption — every API response is cached on disk under uw_cache/ and
+# picked up where it left off.
 set -euo pipefail
 cd "$(dirname "$0")"
 
