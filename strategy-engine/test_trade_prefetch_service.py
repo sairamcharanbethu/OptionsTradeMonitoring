@@ -273,26 +273,30 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         self.assertEqual(selected["selected_source"], "zerogex")
         self.assertIn("no snapshot", selected["data"]["SPY"]["error"])
 
-    def test_expiry_rolls_from_today_to_next_listed_at_1pm_et(self) -> None:
+    def test_primary_expiry_never_selects_same_day(self) -> None:
         et = ZoneInfo("America/New_York")
         expirations = ["20260722", "20260723", "20260724"]
         before = datetime(2026, 7, 22, 12, 59, 59, tzinfo=et).timestamp()
         after = datetime(2026, 7, 22, 13, 0, 0, tzinfo=et).timestamp()
-        self.assertEqual(
-            _preferred_option_expiry(expirations, before),
-            ("20260722", "0DTE"),
-        )
-        self.assertEqual(
-            _preferred_option_expiry(expirations, after),
-            ("20260723", "1DTE_NEXT_LISTED"),
-        )
+        # No expiry reaches the default 3 DTE -> nearest expiry strictly after today, at any hour.
+        self.assertEqual(_preferred_option_expiry(expirations, before), ("20260723", "NEXT_LISTED_FALLBACK"))
+        self.assertEqual(_preferred_option_expiry(expirations, after), ("20260723", "NEXT_LISTED_FALLBACK"))
+        # A legacy min_dte of 0 is floored to 1: still never today's expiry.
+        self.assertEqual(_preferred_option_expiry(expirations, before, min_dte=0), ("20260723", "MULTI_DAY_1DTE"))
+        # Only today's expiry listed -> refuse rather than trade 0DTE.
+        with self.assertRaises(RuntimeError):
+            _preferred_option_expiry(["20260722"], before)
 
-    def test_after_1pm_uses_next_listed_expiry_across_weekend(self) -> None:
+    def test_fallback_uses_next_listed_expiry_across_weekend(self) -> None:
         et = ZoneInfo("America/New_York")
-        friday_after = datetime(2026, 7, 24, 13, 0, tzinfo=et).timestamp()
+        friday = datetime(2026, 7, 24, 10, 0, tzinfo=et).timestamp()
         self.assertEqual(
-            _preferred_option_expiry(["20260724", "20260727"], friday_after),
-            ("20260727", "1DTE_NEXT_LISTED"),
+            _preferred_option_expiry(["20260724", "20260727"], friday),
+            ("20260727", "MULTI_DAY_3DTE"),
+        )
+        self.assertEqual(
+            _preferred_option_expiry(["20260724", "20260725"], friday),
+            ("20260725", "NEXT_LISTED_FALLBACK"),
         )
 
     def test_primary_expiry_prefers_min_dte_chain(self) -> None:
@@ -304,24 +308,26 @@ class TradePrefetchHelpersTest(unittest.TestCase):
             _preferred_option_expiry(expirations, stamp, min_dte=3),
             ("20260727", "MULTI_DAY_3DTE"),
         )
-        # The 1 PM rollover is irrelevant on the multi-day chain.
+        # Time of day is irrelevant on the multi-day chain.
         after = datetime(2026, 7, 22, 13, 30, tzinfo=et).timestamp()
         self.assertEqual(_preferred_option_expiry(expirations, after, min_dte=3)[0], "20260727")
-        # No listed expiry reaches 3 DTE -> legacy same-day behaviour.
+        # No listed expiry reaches 3 DTE -> nearest expiry after today, never same-day.
         self.assertEqual(
             _preferred_option_expiry(["20260722", "20260723"], stamp, min_dte=3),
-            ("20260722", "0DTE"),
+            ("20260723", "NEXT_LISTED_FALLBACK"),
         )
-        # min_dte=0 keeps the legacy behaviour exactly.
-        self.assertEqual(_preferred_option_expiry(expirations, stamp, min_dte=0), ("20260722", "0DTE"))
 
     def test_policy_option_expiry_dte_overrides_cli_default(self) -> None:
-        self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": 0}, 3), 0)
+        # A legacy 0 (same-day) in policy.json is ignored in favour of the default.
+        self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": 0}, 3), 3)
         self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": "5"}, 3), 5)
+        self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": 1}, 3), 1)
         self.assertEqual(_policy_option_expiry_dte({}, 3), 3)
         self.assertEqual(_policy_option_expiry_dte(None, 3), 3)
         self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": 42}, 3), 3)
         self.assertEqual(_policy_option_expiry_dte({"option_expiry_dte": "bad"}, 3), 3)
+        # The CLI default itself can never be 0.
+        self.assertEqual(_policy_option_expiry_dte({}, 0), 1)
 
     def test_wall_expiry_picks_nearest_at_least_3dte(self) -> None:
         et = ZoneInfo("America/New_York")
@@ -555,7 +561,7 @@ class TradePrefetchHelpersTest(unittest.TestCase):
         prefetcher.option_tickers = [SimpleNamespace(stale=True)]
         prefetcher.option_chain = SimpleNamespace(expirations={"20260727"})
         prefetcher.option_expiry = "20260727"
-        prefetcher.option_expiry_mode = "1DTE_NEXT_LISTED"
+        prefetcher.option_expiry_mode = "NEXT_LISTED_FALLBACK"
         prefetcher.option_anchor_spot = 740.0
         prefetcher.last_option_refresh = 123.0
 

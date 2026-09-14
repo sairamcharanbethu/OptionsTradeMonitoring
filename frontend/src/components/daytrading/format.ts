@@ -67,7 +67,7 @@ export function expiryModeLabel(mode: unknown): string | null {
   const text = String(mode || '');
   if (!text) return null;
   if (text.startsWith('MULTI_DAY_') && text !== 'MULTI_DAY_WALL') return text.slice('MULTI_DAY_'.length);
-  return ({ '0DTE': '0DTE', '0DTE_NO_FUTURE_EXPIRY': '0DTE', '1DTE_NEXT_LISTED': '1DTE', MULTI_DAY_WALL: 'wall 3DTE', LOCKED_POSITION: 'locked' } as Record<string, string>)[text] || text;
+  return ({ NEXT_LISTED_FALLBACK: 'next-listed', MULTI_DAY_WALL: 'wall 3DTE', LOCKED_POSITION: 'locked' } as Record<string, string>)[text] || text;
 }
 
 /** h:mm:ss ET for an ISO timestamp. */

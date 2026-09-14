@@ -24,7 +24,8 @@ const ManualEntrySettingsSchema = z.object({
 const ChainQuerySchema = z.object({
   symbol: z.string().trim().min(1).max(12),
   optionType: z.enum(['CALL', 'PUT']),
-  dte: z.coerce.number().int().min(0).max(2)
+  // Same-day (0 DTE) contracts are not traded anywhere in the app.
+  dte: z.coerce.number().int().min(1).max(3)
 });
 
 const QuoteQuerySchema = z.object({

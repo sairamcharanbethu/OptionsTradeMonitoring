@@ -65,7 +65,10 @@ from signal_engine import (
 )
 
 ET = ZoneInfo("America/New_York")
-NEXT_EXPIRY_ROLLOVER_MINUTE_ET = 13 * 60
+# Same-day (0DTE) contracts are not traded. The primary chain is always at
+# least MIN_OPTION_EXPIRY_DTE calendar days out (setting strategy_option_expiry_dte, default 3).
+MIN_OPTION_EXPIRY_DTE = 1
+DEFAULT_OPTION_EXPIRY_DTE = 3
 # One engine lane. The ORB_INDEX / VWAP_TREND family lanes were removed on
 # 2026-09-06 (ORB negative in every replay sample; VWAP no measured edge). The
 # lane-keyed JSON contract is kept so the backend adapter is unchanged.
@@ -436,7 +439,7 @@ def _locked_option_spec(signal: dict[str, Any] | None, expiry: str) -> tuple[flo
 
 
 def _locked_option_expiry(signal: dict[str, Any] | None) -> str | None:
-    """Keep an active position on its activation expiry across the 1 PM rollover."""
+    """Keep an active position on its activation expiry across chain refreshes."""
     signal = signal or {}
     if signal.get("state") not in CONTINUATION_OPEN_STATES:
         return None
@@ -448,34 +451,29 @@ def _locked_option_expiry(signal: dict[str, Any] | None) -> str | None:
 
 
 def _preferred_option_expiry(
-    expirations: list[str], now: float | None = None, min_dte: int = 0
+    expirations: list[str], now: float | None = None, min_dte: int = DEFAULT_OPTION_EXPIRY_DTE
 ) -> tuple[str, str]:
-    """Primary option expiry.
+    """Primary option expiry: never same-day.
 
-    With ``min_dte > 0`` (the default deployment is 3) the primary chain is the
-    nearest listed expiry at least that many calendar days out, mode
-    ``MULTI_DAY_<n>DTE``: higher delta, tighter spreads and far less theta than
-    same-day contracts. When no listed expiry reaches ``min_dte`` the legacy
-    same-day logic applies: today's expiry before 1 PM ET, then the next listed.
+    The primary chain is the nearest listed expiry at least ``min_dte`` calendar
+    days out (floored at ``MIN_OPTION_EXPIRY_DTE``; the default deployment is 3),
+    mode ``MULTI_DAY_<n>DTE``. When no listed expiry reaches ``min_dte`` the
+    nearest expiry strictly after today is used, mode ``NEXT_LISTED_FALLBACK``.
+    Today's expiry is never selected — 0DTE was removed on 2026-09-13.
     """
-    if min_dte > 0:
-        multi_day = _wall_option_expiry(expirations, now, min_dte=min_dte)
-        if multi_day:
-            return multi_day, f"MULTI_DAY_{int(min_dte)}DTE"
+    min_dte = max(MIN_OPTION_EXPIRY_DTE, int(min_dte or 0))
+    multi_day = _wall_option_expiry(expirations, now, min_dte=min_dte)
+    if multi_day:
+        return multi_day, f"MULTI_DAY_{int(min_dte)}DTE"
     stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
     today = stamp.strftime("%Y%m%d")
     listed = sorted({str(expiry) for expiry in expirations})
     if not listed:
         raise RuntimeError("SPY option chain returned no expirations")
-    minutes = stamp.hour * 60 + stamp.minute
-    if minutes < NEXT_EXPIRY_ROLLOVER_MINUTE_ET and today in listed:
-        return today, "0DTE"
     future = [expiry for expiry in listed if expiry > today]
     if future:
-        return future[0], "1DTE_NEXT_LISTED"
-    if today in listed:
-        return today, "0DTE_NO_FUTURE_EXPIRY"
-    raise RuntimeError("SPY option chain has no current or future expiry")
+        return future[0], "NEXT_LISTED_FALLBACK"
+    raise RuntimeError("SPY option chain has no expiry after today (0DTE is not traded)")
 
 
 def _wall_option_expiry(
@@ -483,8 +481,8 @@ def _wall_option_expiry(
 ) -> str | None:
     """Nearest listed expiry at least ``min_dte`` calendar days out.
 
-    Wall-reaction setups trade near-the-money multi-day contracts (lower theta)
-    rather than 0DTE. Returns None when disabled (min_dte <= 0) or when no listed
+    Wall-reaction setups trade near-the-money multi-day contracts (lower theta).
+    Returns None when disabled (min_dte <= 0) or when no listed
     expiry reaches ``min_dte`` days — callers then fall back to the primary chain.
     """
     if min_dte <= 0:
@@ -501,14 +499,32 @@ def _wall_option_expiry(
     return None
 
 
+def _min_dte_arg(value: str) -> int:
+    """argparse type for --option-expiry-dte: whole number >= MIN_OPTION_EXPIRY_DTE (0DTE removed)."""
+    try:
+        dte = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(f"expected a whole number of days, got {value!r}")
+    if dte < MIN_OPTION_EXPIRY_DTE:
+        raise argparse.ArgumentTypeError(
+            f"minimum DTE is {MIN_OPTION_EXPIRY_DTE}; same-day (0DTE) contracts are not traded"
+        )
+    return dte
+
+
 def _policy_option_expiry_dte(policy: dict[str, Any] | None, default: int) -> int:
-    """Primary-chain minimum DTE: backend policy.json ``option_expiry_dte`` wins over the CLI default."""
+    """Primary-chain minimum DTE: backend policy.json ``option_expiry_dte`` wins over the CLI default.
+
+    Values below ``MIN_OPTION_EXPIRY_DTE`` (a legacy ``0`` = same-day) or above 10
+    are ignored in favour of the default, which is itself floored at 1.
+    """
+    fallback = max(MIN_OPTION_EXPIRY_DTE, int(default or 0))
     value = (policy or {}).get("option_expiry_dte") if isinstance(policy, dict) else None
     try:
         dte = int(value)
     except (TypeError, ValueError):
-        return int(default)
-    return dte if 0 <= dte <= 10 else int(default)
+        return fallback
+    return dte if MIN_OPTION_EXPIRY_DTE <= dte <= 10 else fallback
 
 
 def _con_id(contract: Any) -> int | None:
@@ -873,7 +889,7 @@ class TradePrefetcher:
     def _option_expiry_dte(self) -> int:
         policy = _read_policy(getattr(self.args, "policy_file", None))
         return _policy_option_expiry_dte(
-            policy, int(getattr(self.args, "option_expiry_dte", 0) or 0)
+            policy, int(getattr(self.args, "option_expiry_dte", DEFAULT_OPTION_EXPIRY_DTE) or DEFAULT_OPTION_EXPIRY_DTE)
         )
 
     def _options_need_recenter(self) -> bool:
@@ -1530,13 +1546,12 @@ def main() -> None:
     parser.add_argument("--strikes-per-side", type=int, default=6)
     parser.add_argument(
         "--option-expiry-dte",
-        type=int,
-        default=3,
+        type=_min_dte_arg,
+        default=DEFAULT_OPTION_EXPIRY_DTE,
         help=(
             "Minimum calendar days-to-expiry for the PRIMARY option chain every "
             "setup trades. The nearest listed expiry at least this many days out "
-            "is used (default 3). 0 restores same-day (0DTE, rolling to the next "
-            "listed expiry at 1 PM ET)."
+            "is used (default 3, minimum 1). Same-day (0DTE) contracts are never traded."
         ),
     )
     parser.add_argument(
@@ -1547,7 +1562,7 @@ def main() -> None:
             "Minimum calendar days-to-expiry for wall-reaction (near-the-money) "
             "contracts; the nearest listed expiry at least this many days out is "
             "subscribed and used for GEX wall setups. 0 disables (wall setups then "
-            "use the primary 0DTE/next chain)."
+            "use the primary multi-day chain)."
         ),
     )
     parser.add_argument(

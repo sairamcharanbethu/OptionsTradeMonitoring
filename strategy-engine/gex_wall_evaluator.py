@@ -2,7 +2,7 @@
 """Deterministic, execution-free GEX wall-reaction signal evaluator.
 
 This is a *second, independent* strategy that runs alongside the primary
-``signal_engine`` in shadow mode. Where ``signal_engine`` chases 0DTE OTM
+``signal_engine`` in shadow mode. Where ``signal_engine`` trades multi-day OTM
 breakouts via additive confluence scoring, this engine trades *reactions at
 dealer gamma walls* on closed 5m/15m bars with explicit candle microstructure
 (wick / sweep / retest), a logarithmic-regression macro filter, and a

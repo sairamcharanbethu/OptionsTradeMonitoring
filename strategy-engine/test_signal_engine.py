@@ -1171,11 +1171,11 @@ class OtmOptionSelectionTest(unittest.TestCase):
         self.assertEqual(crossed_buffer["atm_strike"], 742.0)
         self.assertEqual(crossed_buffer["target_strike"], 740.0)
 
-    def test_next_listed_expiry_is_eligible_and_labeled_1dte(self) -> None:
+    def test_next_listed_fallback_expiry_is_eligible_and_labeled(self) -> None:
         tomorrow = (datetime.now(ET) + timedelta(days=1)).strftime("%Y%m%d")
         options = {
             "expiry": tomorrow,
-            "expiry_mode": "1DTE_NEXT_LISTED",
+            "expiry_mode": "NEXT_LISTED_FALLBACK",
             "generated_at": et_timestamp(13, 0),
             "contracts": [
                 {**liquid_contract(right, strike), "expiry": tomorrow}
@@ -1186,7 +1186,7 @@ class OtmOptionSelectionTest(unittest.TestCase):
         put = _select_otm_option(options, "P", 742.10, steps=2)
         self.assertTrue(put["eligible"])
         self.assertEqual(put["expiry"], tomorrow)
-        self.assertEqual(put["expiry_mode"], "1DTE_NEXT_LISTED")
+        self.assertEqual(put["expiry_mode"], "NEXT_LISTED_FALLBACK")
         rendered = render_signal({
             "state": "WAIT",
             "favoring": "puts",
@@ -1200,20 +1200,22 @@ class OtmOptionSelectionTest(unittest.TestCase):
             },
             "call_setup": {},
         }, details=True)
-        self.assertIn("OTM-2 1DTE", rendered)
+        self.assertIn("OTM-2 next-listed", rendered)
 
-    def test_after_1pm_zero_dte_snapshot_is_rejected_as_safety_backstop(self) -> None:
-        options = {
-            **self.options,
-            "expiry_mode": "0DTE",
-            "generated_at": et_timestamp(13, 0),
-        }
-        put = _select_otm_option(options, "P", 742.10, steps=2)
-        self.assertFalse(put["eligible"])
-        self.assertIn(
-            "0DTE contracts are prohibited for new setups at/after 1:00 PM ET",
-            put["rejection_reasons"],
-        )
+    def test_same_day_contract_is_rejected_at_any_hour(self) -> None:
+        for hour in (10, 13):
+            # Same-day relative to the snapshot's own timestamp (et_timestamp backs up to a weekday).
+            today = datetime.fromtimestamp(et_timestamp(hour, 0), ET).strftime("%Y%m%d")
+            options = {
+                **self.options,
+                "expiry": today,
+                "expiry_mode": "MULTI_DAY_3DTE",
+                "generated_at": et_timestamp(hour, 0),
+                "contracts": [{**contract, "expiry": today} for contract in self.options["contracts"]],
+            }
+            put = _select_otm_option(options, "P", 742.10, steps=2)
+            self.assertFalse(put["eligible"])
+            self.assertIn("same-day (0DTE) contracts are not traded", put["rejection_reasons"])
 
     def test_exact_otm_contract_is_rejected_when_quote_missing(self) -> None:
         target = next(

@@ -204,12 +204,13 @@ export function validateLiveAiDailyCallBudgetSetting(value: unknown): string | n
   return null;
 }
 
-/** Minimum calendar days-to-expiry for the primary option chain (0 = same-day 0DTE). */
+/** Minimum calendar days-to-expiry for the primary option chain. Same-day (0 DTE) contracts are not traded, so 0 is rejected. */
+export const MIN_OPTION_EXPIRY_DTE = 1;
 export function validateOptionExpiryDteSetting(value: unknown): string | null {
   const raw = String(value ?? '').trim();
   const dte = Number(raw);
-  if (!/^\d+$/.test(raw) || !Number.isInteger(dte) || dte < 0 || dte > 10) {
-    return 'Option expiry DTE must be a whole number between 0 (same-day) and 10';
+  if (!/^\d+$/.test(raw) || !Number.isInteger(dte) || dte < MIN_OPTION_EXPIRY_DTE || dte > 10) {
+    return `Option expiry DTE must be a whole number between ${MIN_OPTION_EXPIRY_DTE} and 10 (same-day 0 DTE contracts are not traded)`;
   }
   return null;
 }

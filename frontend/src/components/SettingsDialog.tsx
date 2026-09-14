@@ -920,13 +920,13 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                 <Input
                                                     id="strategyOptionExpiryDte"
                                                     type="number"
-                                                    min="0"
+                                                    min="1"
                                                     max="10"
                                                     value={strategyOptionExpiryDte}
                                                     onChange={(e) => setStrategyOptionExpiryDte(e.target.value)}
                                                     disabled={!isAdmin}
                                                 />
-                                                <p className="text-2xs text-muted-foreground">Nearest listed SPY expiry at least this many calendar days out. 3 = default multi-day chain; 0 = same-day (0DTE, rolling to the next expiry at 1 PM ET). Applies on the engine's next chain refresh.</p>
+                                                <p className="text-2xs text-muted-foreground">Nearest listed SPY expiry at least this many calendar days out (1–10; 3 = default). Same-day 0 DTE contracts are never traded. Applies on the engine's next chain refresh.</p>
                                             </div>
                                             <div className="grid gap-2">
                                                 <Label htmlFor="strategyMultiDayMaxHoldMinutes">Multi-day Max Hold (min)</Label>
@@ -939,7 +939,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setStrategyMultiDayMaxHoldMinutes(e.target.value)}
                                                     disabled={!isAdmin}
                                                 />
-                                                <p className="text-2xs text-muted-foreground">Time stop for strategy positions on multi-day contracts (same-day contracts keep the 25/15/10-minute theta ladder). 0 disables.</p>
+                                                <p className="text-2xs text-muted-foreground">Time stop for strategy positions (all contracts are multi-day; the 25/15/10-minute theta ladder only applies to a position that reaches its expiry day). 0 disables.</p>
                                             </div>
                                         </div>
 

@@ -68,7 +68,7 @@ export default function StrategyGuidePage() {
               'Continuation, multi-timeframe trend-break/reversal, and GEX-rejection plans freeze their trigger, invalidation, targets, and exact option contract before activation.',
               'ZeroGEX is authoritative for GEX regime, flip, and walls, but local price structure remains the activation authority. ZeroGEX STAND_DOWN is context, not a veto.',
               'The app blocks duplicate entries for the same user, symbol, side, strike, and expiration while an OPEN or PENDING_ORDER position already exists.',
-              'Contracts come from the nearest listed SPY expiry at least 3 calendar days out by default (admin setting; 0 restores same-day). New entries stop at the configured last-entry time (11:00 AM ET by default), are blocked during the opening buffer and on FOMC/CPI/NFP windows, and every strategy position is flattened 40 minutes before the close regardless of expiry (3:20 PM ET on a regular session).'
+              'Contracts come from the nearest listed SPY expiry at least 3 calendar days out by default (admin setting, minimum 1 day; same-day 0 DTE contracts are never traded). New entries stop at the configured last-entry time (11:00 AM ET by default), are blocked during the opening buffer and on FOMC/CPI/NFP windows, and every strategy position is flattened 40 minutes before the close regardless of expiry (3:20 PM ET on a regular session).'
             ]}
           />
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -224,15 +224,15 @@ export default function StrategyGuidePage() {
         <RuleCard title="Late-Day Behavior" detail="The app reduces expiry and liquidity risk later in the session." icon={Clock3}>
           <BulletList
             items={[
-              'The primary chain is ~3 DTE, so the old 1:00 PM roll from same-day to next-day expiry only applies when the admin sets the minimum DTE to 0.',
-              'Same-day contracts keep the 25/15/10-minute theta time stop; multi-day strategy positions use the configurable multi-day max hold (45 minutes by default).',
+              'The primary chain is at least 1 DTE (3 by default). Same-day 0 DTE contracts are never traded, so there is no 1:00 PM expiry roll.',
+              'Strategy positions use the configurable multi-day max hold (45 minutes by default); the 25/15/10-minute same-day theta time stop remains only as a backstop for positions that reach their expiry day.',
               'Late-day take-profit exits can prefer MARKET so the app is not waiting on a limit order as time decays.',
               'Near-target limit orders that sit too long can be marked stale, requiring broker review before another close attempt.'
             ]}
           />
           <div className="mt-4">
             <Example title="After 1 PM">
-              On Wednesday the engine trades the following Monday's SPY expiry (the first at least 3 calendar days out). With the minimum DTE set to 0, a 1:15 PM ET scan would choose tomorrow's expiry and a 10:30 AM scan today's.
+              On Wednesday the engine trades the following Monday's SPY expiry (the first at least 3 calendar days out). If no listed expiry is that far out, it falls back to the nearest expiry after today, never today's.
             </Example>
           </div>
         </RuleCard>

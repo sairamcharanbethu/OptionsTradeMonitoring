@@ -469,9 +469,7 @@ def _expiry_mode_label(expiry_mode: str) -> str | None:
     if mode.startswith("MULTI_DAY_") and mode != "MULTI_DAY_WALL":
         return mode[len("MULTI_DAY_"):]
     return {
-        "0DTE": "0DTE",
-        "0DTE_NO_FUTURE_EXPIRY": "0DTE",
-        "1DTE_NEXT_LISTED": "1DTE",
+        "NEXT_LISTED_FALLBACK": "next-listed",
         "MULTI_DAY_WALL": "wall-3DTE",
     }.get(mode)
 
@@ -2608,13 +2606,13 @@ def _evaluate_option_contract(
     options_generated_at = options.get("generated_at")
     if not expiry or expiry != selected_expiry:
         reasons.append(f"expiry {expiry or '-'} does not match selected expiry {selected_expiry or '-'}")
-    if expiry_mode and _number(options_generated_at):
-        option_stamp = datetime.fromtimestamp(float(options_generated_at), ET)
-        option_minutes = option_stamp.hour * 60 + option_stamp.minute
-        if option_minutes >= 13 * 60 and expiry_mode.startswith("0DTE"):
-            reasons.append("0DTE contracts are prohibited for new setups at/after 1:00 PM ET")
-        elif option_minutes < 13 * 60 and expiry_mode == "1DTE_NEXT_LISTED":
-            reasons.append("next-listed expiry is not selected before 1:00 PM ET")
+    # Same-day contracts are never traded (0DTE removed 2026-09-13): reject any
+    # contract expiring today whatever the chain claims about its mode.
+    expiry_digits = "".join(ch for ch in expiry if ch.isdigit())  # YYYYMMDD (IBKR) or YYYY-MM-DD (backtest)
+    if len(expiry_digits) == 8 and _number(options_generated_at):
+        option_today = datetime.fromtimestamp(float(options_generated_at), ET).strftime("%Y%m%d")
+        if expiry_digits <= option_today:
+            reasons.append("same-day (0DTE) contracts are not traded")
     if not (_number(bid) and _number(ask) and bid > 0 and ask >= bid):
         reasons.append("live bid/ask quote is unavailable")
     if _number(quote_age) is None or float(quote_age) < 0:
@@ -2689,7 +2687,7 @@ def _evaluate_option_contract(
         entry_order="SIGNAL_ONLY",
         premium_target_10=round(float(mid) * 1.10, 2) if _number(mid) and mid > 0 else None,
         premium_target_20=round(float(mid) * 1.20, 2) if _number(mid) and mid > 0 else None,
-        expiry_mode=expiry_mode or "0DTE",
+        expiry_mode=expiry_mode or "MULTI_DAY",
     )
     return contract
 

@@ -2,7 +2,7 @@
 """Out-of-sample backtest driver: Unusual Whales history -> the LIVE engine.
 
 Reconstructs the engine's input contract (SPY/QQQ 1m bars, GEX snapshot,
-0DTE option chain quotes) for a historical session from the Unusual Whales
+multi-day option chain quotes) for a historical session from the Unusual Whales
 API, then replays the day minute-by-minute through the real
 signal_engine.build_signal with a simulated clock. No gate, threshold, or
 setup logic is re-implemented — the engine that trades live makes every call.
@@ -38,7 +38,7 @@ from zoneinfo import ZoneInfo
 import signal_engine
 from signal_engine import build_signal
 # The exact wall-expiry selection the live loop uses — never approximate it.
-from trade_prefetch_service import _wall_option_expiry
+from trade_prefetch_service import _preferred_option_expiry, _wall_option_expiry
 
 ET = ZoneInfo("America/New_York")
 API_BASE = "https://api.unusualwhales.com/api"
@@ -296,7 +296,7 @@ MID_FILLS = False
 
 
 def modeled_spread(mid: float) -> float:
-    # SPY 0DTE near-ATM spreads are tight ($0.01-0.03); scale gently with
+    # SPY near-ATM spreads are tight ($0.01-0.03); scale gently with
     # premium and floor at a cent. Deliberately a touch pessimistic.
     return max(0.01, round(0.006 * mid + 0.01, 3))
 
@@ -467,7 +467,7 @@ def simulate_exit(trade: dict, spy_bars: list[dict], option_candles: dict[float,
 
     Conservative intrabar rule: if a bar spans both stop and target, the stop
     fills first. The premium stop mirrors the live exit stack (20%) and is
-    checked on each minute's option candle close — without it, a 0DTE option can "ride to zero" in ways the
+    checked on each minute's option candle close — without it, a short-dated option can "ride to zero" in ways the
     live StopLossEngine never allows.
     """
     side = trade["side"]
@@ -560,7 +560,7 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
             variants_spec: list[dict] | None = None,
             fetch_only: bool = False,
             no_wall_chain: bool = False,
-            primary_dte: int = 0) -> dict:
+            primary_dte: int = 3) -> dict:
     open_at, close_at = _session_bounds(date)
     flatten_at = close_at - 40 * 60
     entry_cutoff = close_at - 60 * 60
@@ -591,29 +591,26 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
     session_yyyymmdd = date.replace("-", "")
     expiries = listed_expiries(client, date)
 
-    # Primary chain: 0DTE before 1 PM ET, next listed expiry after (live
-    # adaptive mode). Wall chain: nearest expiry >= 3 calendar days out —
-    # exactly the live _wall_option_expiry selection.
-    next_expiry = next((expiry for expiry in expiries if expiry > session_yyyymmdd), None)
+    # Wall chain: nearest expiry >= 3 calendar days out — exactly the live
+    # _wall_option_expiry selection.
     wall_expiry = _wall_option_expiry(expiries, now=open_at, min_dte=3)
-
-    zero_dte_meta = contract_symbols_for_expiry(client, date, session_yyyymmdd, mid_price, width)
-    next_meta = contract_symbols_for_expiry(client, date, next_expiry, mid_price, width) if next_expiry else []
     wall_meta = (
         contract_symbols_for_expiry(client, date, wall_expiry, mid_price, max(6.0, width * 0.8))
         if wall_expiry and wall_expiry not in (session_yyyymmdd,) and not no_wall_chain else []
     )
-    # Live since 2026-09-06: the PRIMARY chain is the nearest expiry >= N days
-    # out (strategy_option_expiry_dte, default 3). Same width as the wall chain
-    # so the run stays inside the on-disk cache.
-    multi_day_expiry = _wall_option_expiry(expiries, now=open_at, min_dte=primary_dte) if primary_dte > 0 else None
-    multi_day_meta = (
-        contract_symbols_for_expiry(client, date, multi_day_expiry, mid_price, max(6.0, width * 0.8))
-        if multi_day_expiry and multi_day_expiry != session_yyyymmdd else []
-    )
+    # PRIMARY chain (live since 2026-09-06): the nearest expiry >= N days out
+    # (strategy_option_expiry_dte, default 3), falling back to the nearest
+    # expiry strictly after the session when none reaches N. Same-day (0DTE)
+    # contracts were removed on 2026-09-13 and are never simulated. Same width
+    # as the wall chain so the run stays inside the on-disk cache.
+    primary_dte = max(1, int(primary_dte))
+    multi_day_expiry, expiry_mode = _preferred_option_expiry(expiries, now=open_at, min_dte=primary_dte)
+    if multi_day_expiry == session_yyyymmdd:
+        raise RuntimeError(f"{date}: primary expiry resolved to same-day; 0DTE is not traded")
+    multi_day_meta = contract_symbols_for_expiry(client, date, multi_day_expiry, mid_price, max(6.0, width * 0.8))
     option_data: dict[str, dict[float, dict]] = {}
     unavailable = 0
-    for entry in (*zero_dte_meta, *next_meta, *wall_meta, *multi_day_meta):
+    for entry in (*wall_meta, *multi_day_meta):
         if entry["symbol"] in option_data:
             continue
         try:
@@ -629,7 +626,6 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
                 raise
     if unavailable:
         print(f"  {unavailable}/{len(option_data)} option contracts not available (skipped)")
-    one_pm = datetime.strptime(date, "%Y-%m-%d").replace(hour=13, minute=0, tzinfo=ET).timestamp()
     if fetch_only:
         # All API data for the session is now cached on disk; skip simulation.
         return {"date": date, "fetched": len(option_data), "variants": {}, "blockers": {}, "states": {}}
@@ -663,16 +659,8 @@ def run_day(client: UWClient, date: str, interval: int, verbose: bool,
             net_gamma = gamma_series[gamma_index][1] if gamma_series and gamma_series[gamma_index][0] <= sim_now else None
             gex = gex_snapshot(sim_now, spy["spot"], net_gamma, flip, call_wall, put_wall)
 
-            if multi_day_meta:
-                primary_meta = multi_day_meta
-                primary_expiry = multi_day_meta[0]["expiry"]
-                expiry_mode = f"MULTI_DAY_{primary_dte}DTE"
-            elif sim_now < one_pm or not next_meta:
-                primary_meta, primary_expiry, expiry_mode = zero_dte_meta, date, "0DTE"
-            else:
-                primary_meta = next_meta
-                primary_expiry = next_meta[0]["expiry"]
-                expiry_mode = "1DTE_NEXT_LISTED"
+            primary_meta = multi_day_meta
+            primary_expiry = multi_day_meta[0]["expiry"] if multi_day_meta else multi_day_expiry
             chain = []
             for entry in primary_meta:
                 quote = build_option_contract(entry, option_data[entry["symbol"]], sim_now, spy["spot"])
@@ -835,8 +823,8 @@ def main() -> None:
                         help="also simulate an exit policy that banks the full position at T1")
     parser.add_argument("--exit-policy-variants", action="store_true",
                         help="also simulate the post-T1 alternatives: t1_no_ratchet, t1_hold, t1_trim_half_hold")
-    parser.add_argument("--primary-dte", type=int, default=0,
-                        help="primary chain = nearest listed expiry >= N calendar days out (live strategy_option_expiry_dte); 0 = 0DTE/1PM-roll")
+    parser.add_argument("--primary-dte", type=int, default=3,
+                        help="primary chain = nearest listed expiry >= N calendar days out (live strategy_option_expiry_dte, default 3, minimum 1; same-day 0DTE is not simulated)")
     parser.add_argument("--legacy-fill-lookahead", action="store_true",
                         help="ABLATION: fill at the current minute's close (the old look-ahead) to size its effect")
     parser.add_argument("--cache-only", action="store_true",
@@ -844,6 +832,8 @@ def main() -> None:
     parser.add_argument("--trades-out",
                         help="path prefix; writes <prefix>-<variant>.jsonl with every priced trade")
     args = parser.parse_args()
+    if args.primary_dte < 1:
+        parser.error("--primary-dte must be >= 1; same-day (0DTE) contracts are no longer traded or simulated")
 
     if args.mid_fills:
         globals()["MID_FILLS"] = True

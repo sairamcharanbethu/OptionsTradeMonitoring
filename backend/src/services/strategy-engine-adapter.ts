@@ -1144,8 +1144,9 @@ export class StrategyEngineAdapter {
       ibkr_host: ibkr.host,
       ibkr_port: ibkr.port,
       ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live',
-      // Minimum DTE for the primary option chain (0 = same-day). The engine
-      // prefers this over its --option-expiry-dte CLI default when present.
+      // Minimum DTE for the primary option chain (>= 1; same-day 0 DTE was
+      // removed 2026-09-13, a legacy 0 resolves to the 3-day default). The
+      // engine prefers this over its --option-expiry-dte CLI default when present.
       option_expiry_dte: resolveOptionExpiryDte(settings),
       session: this.buildSessionPolicy(settings, sessionParts.dateKey, sessionMarket, sessionCloseMinutes)
     };

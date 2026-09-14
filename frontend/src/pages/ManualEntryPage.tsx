@@ -134,7 +134,7 @@ export default function ManualEntryPage() {
   const [speedMode, setSpeedMode] = useState(false);
   const [symbol, setSymbol] = useState('QQQ');
   const [optionType, setOptionType] = useState<'CALL' | 'PUT'>('CALL');
-  const [dte, setDte] = useState<0 | 1 | 2>(0);
+  const [dte, setDte] = useState<1 | 2 | 3>(1);
   const [chain, setChain] = useState<ManualEntryChain | null>(null);
   const [selectedStrike, setSelectedStrike] = useState<number | null>(null);
   const [quote, setQuote] = useState<ManualEntryQuote | null>(null);
@@ -461,7 +461,7 @@ export default function ManualEntryPage() {
     setSelectedStrike(strikes[nextIndex]);
   };
 
-  const loadDtePreset = async (value: 0 | 1 | 2) => {
+  const loadDtePreset = async (value: 1 | 2 | 3) => {
     setDte(value);
     setLoadingChain(true);
     setError(null);
@@ -691,17 +691,17 @@ export default function ManualEntryPage() {
                 </div>
                 <div>
                   <Label className="text-xs">DTE</Label>
-                  <Select value={String(dte)} onValueChange={(value) => setDte(Number(value) as 0 | 1 | 2)}>
+                  <Select value={String(dte)} onValueChange={(value) => setDte(Number(value) as 1 | 2 | 3)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="0">0</SelectItem>
                       <SelectItem value="1">1</SelectItem>
                       <SelectItem value="2">2</SelectItem>
+                      <SelectItem value="3">3</SelectItem>
                     </SelectContent>
                   </Select>
                   <div className="mt-2 grid grid-cols-3 gap-1">
-                    {[0, 1, 2].map((value) => (
-                      <Button key={value} type="button" variant={dte === value ? 'secondary' : 'outline'} size="sm" className="h-7 px-2 text-xs" onClick={() => loadDtePreset(value as 0 | 1 | 2)} title={`Load ${value} DTE strikes`}>
+                    {[1, 2, 3].map((value) => (
+                      <Button key={value} type="button" variant={dte === value ? 'secondary' : 'outline'} size="sm" className="h-7 px-2 text-xs" onClick={() => loadDtePreset(value as 1 | 2 | 3)} title={`Load ${value} DTE strikes`}>
                         {value}
                       </Button>
                     ))}
