@@ -1,0 +1,131 @@
+====================================================================================================
+DELTA-ONE SHADOW P&L  (SPY 1m bars, same trigger/stop/targets, no premium stop)
+MES $/SPY pt = 50.0, friction/round trip = $4.0, risk budget $50.0
+====================================================================================================
+date       et    strategy            side   entry    exit reason             pts      R     MES$    opt0$    opt3$
+2026-04-21 09:53 GEX_WALL_BREAK_FAIL CALL  710.56  710.43 T1_TRAIL_STOP    -0.13  -0.25   -10.50   -18.95   -20.00
+2026-04-22 12:44 GEX_WALL_BREAK_FAIL PUT   709.07  710.08 STOP             -1.01  -1.03   -54.50   -20.75   -46.80
+2026-04-23 09:49 CONTINUATION        CALL  711.01  710.51 STOP             -0.50  -1.07   -29.25   -16.85   -20.55
+2026-04-24 09:57 GEX_WALL_BREAK_FAIL PUT   709.37  710.10 STOP             -0.73  -1.04   -40.50    -9.90   -17.60
+2026-04-27 09:46 CONTINUATION        PUT   713.46  712.74 TARGET_2          0.72   2.00    32.00    24.10    14.25
+2026-04-28 10:36 MTF_TREND_BREAK     PUT   710.58  710.11 TARGET_2          0.47   1.17    19.50    24.95    18.95
+2026-04-29 09:33 MTF_TREND_BREAK     PUT   709.95  710.75 STOP             -0.80  -1.17   -43.94   -52.10   -68.95
+2026-04-30 10:17 CONTINUATION        PUT   710.56  711.56 STOP             -1.00  -1.41   -54.00   -50.85   -52.30
+2026-05-04 11:21 GEX_WALL_BREAK_FAIL PUT   718.53  715.75 TARGET_2          2.78   1.75   135.00   149.50   170.85
+2026-05-12 09:52 MTF_TREND_BREAK     PUT   735.46  736.06 STOP             -0.60  -1.30   -34.00   -25.85   -28.60
+2026-05-15 09:40 MTF_TREND_BREAK     PUT   739.07  739.57 STOP             -0.50  -1.09   -29.00    -6.10   -11.55
+2026-05-18 10:06 GEX_WALL_REJECTION  PUT   738.83  735.75 SESSION_FLATTEN   3.08   0.49   149.75   -71.85    76.80
+2026-05-19 10:03 MTF_TREND_BREAK     PUT   734.06  732.91 TARGET_2          1.15   1.22    53.50    10.85    60.85
+2026-05-20 10:31 CONTINUATION        CALL  738.50  740.39 TARGET_2          1.89   1.89    90.50   -21.80   154.75
+2026-05-21 10:41 GEX_WALL_REJECTION  PUT   738.14  740.16 STOP             -2.02  -1.24  -105.00   -44.90   -94.55
+2026-05-28 09:37 GEX_WALL_BREAK_FAIL PUT   749.41  750.06 STOP             -0.64  -1.11   -36.25   -26.80   -40.45
+2026-06-03 09:46 CONTINUATION        PUT   756.32  755.71 TARGET_2          0.61   1.97    26.50    69.95    55.45
+2026-06-04 09:33 CONTINUATION        CALL  752.45  753.05 TARGET_2          0.60   1.94    26.00    29.00    22.70
+2026-06-05 09:37 MTF_TREND_BREAK     PUT   751.90  751.02 TARGET_2          0.88   1.44    40.00    61.80    58.45
+2026-06-08 10:17 GEX_WALL_REJECTION  PUT   740.99  739.23 SESSION_FLATTEN   1.76   0.13    84.00   -64.95  -119.80
+2026-06-09 09:36 CONTINUATION        CALL  744.19  744.14 T1_TRAIL_STOP    -0.05  -0.14    -6.50    10.10    10.45
+2026-06-10 09:39 CONTINUATION        CALL  734.93  733.47 STOP             -1.46  -1.45   -77.00   -11.25   -17.40
+2026-06-11 10:18 MTF_TREND_BREAK     PUT   727.75  727.75 T1_TRAIL_STOP    -0.00  -0.00    -4.00    -9.40    -3.30
+2026-06-12 11:19 MTF_TREND_BREAK     CALL  743.52  743.40 T1_TRAIL_STOP    -0.12  -0.13   -10.00   -36.00   -30.60
+2026-06-17 11:09 MTF_TREND_BREAK     PUT   748.88  749.58 STOP             -0.70  -1.25   -39.00   -52.10   -46.90
+2026-06-18 11:17 GEX_WALL_REJECTION  PUT   746.12  745.90 SESSION_FLATTEN   0.22   0.02     7.00   -29.85   -67.20
+2026-06-22 10:21 GEX_WALL_BREAK_FAIL PUT   748.15  745.34 TARGET_2          2.81   1.61   136.48   196.50   177.80
+2026-06-23 10:41 GEX_WALL_REJECTION  PUT   737.47  733.83 SESSION_FLATTEN   3.64   0.29   178.00   -55.00   140.35
+2026-06-24 10:16 GEX_WALL_REJECTION  PUT   735.15  731.58 SESSION_FLATTEN   3.57   0.24   174.50   -54.95  -133.85
+2026-06-25 09:49 CONTINUATION        PUT   731.62  732.63 STOP             -1.01  -1.68   -54.50   -37.20      nan
+2026-06-26 09:35 MTF_TREND_BREAK     PUT   727.85  729.74 STOP             -1.89  -1.42   -98.50  -104.05   -37.80
+2026-06-29 09:46 CONTINUATION        CALL  739.66  738.64 STOP             -1.02  -1.67   -55.00   -19.70    -8.55
+2026-06-30 10:04 CONTINUATION        CALL  744.36  743.57 STOP             -0.79  -1.61   -43.50   -27.80   -20.45
+2026-07-01 09:38 CONTINUATION        PUT   742.97  743.41 STOP             -0.44  -1.10   -26.00   -27.90   -20.40
+2026-07-02 11:43 CONTINUATION        PUT   745.87  743.05 TARGET_2          2.82   2.41   137.00   121.80   119.45
+2026-07-07 09:59 CONTINUATION        PUT   748.35  749.14 STOP             -0.79  -1.61   -43.50   -33.90   -31.35
+2026-07-08 09:40 CONTINUATION        CALL  743.95  743.94 T1_TRAIL_STOP    -0.01  -0.02    -4.50    -1.95    27.45
+2026-07-13 10:31 GEX_WALL_BREAK_FAIL CALL  752.97  749.85 STOP             -3.12  -1.02  -160.00   -36.75   -83.35
+2026-07-14 09:39 CONTINUATION        CALL  751.16  749.94 STOP             -1.22  -1.52   -65.00   -20.85   -35.20
+2026-07-15 12:04 CONTINUATION        PUT   751.86  750.65 TARGET_2          1.21   2.05    56.50    50.15    49.55
+2026-07-16 09:49 CONTINUATION        PUT   750.92  751.51 STOP             -0.59  -1.44   -33.50   -33.75   -49.20
+2026-07-17 09:34 MTF_TREND_BREAK     PUT   741.33  741.83 T1_TRAIL_STOP    -0.50  -0.63   -29.00   -60.95   -56.55
+2026-07-20 09:37 CONTINUATION        CALL  748.27  747.92 STOP             -0.35  -1.03   -21.50    -9.75     1.55
+2026-07-21 09:36 MTF_TREND_BREAK     CALL  745.85  745.06 STOP             -0.79  -1.18   -43.50   -51.75   -57.60
+2026-07-22 10:01 MTF_TREND_BREAK     CALL  748.85  748.79 T1_TRAIL_STOP    -0.06  -0.14    -7.00   -14.90   -12.65
+2026-07-23 09:49 CONTINUATION        PUT   740.86  741.21 T1_TRAIL_STOP    -0.35  -0.56   -21.50    -1.00    31.50
+2026-07-24 09:52 CONTINUATION        PUT   738.29  737.56 TARGET_2          0.73   1.82    32.50    25.05    24.65
+2026-07-27 10:24 CONTINUATION        PUT   739.92  738.48 TARGET_2          1.44   1.98    68.25    99.80   112.85
+2026-07-28 10:15 CONTINUATION        PUT   736.61  737.58 STOP             -0.97  -1.26   -52.50    -9.95   -38.85
+2026-07-29 09:56 CONTINUATION        PUT   737.27  738.00 STOP             -0.73  -1.28   -40.50   -20.20   -37.95
+2026-07-30 09:38 CONTINUATION        CALL  736.00  735.39 STOP             -0.61  -1.36   -34.50   -44.90   -39.30
+2026-07-31 10:04 CONTINUATION        PUT   740.93  739.50 TARGET_2          1.43   1.79    67.50   110.65   110.25
+2026-08-06 10:46 GEX_WALL_REJECTION  PUT   770.07  769.16 SESSION_FLATTEN   0.91   0.18    41.50   -28.80   -18.50
+2026-08-07 10:14 GEX_WALL_REJECTION  PUT   770.09  772.84 SESSION_FLATTEN  -2.75  -0.58  -141.75   -53.75   -69.00
+2026-08-11 09:37 GEX_WALL_BREAK_FAIL PUT   773.24  770.00 TARGET_2          3.24   1.85   158.00   -16.80   189.75
+2026-08-12 09:40 GEX_WALL_BREAK_FAIL PUT   772.87  773.14 SESSION_FLATTEN  -0.27  -0.13   -17.75   -40.85   -76.35
+2026-08-17 12:42 MTF_TREND_BREAK     PUT   775.05  774.68 TARGET_2          0.37   1.61    14.51     9.35    25.60
+2026-08-18 09:34 MTF_TREND_BREAK     PUT   768.18  769.36 STOP             -1.18  -1.23   -63.00   -47.80   -56.30
+2026-08-19 09:34 GEX_WALL_REJECTION  PUT   770.00  770.01 SESSION_FLATTEN  -0.01  -0.00    -4.75   -29.80   -89.30
+2026-08-20 09:34 GEX_WALL_BREAK_FAIL CALL  766.83  764.86 STOP             -1.97  -1.05  -102.50   -18.85   -33.40
+2026-08-21 10:20 GEX_WALL_REJECTION  PUT   764.63  765.96 SESSION_FLATTEN  -1.33  -0.24   -70.25   -30.80   -53.05
+
+----------------------------------------------------------------------------------------------------
+ALL 61 REPLAY TRADES
+----------------------------------------------------------------------------------------------------
+MES net  [live]                    n= 61  wins 22 ( 36%)  total $   -78.96  mean $  -1.29 ±  9.58  PF  0.96
+MES net  [no_ratchet]              n= 61  wins 24 ( 39%)  total $  -152.46  mean $  -2.50 ±  9.79  PF  0.92   vs live   -1.20 ±  2.01
+MES net  [exit_at_t1]              n= 61  wins 30 ( 49%)  total $  -304.46  mean $  -4.99 ±  8.46  PF  0.82   vs live   -3.70 ±  3.09
+MES net  [trail_0.5R_T2]           n= 61  wins 25 ( 41%)  total $    81.18  mean $   1.33 ±  6.50  PF  1.08   vs live   +2.63 ±  6.27
+MES net  [trail_1R_T2]             n= 61  wins 26 ( 43%)  total $   138.78  mean $   2.28 ±  8.74  PF  1.10   vs live   +3.57 ±  3.53
+MES net  [trail_1R_run]            n= 61  wins 26 ( 43%)  total $   175.11  mean $   2.87 ±  8.77  PF  1.12   vs live   +4.17 ±  3.81
+MES net  [trail_1.5R_run]          n= 61  wins 22 ( 36%)  total $   -54.08  mean $  -0.89 ±  9.40  PF  0.97   vs live   +0.41 ±  3.74
+MES net  [trail_atr1_T2]           n= 61  wins 19 ( 31%)  total $  -594.48  mean $  -9.75 ±  6.02  PF  0.60   vs live   -8.45 ±  8.12
+MES net  [trail_atr1.5_T2]         n= 61  wins 18 ( 30%)  total $  -955.25  mean $ -15.66 ±  6.89  PF  0.50   vs live  -14.37 ±  8.50
+MES net  [trail_atr1.5_run]        n= 61  wins 15 ( 25%)  total $ -1072.28  mean $ -17.58 ±  7.20  PF  0.45   vs live  -16.28 ±  8.77
+MES net  [trail_atr2_run]          n= 61  wins 14 ( 23%)  total $ -1445.90  mean $ -23.70 ±  7.58  PF  0.36   vs live  -22.41 ±  9.11
+MES net  [t1_then_trail_0.5R]      n= 61  wins 29 ( 48%)  total $  -114.21  mean $  -1.87 ±  9.05  PF  0.93   vs live   -0.58 ±  2.45
+MES net  [t1_then_trail_1R_run]    n= 61  wins 27 ( 44%)  total $    20.12  mean $   0.33 ±  9.60  PF  1.01   vs live   +1.62 ±  1.92
+MES gross [live]                   n= 61  wins 22 ( 36%)  total $   165.04  mean $   2.71 ±  9.58  PF  1.10
+R multiple [live]                  n= 61  wins 22 ( 36%)  total     -7.61  mean   -0.12 ±  0.16  PF  0.80
+Options 0DTE (replay)              n= 61  wins 15 ( 25%)  total $  -511.35  mean $  -8.38 ±  6.94  PF  0.66
+Options 3DTE (replay)              n= 60  wins 22 ( 37%)  total $   -91.25  mean $  -1.52 ±  9.45  PF  0.95
+Paired MES - 0DTE options          n= 61  mean $   7.09 ±  8.88  ( 0.8 SE)
+MES sized to $50 risk [live]       n= 42  wins 12 ( 29%)  total $  -578.43  mean $ -13.77 ±  8.27  PF  0.57   denied 19
+  by strategy:
+   CONTINUATION                       n= 26  wins  9 ( 35%)  total $  -126.01  mean $  -4.85 ± 10.69  PF  0.81
+   GEX_WALL_BREAK_FAIL                n= 10  wins  3 ( 30%)  total $     7.48  mean $   0.75 ± 34.04  PF  1.02
+   GEX_WALL_REJECTION                 n= 10  wins  6 ( 60%)  total $   313.00  mean $  31.30 ± 36.46  PF  1.97
+   MTF_TREND_BREAK                    n= 15  wins  4 ( 27%)  total $  -273.44  mean $ -18.23 ± 10.26  PF  0.32
+  by exit reason:
+   SESSION_FLATTEN                    n= 10  wins  6 ( 60%)  total $   400.25  mean $  40.03 ± 33.79  PF  2.71
+   STOP                               n= 27  wins  0 (  0%)  total $ -1479.94  mean $ -54.81 ±  5.91  PF  0.00
+   T1_TRAIL_STOP                      n=  8  wins  0 (  0%)  total $   -93.00  mean $ -11.63 ±  3.16  PF  0.00
+   TARGET_2                           n= 16  wins 16 (100%)  total $  1093.73  mean $  68.36 ± 12.06  PF   inf
+
+----------------------------------------------------------------------------------------------------
+LIVE SET (excluding retired GEX_WALL_REJECTION)
+----------------------------------------------------------------------------------------------------
+MES net  [live]                    n= 51  wins 16 ( 31%)  total $  -391.97  mean $  -7.69 ±  8.93  PF  0.74
+MES net  [no_ratchet]              n= 51  wins 18 ( 35%)  total $  -465.46  mean $  -9.13 ±  9.24  PF  0.72   vs live   -1.44 ±  2.41
+MES net  [exit_at_t1]              n= 51  wins 24 ( 47%)  total $  -617.47  mean $ -12.11 ±  7.05  PF  0.56   vs live   -4.42 ±  3.70
+MES net  [trail_0.5R_T2]           n= 51  wins 19 ( 37%)  total $  -203.07  mean $  -3.98 ±  4.51  PF  0.71   vs live   +3.70 ±  7.00
+MES net  [trail_1R_T2]             n= 51  wins 20 ( 39%)  total $  -220.72  mean $  -4.33 ±  7.85  PF  0.81   vs live   +3.36 ±  4.14
+MES net  [trail_1R_run]            n= 51  wins 20 ( 39%)  total $  -184.39  mean $  -3.62 ±  7.91  PF  0.84   vs live   +4.07 ±  4.48
+MES net  [trail_1.5R_run]          n= 51  wins 16 ( 31%)  total $  -401.33  mean $  -7.87 ±  8.79  PF  0.72   vs live   -0.18 ±  4.43
+MES net  [trail_atr1_T2]           n= 51  wins 17 ( 33%)  total $  -408.97  mean $  -8.02 ±  6.50  PF  0.65   vs live   -0.33 ±  6.19
+MES net  [trail_atr1.5_T2]         n= 51  wins 16 ( 31%)  total $  -503.38  mean $  -9.87 ±  7.28  PF  0.64   vs live   -2.18 ±  5.64
+MES net  [trail_atr1.5_run]        n= 51  wins 13 ( 25%)  total $  -620.40  mean $ -12.16 ±  7.74  PF  0.57   vs live   -4.48 ±  6.28
+MES net  [trail_atr2_run]          n= 51  wins 12 ( 24%)  total $  -858.92  mean $ -16.84 ±  7.92  PF  0.48   vs live   -9.16 ±  6.72
+MES net  [t1_then_trail_0.5R]      n= 51  wins 23 ( 45%)  total $  -427.21  mean $  -8.38 ±  8.09  PF  0.69   vs live   -0.69 ±  2.94
+MES net  [t1_then_trail_1R_run]    n= 51  wins 21 ( 41%)  total $  -292.88  mean $  -5.74 ±  8.98  PF  0.79   vs live   +1.94 ±  2.30
+MES gross [live]                   n= 51  wins 16 ( 31%)  total $  -187.97  mean $  -3.69 ±  8.93  PF  0.86
+R multiple [live]                  n= 51  wins 16 ( 31%)  total     -6.89  mean   -0.14 ±  0.19  PF  0.81
+Options 0DTE (replay)              n= 51  wins 15 ( 29%)  total $   -46.70  mean $  -0.92 ±  7.84  PF  0.96
+Options 3DTE (replay)              n= 50  wins 20 ( 40%)  total $   336.85  mean $   6.74 ±  9.62  PF  1.31
+Paired MES - 0DTE options          n= 51  mean $  -6.77 ±  5.99  (-1.1 SE)
+MES sized to $50 risk [live]       n= 42  wins 12 ( 29%)  total $  -578.43  mean $ -13.77 ±  8.27  PF  0.57   denied 9
+  by strategy:
+   CONTINUATION                       n= 26  wins  9 ( 35%)  total $  -126.01  mean $  -4.85 ± 10.69  PF  0.81
+   GEX_WALL_BREAK_FAIL                n= 10  wins  3 ( 30%)  total $     7.48  mean $   0.75 ± 34.04  PF  1.02
+   MTF_TREND_BREAK                    n= 15  wins  4 ( 27%)  total $  -273.44  mean $ -18.23 ± 10.26  PF  0.32
+  by exit reason:
+   SESSION_FLATTEN                    n=  1  wins  0 (  0%)  total $   -17.75  mean $ -17.75 ±  0.00  PF  0.00
+   STOP                               n= 26  wins  0 (  0%)  total $ -1374.94  mean $ -52.88 ±  5.80  PF  0.00
+   T1_TRAIL_STOP                      n=  8  wins  0 (  0%)  total $   -93.00  mean $ -11.63 ±  3.16  PF  0.00
+   TARGET_2                           n= 16  wins 16 (100%)  total $  1093.73  mean $  68.36 ± 12.06  PF   inf

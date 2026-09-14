@@ -1,0 +1,23 @@
+160 sessions, 62240 aligned 1m returns
+
+Cross-correlation corr(QQQ_ret[t-k], SPY_ret[t]); k>0 means QQQ/NQ leads SPY, k<0 means SPY leads
+  k=-3  corr -0.0121   (n=61760, 1 SE ≈ 0.0040)
+  k=-2  corr +0.0044   (n=61920, 1 SE ≈ 0.0040)
+  k=-1  corr -0.0008   (n=62080, 1 SE ≈ 0.0040)
+  k=+0  corr +0.9223   (n=62240, 1 SE ≈ 0.0040)
+  k=+1  corr +0.0023   (n=62080, 1 SE ≈ 0.0040)
+  k=+2  corr +0.0018   (n=61920, 1 SE ≈ 0.0040)
+  k=+3  corr -0.0099   (n=61760, 1 SE ≈ 0.0040)
+
+Predictive OLS  SPY_ret[t] = a + b1*SPY_ret[t-1] + b2*QQQ_ret[t-1]   (n=62080)
+  b1 (own lag)   -0.0430 ± 0.0104   t= -4.1
+  b2 (QQQ lag)   +0.0286 ± 0.0071   t= +4.0
+
+Sign-following: trade SPY in the direction of QQQ's prior move (gross, no costs); returns in bps of SPY
+  look 1m -> hold 1m: mean -0.002 bps ± 0.014  hit 49.3%  n=61448   (1 SPY tick ≈ 0.13 bps; typical spread cost ≈ 0.13 bps)
+  look 1m -> hold 5m: mean -0.037 bps ± 0.031  hit 49.8%  n=60814   (1 SPY tick ≈ 0.13 bps; typical spread cost ≈ 0.13 bps)
+  look 3m -> hold 1m: mean -0.011 bps ± 0.014  hit 48.9%  n=61760   (1 SPY tick ≈ 0.13 bps; typical spread cost ≈ 0.13 bps)
+  look 3m -> hold 5m: mean -0.103 bps ± 0.031  hit 49.3%  n=61120   (1 SPY tick ≈ 0.13 bps; typical spread cost ≈ 0.13 bps)
+
+QQQ-specific (residual) lag: SPY_ret[t] on SPY_ret[t-1] and (QQQ_ret - 0.63*SPY_ret)[t-1]
+  b2 residual    +0.0286 ± 0.0071   t= +4.0
