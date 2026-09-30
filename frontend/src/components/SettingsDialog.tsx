@@ -199,8 +199,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
     const [strategyPreferredContracts, setStrategyPreferredContracts] = useState('1');
     const [strategyMaxRiskPerTradeDollars, setStrategyMaxRiskPerTradeDollars] = useState('50');
     const [strategyMaxContracts, setStrategyMaxContracts] = useState('1');
-    const [strategyOptionExpiryDte, setStrategyOptionExpiryDte] = useState('3');
-    const [strategyMultiDayMaxHoldMinutes, setStrategyMultiDayMaxHoldMinutes] = useState('45');
+    const [strategyOptionExpiryDte, setStrategyOptionExpiryDte] = useState('9');
+    const [strategyOptionExpiryMaxDte, setStrategyOptionExpiryMaxDte] = useState('10');
+    const [strategyMultiDayMaxHoldMinutes, setStrategyMultiDayMaxHoldMinutes] = useState('10080');
     const [entryOpenBufferMinutes, setEntryOpenBufferMinutes] = useState('15');
     const [entryLastMinuteEt, setEntryLastMinuteEt] = useState('11:00');
     const [eventBlackoutsEnabled, setEventBlackoutsEnabled] = useState(true);
@@ -355,8 +356,9 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
             setStrategyPreferredContracts(data.strategy_preferred_contracts || '1');
             setStrategyMaxRiskPerTradeDollars(data.strategy_max_risk_per_trade_dollars || '500');
             setStrategyMaxContracts(data.strategy_max_contracts || '1');
-            setStrategyOptionExpiryDte(data.strategy_option_expiry_dte || '3');
-            setStrategyMultiDayMaxHoldMinutes(data.strategy_multi_day_max_hold_minutes || '45');
+            setStrategyOptionExpiryDte(data.strategy_option_expiry_dte || '9');
+            setStrategyOptionExpiryMaxDte(data.strategy_option_expiry_max_dte || '10');
+            setStrategyMultiDayMaxHoldMinutes(data.strategy_multi_day_max_hold_minutes || '10080');
             setEntryOpenBufferMinutes(data.entry_open_buffer_minutes || '15');
             setEntryLastMinuteEt(data.entry_last_minute_et || '11:00');
             setEventBlackoutsEnabled(data.event_blackouts_enabled !== 'false');
@@ -612,6 +614,7 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                 settingsPayload.strategy_max_risk_per_trade_dollars = strategyMaxRiskPerTradeDollars.trim();
                 settingsPayload.strategy_max_contracts = strategyMaxContracts;
                 settingsPayload.strategy_option_expiry_dte = strategyOptionExpiryDte;
+                settingsPayload.strategy_option_expiry_max_dte = strategyOptionExpiryMaxDte;
                 settingsPayload.strategy_multi_day_max_hold_minutes = strategyMultiDayMaxHoldMinutes;
                 settingsPayload.entry_open_buffer_minutes = entryOpenBufferMinutes;
                 settingsPayload.entry_last_minute_et = entryLastMinuteEt.trim();
@@ -926,7 +929,20 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     onChange={(e) => setStrategyOptionExpiryDte(e.target.value)}
                                                     disabled={!isAdmin}
                                                 />
-                                                <p className="text-2xs text-muted-foreground">Nearest listed SPY expiry at least this many calendar days out (1–10; 3 = default). Same-day 0 DTE contracts are never traded. Applies on the engine's next chain refresh.</p>
+                                                <p className="text-2xs text-muted-foreground">Nearest listed SPY expiry at least this many calendar days out (1–10; 9 = default). Same-day 0 DTE contracts are never traded. Applies on the engine's next chain refresh.</p>
+                                            </div>
+                                            <div className="grid gap-2">
+                                                <Label htmlFor="strategyOptionExpiryMaxDte">Option Expiry (max DTE)</Label>
+                                                <Input
+                                                    id="strategyOptionExpiryMaxDte"
+                                                    type="number"
+                                                    min="1"
+                                                    max="31"
+                                                    value={strategyOptionExpiryMaxDte}
+                                                    onChange={(e) => setStrategyOptionExpiryMaxDte(e.target.value)}
+                                                    disabled={!isAdmin}
+                                                />
+                                                <p className="text-2xs text-muted-foreground">Latest listed SPY expiry the engine may pick, in calendar days (1–31; 10 = default). The engine trades the nearest expiry inside the [min, max] DTE window.</p>
                                             </div>
                                             <div className="grid gap-2">
                                                 <Label htmlFor="strategyMultiDayMaxHoldMinutes">Multi-day Max Hold (min)</Label>
@@ -934,12 +950,12 @@ export default function SettingsDialog({ user, onUpdate }: SettingsDialogProps) 
                                                     id="strategyMultiDayMaxHoldMinutes"
                                                     type="number"
                                                     min="0"
-                                                    max="390"
+                                                    max="20160"
                                                     value={strategyMultiDayMaxHoldMinutes}
                                                     onChange={(e) => setStrategyMultiDayMaxHoldMinutes(e.target.value)}
                                                     disabled={!isAdmin}
                                                 />
-                                                <p className="text-2xs text-muted-foreground">Time stop for strategy positions (all contracts are multi-day; the 25/15/10-minute theta ladder only applies to a position that reaches its expiry day). 0 disables.</p>
+                                                <p className="text-2xs text-muted-foreground">Time stop for strategy positions in minutes (0–20160; 10080 = 7 days default). 0 disables.</p>
                                             </div>
                                         </div>
 
