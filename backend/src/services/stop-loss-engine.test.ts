@@ -86,6 +86,27 @@ async function runTests() {
   });
   assert(res8.newStopLoss === 0.43, `A 15% trail from $0.50 should protect at $0.43, got ${res8.newStopLoss}`);
 
+  // Profit-lock ladder: breakeven at +20% peak, +25% locked at +50% peak.
+  assert(StopLossEngine.profitLockFloor(3, 3.3) === 0, 'below +20% peak: no lock');
+  assert(StopLossEngine.profitLockFloor(3, 3.59) === 0, '+19.7% peak: no lock');
+  assert(StopLossEngine.profitLockFloor(3, 3.6) === 3, '+20% peak locks breakeven');
+  assert(StopLossEngine.profitLockFloor(3, 4.2) === 3, '+40% peak still breakeven lock');
+  assert(StopLossEngine.profitLockFloor(3, 4.5) === 3.75, '+50% peak locks +25%');
+  assert(StopLossEngine.profitLockFloor(3, 9) === 3.75, '+200% peak keeps the +25% lock');
+  assert(StopLossEngine.profitLockFloor(0, 5) === 0, 'zero entry: no lock');
+  assert(StopLossEngine.profitLockFloor(3, 0) === 0, 'zero peak: no lock');
+  // The floor clamps the trailing stop: peak +30% with a 15% trail would stop
+  // at 1.105x entry, but the breakeven lock holds it at entry.
+  const res9 = StopLossEngine.evaluate(2.9, {
+    entry_price: 3,
+    stop_loss_trigger: 0,
+    trailing_high_price: 3.9,
+    trailing_stop_loss_pct: 15,
+    trailing_floor_price: StopLossEngine.profitLockFloor(3, 3.9)
+  });
+  assert(res9.triggered === true, 'faded to below entry with lock armed: should trigger');
+  assert(res9.triggerType === 'STOP_LOSS', 'lock exit is a STOP_LOSS');
+
   console.log('All tests passed!');
 }
 

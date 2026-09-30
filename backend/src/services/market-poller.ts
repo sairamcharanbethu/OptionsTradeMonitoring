@@ -1158,20 +1158,34 @@ export class MarketPoller {
     let syntheticTrailingActive = syntheticTrailingConfigured
       && (!strategySyntheticTrail || syntheticState.active === true || String(position.profit_trim_status || '').toUpperCase() === 'DONE');
 
-    if (strategySyntheticTrail && !syntheticTrailingActive && syntheticT1Reached && syntheticQuoteFresh) {
+    // Profit-lock ladder: once the premium peak prints +20% the trail arms
+    // even if the underlying never reached TP1, with the floor ratcheted to
+    // breakeven (and to +25% once the peak prints +50%). The floor only ever
+    // moves up, so a stalled winner exits flat or better.
+    const swingEntryPrice = Number(position.entry_price || 0);
+    const premiumPeakForLock = Math.max(
+      Number(position.trailing_high_price || 0),
+      swingEntryPrice,
+      sellablePremium > 0 ? sellablePremium : 0
+    );
+    const profitLockFloor = StopLossEngine.profitLockFloor(swingEntryPrice, premiumPeakForLock);
+    const premiumProfitLockHit = strategySyntheticTrail && profitLockFloor > 0;
+
+    if (strategySyntheticTrail && !syntheticTrailingActive && (syntheticT1Reached || premiumProfitLockHit) && syntheticQuoteFresh) {
       syntheticTrailingActive = true;
+      const activation = syntheticT1Reached ? 'TP1' : 'PROFIT_LOCK';
       analysis.syntheticTrailing = {
         ...syntheticState,
         enabled: true,
         active: true,
         pct: configuredSyntheticTrailingPct,
-        activation: 'TP1',
+        activation,
         activatedAt: new Date().toISOString(),
         t1Underlying: syntheticT1,
         t2Underlying: syntheticT2
       };
       analysisDirty = true;
-      this.fastify.log.info(`[MarketPoller] Synthetic premium trail activated for position ${position.id} at TP1 with ${configuredSyntheticTrailingPct}%.`);
+      this.fastify.log.info(`[MarketPoller] Synthetic premium trail activated for position ${position.id} at ${activation} with ${configuredSyntheticTrailingPct}%.`);
     }
 
     const engineResult = StopLossEngine.evaluate(sellablePremium, {
@@ -1182,7 +1196,9 @@ export class MarketPoller {
         : undefined,
       trailing_high_price: Number(position.trailing_high_price || position.entry_price),
       trailing_stop_loss_pct: syntheticTrailingActive && syntheticQuoteFresh ? configuredSyntheticTrailingPct : undefined,
-      trailing_floor_price: strategySyntheticTrail && syntheticTrailingActive ? Number(position.entry_price) : undefined,
+      trailing_floor_price: strategySyntheticTrail && syntheticTrailingActive
+        ? (profitLockFloor > 0 ? profitLockFloor : Number(position.entry_price))
+        : undefined,
     });
     const priorTrailingHighPrice = Number(position.trailing_high_price || position.entry_price);
     const bufferedTrailingHighPrice = syntheticTrailingActive && !syntheticQuoteFresh

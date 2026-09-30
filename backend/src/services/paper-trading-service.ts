@@ -4,6 +4,7 @@ import { DiscordAlertService } from './discord-alert-service';
 import { getGlobalSettings } from '../lib/settings-utils';
 import { KillSwitchService } from './kill-switch-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
+import { StopLossEngine } from './stop-loss-engine';
 import { redis as defaultRedis } from '../lib/redis';
 import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { PAPER_STRATEGIES, SHARED_PAPER_ACCOUNT_ID } from './paper-account-constants';
@@ -2172,7 +2173,9 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
 
   /**
    * Manage open SWING paper positions: exit at ≤2 DTE, at the 7-calendar-day
-   * max hold, or on a 15% synthetic trailing stop from the premium peak.
+   * max hold, or on a 15% synthetic trailing stop from the premium peak —
+   * tightened by the profit-lock ladder (breakeven once the peak prints +20%,
+   * +25% locked once it prints +50%) so stalled winners exit flat or better.
    * Runs on every strategy snapshot so exits stay timely.
    */
   public async manageSwingExits(signal: Record<string, any>): Promise<void> {
@@ -2205,17 +2208,21 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         continue;
       }
       if (!(bid > 0)) continue;
-      const peak = Math.max(Number(position.trailing_high_price || 0), Number(position.entry_price || 0), bid);
+      const entry = Number(position.entry_price || 0);
+      const peak = Math.max(Number(position.trailing_high_price || 0), entry, bid);
       if (peak !== Number(position.trailing_high_price || 0)) {
         await (this.fastify as any).pg.query(
           `UPDATE positions SET trailing_high_price=$1, current_price=$2, updated_at=NOW() WHERE id=$3`,
           [peak, bid, position.id]
         );
       }
-      if (bid <= peak * 0.85) {
+      const lockFloor = StopLossEngine.profitLockFloor(entry, peak);
+      const stopPrice = Math.max(peak * 0.85, lockFloor);
+      if (bid <= stopPrice) {
         await this.closePaperQuantity({ ...position, trailing_high_price: peak }, Number(position.quantity), bid, 'SWING_TRAILING_STOP', {
           peak: Number(peak.toFixed(2)),
-          stopPct: 15
+          stopPct: 15,
+          profitLock: lockFloor > 0 ? Number(lockFloor.toFixed(2)) : null
         });
       }
     }

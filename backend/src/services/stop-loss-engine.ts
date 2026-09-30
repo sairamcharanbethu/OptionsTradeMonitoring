@@ -12,6 +12,32 @@ export function roundProtectiveStop(value: number): number {
 
 export class StopLossEngine {
   /**
+   * Profit-lock ladder for swing positions (premium-based).
+   *
+   * Once the premium peak prints a rung, the trailing floor ratchets up and
+   * never comes back down, so a trade that works a little but then stalls
+   * exits flat or better instead of fading into a loser. The first rung is
+   * intentionally clear of typical intraday premium noise; both rungs are
+   * one-line tunables if live results say otherwise.
+   */
+  public static readonly PROFIT_LOCK_TRIGGER_MULT = 1.2;
+  public static readonly PROFIT_LOCK_RUNG2_MULT = 1.5;
+  public static readonly PROFIT_LOCK_RUNG2_FLOOR_MULT = 1.25;
+
+  public static profitLockFloor(entryPrice: number, premiumHigh: number): number {
+    const entry = Number(entryPrice);
+    const high = Number(premiumHigh);
+    if (!(entry > 0) || !(high > 0)) return 0;
+    if (high >= entry * StopLossEngine.PROFIT_LOCK_RUNG2_MULT) {
+      return entry * StopLossEngine.PROFIT_LOCK_RUNG2_FLOOR_MULT;
+    }
+    if (high >= entry * StopLossEngine.PROFIT_LOCK_TRIGGER_MULT) {
+      return entry;
+    }
+    return 0;
+  }
+
+  /**
    * Evaluates a position against a new price point.
    * If price is higher than trailing_high, stop-loss trails up.
    * If price hits stop-loss, it triggers an alert.
