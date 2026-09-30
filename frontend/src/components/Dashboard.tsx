@@ -626,7 +626,7 @@ export default function Dashboard({ user }: DashboardProps) {
                   <article key={`mobile-${pos.id}`} className="rounded-xl border border-border/70 bg-background/60 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div><div className="font-bold">{pos.symbol}</div><div className="mt-1 text-xs text-muted-foreground">{pos.option_type} ${pos.strike_price}</div></div>
-                      <div className={`text-right font-mono font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>${Number(pos.realized_pnl).toFixed(2)}<div className="text-xs font-normal">{getRoi(pos).toFixed(2)}%</div></div>
+                      <div className={`text-right font-mono font-bold ${(Number(pos.realized_pnl) || 0) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>${(Number(pos.realized_pnl) || 0).toFixed(2)}<div className="text-xs font-normal">{getRoi(pos).toFixed(2)}%</div></div>
                     </div>
                     <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-3">
                       <Badge variant="outline">Closed</Badge>
@@ -662,8 +662,8 @@ export default function Dashboard({ user }: DashboardProps) {
                           </td>
                           <td className="px-4 py-3"><Badge variant="outline" className="text-2xs">CLOSED</Badge></td>
                           <td className="px-4 py-3">
-                            <div className={`font-bold ${Number(pos.realized_pnl) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
-                              ${Number(pos.realized_pnl).toFixed(2)}
+                            <div className={`font-bold ${(Number(pos.realized_pnl) || 0) >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>
+                              ${(Number(pos.realized_pnl) || 0).toFixed(2)}
                               <span className="ml-1 text-2xs opacity-70">({getRoi(pos).toFixed(2)}%)</span>
                             </div>
                           </td>

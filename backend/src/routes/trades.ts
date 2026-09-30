@@ -4,6 +4,7 @@ import { TradeExecutionService } from '../services/trade-execution-service';
 import { TradeLifecycleService } from '../services/trade-lifecycle-service';
 import { TradeRedisService } from '../services/trade-redis-service';
 import { DiscordAlertService } from '../services/discord-alert-service';
+import { SHARED_PAPER_ACCOUNT_ID } from '../services/paper-account-constants';
 import { buildCommandReplayEventsQuery } from '../lib/trade-command-events';
 import {
   getTradeVoidEligibility,
@@ -220,13 +221,21 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
       querystring: {
         type: 'object',
         properties: {
-          range: { type: 'string', enum: ['today', '7d', '30d', '90d', 'ytd', '1y'] }
+          range: { type: 'string', enum: ['today', '7d', '30d', '90d', 'ytd', '1y'] },
+          scope: { type: 'string', enum: ['paper', 'live'] }
         }
       }
     }
   }, async (request) => {
     const { id: userId } = (request as any).user;
-    const { range = '30d' } = request.query as { range?: string };
+    const { range = '30d', scope = 'live' } = request.query as { range?: string; scope?: 'paper' | 'live' };
+    // Scope filter for the outcome queries: live = the user's Wealthsimple/SnapTrade
+    // broker positions (existing behavior); paper = the shared paper account, so the
+    // report matches the scope selector on the Trade Intelligence page.
+    const scopeFilter = scope === 'paper'
+      ? `paper_account_id = $1`
+      : `user_id = $1 AND execution_broker = 'wealthsimple_snaptrade'`;
+    const scopeParam = scope === 'paper' ? SHARED_PAPER_ACCOUNT_ID : userId;
     const interval = reportRangeToInterval(range);
     const rangePredicate = range === 'today'
       ? "updated_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York') AT TIME ZONE 'America/New_York'"
@@ -256,11 +265,10 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
          COUNT(*) FILTER (WHERE exit_reason ILIKE '%MANUAL%')::int AS manual_exits,
          COUNT(*) FILTER (WHERE profit_trim_status = 'DONE')::int AS trimmed_trades
        FROM positions
-       WHERE user_id = $1
-         AND execution_broker = 'wealthsimple_snaptrade'
+       WHERE ${scopeFilter}
          AND status = 'CLOSED'
          AND ${rangePredicate}`,
-      [userId]
+      [scopeParam]
     );
 
     const { rows: symbolRows } = await fastify.pg.query(
@@ -271,13 +279,12 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
               COUNT(*) FILTER (WHERE realized_pnl < 0)::int AS losses,
               COALESCE(AVG(realized_pnl), 0)::float AS average_pnl
        FROM positions
-       WHERE user_id = $1
-         AND execution_broker = 'wealthsimple_snaptrade'
+       WHERE ${scopeFilter}
          AND status = 'CLOSED'
          AND ${rangePredicate}
        GROUP BY symbol
        ORDER BY total_pnl DESC`,
-      [userId]
+      [scopeParam]
     );
 
     const { rows: recentClosedRows } = await fastify.pg.query(
@@ -285,13 +292,12 @@ export async function tradeRoutes(fastify: FastifyInstance, options: FastifyPlug
               quantity, realized_pnl, exit_reason, execution_status, profit_trim_status,
               last_broker_order_status, broker_order_id, broker_exit_order_id, notes, created_at, updated_at
        FROM positions
-       WHERE user_id = $1
-         AND execution_broker = 'wealthsimple_snaptrade'
+       WHERE ${scopeFilter}
          AND status = 'CLOSED'
          AND ${rangePredicate}
        ORDER BY updated_at DESC
        LIMIT 25`,
-      [userId]
+      [scopeParam]
     );
 
     const { rows: skippedRows } = await fastify.pg.query(
