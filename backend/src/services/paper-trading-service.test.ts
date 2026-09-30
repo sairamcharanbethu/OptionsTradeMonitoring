@@ -979,6 +979,90 @@ async function run() {
   assert.equal(PaperTradingService.swingDte(null, swingDay), null, 'missing expiry is not a number');
   assert.equal(PaperTradingService.swingDte('not-a-date', swingDay), null, 'garbage expiry is not a number');
 
+  // --- Swing lane (2026-09-30 review fixes) ---
+  // Thursday 9-10 DTE lands on Sat/Sun: the window rolls to Monday (11 DTE).
+  assert.equal(PaperTradingService.swingMaxDte(new Date('2026-10-01T15:00:00Z')), 11, 'a Thursday window rolls to the Monday expiry');
+  assert.equal(PaperTradingService.swingMaxDte(new Date('2026-09-30T15:00:00Z')), 10, 'a Wednesday window stays 9-10 DTE');
+  assert.equal(PaperTradingService.swingMaxDte(new Date('2026-10-02T15:00:00Z')), 10, 'a Friday window stays 9-10 DTE');
+  assert.equal(PaperTradingService.swingPremiumStop(4, {}), 3.2, 'the paper swing premium stop mirrors the live 20% default');
+  assert.equal(PaperTradingService.swingPremiumStop(4, { paper_policy: { premium_stop_pct: 30 } }), 2.8, 'the strategy premium stop wins when configured');
+
+  // Exit rules mirror live: no trail from entry; premium stop, invalidation,
+  // TP1 / profit-lock arming, then the 15% trail floored at entry or the lock.
+  const swingCall = {
+    option_type: 'CALL', entry_price: 4, trailing_high_price: 4, stop_loss_trigger: 3.2,
+    suggested_stop_loss: 99.7, suggested_take_profit_1: 101, analysis_data: {}
+  };
+  const decide = (position: any, bid: number, spot: number | null, dte = 8, hold = 1) =>
+    PaperTradingService.swingExitDecision(position, bid, spot, dte, hold);
+  assert.equal(decide(swingCall, 3.4, 100).intent, null, 'a -15% dip before the trail arms must not exit (live holds to its premium stop)');
+  assert.equal(decide(swingCall, 3.2, 100).intent, 'SWING_PREMIUM_STOP', 'the premium stop protects before the trail arms');
+  assert.equal(decide(swingCall, 3.9, 99.6).intent, 'SWING_INVALIDATION', 'an underlying break of the invalidation exits a CALL');
+  assert.equal(decide({ ...swingCall, option_type: 'PUT', suggested_stop_loss: 100.3, suggested_take_profit_1: 99 }, 3.9, 100.4).intent,
+    'SWING_INVALIDATION', 'an underlying break above the invalidation exits a PUT');
+  const locked = decide(swingCall, 4.8, 100);
+  assert.equal(locked.intent, null, 'a +20% peak arms the trail without exiting');
+  assert.equal(locked.armNow, true, 'arming is recorded once');
+  const armed = { ...swingCall, trailing_high_price: 4.8, analysis_data: { swingTrailArmedAt: '2026-09-30T15:00:00Z' } };
+  assert.equal(decide(armed, 4.1, 100).intent, null, 'an armed trail above 15% off the peak (4.08) keeps holding');
+  assert.equal(decide(armed, 4.05, 100).intent, 'SWING_TRAILING_STOP', 'the armed trail exits 15% off the peak');
+  const armedNearEntry = { ...armed, trailing_high_price: 4.6 };
+  assert.equal(decide(armedNearEntry, 4.0, 100).intent, 'SWING_TRAILING_STOP', 'the breakeven floor exits a stalled winner flat');
+  assert.equal(decide(armedNearEntry, 4.0, 100).metadata.floor, 4, 'the trail floor is entry until the +50% rung');
+  assert.equal(decide({ ...swingCall, trailing_high_price: 6.5, analysis_data: armed.analysis_data }, 5.5, 100).metadata.floor, 5,
+    'the +50% rung locks +25%');
+  const tp1 = decide(swingCall, 4.1, 101.1);
+  assert.equal(tp1.armNow, true, 'TP1 on the underlying arms the trail');
+  assert.equal(decide(swingCall, 4.1, 100, 2).intent, 'SWING_EXPIRY_EXIT', '≤2 DTE exits');
+  assert.equal(decide(swingCall, 4.1, 100, 8, 7).intent, 'SWING_MAX_HOLD', 'the 7-day max hold exits');
+
+  // A swing position closes under its own lane, and a failed quote never books a $0 exit.
+  const swingCloseValues: any[][] = [];
+  let swingCloseCommitted = false;
+  const swingCloseService = new PaperTradingService({
+    pg: {
+      connect: async () => ({
+        query: async (sql: string, values: any[] = []) => {
+          if (sql === 'COMMIT') swingCloseCommitted = true;
+          if (sql.includes('FROM positions') && sql.includes('FOR UPDATE')) {
+            swingCloseValues.push(values);
+            return values[2] === 'SWING' ? { rows: [{ quantity: 1, status: 'OPEN', realized_pnl: 0 }] } : { rows: [] };
+          }
+          if (sql.includes('INSERT INTO paper_orders')) { swingCloseValues.push(values); return { rows: [{ id: 72 }] }; }
+          if (sql.includes('SELECT * FROM paper_accounts')) return { rows: [{ equity: 100_000, cash_balance: 99_900, reserved_cash: 0 }] };
+          if (sql.includes('AS realized')) return { rows: [{ realized: 0, unrealized: 0 }] };
+          return { rows: [] };
+        },
+        release() {}
+      }),
+      query: async () => ({ rows: [] })
+    },
+    log: { warn() {}, info() {}, error() {} },
+    websocketServer: null
+  } as any, { isReady: () => true, hset: async () => {}, hgetall: async () => ({}), del: async () => {} }) as any;
+  await swingCloseService.closePaperQuantity({
+    id: 90, paper_strategy: 'SWING', paper_decision_id: 95, strategy_setup_id: '55555555-5555-4555-8555-555555555555',
+    option_type: 'CALL', strike_price: 700, expiration_date: '2026-10-09', entry_price: 4, quantity: 1, analysis_data: {}
+  }, 1, 4.5, 'SWING_TRAILING_STOP');
+  assert.equal(swingCloseValues[0][2], 'SWING', 'a swing close must lock the position under the SWING lane');
+  assert.equal(swingCloseValues[1][13], 'SWING', 'a swing exit order must be booked under the SWING lane');
+  assert.ok(swingCloseCommitted, 'a swing exit must commit');
+
+  let noQuoteCloses = 0;
+  const noQuoteService = new PaperTradingService({
+    pg: {
+      query: async (sql: string) => sql.includes('FROM positions p')
+        ? { rows: [{ id: 91, paper_strategy: 'SWING', option_type: 'CALL', strike_price: 700, expiration_date: '2026-10-01',
+            entry_price: 4, quantity: 1, created_at: '2026-09-20T15:00:00Z', analysis_data: {} }] }
+        : { rows: [] }
+    },
+    ibkrMarketData: { getOptionQuoteForOsi: async () => { throw new Error('gateway down'); } },
+    log: { warn() {}, info() {}, error() {} }
+  } as any, redis) as any;
+  noQuoteService.closePaperQuantity = async () => { noQuoteCloses += 1; };
+  await noQuoteService.manageSwingExits({ spot: 700 });
+  assert.equal(noQuoteCloses, 0, 'a due swing exit with no usable bid must wait for a quote, not close at $0');
+
   console.log('All PaperTradingService tests passed!');
 }
 

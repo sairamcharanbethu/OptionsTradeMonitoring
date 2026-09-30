@@ -566,7 +566,116 @@ async function runTests() {
   assert(terminalPositionUpdate?.values[1] === 'INVALIDATED', 'Position exit reason must retain the terminal lifecycle state');
 }
 
+// Swing entry guards: global kill switch, one-position slot (incl. pending
+// entries), in-flight serialization, and per-user recheck routing.
+async function testSwingEntryGuards() {
+  const users = [9191, 9192];
+  let disarm: 'true' | 'false' | 'throw' = 'false';
+  let slotRow: any = null;
+  const slotSql: string[] = [];
+  const entries: number[] = [];
+  let aiCalls = 0;
+  const adapter = new StrategyEngineAdapter({
+    pg: {
+      query: async (sql: string, values: any[] = []) => {
+        if (sql.includes('FROM settings') && values[0] === 'live_trading_disarmed') {
+          if (disarm === 'throw') throw new Error('db down');
+          return { rows: [{ value: disarm }] };
+        }
+        if (sql.includes("key = 'autonomous_live_entry_enabled'")) return { rows: users.map(user_id => ({ user_id })) };
+        if (sql.includes('SELECT DISTINCT ON')) return { rows: [] };
+        if (sql.includes('SELECT key, value FROM settings')) {
+          return { rows: [
+            { key: 'autonomous_live_entry_enabled', value: 'true' },
+            { key: 'day_trading_enabled', value: 'true' },
+            { key: 'execution_broker', value: 'wealthsimple_snaptrade' },
+            { key: 'snaptrade_auto_trade', value: 'true' },
+            { key: 'live_trading_acknowledged', value: 'true' },
+            { key: 'snaptrade_trading_account_id', value: 'account-1' },
+            { key: 'shadow_trading_enabled', value: 'false' }
+          ] };
+        }
+        if (sql.includes('SELECT strategy_setup_id')) return { rows: [{ strategy_setup_id: adapter.currentSetupId }] };
+        if (sql.includes('strategy_managed = TRUE') && sql.includes('LIMIT 1')) {
+          slotSql.push(sql);
+          return { rows: slotRow ? [slotRow] : [] };
+        }
+        return { rows: [] };
+      }
+    },
+    scanner: {
+      executeSignalForUser: async (userId: number) => {
+        entries.push(userId);
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return { success: true };
+      }
+    },
+    log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    liveExitMonitor: { getHealth: () => ({ status: 'UP' }) }
+  } as any) as any;
+  adapter.liveAiGate = {
+    decide: async () => {
+      aiCalls += 1;
+      return { mode: 'gate', decision: 'TRADE', riskTier: 'STANDARD', rationale: 'ok', riskFlags: [], source: 'AI', blocks: false };
+    }
+  };
+  adapter.currentSetupId = '44444444-4444-4444-8444-444444444444';
+  adapter.currentSignal = signal({
+    generated_at: Date.now() / 1000,
+    state: 'ACTIVE',
+    lifecycle: { entry_allowed: true },
+    gex: { provider_age_seconds: 2 },
+    call_setup: { ...signal().call_setup, option: { ...signal().call_setup.option, quote_age_seconds: 2 } }
+  });
+  adapter.autonomousEntryWindow = () => ({ open: true, reason: 'OPEN', cutoffMinutes: 900, closeMinutes: 960 });
+  adapter.markLiveEntriesReady();
+
+  disarm = 'true';
+  await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 70);
+  assert(entries.length === 0 && aiCalls === 0, 'The live disarm flag must halt autonomous entries before any AI call');
+  assert(String(adapter.lastAutonomousEntryResult).includes('disarmed'), 'The kill-switch block must be surfaced');
+  disarm = 'throw';
+  await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 70);
+  assert(entries.length === 0, 'An unreadable kill switch must fail closed');
+  disarm = 'false';
+
+  slotRow = { id: 555 };
+  await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 71);
+  assert(entries.length === 0 && aiCalls === 0, 'An occupied swing slot must block entry before the AI call');
+  assert(slotSql.every(sql => sql.includes("'PENDING_ORDER'")), 'An entry still pending at the broker must hold the swing slot');
+  slotRow = null;
+
+  await Promise.all([
+    adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 72),
+    adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 72)
+  ]);
+  assert(entries.length === users.length, `Concurrent wakes must submit at most one entry per user (got ${entries.length})`);
+  assert(adapter.entryInFlightUsers.size === 0, 'The in-flight guard must release after the entry settles');
+
+  entries.length = 0;
+  await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 73, 9192);
+  assert(entries.length === 1 && entries[0] === 9192, 'A scoped recheck wake must only re-drive its own user');
+
+  // Due-recheck routing: the paper shadow row (user 0) re-drives the paper
+  // entry; a live user's row re-drives only that user.
+  const fingerprint = adapter.planFingerprint(adapter.currentSignal);
+  const routed: string[] = [];
+  adapter.maybeExecutePaperSwingEntry = async (_s: any, signalId: number, setupId: string) => { routed.push(`paper:${signalId}:${setupId}`); };
+  adapter.maybeExecuteAutonomousLiveEntries = async (_s: any, signalId: number, onlyUserId?: number) => { routed.push(`live:${signalId}:${onlyUserId}`); };
+  (adapter as any).fastify.pg.query = async (sql: string) => sql.includes('FROM strategy_ai_rechecks WHERE recheck_at')
+    ? { rows: [
+        { user_id: 0, plan_fingerprint: fingerprint, gate_mode: 'gate', signal_id: 80, lane: '' },
+        { user_id: 9191, plan_fingerprint: fingerprint, gate_mode: 'gate', signal_id: 81, lane: '' }
+      ] }
+    : { rows: [] };
+  await adapter.processDueAiRechecks();
+  assert(routed.includes(`paper:80:${adapter.currentSetupId}`), 'A due paper hold must re-drive the paper swing entry');
+  assert(routed.includes('live:81:9191'), 'A due live hold must re-drive only its own user');
+  assert(!routed.some(r => r.startsWith('live:80')), 'A paper hold must never enter the live entry path');
+}
+
 runTests()
+  .then(testSwingEntryGuards)
   .then(() => console.log('All StrategyEngineAdapter tests passed!'))
   .catch((err) => {
     console.error(err);

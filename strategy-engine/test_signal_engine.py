@@ -1685,14 +1685,18 @@ class ContinuationStateTest(unittest.TestCase):
                 "completed_bar_age_seconds": 60,
             }
         }
+        # Swing profile selects near-ATM contracts (|delta| 0.40-0.60).
         self.options = {
             "expiry": TEST_SESSION_EXPIRY,
             "contracts": [
-                liquid_contract(
-                    right,
-                    strike,
-                    expiry=TEST_SESSION_EXPIRY,
-                )
+                {
+                    **liquid_contract(
+                        right,
+                        strike,
+                        expiry=TEST_SESSION_EXPIRY,
+                    ),
+                    "delta": 0.50 if right == "C" else -0.50,
+                }
                 for strike in range(96, 106)
                 for right in ("C", "P")
             ],
@@ -2258,6 +2262,24 @@ class ContinuationStateTest(unittest.TestCase):
         )
         self.assertFalse(aborted["lifecycle"]["paper_position_open"])
         self.assertIn("ABORTED", render_signal(aborted))
+
+    def test_swing_position_survives_overnight_tracking_gap(self) -> None:
+        swing_expiry = (
+            datetime.fromtimestamp(self.now, ET) + timedelta(days=9)
+        ).strftime("%Y%m%d")
+        self.options["expiry"] = swing_expiry
+        for contract in self.options["contracts"]:
+            contract["expiry"] = swing_expiry
+        first = self.build()
+        self.assertEqual(first["state"], "ACTIVE")
+        first["lifecycle"]["last_trusted_tracking_at"] = time.time() - 17 * 3600
+        resumed = self.build(previous=first, spot=100.20)
+        self.assertEqual(resumed["state"], "ACTIVE")
+        self.assertNotEqual(resumed["lifecycle"].get("close_reason"), "tracking_gap_abort")
+        self.assertTrue(resumed["lifecycle"]["paper_position_open"])
+        self.assertTrue(
+            any("tracking resumed" in w for w in resumed.get("warnings", []))
+        )
 
     def test_stale_market_data_pauses_without_dropping_open_lifecycle(self) -> None:
         first = self.build()

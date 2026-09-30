@@ -11,7 +11,7 @@ import math
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -473,6 +473,11 @@ def _preferred_option_expiry(
     if multi_day:
         return multi_day, f"MULTI_DAY_{int(min_dte)}DTE"
     if strict:
+        rolled_max = _swing_window_max_dte(min_dte, max_dte, now)
+        if rolled_max != max_dte:
+            rolled = _wall_option_expiry(expirations, now, min_dte=min_dte, max_dte=rolled_max)
+            if rolled:
+                return rolled, f"MULTI_DAY_{int(min_dte)}DTE_WEEKEND_ROLL"
         return None, "NO_EXPIRY_IN_WINDOW"
     stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
     today = stamp.strftime("%Y%m%d")
@@ -483,6 +488,28 @@ def _preferred_option_expiry(
     if future:
         return future[0], "NEXT_LISTED_FALLBACK"
     raise RuntimeError("SPY option chain has no expiry after today (0DTE is not traded)")
+
+
+def _swing_window_max_dte(
+    min_dte: int, max_dte: int | None, now: float | None = None
+) -> int | None:
+    """Effective upper DTE bound for the strict primary window.
+
+    When every calendar day in ``[min_dte, max_dte]`` is a Saturday or Sunday
+    (the 9-10 DTE window on a Thursday), no SPY expiry can be listed in it, so
+    the bound rolls forward to the next weekday. Otherwise ``max_dte`` is
+    returned unchanged. Exchange holidays are not rolled over.
+    """
+    if max_dte is None or int(max_dte) < int(min_dte):
+        return max_dte
+    today = datetime.fromtimestamp(time.time() if now is None else now, ET).date()
+    window = [today + timedelta(days=day) for day in range(int(min_dte), int(max_dte) + 1)]
+    if any(day.weekday() < 5 for day in window):
+        return int(max_dte)
+    rolled = int(max_dte)
+    while (today + timedelta(days=rolled)).weekday() >= 5:
+        rolled += 1
+    return rolled
 
 
 def _wall_option_expiry(
@@ -875,15 +902,10 @@ class TradePrefetcher:
             max_dte=self._option_expiry_max_dte(),
             strict=True,
         )
-        if preferred_expiry is None:
-            # Strict 9-10 DTE: no listed expiry in the window means no chain
-            # to trade — the engine must not fall back to another expiry.
-            self.option_expiry = None
-            self.option_expiry_mode = preferred_mode
-            self.option_expiries = set()
-            self.option_tickers = []
-            self.last_option_refresh = time.time()
-            return
+        # Strict 9-10 DTE: no listed expiry in the window means no new-entry
+        # chain (preferred_expiry is None) — the engine must not fall back to
+        # another expiry. Open positions' locked contracts and the wall chain
+        # stay subscribed regardless, so exit tracking never goes blind.
         locked_expiries = {
             expiry
             for signal in previous_lanes.values()
@@ -895,7 +917,10 @@ class TradePrefetcher:
             min_dte=int(getattr(self.args, "wall_option_expiry_dte", 0) or 0),
         )
         self.wall_option_expiry = wall_expiry
-        desired_expiries = {preferred_expiry, *locked_expiries}
+        desired_expiries = {
+            *({preferred_expiry} if preferred_expiry else set()),
+            *locked_expiries,
+        }
         if wall_expiry:
             desired_expiries = {*desired_expiries, wall_expiry}
         strike_count = (
@@ -921,7 +946,11 @@ class TradePrefetcher:
             _contract("SPY", expiry, strike, right, chain.tradingClass)
             for expiry, strike, right in sorted(contract_specs)
         ]
-        qualified = [contract for contract in self.ib.qualifyContracts(*contracts) if _con_id(contract)]
+        qualified = (
+            [contract for contract in self.ib.qualifyContracts(*contracts) if _con_id(contract)]
+            if contracts
+            else []
+        )
         old_by_con_id = {
             _con_id(ticker.contract): ticker
             for ticker in self.option_tickers
@@ -986,7 +1015,7 @@ class TradePrefetcher:
         }
 
     def _options_need_recenter(self) -> bool:
-        if not self.option_tickers or self.option_anchor_spot is None or self.option_expiry is None:
+        if not self.option_tickers or self.option_anchor_spot is None:
             return True
         signal = _read_gex(self.args.output_dir / "signal.json")
         previous_lanes = _previous_strategy_lanes(
@@ -1119,7 +1148,9 @@ class TradePrefetcher:
             "expiry": self.option_expiry,
             "expiry_mode": self.option_expiry_mode,
             "min_dte": self._option_expiry_dte(),
-            "max_dte": self._option_expiry_max_dte(),
+            "max_dte": _swing_window_max_dte(
+                self._option_expiry_dte(), self._option_expiry_max_dte(), generated_at
+            ),
             "contracts": [
                 contract
                 for contract in option_contracts

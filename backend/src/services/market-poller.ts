@@ -378,20 +378,16 @@ export class MarketPoller {
    * an unprotected position.
    */
   private async checkStrategyPositionWatchdog(positions: any[], now: Date): Promise<void> {
-    const managed = positions.filter((p: any) => p?.strategy_managed === true && String(p.status || '').toUpperCase() === 'OPEN');
+    const managed = positions.filter((p: any) => p?.strategy_managed === true
+      && p?.is_simulated !== true
+      && String(p.status || '').toUpperCase() === 'OPEN');
     if (!managed.length) return;
     if (!this.isMarketOpen(now)) return;
     const exitHealth = (this.fastify as any).liveExitMonitor?.getHealth?.();
     const monitorBlind = !exitHealth || exitHealth.status !== 'UP';
-    const staleSyncMs = 10 * 60_000;
     for (const pos of managed) {
-      const lastSync = pos.last_broker_sync_at ? new Date(pos.last_broker_sync_at).getTime() : 0;
-      const syncStale = !lastSync || now.getTime() - lastSync > staleSyncMs;
-      if (!monitorBlind && !syncStale) continue;
-      const why = [
-        monitorBlind ? `exit monitor ${exitHealth?.status || 'unavailable'}` : null,
-        syncStale ? 'broker sync stale' : null,
-      ].filter(Boolean).join(' + ');
+      const why = this.strategyWatchdogReason(pos, monitorBlind ? String(exitHealth?.status || 'unavailable') : null, now);
+      if (!why) continue;
       this.fastify.log.error(`[MarketPoller] WATCHDOG: strategy position ${pos.id} (${pos.symbol}) is OPEN but ${why} — trailing protection may be blind`);
       await new DiscordAlertService(this.fastify).send({
         userId: Number(pos.user_id),
@@ -405,6 +401,31 @@ export class MarketPoller {
       }).catch(() => undefined);
     }
   }
+
+  /**
+   * Why a strategy position is unprotected, or null when it is covered.
+   * Broker sync only touches positions with order work outstanding (partial
+   * entry, reconcile, pending exit/trim), so last_broker_sync_at is a
+   * freshness signal for those alone — a filled OPEN position with no working
+   * order is never synced and must not page as "stale" for its whole hold.
+   */
+  private strategyWatchdogReason(position: any, monitorBlindStatus: string | null, now: Date): string | null {
+    const executionStatus = String(position.execution_status || '').toUpperCase();
+    const awaitingBroker = MarketPoller.BROKER_SYNC_EXECUTION_STATUSES.has(executionStatus)
+      || executionStatus.startsWith('EXIT_');
+    const lastSync = position.last_broker_sync_at ? new Date(position.last_broker_sync_at).getTime() : 0;
+    const syncStale = awaitingBroker && (!lastSync || now.getTime() - lastSync > 10 * 60_000);
+    const why = [
+      monitorBlindStatus ? `exit monitor ${monitorBlindStatus}` : null,
+      syncStale ? 'broker sync stale' : null,
+    ].filter(Boolean).join(' + ');
+    return why || null;
+  }
+
+  // Execution statuses the SnapTrade pending-order sync refreshes (mirrors its query).
+  private static readonly BROKER_SYNC_EXECUTION_STATUSES = new Set([
+    'PARTIALLY_FILLED', 'PENDING_RECONCILE', 'ENTRY_RECONCILE_REQUIRED', 'ENTRY_STALE', 'PENDING_EXIT', 'PENDING_TRIM'
+  ]);
 
   private getExpiryExitAssessment(position: any, now: Date = new Date()): {
     triggered: boolean;

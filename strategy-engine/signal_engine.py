@@ -4466,7 +4466,29 @@ def build_signal(
         if prior_position_open and _number(last_trusted_tracking_at)
         else 0.0
     )
-    if prior_position_open and processing_gap_seconds > max_tracking_gap_seconds:
+    position_dte = (
+        _option_dte_days(
+            (refreshed_position_option or (previous_setup or {}).get("option") or {}).get("expiry"),
+            now,
+        )
+        if prior_position_open
+        else None
+    )
+    # Swing profile: a position whose contract is more than
+    # intraday_flatten_max_dte days from expiry rides overnight, so a tracking
+    # gap spanning the close (hours) is expected, not a stale lifecycle. Its
+    # exits are owned by the backend trailing stop / invalidation / max-hold;
+    # the engine resumes tracking on current data instead of aborting.
+    # Unparseable DTE fails safe toward the historical abort.
+    swing_carry = (
+        position_dte is not None and position_dte > int(intraday_flatten_max_dte)
+    )
+    if prior_position_open and swing_carry and processing_gap_seconds > max_tracking_gap_seconds:
+        result.setdefault("warnings", []).append(
+            f"swing position tracking resumed after a {processing_gap_seconds:.0f}s gap "
+            f"({position_dte} DTE carried overnight)"
+        )
+    if prior_position_open and not swing_carry and processing_gap_seconds > max_tracking_gap_seconds:
         gap_setup = (
             result["call_setup"]
             if previous_side == "calls"
@@ -4523,19 +4545,12 @@ def build_signal(
             f"{max_tracking_gap_seconds:g}s; stale lifecycle closed"
         ]
         return _dedupe_messages(result)
-    position_dte = (
-        _option_dte_days((refreshed_position_option or {}).get("expiry"), now)
-        if prior_position_open
-        else None
-    )
     # Swing profile: the intraday mandatory flatten only applies to positions
     # whose contracts are near expiry (DTE <= intraday_flatten_max_dte). A 9-10
     # DTE position rides overnight and is managed by its trailing stop,
     # invalidation level, and max-hold instead. Unparseable DTE fails safe
     # toward the historical behavior (flatten).
-    flatten_exempt = (
-        position_dte is not None and position_dte > int(intraday_flatten_max_dte)
-    )
+    flatten_exempt = swing_carry
     if flatten_exempt:
         result.setdefault("warnings", []).append(
             f"swing position kept overnight: {position_dte} DTE exceeds the "

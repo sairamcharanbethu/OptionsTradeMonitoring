@@ -578,6 +578,13 @@ const ensureSchema = async (instance: any) => {
     await instance.pg.query(`CREATE INDEX IF NOT EXISTS idx_paper_baseline_account_status ON paper_baseline_trades (account_id, status, created_at DESC);`);
     await instance.pg.query(`ALTER TABLE paper_orders ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING';`);
     await instance.pg.query(`ALTER TABLE paper_trade_journal ADD COLUMN IF NOT EXISTS strategy_name VARCHAR(50) NOT NULL DEFAULT 'DAY_TRADING';`);
+    // Paper lanes share one account: decision/order uniqueness is per strategy,
+    // so the DAY_TRADING and SWING lanes can each record their own verdict and
+    // orders on the same setup instead of silently blocking each other.
+    await instance.pg.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_decisions_account_setup_strategy ON paper_trade_decisions (account_id, setup_id, strategy_name);`);
+    await instance.pg.query(`ALTER TABLE paper_trade_decisions DROP CONSTRAINT IF EXISTS paper_trade_decisions_account_id_setup_id_key;`);
+    await instance.pg.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_orders_account_setup_intent_strategy ON paper_orders (account_id, setup_id, intent, strategy_name);`);
+    await instance.pg.query(`ALTER TABLE paper_orders DROP CONSTRAINT IF EXISTS paper_orders_account_id_setup_id_intent_key;`);
 
     // 3. Ensure all extra columns are added to positions table
     const columns = [
@@ -653,23 +660,27 @@ const ensureSchema = async (instance: any) => {
     // A pre-existing duplicate (from before the guard) must not break boot:
     // the index is created only when the table is clean, otherwise the
     // duplicate is logged loudly for the operator to reconcile.
+    // The slot covers PENDING_ORDER too: an entry still working at the broker
+    // occupies it, so a second setup cannot submit while the first is pending.
     try {
       const dupes = await instance.pg.query(`
         SELECT user_id, COUNT(*) AS n
         FROM positions
-        WHERE strategy_managed = TRUE AND status = 'OPEN'
+        WHERE strategy_managed = TRUE AND status IN ('OPEN', 'PENDING_ORDER')
         GROUP BY user_id HAVING COUNT(*) > 1
       `);
       if ((dupes.rows?.length || 0) > 0) {
         instance.log.error(
-          `[Schema] Duplicate open strategy positions found for user(s) ${dupes.rows.map((r: any) => r.user_id).join(', ')} — uq_positions_swing_slot NOT created. Reconcile manually, then restart.`
+          `[Schema] Duplicate open/pending strategy positions found for user(s) ${dupes.rows.map((r: any) => r.user_id).join(', ')} — uq_positions_swing_slot_active NOT created. Reconcile manually, then restart.`
         );
       } else {
         await instance.pg.query(`
-          CREATE UNIQUE INDEX IF NOT EXISTS uq_positions_swing_slot
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_positions_swing_slot_active
           ON positions (user_id)
-          WHERE strategy_managed = TRUE AND status = 'OPEN';
+          WHERE strategy_managed = TRUE AND status IN ('OPEN', 'PENDING_ORDER');
         `);
+        // Superseded by the _active index (OPEN-only predicate).
+        await instance.pg.query(`DROP INDEX IF EXISTS uq_positions_swing_slot;`);
       }
     } catch (err: any) {
       instance.log.warn(`[Schema] Swing-slot backstop index check failed: ${err.message || String(err)}`);

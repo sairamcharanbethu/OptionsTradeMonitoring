@@ -825,7 +825,7 @@ export class PaperTradingService {
       return;
     }
     const existing = await (this.fastify as any).pg.query(
-      'SELECT id FROM paper_trade_decisions WHERE account_id = $1 AND setup_id = $2', [ACCOUNT_ID, setupId]
+      'SELECT id FROM paper_trade_decisions WHERE account_id = $1 AND setup_id = $2 AND strategy_name = $3', [ACCOUNT_ID, setupId, STRATEGY_NAME]
     );
     if (existing.rows.length > 0) return;
     const today = ET_DATE.format(new Date());
@@ -958,7 +958,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
          ai_requested, ai_reasons, prompt_tokens, completion_tokens, total_tokens,
          rationale, risk_flags, evidence, strategy_name
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
-       ON CONFLICT (account_id, setup_id) DO NOTHING RETURNING *`,
+       ON CONFLICT (account_id, setup_id, strategy_name) DO NOTHING RETURNING *`,
       [ACCOUNT_ID, setupId, signalRow.rows[0]?.id || null, bounded.decision, bounded.riskTier, bounded.exitProfile,
         bounded.source, quantity, sizing.maxAffordable, 0, protectedLimit,
         settings.ai_model || null, PROMPT_VERSION,
@@ -1009,7 +1009,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            account_id, decision_id, setup_id, signal_id, intent, action, status, osi_ticker,
            option_type, strike, expiration, quantity, limit_price, reserved_debit, quote_snapshot, expires_at, strategy_name
          ) VALUES ($1,$2,$3,$4,'ENTRY','BUY_TO_OPEN','PENDING',$5,$6,$7,$8,$9,$10,$11,$12,NOW() + INTERVAL '60 seconds',$13)
-         ON CONFLICT (account_id, setup_id, intent) DO NOTHING RETURNING id`,
+         ON CONFLICT (account_id, setup_id, intent, strategy_name) DO NOTHING RETURNING id`,
         [ACCOUNT_ID, decisionRow.id, setupId, decisionRow.signal_id, option.local_symbol, side, Number(option.strike), expiry,
           quantity, protectedLimit, reservedDebit, JSON.stringify({ bid, ask, mid, quoteAgeSeconds }), STRATEGY_NAME]
       );
@@ -1526,6 +1526,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const setupId = this.paperLedgerSetupId(position);
     const ledgerPosition = { ...position, strategy_setup_id: setupId };
     const analysis = this.paperAnalysis(position.analysis_data);
+    // Every paper lane closes through here; lock and book under the position's own lane.
+    const strategyName = String(position.paper_strategy || STRATEGY_NAME);
     const client = await (this.fastify as any).pg.connect();
     let closeStage = 'BEGIN';
     try {
@@ -1534,7 +1536,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       const lockedPosition = await client.query(
         `SELECT quantity, status, realized_pnl FROM positions
          WHERE id=$1 AND paper_account_id=$2 AND paper_strategy=$3 FOR UPDATE`,
-        [position.id, ACCOUNT_ID, STRATEGY_NAME]
+        [position.id, ACCOUNT_ID, strategyName]
       );
       if (lockedPosition.rows[0]?.status !== 'OPEN') {
         await client.query('ROLLBACK');
@@ -1552,10 +1554,10 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            account_id, decision_id, position_id, setup_id, signal_id, intent, action, status,
            osi_ticker, option_type, strike, expiration, quantity, fill_price, quote_snapshot, filled_at, strategy_name
          ) VALUES ($1,$2,$3,$4,$5,$6,'SELL_TO_CLOSE','FILLED',$7,$8,$9,$10,$11,$12,$13,NOW(),$14)
-         ON CONFLICT (account_id, setup_id, intent) DO NOTHING RETURNING id`,
+         ON CONFLICT (account_id, setup_id, intent, strategy_name) DO NOTHING RETURNING id`,
         [ACCOUNT_ID, position.paper_decision_id, position.id, setupId, position.signal_id, intent,
           this.osiTicker(position), position.option_type, Number(position.strike_price), this.normalizeExpiry(position.expiration_date), closeQty, bid,
-          JSON.stringify({ bid, underlyingPrice: position.underlying_price, ...exitMetadata }), STRATEGY_NAME]
+          JSON.stringify({ bid, underlyingPrice: position.underlying_price, ...exitMetadata }), strategyName]
       );
       if (!inserted.rows[0]) {
         await client.query('ROLLBACK');
@@ -1841,7 +1843,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
   private exitAlertType(intent: string): string {
     if (intent === 'TARGET_1_TRIM' || intent === 'TARGET_1') return 'TP1';
     if (intent === 'TARGET_2') return 'TP2';
-    if (intent === 'TRAILING_STOP') return 'TRAILING_STOP';
+    if (intent === 'TRAILING_STOP' || intent === 'SWING_TRAILING_STOP') return 'TRAILING_STOP';
+    if (intent === 'SWING_EXPIRY_EXIT' || intent === 'SWING_MAX_HOLD') return 'EXIT';
     if (['END_OF_DAY', 'END_OF_DAY_RECOVERY', 'EXPIRED_RECOVERY'].includes(intent)) return 'EOD';
     if (intent === 'STRATEGY_TERMINAL' || intent === 'MANUAL_EXIT' || intent === 'MANUAL_FORCE_EXIT') return 'EXIT';
     return 'SL';
@@ -1867,7 +1870,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
          message, premium, underlying_price, quantity, metadata, strategy_name
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [ACCOUNT_ID, setupId, decisionId, positionId, eventType, policyVersion, message, premium,
-        source?.underlying_price || null, metadata.quantity ?? source?.quantity ?? null, JSON.stringify(metadata), STRATEGY_NAME]
+        source?.underlying_price || null, metadata.quantity ?? source?.quantity ?? null, JSON.stringify(metadata),
+        source?.paper_strategy || source?.strategy_name || STRATEGY_NAME]
     );
   }
 
@@ -2027,6 +2031,28 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     return Number(rows[0]?.n || 0);
   }
 
+  /** Live premium stop for strategy entries: paper_policy.premium_stop_pct, else 20%. */
+  public static swingPremiumStop(fillPrice: number, signal: Record<string, any>): number {
+    const configured = Number(signal?.paper_policy?.premium_stop_pct);
+    const pct = Number.isFinite(configured) && configured > 0 && configured < 100 ? configured : 20;
+    return Number((fillPrice * (1 - pct / 100)).toFixed(2));
+  }
+
+  /**
+   * Upper swing DTE bound, mirroring the prefetch service: 10, unless every
+   * day of the 9–10 window is a weekend (Thursdays), in which case it rolls
+   * to the next weekday so the Monday expiry (11 DTE) is tradable.
+   */
+  public static swingMaxDte(date: Date = new Date()): number {
+    const today = Date.parse(`${ET_DATE.format(date)}T12:00:00Z`);
+    const weekday = (days: number) => new Date(today + days * 86400000).getUTCDay();
+    const isWeekend = (days: number) => weekday(days) === 0 || weekday(days) === 6;
+    if (!isWeekend(9) || !isWeekend(10)) return 10;
+    let max = 10;
+    while (isWeekend(max)) max += 1;
+    return max;
+  }
+
   public static swingDte(expiry: string | null, date: Date = new Date()): number | null {
     if (!expiry) return null;
     const today = ET_DATE.format(date);
@@ -2053,8 +2079,9 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const bid = Number(option.bid);
     const ask = Number(option.ask);
     const quoteAgeSeconds = option.quote_age_seconds == null ? NaN : Number(option.quote_age_seconds);
-    if (dte == null || dte < 9 || dte > 10) {
-      return { entered: false, reason: `Swing DTE ${dte ?? 'unknown'} outside 9–10 window` };
+    const maxDte = PaperTradingService.swingMaxDte();
+    if (dte == null || dte < 9 || dte > maxDte) {
+      return { entered: false, reason: `Swing DTE ${dte ?? 'unknown'} outside 9–${maxDte} window` };
     }
     if (option.eligible !== true || !Number.isFinite(bid) || bid <= 0 || !Number.isFinite(ask) || ask <= 0 || ask < bid
       || !Number.isFinite(quoteAgeSeconds) || quoteAgeSeconds < 0 || quoteAgeSeconds > 15
@@ -2109,7 +2136,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            rationale, risk_flags, evidence, strategy_name
          ) VALUES ($1,$2,$3,'TRADE',$4,'SWING_HOLD','AI',$5,$5,0,$6,$7,$8,$9,15,
            TRUE,'[]',0,0,0,$10,'[]',$11,$12)
-         ON CONFLICT (account_id, setup_id) DO NOTHING RETURNING *`,
+         ON CONFLICT (account_id, setup_id, strategy_name) DO NOTHING RETURNING *`,
         [ACCOUNT_ID, setupId, signalRow.rows[0]?.id || null, aiVerdict.riskTier, 1, fillPrice,
           null, PROMPT_VERSION, PAPER_POLICY_VERSION,
           `Swing shadow entry — AI ${aiVerdict.decision} via ${aiVerdict.source}: ${aiVerdict.rationale}`,
@@ -2134,7 +2161,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            ) VALUES (NULL,'SPY',$1,$2,$3,$4,1,$5,$4,$4,15,'OPEN',TRUE,$6,'system_paper','FILLED',1,
                    'BUY_TO_OPEN','SELL_TO_CLOSE',$7,$8,$9,$10,$11,'signal-only-v2','ACTIVE',$12,TRUE,$6,$13,$14,$15,$16)
          RETURNING *`,
-        [side, Number(option.strike), expiry, fillPrice, Number((fillPrice * 0.5).toFixed(2)),
+        [side, Number(option.strike), expiry, fillPrice, PaperTradingService.swingPremiumStop(fillPrice, signal),
           ACCOUNT_ID, setup.invalidation || null, targets[0] || null, targets[1] || targets[0] || null,
           decisionRow.signal_id, setupId, JSON.stringify(signal), decisionRow.id,
           PAPER_STRATEGIES.SWING,
@@ -2172,11 +2199,14 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
   }
 
   /**
-   * Manage open SWING paper positions: exit at ≤2 DTE, at the 7-calendar-day
-   * max hold, or on a 15% synthetic trailing stop from the premium peak —
-   * tightened by the profit-lock ladder (breakeven once the peak prints +20%,
-   * +25% locked once it prints +50%) so stalled winners exit flat or better.
-   * Runs on every strategy snapshot so exits stay timely.
+   * Manage open SWING paper positions with the live swing exit rules
+   * (market-poller): out at ≤2 DTE or the 7-calendar-day max hold; an
+   * underlying break of the setup invalidation exits at once; before the
+   * trail arms the premium stop (stop_loss_trigger) protects; the 15%
+   * synthetic trail arms only at TP1 (underlying) or once the profit-lock
+   * ladder engages (+20% premium peak), floored at entry or the lock rung.
+   * Runs on every strategy snapshot. Without a usable bid nothing is closed —
+   * a missing quote must never book a $0 fill; the next snapshot retries.
    */
   public async manageSwingExits(signal: Record<string, any>): Promise<void> {
     const { rows } = await (this.fastify as any).pg.query(
@@ -2184,6 +2214,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
        WHERE p.paper_account_id=$1 AND p.paper_strategy=$2 AND p.status='OPEN'`,
       [ACCOUNT_ID, PAPER_STRATEGIES.SWING]
     );
+    const spot = Number(signal?.spot);
+    const underlying = Number.isFinite(spot) && spot > 0 ? spot : null;
     for (const position of rows) {
       const expiry = this.normalizeExpiry(position.expiration_date);
       const dte = PaperTradingService.swingDte(expiry);
@@ -2199,32 +2231,76 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       } catch (error: any) {
         this.fastify.log.warn(`[PaperTrading] Swing exit quote failed for position ${position.id}: ${error.message || String(error)}`);
       }
-      if (dte != null && dte <= 2) {
-        await this.closePaperQuantity(position, Number(position.quantity), bid, 'SWING_EXPIRY_EXIT', { dte });
+      if (!(bid > 0)) {
+        if ((dte != null && dte <= 2) || holdDays >= 7) {
+          this.fastify.log.warn(`[PaperTrading] Swing position ${position.id} is due to exit but has no usable bid — retrying on the next snapshot`);
+        }
         continue;
       }
-      if (holdDays >= 7) {
-        await this.closePaperQuantity(position, Number(position.quantity), bid, 'SWING_MAX_HOLD', { holdDays });
-        continue;
-      }
-      if (!(bid > 0)) continue;
-      const entry = Number(position.entry_price || 0);
-      const peak = Math.max(Number(position.trailing_high_price || 0), entry, bid);
-      if (peak !== Number(position.trailing_high_price || 0)) {
+      const exitPosition = { ...position, underlying_price: underlying ?? position.underlying_price };
+      const decision = PaperTradingService.swingExitDecision(position, bid, underlying, dte, holdDays);
+      if (decision.peak !== Number(position.trailing_high_price || 0) || decision.armNow) {
+        const analysis = this.paperAnalysis(position.analysis_data);
+        if (decision.armNow) analysis.swingTrailArmedAt = new Date().toISOString();
+        position.analysis_data = analysis;
+        exitPosition.analysis_data = analysis;
         await (this.fastify as any).pg.query(
-          `UPDATE positions SET trailing_high_price=$1, current_price=$2, updated_at=NOW() WHERE id=$3`,
-          [peak, bid, position.id]
+          `UPDATE positions SET trailing_high_price=$1, current_price=$2, analysis_data=$3, updated_at=NOW() WHERE id=$4`,
+          [decision.peak, bid, JSON.stringify(analysis), position.id]
         );
       }
-      const lockFloor = StopLossEngine.profitLockFloor(entry, peak);
-      const stopPrice = Math.max(peak * 0.85, lockFloor);
-      if (bid <= stopPrice) {
-        await this.closePaperQuantity({ ...position, trailing_high_price: peak }, Number(position.quantity), bid, 'SWING_TRAILING_STOP', {
-          peak: Number(peak.toFixed(2)),
-          stopPct: 15,
-          profitLock: lockFloor > 0 ? Number(lockFloor.toFixed(2)) : null
-        });
-      }
+      if (!decision.intent) continue;
+      await this.closePaperQuantity(
+        { ...exitPosition, trailing_high_price: decision.peak },
+        Number(position.quantity),
+        bid,
+        decision.intent,
+        decision.metadata
+      );
     }
+  }
+
+  /** Pure swing exit rule set (see manageSwingExits); exported for tests. */
+  public static swingExitDecision(
+    position: any,
+    bid: number,
+    underlying: number | null,
+    dte: number | null,
+    holdDays: number
+  ): { intent: string | null; peak: number; armNow: boolean; metadata: Record<string, any> } {
+    const entry = Number(position.entry_price || 0);
+    const peak = Math.max(Number(position.trailing_high_price || 0), entry, bid);
+    const isCall = String(position.option_type || '').toUpperCase() === 'CALL';
+    const crossed = (level: any, towardProfit: boolean) => {
+      const value = Number(level);
+      if (underlying == null || !(value > 0)) return false;
+      return (isCall === towardProfit) ? underlying >= value : underlying <= value;
+    };
+    if (dte != null && dte <= 2) return { intent: 'SWING_EXPIRY_EXIT', peak, armNow: false, metadata: { dte } };
+    if (holdDays >= 7) return { intent: 'SWING_MAX_HOLD', peak, armNow: false, metadata: { holdDays } };
+    if (crossed(position.suggested_stop_loss, false)) {
+      return { intent: 'SWING_INVALIDATION', peak, armNow: false, metadata: { underlying, invalidation: Number(position.suggested_stop_loss) } };
+    }
+    const analysis = typeof position.analysis_data === 'string'
+      ? (() => { try { return JSON.parse(position.analysis_data) || {}; } catch { return {}; } })()
+      : (position.analysis_data || {});
+    const lockFloor = StopLossEngine.profitLockFloor(entry, peak);
+    const alreadyArmed = Boolean(analysis.swingTrailArmedAt);
+    const armed = alreadyArmed || lockFloor > 0 || crossed(position.suggested_take_profit_1, true);
+    if (armed) {
+      const floor = lockFloor > 0 ? lockFloor : entry;
+      const stopPrice = Math.max(peak * 0.85, floor);
+      return {
+        intent: bid <= stopPrice ? 'SWING_TRAILING_STOP' : null,
+        peak,
+        armNow: !alreadyArmed,
+        metadata: { peak: Number(peak.toFixed(2)), stopPct: 15, floor: Number(floor.toFixed(2)), profitLock: lockFloor > 0 ? Number(lockFloor.toFixed(2)) : null }
+      };
+    }
+    const premiumStop = Number(position.stop_loss_trigger || 0);
+    if (premiumStop > 0 && bid <= premiumStop) {
+      return { intent: 'SWING_PREMIUM_STOP', peak, armNow: false, metadata: { premiumStop } };
+    }
+    return { intent: null, peak, armNow: false, metadata: {} };
   }
 }

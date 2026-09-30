@@ -732,3 +732,85 @@ class ConIdGuardTests(unittest.TestCase):
 
     def test_qualified_contract_yields_int(self):
         self.assertEqual(trade_prefetch_service._con_id(SimpleNamespace(conId=756733)), 756733)
+
+
+class SwingWindowRefreshTests(unittest.TestCase):
+    """Strict 9-10 DTE window: Thursday has no weekday in the window, and an
+    empty window must never drop an open position's contract subscription."""
+
+    ET = ZoneInfo("America/New_York")
+
+    def test_thursday_window_rolls_to_monday(self):
+        thursday = datetime(2026, 10, 1, 10, 0, tzinfo=self.ET).timestamp()
+        wednesday = datetime(2026, 9, 30, 10, 0, tzinfo=self.ET).timestamp()
+        self.assertEqual(trade_prefetch_service._swing_window_max_dte(9, 10, thursday), 11)
+        self.assertEqual(trade_prefetch_service._swing_window_max_dte(9, 10, wednesday), 10)
+        # Monday 2026-10-12 is 11 DTE from Thursday 2026-10-01.
+        self.assertEqual(
+            _preferred_option_expiry(["20261009", "20261012"], thursday, min_dte=9, max_dte=10, strict=True),
+            ("20261012", "MULTI_DAY_9DTE_WEEKEND_ROLL"),
+        )
+        # Wednesday keeps the strict window (Friday 9 DTE is listed).
+        self.assertEqual(
+            _preferred_option_expiry(["20261009", "20261012"], wednesday, min_dte=9, max_dte=10, strict=True),
+            ("20261009", "MULTI_DAY_9DTE"),
+        )
+
+    def _prefetcher(self, output_dir, expirations):
+        prefetcher = trade_prefetch_service.TradePrefetcher.__new__(trade_prefetch_service.TradePrefetcher)
+        prefetcher.stocks = {"SPY": SimpleNamespace(conId=756733, secType="STK")}
+        prefetcher.option_chain = SimpleNamespace(
+            expirations=set(expirations), strikes=[99.0, 100.0, 101.0], tradingClass="SPY"
+        )
+        prefetcher.args = SimpleNamespace(
+            output_dir=output_dir, strikes_per_side=1, local_gex_fallback=False,
+            local_gex_strikes_per_side=1, wall_option_expiry_dte=0, option_recenter=2.0,
+        )
+        prefetcher._option_anchor_price = Mock(return_value=100.0)
+        prefetcher.ib = Mock()
+        prefetcher.ib.qualifyContracts.side_effect = lambda *contracts: [
+            SimpleNamespace(**vars(c), conId=abs(hash((c.expiry, c.strike, c.right))) or 1) for c in contracts
+        ]
+        prefetcher.ib.reqMktData.side_effect = lambda contract, *args: SimpleNamespace(contract=contract)
+        return prefetcher
+
+    def test_empty_window_keeps_open_position_contract_and_cancels_the_rest(self):
+        thursday = datetime(2026, 10, 1, 10, 0, tzinfo=self.ET).timestamp()
+        active = {
+            "state": "ACTIVE",
+            "strategy": "CONTINUATION",
+            "favoring": "calls",
+            "call_setup": {"option": {"expiry": "20261009", "strike": 100.0, "right": "C"}},
+        }
+        stale = SimpleNamespace(contract=SimpleNamespace(conId=42, expiry="20261001"))
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            (output_dir / "signal.json").write_text(json.dumps(active))
+            # Nothing listed in (or rolled into) the window: only Fri 8 DTE.
+            prefetcher = self._prefetcher(output_dir, ["20261009"])
+            prefetcher.option_tickers = [stale]
+            fake_contract = lambda symbol, expiry, strike, right, trading_class: SimpleNamespace(
+                expiry=expiry, strike=strike, right=right
+            )
+            with patch("trade_prefetch_service.time.time", return_value=thursday), \
+                    patch("trade_prefetch_service._contract", side_effect=fake_contract):
+                prefetcher._refresh_options()
+        self.assertIsNone(prefetcher.option_expiry)
+        self.assertEqual(prefetcher.option_expiries, {"20261009"})
+        subscribed = {(t.contract.expiry, t.contract.strike, t.contract.right) for t in prefetcher.option_tickers}
+        self.assertIn(("20261009", 100.0, "C"), subscribed)
+        prefetcher.ib.cancelMktData.assert_called_once_with(stale.contract)
+
+    def test_empty_window_with_no_positions_cancels_everything(self):
+        thursday = datetime(2026, 10, 1, 10, 0, tzinfo=self.ET).timestamp()
+        stale = SimpleNamespace(contract=SimpleNamespace(conId=42))
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            (output_dir / "signal.json").write_text(json.dumps({"state": "WAIT"}))
+            prefetcher = self._prefetcher(output_dir, ["20261009"])
+            prefetcher.option_tickers = [stale]
+            with patch("trade_prefetch_service.time.time", return_value=thursday):
+                prefetcher._refresh_options()
+        self.assertEqual(prefetcher.option_tickers, [])
+        prefetcher.ib.qualifyContracts.assert_not_called()
+        prefetcher.ib.cancelMktData.assert_called_once_with(stale.contract)

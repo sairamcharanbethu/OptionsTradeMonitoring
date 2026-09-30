@@ -22,6 +22,8 @@ const ACTIVE_STATES = new Set(['ARMED', 'ACTIVE', 'MANAGE', 'EXTENDED']);
 const TERMINAL_STATES = new Set(['COMPLETED', 'INVALIDATED', 'TRACKING_ABORTED', 'FAILED']);
 const MAX_GEX_PROVIDER_AGE_SECONDS = 120;
 const MIN_PLAN_REWARD_RISK = 1.5;
+// strategy_ai_rechecks rows for the shared paper swing shadow (no real user).
+const PAPER_SWING_RECHECK_USER_ID = 0;
 
 export class StrategyEngineAdapter {
   private readonly mode: StrategyEngineMode = 'primary';
@@ -64,6 +66,11 @@ export class StrategyEngineAdapter {
   // change legitimately resets the hold. A 60s timer wakes due rows even when
   // no new engine event arrives, and rows survive backend restarts.
   private recheckTimer: NodeJS.Timeout | null = null;
+  // Users with an autonomous entry between the slot check and the position
+  // insert. The broker order is submitted before the row exists, so the DB
+  // slot index alone cannot stop two concurrent wakes (engine event + recheck
+  // sweep, or two lanes) from both reaching the broker.
+  private entryInFlightUsers = new Set<number>();
   // Live entries stay disabled until the exit monitor, order watchdog, and broker
   // sync loops are running. The adapter starts before them (to publish IBKR policy
   // early), and an autonomous short-dated entry must never fire while nothing is watching
@@ -1088,14 +1095,26 @@ export class StrategyEngineAdapter {
           await this.deleteAiRecheck(Number(row.user_id), String(row.plan_fingerprint), String(row.gate_mode));
           continue;
         }
-        await this.maybeExecuteAutonomousLiveEntries(signal, Number(row.signal_id) || 0);
+        const rowUserId = Number(row.user_id);
+        if (rowUserId === PAPER_SWING_RECHECK_USER_ID) {
+          // The paper shadow's hold re-drives the paper entry, never live.
+          const setupId = this.laneSetupIds[lane || this.strategyLane(signal)] || this.currentSetupId;
+          if (setupId) await this.maybeExecutePaperSwingEntry(signal, Number(row.signal_id) || 0, setupId);
+          else await this.deleteAiRecheck(rowUserId, String(row.plan_fingerprint), String(row.gate_mode));
+          continue;
+        }
+        await this.maybeExecuteAutonomousLiveEntries(signal, Number(row.signal_id) || 0, rowUserId);
       } catch (err: any) {
         this.fastify.log.warn(`[StrategyEngineAdapter] Recheck for user ${row.user_id} failed: ${err.message || String(err)}`);
       }
     }
   }
 
-  private async maybeExecuteAutonomousLiveEntries(signal: StrategySnapshot, signalId: number): Promise<void> {
+  /**
+   * `onlyUserId` scopes a recheck wake to the user whose hold came due, so one
+   * user's hold never re-drives the gate (and AI budget) for every live user.
+   */
+  private async maybeExecuteAutonomousLiveEntries(signal: StrategySnapshot, signalId: number, onlyUserId?: number): Promise<void> {
     if (String(signal.state || '') !== 'ACTIVE' || signal.lifecycle?.entry_allowed !== true) return;
     if (!this.liveEntriesReady) {
       this.lastAutonomousEntryResult = 'Blocked: exit-monitoring services are not running yet';
@@ -1110,14 +1129,12 @@ export class StrategyEngineAdapter {
         `Blocked: exit monitor ${exitHealth?.status || 'unavailable'}${exitHealth?.lastError ? ` (${exitHealth.lastError})` : ''} — entries resume when monitoring is healthy`;
       return;
     }
-    // Global kill switch (DB-backed, survives restarts): operator sets
-    // autonomous_live_entry_kill_switch=true on the global settings row to
-    // stop every autonomous entry immediately, regardless of per-user config.
-    const killSwitch = await (this.fastify as any).pg.query(
-      `SELECT value FROM settings WHERE user_id = 0 AND key = 'autonomous_live_entry_kill_switch' LIMIT 1`
-    ).then((r: any) => String(r.rows?.[0]?.value || '').toLowerCase() === 'true').catch(() => false);
+    // Global kill switch: the operator's live disarm (kill-switch / flatten-all
+    // routes, DB-backed, survives restarts) stops every autonomous entry before
+    // any AI call. Fails closed: an unreadable flag blocks entries.
+    const killSwitch = await KillSwitchService.isLiveTradingDisarmed((this.fastify as any).pg).catch(() => true);
     if (killSwitch) {
-      this.lastAutonomousEntryResult = 'Blocked: global kill switch engaged — autonomous entries halted';
+      this.lastAutonomousEntryResult = 'Blocked: live trading disarmed (global kill switch) — autonomous entries halted';
       return;
     }
     const entryWindow = this.autonomousEntryWindow();
@@ -1137,9 +1154,13 @@ export class StrategyEngineAdapter {
        WHERE key = 'autonomous_live_entry_enabled' AND value = 'true'`
     );
     if (!rows?.length) return;
+    const targetRows = onlyUserId === undefined
+      ? rows
+      : rows.filter((row: any) => Number(row.user_id) === onlyUserId);
+    if (!targetRows.length) return;
 
     const attemptedAt = new Date().toISOString();
-    const outcomes = await Promise.all(rows.map(async (row: any) => {
+    const outcomes = await Promise.all(targetRows.map(async (row: any) => {
       const userId = Number(row.user_id);
       if (!Number.isInteger(userId) || userId <= 0) return null;
       const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
@@ -1148,14 +1169,19 @@ export class StrategyEngineAdapter {
         return { userId, result: 'configuration incomplete' };
       }
 
+      if (this.entryInFlightUsers.has(userId)) {
+        return { userId, result: 'another autonomous entry is in flight — one position at a time' };
+      }
+      this.entryInFlightUsers.add(userId);
       try {
         // Deterministic gates first (so the model never sees a candidate that
         // would be rejected anyway), then the AI gate as the last check.
         await this.assertSignalExecutable(signalId);
         // Swing profile: one open strategy position per user at a time, one
-        // contract per trade. A second setup waits for the slot to free.
+        // contract per trade. A second setup waits for the slot to free. An
+        // entry still working at the broker (PENDING_ORDER) holds the slot too.
         const { rows: openPositions } = await (this.fastify as any).pg.query(
-          `SELECT id FROM positions WHERE user_id = $1 AND strategy_managed = TRUE AND status = 'OPEN' LIMIT 1`,
+          `SELECT id FROM positions WHERE user_id = $1 AND strategy_managed = TRUE AND status IN ('OPEN', 'PENDING_ORDER') LIMIT 1`,
           [userId]
         );
         if (openPositions?.length) {
@@ -1253,6 +1279,8 @@ export class StrategyEngineAdapter {
       } catch (err: any) {
         this.fastify.log.error(`[StrategyEngineAdapter] Autonomous entry failed for user ${userId}: ${err.message || String(err)}`);
         return { userId, result: `entry failed: ${err.message || String(err)}` };
+      } finally {
+        this.entryInFlightUsers.delete(userId);
       }
     }));
     const completed = outcomes.filter((outcome): outcome is { userId: number; result: string } => Boolean(outcome));
@@ -1281,11 +1309,9 @@ export class StrategyEngineAdapter {
       this.fastify.log.info(`[StrategyEngineAdapter] Paper swing entry blocked: exit monitor ${exitHealth?.status || 'unavailable'}`);
       return;
     }
-    const killSwitch = await (this.fastify as any).pg.query(
-      `SELECT value FROM settings WHERE user_id = 0 AND key = 'autonomous_live_entry_kill_switch' LIMIT 1`
-    ).then((r: any) => String(r.rows?.[0]?.value || '').toLowerCase() === 'true').catch(() => false);
+    const killSwitch = await KillSwitchService.isLiveTradingDisarmed((this.fastify as any).pg).catch(() => true);
     if (killSwitch) {
-      this.fastify.log.info('[StrategyEngineAdapter] Paper swing entry blocked: global kill switch engaged');
+      this.fastify.log.info('[StrategyEngineAdapter] Paper swing entry blocked: live trading disarmed (global kill switch)');
       return;
     }
     if (!this.autonomousEntryWindow().open) return;
@@ -1297,21 +1323,21 @@ export class StrategyEngineAdapter {
     const fingerprint = this.planFingerprint(signal);
     const gateMode = LiveAiGateService.mode(settings);
     if (fingerprint) {
-      const recheck = await this.getAiRecheck(0, fingerprint, gateMode).catch(() => null);
+      const recheck = await this.getAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => null);
       const recheckAt = recheck?.recheck_at ? new Date(recheck.recheck_at).getTime() : 0;
       if (recheckAt > Date.now()) return;
-      await this.deleteAiRecheck(0, fingerprint, gateMode).catch(() => undefined);
+      await this.deleteAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => undefined);
     }
     const halt = await KillSwitchService.evaluate((this.fastify as any).pg, 'paper').catch(() => null);
     if (halt?.halted) {
       this.fastify.log.info(`[StrategyEngineAdapter] Paper swing entry halted: ${halt.reason || 'kill switch engaged'}`);
       return;
     }
-    const verdict = await this.liveAiGate.decide({ userId: 0, signalId, signal, settings });
+    const verdict = await this.liveAiGate.decide({ userId: PAPER_SWING_RECHECK_USER_ID, signalId, signal, settings });
     if (verdict.blocks) {
       if (fingerprint) {
         await this.upsertAiRecheck({
-          userId: 0,
+          userId: PAPER_SWING_RECHECK_USER_ID,
           fingerprint,
           gateMode,
           signalId,
@@ -1327,7 +1353,7 @@ export class StrategyEngineAdapter {
       return;
     }
     if (fingerprint) {
-      await this.deleteAiRecheck(0, fingerprint, gateMode).catch(() => undefined);
+      await this.deleteAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => undefined);
     }
     const outcome = await paperTrading.createSwingEntry(signal, setupId, verdict);
     this.fastify.log.info(`[StrategyEngineAdapter] Paper swing entry ${outcome.entered ? 'FILLED' : 'skipped'}: ${outcome.reason}`);

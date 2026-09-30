@@ -683,6 +683,24 @@ async function testExpiryExitAssessment() {
   assert(noExpiry === null, 'A position with an unparseable expiry must not trigger the exit-before-expiry rule');
 }
 
+async function testStrategyWatchdogOnlyFlagsSyncForWorkingOrders() {
+  const poller = createPoller();
+  const now = new Date('2026-09-30T15:00:00.000Z');
+  const longAgo = '2026-09-28T15:00:00.000Z';
+  const filled = { status: 'OPEN', strategy_managed: true, execution_status: 'FILLED', last_broker_sync_at: longAgo };
+  assert(poller.strategyWatchdogReason(filled, null, now) === null,
+    'A filled swing position with no working order is not broker-synced and must not page as stale');
+  assert(poller.strategyWatchdogReason({ ...filled, last_broker_sync_at: null }, null, now) === null,
+    'A never-synced filled position is covered while the exit monitor is up');
+  assert(poller.strategyWatchdogReason(filled, 'DEGRADED', now) === 'exit monitor DEGRADED',
+    'A blind exit monitor must still page for a filled position');
+  const exiting = { ...filled, execution_status: 'PENDING_EXIT' };
+  assert(poller.strategyWatchdogReason(exiting, null, now) === 'broker sync stale',
+    'A pending exit whose broker sync went stale must page');
+  assert(poller.strategyWatchdogReason({ ...exiting, last_broker_sync_at: '2026-09-30T14:55:00.000Z' }, null, now) === null,
+    'A pending exit synced within 10 minutes is covered');
+}
+
 async function runTests() {
   console.log('Running MarketPoller tests...');
   await testUnderlyingStopDirection();
@@ -704,6 +722,7 @@ async function runTests() {
   await testExpiryExitAssessment();
   await testSimulatedExitPersistsFinalCheckpoint();
   await testExpiredPositionWithRejectedExitIsReconciled();
+  await testStrategyWatchdogOnlyFlagsSyncForWorkingOrders();
   console.log('All MarketPoller tests passed!');
 }
 
