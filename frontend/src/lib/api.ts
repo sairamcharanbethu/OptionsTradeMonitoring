@@ -862,8 +862,8 @@ export const api = {
     };
   },
 
-  async getTradeReport(range = '30d'): Promise<TradeReportResponse> {
-    const params = new URLSearchParams({ range, t: String(Date.now()) });
+  async getTradeReport(range = '30d', scope: 'paper' | 'live' = 'live'): Promise<TradeReportResponse> {
+    const params = new URLSearchParams({ range, scope, t: String(Date.now()) });
     const res = await authFetch(`${API_BASE}/trades/report?${params.toString()}`);
     if (!res.ok) throw new Error('Failed to fetch trade report');
     const data = await res.json();

@@ -103,7 +103,7 @@ export default function TradeIntelligencePage() {
     setError(null);
     try {
       const [reportData, alertData, metricsData] = await Promise.all([
-        api.getTradeReport(range),
+        api.getTradeReport(range, scope),
         api.getTradeAlerts(),
         api.getPerformanceMetrics(scope, daysForRange(range)).catch(() => null)
       ]);
