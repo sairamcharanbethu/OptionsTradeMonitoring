@@ -534,6 +534,10 @@ async function runTests() {
   await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 89);
   assert(autonomousCalls.length === 0, 'An AI gate SKIP must block every autonomous entry');
   assert(String(autonomousAdapter.lastAutonomousEntryResult).includes('AI gate') && String(autonomousAdapter.lastAutonomousEntryResult).includes('GEX conflicts'), 'The skip reason must be surfaced in the last-entry status');
+  // The test swaps the whole gate regime here (gate -> advisory), which in
+  // production arrives as a settings change; the adapter keys its red-setup
+  // re-review hold on fingerprint + gate mode, so the hold resets.
+  autonomousAdapter.pendingAiRecheck.clear();
   autonomousAdapter.liveAiGate = { decide: async () => gateVerdict({ mode: 'advisory', decision: 'SKIP', blocks: false }) };
   await autonomousAdapter.maybeExecuteAutonomousLiveEntries(autonomousAdapter.currentSignal, 90);
   const advisoryCalls = autonomousCalls.slice();

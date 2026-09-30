@@ -68,7 +68,7 @@ ET = ZoneInfo("America/New_York")
 # Same-day (0DTE) contracts are not traded. The primary chain is always at
 # least MIN_OPTION_EXPIRY_DTE calendar days out (setting strategy_option_expiry_dte, default 3).
 MIN_OPTION_EXPIRY_DTE = 1
-DEFAULT_OPTION_EXPIRY_DTE = 3
+DEFAULT_OPTION_EXPIRY_DTE = 9
 # One engine lane. The ORB_INDEX / VWAP_TREND family lanes were removed on
 # 2026-09-06 (ORB negative in every replay sample; VWAP no measured edge). The
 # lane-keyed JSON contract is kept so the backend adapter is unchanged.
@@ -454,18 +454,20 @@ def _locked_option_expiry(signal: dict[str, Any] | None) -> str | None:
 
 
 def _preferred_option_expiry(
-    expirations: list[str], now: float | None = None, min_dte: int = DEFAULT_OPTION_EXPIRY_DTE
+    expirations: list[str], now: float | None = None, min_dte: int = DEFAULT_OPTION_EXPIRY_DTE,
+    max_dte: int | None = None,
 ) -> tuple[str, str]:
     """Primary option expiry: never same-day.
 
-    The primary chain is the nearest listed expiry at least ``min_dte`` calendar
-    days out (floored at ``MIN_OPTION_EXPIRY_DTE``; the default deployment is 3),
-    mode ``MULTI_DAY_<n>DTE``. When no listed expiry reaches ``min_dte`` the
-    nearest expiry strictly after today is used, mode ``NEXT_LISTED_FALLBACK``.
+    The primary chain is the nearest listed expiry inside ``[min_dte, max_dte]``
+    calendar days out (``max_dte`` unset means no upper bound; the default
+    deployment targets the 9-10 DTE swing window), mode ``MULTI_DAY_<n>DTE``.
+    When no listed expiry reaches ``min_dte`` the nearest expiry strictly
+    after today is used, mode ``NEXT_LISTED_FALLBACK``.
     Today's expiry is never selected — 0DTE was removed on 2026-09-13.
     """
     min_dte = max(MIN_OPTION_EXPIRY_DTE, int(min_dte or 0))
-    multi_day = _wall_option_expiry(expirations, now, min_dte=min_dte)
+    multi_day = _wall_option_expiry(expirations, now, min_dte=min_dte, max_dte=max_dte)
     if multi_day:
         return multi_day, f"MULTI_DAY_{int(min_dte)}DTE"
     stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
@@ -480,9 +482,10 @@ def _preferred_option_expiry(
 
 
 def _wall_option_expiry(
-    expirations: list[str], now: float | None = None, min_dte: int = 3
+    expirations: list[str], now: float | None = None, min_dte: int = 3,
+    max_dte: int | None = None,
 ) -> str | None:
-    """Nearest listed expiry at least ``min_dte`` calendar days out.
+    """Nearest listed expiry inside ``[min_dte, max_dte]`` calendar days out.
 
     Wall-reaction setups trade near-the-money multi-day contracts (lower theta).
     Returns None when disabled (min_dte <= 0) or when no listed
@@ -497,8 +500,12 @@ def _wall_option_expiry(
             expiry_date = datetime.strptime(expiry, "%Y%m%d").date()
         except ValueError:
             continue
-        if (expiry_date - today).days >= min_dte:
-            return expiry
+        dte = (expiry_date - today).days
+        if dte < min_dte:
+            continue
+        if max_dte is not None and dte > int(max_dte):
+            continue
+        return expiry
     return None
 
 
@@ -528,6 +535,47 @@ def _policy_option_expiry_dte(policy: dict[str, Any] | None, default: int) -> in
     except (TypeError, ValueError):
         return fallback
     return dte if MIN_OPTION_EXPIRY_DTE <= dte <= 10 else fallback
+
+
+def _policy_option_expiry_max_dte(
+    policy: dict[str, Any] | None, default: int, min_dte: int
+) -> int:
+    """Primary-chain maximum DTE: backend policy.json ``option_expiry_max_dte``
+    wins over the CLI default. Never below ``min_dte`` (the window cannot
+    invert); out-of-range values fall back to the default."""
+    fallback = max(int(min_dte), int(default or 0))
+    value = (policy or {}).get("option_expiry_max_dte") if isinstance(policy, dict) else None
+    try:
+        dte = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    if not (MIN_OPTION_EXPIRY_DTE <= dte <= 31):
+        return fallback
+    return max(dte, int(min_dte))
+
+
+def _policy_int(
+    policy: dict[str, Any] | None, key: str, default: int, lo: int, hi: int
+) -> int:
+    """Backend policy.json integer knob wins over the default; out-of-range or
+    missing values fall back to the default."""
+    try:
+        value = int((policy or {}).get(key))
+    except (TypeError, ValueError):
+        return int(default)
+    return value if lo <= value <= hi else int(default)
+
+
+def _policy_float(
+    policy: dict[str, Any] | None, key: str, default: float, lo: float, hi: float
+) -> float:
+    """Backend policy.json float knob wins over the default; out-of-range or
+    missing values fall back to the default."""
+    try:
+        value = float((policy or {}).get(key))
+    except (TypeError, ValueError):
+        return float(default)
+    return value if lo <= value <= hi else float(default)
 
 
 def _con_id(contract: Any) -> int | None:
@@ -820,6 +868,7 @@ class TradePrefetcher:
         preferred_expiry, preferred_mode = _preferred_option_expiry(
             list(chain.expirations),
             min_dte=self._option_expiry_dte(),
+            max_dte=self._option_expiry_max_dte(),
         )
         locked_expiries = {
             expiry
@@ -895,6 +944,33 @@ class TradePrefetcher:
             policy, int(getattr(self.args, "option_expiry_dte", DEFAULT_OPTION_EXPIRY_DTE) or DEFAULT_OPTION_EXPIRY_DTE)
         )
 
+    def _option_expiry_max_dte(self) -> int:
+        policy = _read_policy(getattr(self.args, "policy_file", None))
+        return _policy_option_expiry_max_dte(
+            policy,
+            int(getattr(self.args, "option_expiry_max_dte", 10) or 10),
+            self._option_expiry_dte(),
+        )
+
+    def _option_selection_knobs(self) -> dict[str, Any]:
+        """Swing contract-selection knobs: backend policy.json wins over CLI defaults."""
+        policy = _read_policy(getattr(self.args, "policy_file", None))
+        args = self.args
+        return {
+            "option_min_offset": _policy_int(
+                policy, "option_min_offset", int(getattr(args, "option_min_offset", 0) or 0), -2, 2),
+            "option_target_delta": _policy_float(
+                policy, "option_target_delta", float(getattr(args, "option_target_delta", 0.50) or 0.50), 0.05, 0.95),
+            "option_preferred_offset": _policy_int(
+                policy, "option_preferred_offset", int(getattr(args, "option_preferred_offset", 0) or 0), -2, 6),
+            "option_max_otm_steps": _policy_int(
+                policy, "option_max_otm_steps", int(getattr(args, "option_max_otm_steps", 1) or 1), 0, 6),
+            "option_min_abs_delta": _policy_float(
+                policy, "option_min_abs_delta", float(getattr(args, "option_min_abs_delta", 0.40) or 0.40), 0.05, 0.95),
+            "intraday_flatten_max_dte": _policy_int(
+                policy, "intraday_flatten_max_dte", 1, 0, 31),
+        }
+
     def _options_need_recenter(self) -> bool:
         if not self.option_tickers or self.option_anchor_spot is None or self.option_expiry is None:
             return True
@@ -908,6 +984,7 @@ class TradePrefetcher:
         preferred_expiry, _ = _preferred_option_expiry(
             list(self.option_chain.expirations),
             min_dte=self._option_expiry_dte(),
+            max_dte=self._option_expiry_max_dte(),
         )
         desired_expiries = {
             preferred_expiry,
@@ -1177,8 +1254,7 @@ class TradePrefetcher:
                 option_max_total_debit_dollars=max_total_debit,
                 option_preferred_contracts=preferred_contracts,
                 option_limit_price_offset=self.args.option_limit_price_offset,
-                option_max_otm_steps=self.args.option_max_otm_steps,
-                option_min_abs_delta=self.args.option_min_abs_delta,
+                **self._option_selection_knobs(),
                 option_max_spread_pct=self.args.option_max_spread_pct,
                 session_policy=(
                     policy.get("session")
@@ -1550,11 +1626,22 @@ def main() -> None:
     parser.add_argument(
         "--option-expiry-dte",
         type=_min_dte_arg,
-        default=DEFAULT_OPTION_EXPIRY_DTE,
+        default=9,
         help=(
             "Minimum calendar days-to-expiry for the PRIMARY option chain every "
-            "setup trades. The nearest listed expiry at least this many days out "
-            "is used (default 3, minimum 1). Same-day (0DTE) contracts are never traded."
+            "setup trades. The nearest listed expiry inside [min DTE, max DTE] "
+            "is used (default 9, minimum 1). Same-day (0DTE) contracts are never traded."
+        ),
+    )
+    parser.add_argument(
+        "--option-expiry-max-dte",
+        type=int,
+        default=10,
+        help=(
+            "Maximum calendar days-to-expiry for the PRIMARY option chain. "
+            "Together with --option-expiry-dte this defines the swing window "
+            "(default 9-10 DTE). Backend policy.json option_expiry_max_dte wins "
+            "over this default when present."
         ),
     )
     parser.add_argument(
@@ -1592,14 +1679,35 @@ def main() -> None:
     parser.add_argument(
         "--option-max-otm-steps",
         type=int,
-        default=6,
-        help="Maximum number of OTM strikes considered by the selector.",
+        default=1,
+        help="Maximum number of OTM strikes considered by the selector (swing profile: 1).",
+    )
+    parser.add_argument(
+        "--option-min-offset",
+        type=int,
+        default=0,
+        help=(
+            "Closest strike offset relative to ATM considered by the selector: "
+            "0 allows ATM picks (swing profile), 1 keeps the historical OTM-only behavior."
+        ),
+    )
+    parser.add_argument(
+        "--option-target-delta",
+        type=float,
+        default=0.50,
+        help="Delta the contract selector scores toward (swing profile: ATM ~0.50).",
+    )
+    parser.add_argument(
+        "--option-preferred-offset",
+        type=int,
+        default=0,
+        help="Strike offset the selector prefers, relative to ATM (swing profile: 0 = ATM).",
     )
     parser.add_argument(
         "--option-min-abs-delta",
         type=float,
-        default=0.15,
-        help="Reject cheap contracts whose absolute delta is below this floor.",
+        default=0.40,
+        help="Reject contracts whose absolute delta is below this floor (swing profile: 0.40, near-ATM only).",
     )
     parser.add_argument(
         "--option-max-spread-pct",

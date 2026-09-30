@@ -290,12 +290,14 @@ class TradePrefetchHelpersTest(unittest.TestCase):
     def test_fallback_uses_next_listed_expiry_across_weekend(self) -> None:
         et = ZoneInfo("America/New_York")
         friday = datetime(2026, 7, 24, 10, 0, tzinfo=et).timestamp()
+        # Pin the pre-swing window: this test exercises calendar-day DTE
+        # counting across a weekend, not the swing profile's 9-10 DTE window.
         self.assertEqual(
-            _preferred_option_expiry(["20260724", "20260727"], friday),
+            _preferred_option_expiry(["20260724", "20260727"], friday, min_dte=3, max_dte=None),
             ("20260727", "MULTI_DAY_3DTE"),
         )
         self.assertEqual(
-            _preferred_option_expiry(["20260724", "20260725"], friday),
+            _preferred_option_expiry(["20260724", "20260725"], friday, min_dte=3, max_dte=None),
             ("20260725", "NEXT_LISTED_FALLBACK"),
         )
 

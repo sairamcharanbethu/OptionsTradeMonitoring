@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from signal_engine import (
     _enforce_entry_gates,
+    _option_dte_days,
     _select_signal_option,
     _frozen_reversal,
     _mandatory_flatten_due,
@@ -784,6 +785,9 @@ class OtmOptionSelectionTest(unittest.TestCase):
             limit_price_offset=0.01,
             max_otm_steps=6,
             max_spread_pct=5,
+            # Pin the pre-swing delta floor: this test exercises the budget
+            # rejection path, not the swing profile's near-ATM delta filter.
+            min_abs_delta=0.15,
         )
 
         self.assertEqual(selected["target_strike"], 743.0)
@@ -879,6 +883,9 @@ class OtmOptionSelectionTest(unittest.TestCase):
             limit_price_offset=0.01,
             max_otm_steps=6,
             max_spread_pct=5,
+            # Pin the pre-swing delta floor: this test exercises the budget
+            # rejection path, not the swing profile's near-ATM delta filter.
+            min_abs_delta=0.15,
         )
 
         self.assertFalse(selected["eligible"])
@@ -1471,6 +1478,37 @@ class SessionCutoffTest(unittest.TestCase):
         self.assertFalse(_new_entry_window_open(at(14, 0), policy))
         # Flatten is unaffected by windows.
         self.assertTrue(_mandatory_flatten_due(at(15, 20), policy))
+
+
+class SwingFlattenExemptionTest(unittest.TestCase):
+    """9-10 DTE swing positions ride overnight; only near-expiry contracts
+    keep the intraday mandatory-flatten contract."""
+
+    def test_option_dte_days_parses_chain_and_iso_formats(self) -> None:
+        now = datetime(2026, 9, 30, 12, 0, tzinfo=ET).timestamp()
+        self.assertEqual(_option_dte_days("20261009", now), 9)
+        self.assertEqual(_option_dte_days("2026-10-09", now), 9)
+        self.assertEqual(_option_dte_days("20261001", now), 1)
+        self.assertIsNone(_option_dte_days("not-a-date", now))
+        self.assertIsNone(_option_dte_days(None, now))
+        self.assertIsNone(_option_dte_days("", now))
+
+    def test_swing_position_is_exempt_from_intraday_flatten(self) -> None:
+        # Mirrors the gate in build_signal: DTE > intraday_flatten_max_dte
+        # exempts the position; DTE <= threshold (or unparseable) flattens.
+        now = datetime(2026, 9, 30, 12, 0, tzinfo=ET).timestamp()
+        threshold = 1
+        for expiry, expected_exempt in [
+            ("20261009", True),    # 9 DTE swing
+            ("20261010", True),    # 10 DTE swing
+            ("20261001", False),   # 1 DTE: still flattened
+            ("20260930", False),   # 0 DTE: still flattened
+            ("garbage", False),    # unparseable fails safe toward flatten
+            (None, False),
+        ]:
+            dte = _option_dte_days(expiry, now)
+            exempt = dte is not None and dte > threshold
+            self.assertEqual(exempt, expected_exempt, f"expiry={expiry!r}")
 
     def test_policy_without_windows_is_unchanged(self) -> None:
         policy = {

@@ -59,7 +59,7 @@ type AskFn = (prompt: string, userId: number, maxTokens: number, timeoutMs: numb
 export class LiveAiGateService {
   static readonly DEFAULT_DAILY_BUDGET = 30;
   static readonly TIMEOUT_MS = 15_000;
-  static readonly PROMPT_VERSION = 'live-gate-v1';
+  static readonly PROMPT_VERSION = 'live-gate-v2-swing';
   /** Consecutive failed reviews before the operator is paged. One bad call is noise. */
   static readonly FAILURE_ALERT_THRESHOLD = 2;
 
@@ -94,6 +94,7 @@ export class LiveAiGateService {
       strategy: signal.strategy,
       side,
       confidence_score: signal.confidence_score,
+      profile: 'swing: 9-10 DTE, ATM/near-ATM (delta ~0.50), 1 contract, multi-day hold, trailing stop attached at entry',
       plan: {
         trigger: setup.trigger,
         invalidation: setup.invalidation,
@@ -103,6 +104,7 @@ export class LiveAiGateService {
       option: {
         strike: option.strike,
         expiry: option.expiry,
+        dte_days: option.dte_days ?? option.dte ?? null,
         mid: option.mid,
         spread_pct: option.spread_pct,
         delta: option.delta,
@@ -129,8 +131,8 @@ export class LiveAiGateService {
       warnings: (signal.warnings || []).slice(0, 6),
       risk: riskContext
     };
-    return `You are the final risk reviewer for one autonomous short-dated (default ~3 DTE, day-traded, flat by the close) SPY option entry. The contract, stop and targets are fixed by the strategy engine; you may only TRADE or SKIP and set a size tier.
-Rules: SKIP when the supplied facts show degraded edge (thin/late tape, GEX conflict with direction, event risk, wide spread, stale quote, weak reward/risk, warnings that undercut the setup). Prefer CAUTIOUS when uncertain. Never invent facts.
+    return `You are the final risk reviewer for one autonomous SWING SPY option entry: 9-10 DTE, ATM or near-ATM (delta near 0.50), exactly 1 contract, held up to ~7 days, with a trailing stop attached at entry. The contract, stop and targets are fixed by the strategy engine; you may only TRADE or SKIP and set a size tier.
+Rules: SKIP when the supplied facts show degraded edge (GEX conflict with direction, event risk inside the hold window, wide spread, stale quote, weak reward/risk, DTE outside 9-10, delta far from 0.50, warnings that undercut the setup). A SKIP means "not now" — the setup stays under watch and you will be asked again later, so SKIP only when the setup is wrong, not merely early. With 9-10 DTE there is time; do not approve marginal setups out of urgency. Prefer CAUTIOUS when uncertain. Never invent facts.
 Facts: ${JSON.stringify(facts)}
 Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL","exit_profile":"CONSERVATIVE_T1|BALANCED_T2","rationale":"one sentence","risk_flags":["short"]}`;
   }

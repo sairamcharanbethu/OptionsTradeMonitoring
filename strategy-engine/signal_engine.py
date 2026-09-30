@@ -450,6 +450,25 @@ def _new_entry_window_open(
     )
 
 
+def _option_dte_days(expiry: Any, now: float | None = None) -> int | None:
+    """Calendar days-to-expiry for an option expiry value (None when unparseable).
+
+    Accepts the engine's ``YYYYMMDD`` chain format and ISO ``YYYY-MM-DD``.
+    """
+    raw = str(expiry or "").strip()
+    expiry_date = None
+    for fmt, width in (("%Y%m%d", 8), ("%Y-%m-%d", 10)):
+        try:
+            expiry_date = datetime.strptime(raw[:width], fmt).date()
+            break
+        except ValueError:
+            continue
+    if expiry_date is None:
+        return None
+    stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
+    return (expiry_date - stamp.date()).days
+
+
 def _mandatory_flatten_due(
     now: float | None = None,
     session_policy: dict[str, Any] | None = None,
@@ -2702,19 +2721,21 @@ def _select_signal_option(
     max_total_debit_dollars: float = 0,
     preferred_contracts: int = 1,
     limit_price_offset: float = 0,
-    max_otm_steps: int = 3,
-    min_abs_delta: float = 0.15,
+    max_otm_steps: int = 1,
+    min_abs_delta: float = 0.40,
     max_spread_pct: float = MAX_OPTION_SPREAD_PCT,
-    min_offset: int = 1,
-    target_delta: float = 0.40,
-    preferred_offset: int = 2,
+    min_offset: int = 0,
+    target_delta: float = 0.50,
+    preferred_offset: int = 0,
+    fallback_steps: int = 0,
 ) -> dict[str, Any] | None:
     """Choose a liquid contract using delta, spread, volume, and stability.
 
-    ``min_offset`` sets the closest strike considered relative to ATM: the
-    default ``1`` keeps the historical OTM-only behavior, while ``<= 0`` lets
-    ATM/ITM strikes in (used by near-the-money setups). ``target_delta`` and
-    ``preferred_offset`` steer the scoring toward the desired moneyness.
+    ``min_offset`` sets the closest strike considered relative to ATM: ``0``
+    allows ATM picks (swing profile: near-ATM, delta ~0.50); ``1`` keeps the
+    historical OTM-only behavior. ``target_delta`` and ``preferred_offset``
+    steer the scoring toward the desired moneyness. ``fallback_steps`` is the
+    OTM step used when the delta-scored shortlist is empty (0 = ATM fallback).
     """
     contracts = [
         contract for contract in options.get("contracts") or []
@@ -2726,7 +2747,7 @@ def _select_signal_option(
             options,
             right,
             spot,
-            steps=2,
+            steps=fallback_steps,
             preferred=preferred,
             max_total_debit_dollars=max_total_debit_dollars,
             preferred_contracts=preferred_contracts,
@@ -2818,7 +2839,7 @@ def _select_signal_option(
             options,
             right,
             spot,
-            steps=2,
+            steps=fallback_steps,
             preferred=preferred,
             max_total_debit_dollars=max_total_debit_dollars,
             preferred_contracts=preferred_contracts,
@@ -3733,9 +3754,13 @@ def build_signal(
     option_max_total_debit_dollars: float = 0,
     option_preferred_contracts: int = 1,
     option_limit_price_offset: float = 0,
-    option_max_otm_steps: int = 3,
-    option_min_abs_delta: float = 0.15,
+    option_max_otm_steps: int = 1,
+    option_min_offset: int = 0,
+    option_target_delta: float = 0.50,
+    option_preferred_offset: int = 0,
+    option_min_abs_delta: float = 0.40,
     option_max_spread_pct: float = MAX_OPTION_SPREAD_PCT,
+    intraday_flatten_max_dte: int = 1,
     session_policy: dict[str, Any] | None = None,
     cross_market_confirmation: str = "required",
     wall_options: dict[str, Any] | None = None,
@@ -4220,6 +4245,9 @@ def build_signal(
         "preferred_contracts": option_preferred_contracts,
         "limit_price_offset": float(option_limit_price_offset),
         "max_otm_steps": option_max_otm_steps,
+        "min_offset": option_min_offset,
+        "target_delta": option_target_delta,
+        "preferred_offset": option_preferred_offset,
         "min_abs_delta": float(option_min_abs_delta),
         "max_spread_pct": float(option_max_spread_pct),
     }
@@ -4465,7 +4493,25 @@ def build_signal(
             f"{max_tracking_gap_seconds:g}s; stale lifecycle closed"
         ]
         return _dedupe_messages(result)
-    if prior_position_open and _mandatory_flatten_due(now, session):
+    position_dte = (
+        _option_dte_days((refreshed_position_option or {}).get("expiry"), now)
+        if prior_position_open
+        else None
+    )
+    # Swing profile: the intraday mandatory flatten only applies to positions
+    # whose contracts are near expiry (DTE <= intraday_flatten_max_dte). A 9-10
+    # DTE position rides overnight and is managed by its trailing stop,
+    # invalidation level, and max-hold instead. Unparseable DTE fails safe
+    # toward the historical behavior (flatten).
+    flatten_exempt = (
+        position_dte is not None and position_dte > int(intraday_flatten_max_dte)
+    )
+    if flatten_exempt:
+        result.setdefault("warnings", []).append(
+            f"swing position kept overnight: {position_dte} DTE exceeds the "
+            f"intraday flatten threshold ({int(intraday_flatten_max_dte)} DTE)"
+        )
+    if prior_position_open and not flatten_exempt and _mandatory_flatten_due(now, session):
         timed_exit_setup = result["call_setup"] if previous_side == "calls" else result["put_setup"]
         timed_exit_setup.update(
             status="time_exit",

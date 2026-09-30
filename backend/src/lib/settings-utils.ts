@@ -27,6 +27,7 @@ const GLOBAL_SETTING_KEYS = [
   'event_blackouts_enabled',
   'event_blackout_dates',
   'strategy_option_expiry_dte',
+  'strategy_option_expiry_max_dte',
   'strategy_multi_day_max_hold_minutes',
   'max_same_direction_positions',
   'autonomous_live_ai_mode',
@@ -39,6 +40,7 @@ const ADMIN_ONLY_GLOBAL_SETTING_KEYS = [
   'autonomous_live_ai_fallback',
   'live_ai_daily_call_budget',
   'strategy_option_expiry_dte',
+  'strategy_option_expiry_max_dte',
   'strategy_multi_day_max_hold_minutes',
   'entry_open_buffer_minutes',
   'entry_last_minute_et',
@@ -165,6 +167,7 @@ export function isPublicGlobalSettingKey(key: string): boolean {
     'event_blackouts_enabled',
     'event_blackout_dates',
     'strategy_option_expiry_dte',
+    'strategy_option_expiry_max_dte',
     'strategy_multi_day_max_hold_minutes',
     'max_same_direction_positions',
     'autonomous_live_ai_mode',
@@ -215,21 +218,41 @@ export function validateOptionExpiryDteSetting(value: unknown): string | null {
   return null;
 }
 
-/** Max hold for strategy positions on multi-day contracts, in minutes (0 disables the time stop). */
-export function validateMultiDayMaxHoldMinutesSetting(value: unknown): string | null {
+/** Maximum calendar days-to-expiry for the primary option chain: the engine picks
+ * the nearest listed expiry inside [min DTE, max DTE] (swing profile: 9-10 DTE). */
+export function validateOptionExpiryMaxDteSetting(value: unknown): string | null {
   const raw = String(value ?? '').trim();
-  const minutes = Number(raw);
-  if (!/^\d+$/.test(raw) || !Number.isInteger(minutes) || minutes < 0 || minutes > 390) {
-    return 'Multi-day max hold must be a whole number of minutes between 0 and 390';
+  const dte = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(dte) || dte < MIN_OPTION_EXPIRY_DTE || dte > 31) {
+    return `Option expiry max DTE must be a whole number between ${MIN_OPTION_EXPIRY_DTE} and 31`;
   }
   return null;
 }
 
-export function resolveOptionExpiryDte(settings: Record<string, string> | undefined, fallback = 3): number {
+/** Max hold for strategy positions on multi-day contracts, in minutes (0 disables the time stop). */
+export function validateMultiDayMaxHoldMinutesSetting(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  const minutes = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isInteger(minutes) || minutes < 0 || minutes > 20160) {
+    return 'Multi-day max hold must be a whole number of minutes between 0 and 20160 (14 days)';
+  }
+  return null;
+}
+
+export function resolveOptionExpiryDte(settings: Record<string, string> | undefined, fallback = 9): number {
   return validateOptionExpiryDteSetting(settings?.strategy_option_expiry_dte) === null ? Number(settings!.strategy_option_expiry_dte) : fallback;
 }
 
-export function resolveMultiDayMaxHoldMinutes(settings: Record<string, string> | undefined, fallback = 45): number {
+export function resolveOptionExpiryMaxDte(settings: Record<string, string> | undefined, fallback = 10): number {
+  const minDte = resolveOptionExpiryDte(settings);
+  const maxDte = validateOptionExpiryMaxDteSetting(settings?.strategy_option_expiry_max_dte) === null
+    ? Number(settings!.strategy_option_expiry_max_dte)
+    : fallback;
+  // The window must never invert: max DTE is at least the min DTE.
+  return Math.max(maxDte, minDte);
+}
+
+export function resolveMultiDayMaxHoldMinutes(settings: Record<string, string> | undefined, fallback = 10080): number {
   return validateMultiDayMaxHoldMinutesSetting(settings?.strategy_multi_day_max_hold_minutes) === null ? Number(settings!.strategy_multi_day_max_hold_minutes) : fallback;
 }
 

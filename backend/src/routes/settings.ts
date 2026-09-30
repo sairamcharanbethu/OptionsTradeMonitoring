@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting, validateEntryOpenBufferMinutesSetting, validateEntryLastMinuteSetting, validateEventBlackoutDatesSetting, validateOptionExpiryDteSetting, validateMultiDayMaxHoldMinutesSetting, validateAutonomousLiveAiModeSetting, validateAutonomousLiveAiFallbackSetting, validateMaxSameDirectionPositionsSetting, validateLiveAiDailyCallBudgetSetting } from '../lib/settings-utils';
+import { applyMcpTradingEnabledFallback, getSettingsWithGlobalFallback, invalidateSettingsCache, isGlobalSettingKey, isPublicGlobalSettingKey, resolveMcpTradingEnabled, validateMarketPollIntervalSetting, validateSyntheticTrailingStopPctSetting, validateTakeProfitPctSetting, validateEntryOpenBufferMinutesSetting, validateEntryLastMinuteSetting, validateEventBlackoutDatesSetting, validateOptionExpiryDteSetting, validateOptionExpiryMaxDteSetting, validateMultiDayMaxHoldMinutesSetting, validateAutonomousLiveAiModeSetting, validateAutonomousLiveAiFallbackSetting, validateMaxSameDirectionPositionsSetting, validateLiveAiDailyCallBudgetSetting } from '../lib/settings-utils';
 import { protectSettingValue } from '../lib/secret-box';
 import { defaultIbkrPort } from '../lib/ibkr-config';
 
@@ -415,10 +415,12 @@ export async function settingsRoutes(fastify: FastifyInstance) {
                         await client.query('ROLLBACK');
                         return reply.code(400).send({ error: 'Event blackouts enabled must be true or false' });
                     }
-                    if (key === 'strategy_option_expiry_dte' || key === 'strategy_multi_day_max_hold_minutes') {
+                    if (key === 'strategy_option_expiry_dte' || key === 'strategy_option_expiry_max_dte' || key === 'strategy_multi_day_max_hold_minutes') {
                         const validationError = key === 'strategy_option_expiry_dte'
                             ? validateOptionExpiryDteSetting(trimmedValue)
-                            : validateMultiDayMaxHoldMinutesSetting(trimmedValue);
+                            : key === 'strategy_option_expiry_max_dte'
+                                ? validateOptionExpiryMaxDteSetting(trimmedValue)
+                                : validateMultiDayMaxHoldMinutesSetting(trimmedValue);
                         if (validationError) {
                             await client.query('ROLLBACK');
                             return reply.code(400).send({ error: validationError });

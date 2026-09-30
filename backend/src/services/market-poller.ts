@@ -332,9 +332,10 @@ export class MarketPoller {
 
   /**
    * Time stop. Same-day contracts use the theta ladder (25/15/10 min by entry
-   * time). Strategy-managed positions on multi-day contracts (~3 DTE primary
-   * chain) use a flat "thesis did not play out" hold, `multiDayMaxHoldMinutes`
-   * (setting strategy_multi_day_max_hold_minutes, default 45; 0 disables).
+   * time). Strategy-managed positions on multi-day contracts (swing profile:
+   * 9-10 DTE primary chain) use a flat "thesis did not play out" hold,
+   * `multiDayMaxHoldMinutes` (setting strategy_multi_day_max_hold_minutes,
+   * default 10080 = 7 days; 0 disables).
    */
   private getThetaStopAssessment(position: any, now: Date = new Date(), startedAtOverride?: string | null, multiDayMaxHoldMinutes: number = 45): {
     triggered: boolean;
@@ -370,12 +371,18 @@ export class MarketPoller {
   } | null {
     if (position.is_simulated
       || String(position.execution_broker || '').toLowerCase() !== 'wealthsimple_snaptrade') return null;
-    // Day-trade contract: every strategy-managed live position is flat by the
-    // close whatever its expiry (the primary chain is now ~3 DTE). Non-strategy
-    // (manual) live positions are only force-flattened when they expire today.
+    // Swing profile: a strategy-managed position whose contract still has more
+    // than intraday_flatten_max_dte (default 1) days to expiry rides overnight
+    // under its trailing stop / invalidation / max-hold — it is NOT flattened
+    // into the close. Only near-expiry strategy positions keep the day-trade
+    // contract of being flat by the close.
     const expiration = this.normalizeExpirationDate(position.expiration_date);
     const expiresToday = expiration === this.getNewYorkDateString(now);
     if (!expiresToday && position.strategy_managed !== true) return null;
+    if (position.strategy_managed === true && !expiresToday) {
+      const dte = this.contractDteDays(expiration, now);
+      if (dte !== null && dte > 1) return null;
+    }
 
     const closeMinutes = getUSMarketCloseMinutes(now);
     const flattenMinutes = closeMinutes - 40;
@@ -388,6 +395,17 @@ export class MarketPoller {
       flattenMinutes,
       closeMinutes
     };
+  }
+
+  /** Calendar days from now (New York) to a YYYY-MM-DD expiration; null when unparseable. */
+  private contractDteDays(expirationKey: string, now: Date = new Date()): number | null {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expirationKey || '')) return null;
+    const todayKey = this.getNewYorkDateString(now);
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const expiryMs = Date.parse(`${expirationKey}T12:00:00-04:00`);
+    const todayMs = Date.parse(`${todayKey}T12:00:00-04:00`);
+    if (!Number.isFinite(expiryMs) || !Number.isFinite(todayMs)) return null;
+    return Math.round((expiryMs - todayMs) / msPerDay);
   }
 
   private getTakeProfitOrderPreference(position: any, price: number, quote?: ExitQuoteContext): { orderType: 'LIMIT' | 'MARKET'; limitPrice?: string; mode: 'PAST_TP' | 'NEAR_TP' | 'STRUCTURE_TP' | 'EOD_MARKET' } {

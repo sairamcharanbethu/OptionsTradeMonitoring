@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
-import { getGlobalSettings, getSettingsWithGlobalFallback, resolveOptionExpiryDte } from '../lib/settings-utils';
+import { getGlobalSettings, getSettingsWithGlobalFallback, resolveOptionExpiryDte, resolveOptionExpiryMaxDte } from '../lib/settings-utils';
 import { getIbkrGatewayConfig } from '../lib/ibkr-config';
 import { getNewYorkDateParts, getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { NoTradeWindow, findActiveNoTradeWindow, getEventNoTradeWindows, parseCustomEconomicEvents, parseEtClockMinute } from '../lib/economic-calendar';
@@ -55,6 +55,12 @@ export class StrategyEngineAdapter {
   private lastAutonomousEntryAt: string | null = null;
   private lastAutonomousEntryResult: string | null = null;
   private lastEntryBlock: { halted: boolean; reason: string | null } | null = null;
+  // AI re-review: a SKIP verdict means "not now", not "never". The setup stays
+  // under watch and the gate is asked again once the cooldown elapses, so a
+  // red setup can turn green without the operator re-arming anything.
+  // Keyed by plan fingerprint + gate mode -> epoch ms when the next review is
+  // allowed; a gate-mode change legitimately resets the hold.
+  private pendingAiRecheck = new Map<string, number>();
   // Live entries stay disabled until the exit monitor, order watchdog, and broker
   // sync loops are running. The adapter starts before them (to publish IBKR policy
   // early), and an autonomous short-dated entry must never fire while nothing is watching
@@ -990,6 +996,13 @@ export class StrategyEngineAdapter {
     }
   }
 
+  /** Minutes between AI re-reviews of a red setup (setting `ai_recheck_cooldown_minutes`, default 30). */
+  private aiRecheckCooldownMs(settings: Record<string, string>): number {
+    const raw = Number(settings.ai_recheck_cooldown_minutes);
+    const minutes = Number.isFinite(raw) && raw >= 5 && raw <= 720 ? raw : 30;
+    return minutes * 60_000;
+  }
+
   private async maybeExecuteAutonomousLiveEntries(signal: StrategySnapshot, signalId: number): Promise<void> {
     if (String(signal.state || '') !== 'ACTIVE' || signal.lifecycle?.entry_allowed !== true) return;
     if (!this.liveEntriesReady) {
@@ -1028,15 +1041,51 @@ export class StrategyEngineAdapter {
         // Deterministic gates first (so the model never sees a candidate that
         // would be rejected anyway), then the AI gate as the last check.
         await this.assertSignalExecutable(signalId);
+        // Swing profile: one open strategy position per user at a time, one
+        // contract per trade. A second setup waits for the slot to free.
+        const { rows: openPositions } = await (this.fastify as any).pg.query(
+          `SELECT id FROM positions WHERE user_id = $1 AND strategy_managed = TRUE AND status = 'OPEN' LIMIT 1`,
+          [userId]
+        );
+        if (openPositions?.length) {
+          return { userId, result: `swing slot occupied by position ${openPositions[0].id} — one open position at a time` };
+        }
+        const fingerprint = this.planFingerprint(signal);
+        const gateMode = LiveAiGateService.mode(settings);
+        const recheckKey = fingerprint ? `${fingerprint}:${gateMode}` : null;
+        const recheckAt = recheckKey ? this.pendingAiRecheck.get(recheckKey) : undefined;
+        if (recheckAt && Date.now() < recheckAt) {
+          const mins = Math.ceil((recheckAt - Date.now()) / 60000);
+          return { userId, result: `AI gate red — holding for re-review in ~${mins}m (no new AI call until then)` };
+        }
+        if (recheckKey) this.pendingAiRecheck.delete(recheckKey);
         const verdict = await this.liveAiGate.decide({ userId, signalId, signal, settings });
         if (verdict.blocks) {
-          this.fastify.log.info(`[StrategyEngineAdapter] AI gate skipped signal ${signalId} for user ${userId}: ${verdict.rationale}`);
-          return { userId, result: `entry skipped by AI gate (${verdict.source}): ${verdict.rationale}` };
+          // Red verdict = "not now", not "never": keep the setup under watch
+          // and ask the gate again after the cooldown instead of dropping it.
+          if (recheckKey) {
+            const cooldownMs = this.aiRecheckCooldownMs(settings);
+            this.pendingAiRecheck.set(recheckKey, Date.now() + cooldownMs);
+            // Bound the map: fingerprints are per-setup, but never let it grow
+            // unbounded across a long session.
+            if (this.pendingAiRecheck.size > 200) {
+              const oldest = [...this.pendingAiRecheck.entries()].sort((a, b) => a[1] - b[1])[0];
+              this.pendingAiRecheck.delete(oldest[0]);
+            }
+          }
+          this.fastify.log.info(`[StrategyEngineAdapter] AI gate red for signal ${signalId} (user ${userId}) — holding for re-review: ${verdict.rationale}`);
+          return { userId, result: `AI gate red — holding for re-review (${verdict.source}): ${verdict.rationale}` };
         }
+        if (recheckKey) this.pendingAiRecheck.delete(recheckKey);
         const gateSettings: Record<string, string> = { ...settings };
         if (verdict.mode !== 'off') {
           gateSettings.ai_gate_note = `${verdict.mode} ${verdict.decision} ${verdict.riskTier} via ${verdict.source}: ${verdict.rationale}`;
           if (verdict.mode === 'gate') gateSettings.ai_gate_risk_tier = verdict.riskTier;
+        }
+        if (verdict.decision === 'TRADE' && verdict.mode === 'gate') {
+          // Green light on a swing entry always rides with a trailing stop.
+          gateSettings.synthetic_trailing_stop_enabled = 'true';
+          if (!gateSettings.synthetic_trailing_stop_pct) gateSettings.synthetic_trailing_stop_pct = '15';
         }
         const result = await this.lifecycleManager.submitAutonomousEntry({
           userId,
@@ -1144,10 +1193,24 @@ export class StrategyEngineAdapter {
       ibkr_host: ibkr.host,
       ibkr_port: ibkr.port,
       ibkr_data_type: ibkrDataTypes[ibkr.marketDataType] || 'live',
-      // Minimum DTE for the primary option chain (>= 1; same-day 0 DTE was
-      // removed 2026-09-13, a legacy 0 resolves to the 3-day default). The
-      // engine prefers this over its --option-expiry-dte CLI default when present.
+      // Swing profile (2026-09-30): the primary option chain is the nearest listed
+      // expiry inside [option_expiry_dte, option_expiry_max_dte] (default 9-10
+      // DTE). Same-day (0 DTE) contracts are never traded. The engine prefers
+      // these policy values over its --option-expiry-dte CLI defaults when present.
       option_expiry_dte: resolveOptionExpiryDte(settings),
+      option_expiry_max_dte: resolveOptionExpiryMaxDte(settings),
+      // Swing contract selection: ATM/near-ATM (delta ~0.50), at most one OTM
+      // step considered, delta floor 0.40, exactly 1 contract.
+      option_min_offset: 0,
+      option_target_delta: 0.5,
+      option_preferred_offset: 0,
+      option_max_otm_steps: 1,
+      option_min_abs_delta: 0.4,
+      option_preferred_contracts: 1,
+      // The intraday mandatory flatten only applies to positions whose
+      // contracts are at/below this DTE; 9-10 DTE swing positions ride
+      // overnight under their trailing stop / invalidation / max-hold.
+      intraday_flatten_max_dte: 1,
       session: this.buildSessionPolicy(settings, sessionParts.dateKey, sessionMarket, sessionCloseMinutes)
     };
     policy.strategy_preferred_contracts = Math.min(

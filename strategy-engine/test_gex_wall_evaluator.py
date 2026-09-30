@@ -300,9 +300,11 @@ class NearAtmContractSelectionTest(unittest.TestCase):
         ],
     }
 
-    def test_default_selection_stays_otm(self):
+    def test_default_selection_targets_atm(self):
+        # Swing profile: the default selection is ATM/near-ATM (~0.50 delta),
+        # not OTM.
         selected = _select_signal_option(self.OPTIONS, "C", 500.0)
-        self.assertGreater(selected["strike"], 500.0)  # OTM
+        self.assertEqual(selected["strike"], 500.0)  # ATM
 
     def test_wall_near_atm_selection_picks_atm(self):
         selected = _select_signal_option(
