@@ -970,6 +970,15 @@ async function run() {
   assert.deepEqual(PaperTradingService.aiBudgetGate(12, 0), { allowed: false, exhausted: 'BUDGET' },
     'the budget is checked ahead of the attempt ceiling so the operator sees the real cause');
 
+  // Swing shadow DTE gate: strict 9–10 calendar days, ET.
+  const swingDay = new Date('2026-09-30T13:00:00-04:00');
+  assert.equal(PaperTradingService.swingDte('2026-10-09', swingDay), 9, '9 DTE is the near edge');
+  assert.equal(PaperTradingService.swingDte('2026-10-10', swingDay), 10, '10 DTE is the far edge');
+  assert.equal(PaperTradingService.swingDte('2026-10-08', swingDay), 8, '8 DTE is out of window');
+  assert.equal(PaperTradingService.swingDte('2026-10-11', swingDay), 11, '11 DTE is out of window');
+  assert.equal(PaperTradingService.swingDte(null, swingDay), null, 'missing expiry is not a number');
+  assert.equal(PaperTradingService.swingDte('not-a-date', swingDay), null, 'garbage expiry is not a number');
+
   console.log('All PaperTradingService tests passed!');
 }
 

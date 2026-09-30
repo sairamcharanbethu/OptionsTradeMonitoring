@@ -642,6 +642,9 @@ export class PaperTradingService {
       if (!this.redisClient.isReady?.()) throw new Error('Redis is required for autonomous paper position management');
       await this.rollSessionIfNeeded();
       await this.refreshOpenPositions(signal, setupId);
+      await this.manageSwingExits(signal).catch((err: any) => {
+        this.fastify.log.warn(`[PaperTrading] Swing exit management failed: ${err.message || String(err)}`);
+      });
       await this.processPendingEntry(signal, setupId);
       await this.maybeCreateEntry(signal, setupId);
       this.lastProcessedAt = new Date().toISOString();
@@ -1997,5 +2000,224 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
 
   private canonicalTicker(value: any): string {
     return String(value || '').replace(/\s+/g, '').toUpperCase();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Swing shadow: paper mirror of the autonomous 9–10 DTE swing system.
+  // One SWING position at a time, exactly one contract, AI-gated at entry by
+  // the caller (strategy-engine-adapter). Exits mirror the live swing rules:
+  // out at ≤2 DTE, 7-calendar-day max hold, 15% synthetic trailing stop.
+  // ---------------------------------------------------------------------------
+
+  public async isSwingAutomationActive(queryable: any = (this.fastify as any).pg): Promise<boolean> {
+    const { rows } = await queryable.query(
+      `SELECT automation_status FROM paper_strategy_controls WHERE strategy_name=$1`,
+      [PAPER_STRATEGIES.SWING]
+    );
+    if (!rows[0]) throw new Error('Swing paper automation control is unavailable');
+    return String(rows[0].automation_status || 'PAUSED') === 'ACTIVE';
+  }
+
+  public async openSwingPositionCount(): Promise<number> {
+    const { rows } = await (this.fastify as any).pg.query(
+      `SELECT COUNT(*)::int AS n FROM positions WHERE paper_account_id=$1 AND paper_strategy=$2 AND status='OPEN'`,
+      [ACCOUNT_ID, PAPER_STRATEGIES.SWING]
+    );
+    return Number(rows[0]?.n || 0);
+  }
+
+  public static swingDte(expiry: string | null, date: Date = new Date()): number | null {
+    if (!expiry) return null;
+    const today = ET_DATE.format(date);
+    const ms = Date.parse(`${expiry}T12:00:00`) - Date.parse(`${today}T12:00:00`);
+    if (!Number.isFinite(ms)) return null;
+    return Math.round(ms / 86400000);
+  }
+
+  /**
+   * Create the paper shadow of a swing entry. The AI gate already passed in
+   * the caller; this enforces the remaining paper-side gates (automation on,
+   * slot free, kill switch clear, 9–10 DTE, fresh quote) and fills one
+   * contract immediately at the ask. Returns the entered position id, or a
+   * rejection reason when the entry is skipped.
+   */
+  public async createSwingEntry(
+    signal: Record<string, any>,
+    setupId: string,
+    aiVerdict: { decision: string; riskTier: string; rationale: string; source: string }
+  ): Promise<{ entered: boolean; reason: string; positionId?: number }> {
+    const { side, setup, option } = this.optionFor(signal);
+    const expiry = this.normalizeExpiry(option.expiry);
+    const dte = PaperTradingService.swingDte(expiry);
+    const bid = Number(option.bid);
+    const ask = Number(option.ask);
+    const quoteAgeSeconds = option.quote_age_seconds == null ? NaN : Number(option.quote_age_seconds);
+    if (dte == null || dte < 9 || dte > 10) {
+      return { entered: false, reason: `Swing DTE ${dte ?? 'unknown'} outside 9–10 window` };
+    }
+    if (option.eligible !== true || !Number.isFinite(bid) || bid <= 0 || !Number.isFinite(ask) || ask <= 0 || ask < bid
+      || !Number.isFinite(quoteAgeSeconds) || quoteAgeSeconds < 0 || quoteAgeSeconds > 15
+      || !option.local_symbol || !Number.isFinite(Number(option.strike)) || Number(option.strike) <= 0) {
+      return { entered: false, reason: 'Swing option quote failed quality gates' };
+    }
+    const killSwitch = await KillSwitchService.evaluate((this.fastify as any).pg, 'paper');
+    if (killSwitch.halted) {
+      return { entered: false, reason: `Paper kill switch halted entries: ${killSwitch.reason}` };
+    }
+    if (await this.openSwingPositionCount() > 0) {
+      return { entered: false, reason: 'Swing paper slot occupied — one open position at a time' };
+    }
+    const fillPrice = Number(ask.toFixed(2));
+    const debit = Number((fillPrice * 100).toFixed(2));
+    const client = await (this.fastify as any).pg.connect();
+    try {
+      await client.query('BEGIN');
+      const lockedAccount = await client.query(
+        `SELECT cash_balance, reserved_cash FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]
+      );
+      if (!lockedAccount.rows[0]) {
+        await client.query('ROLLBACK');
+        return { entered: false, reason: 'Shared paper account is unavailable' };
+      }
+      if (!(await this.isSwingAutomationActive(client))) {
+        await client.query('ROLLBACK');
+        return { entered: false, reason: 'Swing paper automation is not ACTIVE' };
+      }
+      const slotTaken = await client.query(
+        `SELECT id FROM positions WHERE paper_account_id=$1 AND paper_strategy=$2 AND status='OPEN' LIMIT 1 FOR UPDATE`,
+        [ACCOUNT_ID, PAPER_STRATEGIES.SWING]
+      );
+      if (slotTaken.rows[0]) {
+        await client.query('ROLLBACK');
+        return { entered: false, reason: 'Swing paper slot occupied — one open position at a time' };
+      }
+      const available = Number(lockedAccount.rows[0].cash_balance || 0) - Number(lockedAccount.rows[0].reserved_cash || 0);
+      if (available < debit) {
+        await client.query('ROLLBACK');
+        return { entered: false, reason: 'Available paper cash cannot fund one contract' };
+      }
+      const signalRow = await client.query(
+        `SELECT id FROM signals WHERE strategy_setup_id = $1 ORDER BY created_at DESC LIMIT 1`, [setupId]
+      );
+      const decisionInsert = await client.query(
+        `INSERT INTO paper_trade_decisions (
+           account_id, setup_id, signal_id, decision, risk_tier, exit_profile, source,
+           quantity, max_quantity, debit_budget, protected_limit, model, prompt_version,
+           policy_version, trailing_stop_pct,
+           ai_requested, ai_reasons, prompt_tokens, completion_tokens, total_tokens,
+           rationale, risk_flags, evidence, strategy_name
+         ) VALUES ($1,$2,$3,'TRADE',$4,'SWING_HOLD','AI',$5,$5,0,$6,$7,$8,$9,15,
+           TRUE,'[]',0,0,0,$10,'[]',$11,$12)
+         ON CONFLICT (account_id, setup_id) DO NOTHING RETURNING *`,
+        [ACCOUNT_ID, setupId, signalRow.rows[0]?.id || null, aiVerdict.riskTier, 1, fillPrice,
+          null, PROMPT_VERSION, PAPER_POLICY_VERSION,
+          `Swing shadow entry — AI ${aiVerdict.decision} via ${aiVerdict.source}: ${aiVerdict.rationale}`,
+          JSON.stringify({ dte, quoteAgeSeconds, bid, ask, strategyState: signal.state }),
+          PAPER_STRATEGIES.SWING]
+      );
+      const decisionRow = decisionInsert.rows[0];
+      if (!decisionRow) {
+        await client.query('ROLLBACK');
+        return { entered: false, reason: 'A swing paper decision already exists for this setup' };
+      }
+      const targets = Array.isArray(setup.targets) ? setup.targets : [];
+      const positionResult = await client.query(
+        `INSERT INTO positions (
+           user_id, symbol, option_type, strike_price, expiration_date, entry_price, quantity,
+           stop_loss_trigger, current_price, trailing_high_price, trailing_stop_loss_pct,
+           status, is_simulated, account_id, execution_broker,
+           execution_status, contracts_requested, entry_action, exit_action, suggested_stop_loss,
+           suggested_take_profit_1, suggested_take_profit_2, signal_id, strategy_setup_id,
+           strategy_engine_version, strategy_lifecycle_status, strategy_snapshot, strategy_managed,
+           paper_account_id, paper_decision_id, paper_strategy, analysis_data, notes
+           ) VALUES (NULL,'SPY',$1,$2,$3,$4,1,$5,$4,$4,15,'OPEN',TRUE,$6,'system_paper','FILLED',1,
+                   'BUY_TO_OPEN','SELL_TO_CLOSE',$7,$8,$9,$10,$11,'signal-only-v2','ACTIVE',$12,TRUE,$6,$13,$14,$15,$16)
+         RETURNING *`,
+        [side, Number(option.strike), expiry, fillPrice, Number((fillPrice * 0.5).toFixed(2)),
+          ACCOUNT_ID, setup.invalidation || null, targets[0] || null, targets[1] || targets[0] || null,
+          decisionRow.signal_id, setupId, JSON.stringify(signal), decisionRow.id,
+          PAPER_STRATEGIES.SWING,
+          JSON.stringify({ exitProfile: 'SWING_HOLD', trailingHighPremium: fillPrice, trailingStopPct: 15, swingDte: dte }),
+          `[System paper swing entry from setup ${setupId}]`]
+      );
+      const filledPosition = positionResult.rows[0];
+      await client.query(
+        `INSERT INTO paper_orders (
+           account_id, decision_id, setup_id, signal_id, intent, action, status, osi_ticker,
+           option_type, strike, expiration, quantity, limit_price, fill_price, filled_at, reserved_debit, quote_snapshot, strategy_name
+         ) VALUES ($1,$2,$3,$4,'ENTRY','BUY_TO_OPEN','FILLED',$5,$6,$7,$8,1,$9,$9,NOW(),0,$10,$11)`,
+        [ACCOUNT_ID, decisionRow.id, setupId, decisionRow.signal_id, option.local_symbol, side,
+          Number(option.strike), expiry, fillPrice, JSON.stringify({ bid, ask, quoteAgeSeconds }), PAPER_STRATEGIES.SWING]
+      );
+      await client.query(
+        `UPDATE paper_accounts SET cash_balance = cash_balance - $1, updated_at=NOW() WHERE id=$2`,
+        [debit, ACCOUNT_ID]
+      );
+      await client.query('COMMIT');
+      await this.journal(
+        'ENTRY_FILLED',
+        `Swing paper entry filled: 1 ${side} contract at $${fillPrice.toFixed(2)} (${dte} DTE).`,
+        decisionRow, filledPosition.id, fillPrice,
+        { quantity: 1, osiTicker: option.local_symbol, swingDte: dte, aiSource: aiVerdict.source }
+      );
+      this.broadcast({ type: 'PAPER_ACCOUNT_CHANGED', data: { reason: 'SWING_ENTRY_FILLED', positionId: filledPosition.id } });
+      return { entered: true, reason: `Filled 1 ${side} at $${fillPrice.toFixed(2)} (${dte} DTE)`, positionId: filledPosition.id };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Manage open SWING paper positions: exit at ≤2 DTE, at the 7-calendar-day
+   * max hold, or on a 15% synthetic trailing stop from the premium peak.
+   * Runs on every strategy snapshot so exits stay timely.
+   */
+  public async manageSwingExits(signal: Record<string, any>): Promise<void> {
+    const { rows } = await (this.fastify as any).pg.query(
+      `SELECT p.* FROM positions p
+       WHERE p.paper_account_id=$1 AND p.paper_strategy=$2 AND p.status='OPEN'`,
+      [ACCOUNT_ID, PAPER_STRATEGIES.SWING]
+    );
+    for (const position of rows) {
+      const expiry = this.normalizeExpiry(position.expiration_date);
+      const dte = PaperTradingService.swingDte(expiry);
+      const entryDate = ET_DATE.format(new Date(position.created_at || Date.now()));
+      const todayStr = ET_DATE.format(new Date());
+      const holdDays = Math.round(
+        (Date.parse(`${todayStr}T12:00:00`) - Date.parse(`${entryDate}T12:00:00`)) / 86400000
+      );
+      let bid = 0;
+      try {
+        const quote = await (this.fastify as any).ibkrMarketData?.getOptionQuoteForOsi(null, this.osiTicker(position));
+        bid = Number(quote?.bid || 0);
+      } catch (error: any) {
+        this.fastify.log.warn(`[PaperTrading] Swing exit quote failed for position ${position.id}: ${error.message || String(error)}`);
+      }
+      if (dte != null && dte <= 2) {
+        await this.closePaperQuantity(position, Number(position.quantity), bid, 'SWING_EXPIRY_EXIT', { dte });
+        continue;
+      }
+      if (holdDays >= 7) {
+        await this.closePaperQuantity(position, Number(position.quantity), bid, 'SWING_MAX_HOLD', { holdDays });
+        continue;
+      }
+      if (!(bid > 0)) continue;
+      const peak = Math.max(Number(position.trailing_high_price || 0), Number(position.entry_price || 0), bid);
+      if (peak !== Number(position.trailing_high_price || 0)) {
+        await (this.fastify as any).pg.query(
+          `UPDATE positions SET trailing_high_price=$1, current_price=$2, updated_at=NOW() WHERE id=$3`,
+          [peak, bid, position.id]
+        );
+      }
+      if (bid <= peak * 0.85) {
+        await this.closePaperQuantity({ ...position, trailing_high_price: peak }, Number(position.quantity), bid, 'SWING_TRAILING_STOP', {
+          peak: Number(peak.toFixed(2)),
+          stopPct: 15
+        });
+      }
+    }
   }
 }
