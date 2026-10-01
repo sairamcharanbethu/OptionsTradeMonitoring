@@ -1,18 +1,67 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, RefreshCw, WalletCards } from 'lucide-react';
-import { api, PaperAccountSummary } from '@/lib/api';
+import { api, PaperAccountSummary, PaperLaneStat } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-type StrategyFilter = 'ALL' | 'DAY_TRADING' | 'WALL_REACTION';
+type StrategyFilter = string;
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
-const strategyLabel = (value: unknown) => String(value) === 'WALL_REACTION' ? 'Wall Reaction' : 'Day Trading';
+const LANE_LABELS: Record<string, string> = {
+  DAY_TRADING: 'Day Trading',
+  WALL_REACTION: 'Wall Reaction',
+  SWING: 'Swing (live rules)',
+  SWING_NOAI: 'Swing · no AI gate',
+  SWING_WIDE_STOP: 'Swing · 30% stop',
+  SWING_TIGHT_STOP: 'Swing · 12% stop',
+  SWING_NO_LOCK: 'Swing · no profit lock'
+};
+const strategyLabel = (value: unknown) => LANE_LABELS[String(value)] || String(value || 'Unknown').replace(/_/g, ' ');
 
 function StrategyBadge({ strategy }: { strategy: unknown }) {
-  const wall = strategy === 'WALL_REACTION';
-  return <Badge variant="outline" className={wall ? 'border-sky-500/40 text-sky-600 dark:text-sky-300' : 'border-violet-500/40 text-violet-600 dark:text-violet-300'}>{strategyLabel(strategy)}</Badge>;
+  const name = String(strategy || '');
+  const tone = name === 'WALL_REACTION'
+    ? 'border-sky-500/40 text-sky-600 dark:text-sky-300'
+    : name.startsWith('SWING')
+      ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-300'
+      : 'border-violet-500/40 text-violet-600 dark:text-violet-300';
+  return <Badge variant="outline" className={tone}>{strategyLabel(strategy)}</Badge>;
+}
+
+function LaneTable({ lanes, canManage, onToggle, busy }: { lanes: PaperLaneStat[]; canManage: boolean; onToggle: (lane: string, active: boolean) => void; busy: string | null }) {
+  const swingLanes = lanes.filter((lane) => lane.lane.startsWith('SWING'));
+  if (swingLanes.length === 0) return null;
+  const fmt = (value: number | null, digits = 1, suffix = '') => (value === null || value === undefined ? '—' : `${value.toFixed(digits)}${suffix}`);
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Swing variant lanes</CardTitle><p className="text-xs text-muted-foreground">Every engine setup is offered to each lane; each lane keeps its own ledger so one rule change at a time can be judged. Exit rules are frozen on each position at entry.</p></CardHeader>
+      <CardContent className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-muted-foreground"><th className="py-1 pr-3 font-medium">Lane</th><th className="py-1 pr-3 font-medium">Rules</th><th className="py-1 pr-3 font-medium">Closed</th><th className="py-1 pr-3 font-medium">Win %</th><th className="py-1 pr-3 font-medium">PF</th><th className="py-1 pr-3 font-medium">Exp / trade</th><th className="py-1 pr-3 font-medium">Realized</th><th className="py-1 pr-3 font-medium">Open</th><th className="py-1 font-medium">Entries</th></tr></thead>
+          <tbody>
+            {swingLanes.map((lane) => (
+              <tr key={lane.lane} className="border-t border-border/50">
+                <td className="py-1.5 pr-3 font-medium" title={lane.description || undefined}>{lane.label}</td>
+                <td className="py-1.5 pr-3 text-muted-foreground">{lane.variant ? `${lane.aiGate === 'off' ? 'no AI · ' : ''}stop ${lane.variant.premiumStopPct}% · trail ${lane.variant.trailPct}%${lane.variant.profitLock ? '' : ' · no lock'}` : '—'}</td>
+                <td className="py-1.5 pr-3 tabular-nums">{lane.closedTrades}</td>
+                <td className="py-1.5 pr-3 tabular-nums">{fmt(lane.winRate, 0, '%')}</td>
+                <td className="py-1.5 pr-3 tabular-nums">{fmt(lane.profitFactor, 2)}</td>
+                <td className="py-1.5 pr-3 tabular-nums">{lane.expectancy === null ? '—' : money.format(lane.expectancy)}</td>
+                <td className={`py-1.5 pr-3 font-mono tabular-nums ${lane.realizedPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{lane.realizedPnl >= 0 ? '+' : ''}{money.format(lane.realizedPnl)}</td>
+                <td className="py-1.5 pr-3 tabular-nums">{lane.openTrades}</td>
+                <td className="py-1.5">
+                  {canManage
+                    ? <Button size="sm" variant="outline" className="h-7 text-2xs" disabled={busy === lane.lane} onClick={() => onToggle(lane.lane, lane.automationStatus !== 'ACTIVE')}>{lane.automationStatus === 'ACTIVE' ? 'Pause' : 'Resume'}</Button>
+                    : <Badge variant="secondary">{lane.automationStatus.toLowerCase()}</Badge>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function PaperAccountsPage() {
@@ -20,6 +69,7 @@ export default function PaperAccountsPage() {
   const [filter, setFilter] = useState<StrategyFilter>('ALL');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [busyLane, setBusyLane] = useState<string | null>(null);
 
   const load = useCallback(async (initial = false) => {
     if (initial) setLoading(true);
@@ -44,13 +94,25 @@ export default function PaperAccountsPage() {
   const orders = useMemo(() => (summary?.recentOrders || []).filter(matches), [summary, matches]);
   const events = useMemo(() => (summary?.journal || []).filter(matches), [summary, matches]);
   const availableCash = summary ? Number(summary.account.cash_balance) - Number(summary.account.reserved_cash) : 0;
+  const laneNames = useMemo(() => (summary?.strategyControls || []).map((control) => control.strategy_name), [summary]);
+  const toggleLane = useCallback(async (lane: string, active: boolean) => {
+    setBusyLane(lane);
+    try {
+      await api.setPaperLaneAutomation(lane, active);
+      await load();
+    } catch (cause: any) {
+      setError(cause.message || 'Failed to update lane automation');
+    } finally {
+      setBusyLane(null);
+    }
+  }, [load]);
 
   return (
     <main className="page-shell space-y-5">
       <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-2"><WalletCards className="h-5 w-5 text-primary" /><h1 className="text-2xl font-semibold">Shared Paper Account</h1></div>
-          <p className="mt-1 text-sm text-muted-foreground">One $100,000 simulated cash balance for Day Trading and Wall Reaction. Every record remains strategy-labelled.</p>
+          <p className="mt-1 text-sm text-muted-foreground">One $100,000 simulated cash balance shared by the day-trading lane and the swing variant lanes. Every record is lane-labelled.</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />Refresh</Button>
       </header>
@@ -66,11 +128,12 @@ export default function PaperAccountsPage() {
 
       <section className="flex flex-wrap items-center gap-2 border-y py-3">
         <span className="mr-1 text-sm font-medium">Show</span>
-        {(['ALL', 'DAY_TRADING', 'WALL_REACTION'] as StrategyFilter[]).map((value) => (
-          <Button key={value} size="sm" variant={filter === value ? 'default' : 'outline'} onClick={() => setFilter(value)}>{value === 'ALL' ? 'All strategies' : strategyLabel(value)}</Button>
+        {(['ALL', ...laneNames] as StrategyFilter[]).map((value) => (
+          <Button key={value} size="sm" variant={filter === value ? 'default' : 'outline'} onClick={() => setFilter(value)}>{value === 'ALL' ? 'All lanes' : strategyLabel(value)}</Button>
         ))}
-        {summary?.strategyControls.map((control) => <Badge key={control.strategy_name} variant="secondary">{strategyLabel(control.strategy_name)} entries {control.automation_status.toLowerCase()}</Badge>)}
       </section>
+
+      {summary?.lanes && <LaneTable lanes={summary.lanes} canManage={Boolean((summary as any).canManage)} onToggle={(lane, active) => void toggleLane(lane, active)} busy={busyLane} />}
 
       <Card>
         <CardHeader><CardTitle className="text-base">Open positions</CardTitle></CardHeader>

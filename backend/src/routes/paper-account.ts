@@ -37,6 +37,24 @@ export async function paperAccountRoutes(fastify: FastifyInstance) {
     return (fastify as any).paperTrading.setAutomationStatus('ACTIVE');
   });
 
+  // Per-lane automation toggle (swing variant lanes and DAY_TRADING alike).
+  fastify.post('/lanes/:lane/:action', async (request, reply) => {
+    if (String((request as any).user?.role || '').toUpperCase() !== 'ADMIN') {
+      return reply.code(403).send({ error: 'Admin access required' });
+    }
+    const { lane, action } = request.params as { lane: string; action: string };
+    if (!/^[A-Z0-9_]{1,50}$/.test(lane)) return reply.code(400).send({ error: 'Invalid lane name' });
+    if (action !== 'pause' && action !== 'resume') return reply.code(400).send({ error: 'Action must be pause or resume' });
+    try {
+      return await (fastify as any).paperTrading.setAutomationStatus(action === 'pause' ? 'PAUSED' : 'ACTIVE', lane);
+    } catch (error: any) {
+      if (Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500) {
+        return reply.code(error.statusCode).send({ error: error.message });
+      }
+      throw error;
+    }
+  });
+
   fastify.post('/positions/:positionId/close', async (request, reply) => {
     if (String((request as any).user?.role || '').toUpperCase() !== 'ADMIN') {
       return reply.code(403).send({ error: 'Admin access required' });

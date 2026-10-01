@@ -1063,6 +1063,30 @@ async function run() {
   await noQuoteService.manageSwingExits({ spot: 700 });
   assert.equal(noQuoteCloses, 0, 'a due swing exit with no usable bid must wait for a quote, not close at $0');
 
+  // --- Variant lanes: exit rules follow the parameters frozen on the position.
+  {
+    const basePos = { entry_price: 4, trailing_high_price: 4, option_type: 'CALL', suggested_stop_loss: 690, suggested_take_profit_1: 710, stop_loss_trigger: 3.2, analysis_data: {} };
+    const wide = { ...basePos, stop_loss_trigger: 2.8, analysis_data: { variant: { name: 'SWING_WIDE_STOP', premiumStopPct: 30, trailPct: 15, profitLock: true, exitBeforeExpiryDte: 2, maxHoldMinutes: 10080 } } };
+    assert.equal(PaperTradingService.swingExitDecision(wide, 3.0, 700, 8, 1).intent, null, 'a 30% stop variant holds through a 25% drawdown');
+    assert.equal(PaperTradingService.swingExitDecision(wide, 2.7, 700, 8, 1).intent, 'SWING_PREMIUM_STOP', 'and exits at its own 30% stop');
+    assert.equal(PaperTradingService.swingExitDecision(basePos, 3.0, 700, 8, 1).intent, 'SWING_PREMIUM_STOP', 'the baseline exits at 20%');
+    const noLock = { ...basePos, trailing_high_price: 6.5, analysis_data: { variant: { name: 'SWING_NO_LOCK', premiumStopPct: 20, trailPct: 15, profitLock: false, exitBeforeExpiryDte: 2, maxHoldMinutes: 10080 } } };
+    const noLockDecision = PaperTradingService.swingExitDecision(noLock, 6.0, 700, 8, 1);
+    assert.equal(noLockDecision.intent, null, 'without the profit-lock ladder a +62% peak does not arm the trail by itself');
+    assert.equal(noLockDecision.armNow, false, 'no-lock variant stays unarmed until TP1 is crossed');
+    const withLock = { ...basePos, trailing_high_price: 6.5 };
+    const lockDecision = PaperTradingService.swingExitDecision(withLock, 5.0, 700, 8, 1);
+    assert.equal(lockDecision.intent, 'SWING_TRAILING_STOP', 'the baseline arms from the ladder (floor 1.25x entry = 5.0) and exits when bid touches it');
+    assert.equal(lockDecision.metadata.variant, 'SWING', 'exit metadata names the lane');
+    const noLockTp1 = PaperTradingService.swingExitDecision(noLock, 6.0, 711, 8, 1);
+    assert.equal(noLockTp1.armNow, true, 'crossing TP1 still arms the trail for the no-lock variant');
+    const shortHold = { ...basePos, analysis_data: { variant: { name: 'X', premiumStopPct: 20, trailPct: 15, profitLock: true, exitBeforeExpiryDte: 3, maxHoldMinutes: 1440 } } };
+    assert.equal(PaperTradingService.swingExitDecision(shortHold, 4.0, 700, 3, 0.5).intent, 'SWING_EXPIRY_EXIT', 'frozen exitBeforeExpiryDte is honoured');
+    assert.equal(PaperTradingService.swingExitDecision(shortHold, 4.0, 700, 8, 1.1).intent, 'SWING_MAX_HOLD', 'frozen maxHoldMinutes is honoured');
+    const legacy = { ...basePos, paper_strategy: 'SWING_TIGHT_STOP', analysis_data: {} };
+    assert.equal(PaperTradingService.swingExitDecision(legacy, 3.0, 700, 8, 1).metadata.variant ?? 'SWING_TIGHT_STOP', 'SWING_TIGHT_STOP', 'a position without frozen params falls back to its lane definition');
+  }
+
   console.log('All PaperTradingService tests passed!');
 }
 

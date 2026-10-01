@@ -728,8 +728,65 @@ async function testSwingEntryGuards() {
   assert(!routed.some(r => r.startsWith('live:80')), 'A paper hold must never enter the live entry path');
 }
 
+// Paper variant lanes: one AI verdict per setup fanned out to the AI-gated
+// lanes; AI-off lanes enter regardless; only lanes with a free slot and
+// ACTIVE automation are offered the setup.
+async function testPaperVariantFanOut() {
+  const { PAPER_SWING_VARIANTS } = require('../config/paper-variants');
+  const entered: Array<{ lane: string; source: string }> = [];
+  let decideCalls = 0;
+  let blocks = true;
+  const inactive = new Set<string>(['SWING_TIGHT_STOP']);
+  const occupied = new Set<string>(['SWING_WIDE_STOP']);
+  const paperTrading = {
+    isSwingAutomationActive: async (_pg: any, lane: string) => !inactive.has(lane),
+    openSwingPositionCount: async (lane: string) => (occupied.has(lane) ? 1 : 0),
+    createSwingEntry: async (_signal: any, _setupId: string, verdict: any, variant: any) => {
+      entered.push({ lane: variant.name, source: verdict.source });
+      return { entered: true, reason: 'ok' };
+    }
+  };
+  const adapter = new StrategyEngineAdapter({
+    pg: { query: async () => ({ rows: [] }) },
+    log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+    liveExitMonitor: { getHealth: () => ({ status: 'UP' }) },
+    paperTrading
+  } as any) as any;
+  adapter.liveAiGate = {
+    decide: async () => {
+      decideCalls += 1;
+      return blocks
+        ? { mode: 'gate', decision: 'SKIP', riskTier: 'CAUTIOUS', rationale: 'red', riskFlags: [], source: 'AI', blocks: true, aiRequested: true }
+        : { mode: 'gate', decision: 'TRADE', riskTier: 'STANDARD', rationale: 'ok', riskFlags: [], source: 'AI', blocks: false, aiRequested: true };
+    }
+  };
+  adapter.autonomousEntryWindow = () => ({ open: true, reason: 'OPEN', cutoffMinutes: 900, closeMinutes: 960 });
+  const sig = signal({ state: 'ACTIVE', lifecycle: { entry_allowed: true } });
+
+  await adapter.maybeExecutePaperSwingEntry(sig, 501, '55555555-5555-4555-8555-555555555555');
+  assert(decideCalls === 1, `The AI gate is asked once per setup, not once per lane (got ${decideCalls})`);
+  assert(entered.length === 1 && entered[0].lane === 'SWING_NOAI' && entered[0].source === 'OFF',
+    `A red verdict holds every AI-gated lane; only the AI-off lane enters (got ${JSON.stringify(entered)})`);
+
+  entered.length = 0;
+  blocks = false;
+  await adapter.maybeExecutePaperSwingEntry(sig, 502, '55555555-5555-4555-8555-555555555556');
+  const lanes = entered.map(e => e.lane).sort();
+  const expected = PAPER_SWING_VARIANTS.map((v: any) => v.name).filter((n: string) => !inactive.has(n) && !occupied.has(n)).sort();
+  assert(JSON.stringify(lanes) === JSON.stringify(expected), `A green verdict enters every ACTIVE lane with a free slot (got ${lanes}, expected ${expected})`);
+  assert(entered.find(e => e.lane === 'SWING')?.source === 'AI' && entered.find(e => e.lane === 'SWING_NOAI')?.source === 'OFF',
+    'AI-gated lanes record the AI verdict; the AI-off lane records OFF');
+
+  entered.length = 0;
+  decideCalls = 0;
+  for (const v of PAPER_SWING_VARIANTS) occupied.add(v.name);
+  await adapter.maybeExecutePaperSwingEntry(sig, 503, '55555555-5555-4555-8555-555555555557');
+  assert(decideCalls === 0 && entered.length === 0, 'With every slot occupied no AI budget is spent and nothing enters');
+}
+
 runTests()
   .then(testSwingEntryGuards)
+  .then(testPaperVariantFanOut)
   .then(() => console.log('All StrategyEngineAdapter tests passed!'))
   .catch((err) => {
     console.error(err);

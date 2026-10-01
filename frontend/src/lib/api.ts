@@ -245,6 +245,23 @@ export interface AdapterHealth {
   source: string;
 }
 
+export interface PaperLaneStat {
+  lane: string;
+  label: string;
+  description: string | null;
+  variant: { name: string; premiumStopPct: number; trailPct: number; profitLock: boolean; exitBeforeExpiryDte: number; maxHoldMinutes: number } | null;
+  aiGate: 'inherit' | 'off' | null;
+  automationStatus: 'ACTIVE' | 'PAUSED';
+  closedTrades: number;
+  wins: number;
+  openTrades: number;
+  winRate: number | null;
+  realizedPnl: number;
+  profitFactor: number | null;
+  expectancy: number | null;
+  lastClosedAt: string | null;
+}
+
 export interface PaperAccountSummary {
   account: {
     id: string;
@@ -322,7 +339,9 @@ export interface PaperAccountSummary {
   limits: { maxDebitPct: number | null; dailyLossPct: number | null; maxTradesPerDay: number | null; maxOpenPositions: number | null; maxContracts: number | null; trailingStopPct: number; policyVersion: string };
   aiUsage: { dailyCalls: number; dailyCallLimit: number; dailyCallsRemaining: number; dailyAttempts: number; dailyAttemptLimit: number; dailyTokens: number; monthlyCalls: number; monthlyTokens: number };
   baseline: { name: string; closedTrades: number; openTrades: number; wins: number; winRate: number; realizedPnl: number; managedRealizedPnl: number; valueAdded: number };
-  strategyControls: Array<{ strategy_name: 'DAY_TRADING' | 'WALL_REACTION'; automation_status: 'ACTIVE' | 'PAUSED' }>;
+  strategyControls: Array<{ strategy_name: string; automation_status: 'ACTIVE' | 'PAUSED' }>;
+  /** Per-lane ledgers: DAY_TRADING, WALL_REACTION and every swing variant lane. */
+  lanes?: PaperLaneStat[];
   strategyAutomationStatus: 'ACTIVE' | 'PAUSED';
   health: { status: string; lastProcessedAt: string | null; lastError: string | null };
   canManage: boolean;
@@ -1588,6 +1607,15 @@ export const api = {
   async getPerformanceMetrics(scope: 'paper' | 'live' = 'live', days = 30): Promise<PerformanceMetrics> {
     const res = await authFetch(`${API_BASE}/metrics/performance?scope=${scope}&days=${days}`);
     if (!res.ok) throw new Error('Failed to fetch performance metrics');
+    return res.json();
+  },
+
+  async setPaperLaneAutomation(lane: string, active: boolean): Promise<any> {
+    const res = await authFetch(`${API_BASE}/paper-account/lanes/${encodeURIComponent(lane)}/${active ? 'resume' : 'pause'}`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update paper lane automation');
+    }
     return res.json();
   },
 

@@ -9,6 +9,7 @@ import { SWING_EXIT_POLICY, SWING_MAX_HOLD_DAYS, SWING_TRAIL_MULT, resolvePremiu
 import { redis as defaultRedis } from '../lib/redis';
 import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { PAPER_STRATEGIES, SHARED_PAPER_ACCOUNT_ID } from './paper-account-constants';
+import { FrozenVariantParams, PAPER_SWING_VARIANTS, PAPER_SWING_VARIANT_NAMES, PaperVariant, freezeVariant, paperVariantByName, variantParamsForPosition } from '../config/paper-variants';
 
 const ACCOUNT_ID = SHARED_PAPER_ACCOUNT_ID;
 const STRATEGY_NAME = PAPER_STRATEGIES.DAY_TRADING;
@@ -172,8 +173,8 @@ export class PaperTradingService {
            COALESCE(SUM(total_tokens) FILTER (WHERE (created_at AT TIME ZONE 'America/New_York')::date=$2::date),0)::int AS daily_tokens,
            COUNT(*) FILTER (WHERE ai_requested AND date_trunc('month', created_at AT TIME ZONE 'America/New_York')=date_trunc('month', NOW() AT TIME ZONE 'America/New_York'))::int AS monthly_calls,
            COALESCE(SUM(total_tokens) FILTER (WHERE date_trunc('month', created_at AT TIME ZONE 'America/New_York')=date_trunc('month', NOW() AT TIME ZONE 'America/New_York')),0)::int AS monthly_tokens
-         FROM paper_trade_decisions WHERE account_id=$1`,
-        [ACCOUNT_ID, ET_DATE.format(new Date())]
+         FROM paper_trade_decisions WHERE account_id=$1 AND strategy_name=$3`,
+        [ACCOUNT_ID, ET_DATE.format(new Date()), STRATEGY_NAME]
       ),
       (this.fastify as any).pg.query(
         `SELECT * FROM paper_trade_journal WHERE account_id=$1 ORDER BY created_at DESC LIMIT 250`, [ACCOUNT_ID]
@@ -194,6 +195,7 @@ export class PaperTradingService {
       )
     ]);
     const openPositions = await this.applyLivePositions(positions.rows);
+    const lanes = await this.laneStats().catch(() => []);
     const openById = new Map(openPositions.map((position: any) => [Number(position.id), position]));
     const recentTradePositions = recentPositions.rows.map((position: any) => ({
       ...position,
@@ -208,6 +210,7 @@ export class PaperTradingService {
         high_water_mark: Math.max(Number(account.high_water_mark || 0), equity)
       },
       openPositions,
+      lanes,
       recentPositions: recentTradePositions,
       recentDecisions: decisions.rows,
       recentOrders: orders.rows,
@@ -570,20 +573,24 @@ export class PaperTradingService {
     }
   }
 
-  public async setAutomationStatus(status: 'ACTIVE' | 'PAUSED'): Promise<Record<string, any>> {
+  public async setAutomationStatus(status: 'ACTIVE' | 'PAUSED', lane: string = STRATEGY_NAME): Promise<Record<string, any>> {
     const client = await (this.fastify as any).pg.connect();
     let result: Record<string, any> | null = null;
     try {
       await client.query('BEGIN');
       const lockedAccount = await client.query(`SELECT id FROM paper_accounts WHERE id=$1 FOR UPDATE`, [ACCOUNT_ID]);
       if (!lockedAccount.rows[0]) throw new Error('Shared paper account is unavailable');
-      const control = await client.query(`SELECT strategy_name FROM paper_strategy_controls WHERE strategy_name=$1 FOR UPDATE`, [STRATEGY_NAME]);
-      if (!control.rows[0]) throw new Error('Day Trading paper automation control is unavailable');
+      const control = await client.query(`SELECT strategy_name FROM paper_strategy_controls WHERE strategy_name=$1 FOR UPDATE`, [lane]);
+      if (!control.rows[0]) {
+        const error: any = new Error(`Paper automation control for lane ${lane} is unavailable`);
+        error.statusCode = 404;
+        throw error;
+      }
       if (status === 'PAUSED') {
         const pending = await client.query(
           `UPDATE paper_orders SET status='EXPIRED', failure_reason='Paper automation paused by an administrator', updated_at=NOW()
            WHERE account_id=$1 AND strategy_name=$2 AND intent='ENTRY' AND status='PENDING'
-           RETURNING reserved_debit`, [ACCOUNT_ID, STRATEGY_NAME]
+           RETURNING reserved_debit`, [ACCOUNT_ID, lane]
         );
         const released = pending.rows.reduce((sum: number, row: any) => sum + Number(row.reserved_debit || 0), 0);
         if (released > 0) {
@@ -595,7 +602,7 @@ export class PaperTradingService {
       }
       const { rows } = await client.query(
         `UPDATE paper_strategy_controls SET automation_status=$1, updated_at=NOW() WHERE strategy_name=$2 RETURNING *`,
-        [status, STRATEGY_NAME]
+        [status, lane]
       );
       if (!rows[0]) throw new Error('Day Trading paper automation control is unavailable');
       await client.query('COMMIT');
@@ -882,8 +889,9 @@ export class PaperTradingService {
            COUNT(*) FILTER (WHERE ai_requested)::int AS attempts
          FROM paper_trade_decisions
          WHERE account_id=$1
+           AND strategy_name=$3
            AND (created_at AT TIME ZONE 'America/New_York')::date=$2::date`,
-        [ACCOUNT_ID, today]
+        [ACCOUNT_ID, today, STRATEGY_NAME]
       );
       const adjudications = Number(calls.rows[0]?.adjudications || 0);
       const attempts = Number(calls.rows[0]?.attempts || 0);
@@ -2012,21 +2020,63 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
   // out at ≤2 DTE, 7-calendar-day max hold, 15% synthetic trailing stop.
   // ---------------------------------------------------------------------------
 
-  public async isSwingAutomationActive(queryable: any = (this.fastify as any).pg): Promise<boolean> {
+  public async isSwingAutomationActive(queryable: any = (this.fastify as any).pg, lane: string = PAPER_STRATEGIES.SWING): Promise<boolean> {
     const { rows } = await queryable.query(
       `SELECT automation_status FROM paper_strategy_controls WHERE strategy_name=$1`,
-      [PAPER_STRATEGIES.SWING]
+      [lane]
     );
-    if (!rows[0]) throw new Error('Swing paper automation control is unavailable');
+    if (!rows[0]) throw new Error(`Paper automation control for lane ${lane} is unavailable`);
     return String(rows[0].automation_status || 'PAUSED') === 'ACTIVE';
   }
 
-  public async openSwingPositionCount(): Promise<number> {
+  /** One open position per variant lane (paper has no DB-level slot guard: user_id is NULL). */
+  public async openSwingPositionCount(lane: string = PAPER_STRATEGIES.SWING): Promise<number> {
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT COUNT(*)::int AS n FROM positions WHERE paper_account_id=$1 AND paper_strategy=$2 AND status='OPEN'`,
-      [ACCOUNT_ID, PAPER_STRATEGIES.SWING]
+      [ACCOUNT_ID, lane]
     );
     return Number(rows[0]?.n || 0);
+  }
+
+  /** Per-lane ledger stats for every paper lane (variants + day trading), for the UI and the weekly report. */
+  public async laneStats(): Promise<Array<Record<string, any>>> {
+    const { rows } = await (this.fastify as any).pg.query(
+      `SELECT c.strategy_name AS lane, c.automation_status,
+              COUNT(p.id) FILTER (WHERE p.status='CLOSED')::int AS closed_trades,
+              COUNT(p.id) FILTER (WHERE p.status='CLOSED' AND p.realized_pnl > 0)::int AS wins,
+              COUNT(p.id) FILTER (WHERE p.status='OPEN')::int AS open_trades,
+              COALESCE(SUM(p.realized_pnl) FILTER (WHERE p.status='CLOSED'),0)::float8 AS realized_pnl,
+              COALESCE(SUM(p.realized_pnl) FILTER (WHERE p.status='CLOSED' AND p.realized_pnl > 0),0)::float8 AS gross_gains,
+              COALESCE(ABS(SUM(p.realized_pnl) FILTER (WHERE p.status='CLOSED' AND p.realized_pnl <= 0)),0)::float8 AS gross_losses,
+              MAX(p.updated_at) FILTER (WHERE p.status='CLOSED') AS last_closed_at
+       FROM paper_strategy_controls c
+       LEFT JOIN positions p ON p.paper_account_id=$1 AND p.paper_strategy=c.strategy_name
+       GROUP BY c.strategy_name, c.automation_status
+       ORDER BY c.strategy_name`,
+      [ACCOUNT_ID]
+    );
+    return rows.map((row: any) => {
+      const variant = PAPER_SWING_VARIANTS.find((v) => v.name === row.lane) || null;
+      const closed = Number(row.closed_trades || 0);
+      const gains = Number(row.gross_gains || 0);
+      const losses = Number(row.gross_losses || 0);
+      return {
+        lane: row.lane,
+        label: variant?.label || row.lane,
+        description: variant?.description || null,
+        variant: variant ? freezeVariant(variant) : null,
+        aiGate: variant?.aiGate || null,
+        automationStatus: row.automation_status,
+        closedTrades: closed,
+        wins: Number(row.wins || 0),
+        openTrades: Number(row.open_trades || 0),
+        winRate: closed ? Number(((Number(row.wins || 0) / closed) * 100).toFixed(1)) : null,
+        realizedPnl: Number(Number(row.realized_pnl || 0).toFixed(2)),
+        profitFactor: losses > 0 ? Number((gains / losses).toFixed(2)) : gains > 0 ? 99.99 : null,
+        expectancy: closed ? Number(((gains - losses) / closed).toFixed(2)) : null,
+        lastClosedAt: row.last_closed_at || null
+      };
+    });
   }
 
   /** Live premium stop for strategy entries: paper_policy.premium_stop_pct, else 20%. */
@@ -2068,8 +2118,14 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
   public async createSwingEntry(
     signal: Record<string, any>,
     setupId: string,
-    aiVerdict: { decision: string; riskTier: string; rationale: string; source: string }
+    aiVerdict: { decision: string; riskTier: string; rationale: string; source: string; aiRequested?: boolean },
+    variant: PaperVariant = paperVariantByName(PAPER_STRATEGIES.SWING)
   ): Promise<{ entered: boolean; reason: string; positionId?: number }> {
+    const lane = variant.name;
+    const frozen = freezeVariant(variant);
+    // Record what actually produced the verdict (the old code hard-coded 'AI').
+    const decisionSource = aiVerdict.source === 'AI' ? 'AI' : aiVerdict.source === 'OFF' ? 'RULES' : 'FALLBACK';
+    const aiRequested = aiVerdict.aiRequested ?? (aiVerdict.source === 'AI' || aiVerdict.source === 'FALLBACK');
     const { side, setup, option } = this.optionFor(signal);
     const expiry = this.normalizeExpiry(option.expiry);
     const dte = PaperTradingService.swingDte(expiry);
@@ -2089,10 +2145,11 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     if (killSwitch.halted) {
       return { entered: false, reason: `Paper kill switch halted entries: ${killSwitch.reason}` };
     }
-    if (await this.openSwingPositionCount() > 0) {
-      return { entered: false, reason: 'Swing paper slot occupied — one open position at a time' };
+    if (await this.openSwingPositionCount(lane) > 0) {
+      return { entered: false, reason: `${lane} paper slot occupied — one open position per lane` };
     }
     const fillPrice = Number(ask.toFixed(2));
+    const premiumStop = Number((fillPrice * (1 - frozen.premiumStopPct / 100)).toFixed(2));
     const debit = Number((fillPrice * 100).toFixed(2));
     const client = await (this.fastify as any).pg.connect();
     try {
@@ -2104,17 +2161,17 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         await client.query('ROLLBACK');
         return { entered: false, reason: 'Shared paper account is unavailable' };
       }
-      if (!(await this.isSwingAutomationActive(client))) {
+      if (!(await this.isSwingAutomationActive(client, lane))) {
         await client.query('ROLLBACK');
-        return { entered: false, reason: 'Swing paper automation is not ACTIVE' };
+        return { entered: false, reason: `${lane} paper automation is not ACTIVE` };
       }
       const slotTaken = await client.query(
         `SELECT id FROM positions WHERE paper_account_id=$1 AND paper_strategy=$2 AND status='OPEN' LIMIT 1 FOR UPDATE`,
-        [ACCOUNT_ID, PAPER_STRATEGIES.SWING]
+        [ACCOUNT_ID, lane]
       );
       if (slotTaken.rows[0]) {
         await client.query('ROLLBACK');
-        return { entered: false, reason: 'Swing paper slot occupied — one open position at a time' };
+        return { entered: false, reason: `${lane} paper slot occupied — one open position per lane` };
       }
       const available = Number(lockedAccount.rows[0].cash_balance || 0) - Number(lockedAccount.rows[0].reserved_cash || 0);
       if (available < debit) {
@@ -2131,19 +2188,19 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            policy_version, trailing_stop_pct,
            ai_requested, ai_reasons, prompt_tokens, completion_tokens, total_tokens,
            rationale, risk_flags, evidence, strategy_name
-         ) VALUES ($1,$2,$3,'TRADE',$4,'SWING_HOLD','AI',$5,$5,0,$6,$7,$8,$9,${SWING_EXIT_POLICY.trailPct},
-           TRUE,'[]',0,0,0,$10,'[]',$11,$12)
+         ) VALUES ($1,$2,$3,'TRADE',$4,'SWING_HOLD',$13,$5,$5,0,$6,$7,$8,$9,$14,
+           $15,'[]',0,0,0,$10,'[]',$11,$12)
          ON CONFLICT (account_id, setup_id, strategy_name) DO NOTHING RETURNING *`,
         [ACCOUNT_ID, setupId, signalRow.rows[0]?.id || null, aiVerdict.riskTier, 1, fillPrice,
           null, PROMPT_VERSION, PAPER_POLICY_VERSION,
-          `Swing shadow entry — AI ${aiVerdict.decision} via ${aiVerdict.source}: ${aiVerdict.rationale}`,
-          JSON.stringify({ dte, quoteAgeSeconds, bid, ask, strategyState: signal.state }),
-          PAPER_STRATEGIES.SWING]
+          `${variant.label} entry — AI ${aiVerdict.decision} via ${aiVerdict.source}: ${aiVerdict.rationale}`,
+          JSON.stringify({ dte, quoteAgeSeconds, bid, ask, strategyState: signal.state, variant: frozen }),
+          lane, decisionSource, frozen.trailPct, aiRequested]
       );
       const decisionRow = decisionInsert.rows[0];
       if (!decisionRow) {
         await client.query('ROLLBACK');
-        return { entered: false, reason: 'A swing paper decision already exists for this setup' };
+        return { entered: false, reason: `A ${lane} paper decision already exists for this setup` };
       }
       const targets = Array.isArray(setup.targets) ? setup.targets : [];
       const positionResult = await client.query(
@@ -2155,15 +2212,16 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            suggested_take_profit_1, suggested_take_profit_2, signal_id, strategy_setup_id,
            strategy_engine_version, strategy_lifecycle_status, strategy_snapshot, strategy_managed,
            paper_account_id, paper_decision_id, paper_strategy, analysis_data, notes
-           ) VALUES (NULL,'SPY',$1,$2,$3,$4,1,$5,$4,$4,${SWING_EXIT_POLICY.trailPct},'OPEN',TRUE,$6,'system_paper','FILLED',1,
+           ) VALUES (NULL,'SPY',$1,$2,$3,$4,1,$5,$4,$4,$17,'OPEN',TRUE,$6,'system_paper','FILLED',1,
                    'BUY_TO_OPEN','SELL_TO_CLOSE',$7,$8,$9,$10,$11,'signal-only-v2','ACTIVE',$12,TRUE,$6,$13,$14,$15,$16)
          RETURNING *`,
-        [side, Number(option.strike), expiry, fillPrice, PaperTradingService.swingPremiumStop(fillPrice, signal),
+        [side, Number(option.strike), expiry, fillPrice, premiumStop,
           ACCOUNT_ID, setup.invalidation || null, targets[0] || null, targets[1] || targets[0] || null,
           decisionRow.signal_id, setupId, JSON.stringify(signal), decisionRow.id,
-          PAPER_STRATEGIES.SWING,
-          JSON.stringify({ exitProfile: 'SWING_HOLD', trailingHighPremium: fillPrice, trailingStopPct: SWING_EXIT_POLICY.trailPct, swingDte: dte }),
-          `[System paper swing entry from setup ${setupId}]`]
+          lane,
+          JSON.stringify({ exitProfile: 'SWING_HOLD', trailingHighPremium: fillPrice, trailingStopPct: frozen.trailPct, swingDte: dte, variant: frozen }),
+          `[System paper ${lane} entry from setup ${setupId}]`,
+          frozen.trailPct]
       );
       const filledPosition = positionResult.rows[0];
       await client.query(
@@ -2172,7 +2230,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            option_type, strike, expiration, quantity, limit_price, fill_price, filled_at, reserved_debit, quote_snapshot, strategy_name
          ) VALUES ($1,$2,$3,$4,'ENTRY','BUY_TO_OPEN','FILLED',$5,$6,$7,$8,1,$9,$9,NOW(),0,$10,$11)`,
         [ACCOUNT_ID, decisionRow.id, setupId, decisionRow.signal_id, option.local_symbol, side,
-          Number(option.strike), expiry, fillPrice, JSON.stringify({ bid, ask, quoteAgeSeconds }), PAPER_STRATEGIES.SWING]
+          Number(option.strike), expiry, fillPrice, JSON.stringify({ bid, ask, quoteAgeSeconds }), lane]
       );
       await client.query(
         `UPDATE paper_accounts SET cash_balance = cash_balance - $1, updated_at=NOW() WHERE id=$2`,
@@ -2181,9 +2239,9 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       await client.query('COMMIT');
       await this.journal(
         'ENTRY_FILLED',
-        `Swing paper entry filled: 1 ${side} contract at $${fillPrice.toFixed(2)} (${dte} DTE).`,
+        `${variant.label} paper entry filled: 1 ${side} contract at $${fillPrice.toFixed(2)} (${dte} DTE).`,
         decisionRow, filledPosition.id, fillPrice,
-        { quantity: 1, osiTicker: option.local_symbol, swingDte: dte, aiSource: aiVerdict.source }
+        { quantity: 1, osiTicker: option.local_symbol, swingDte: dte, aiSource: aiVerdict.source, lane, variant: frozen }
       );
       this.broadcast({ type: 'PAPER_ACCOUNT_CHANGED', data: { reason: 'SWING_ENTRY_FILLED', positionId: filledPosition.id } });
       return { entered: true, reason: `Filled 1 ${side} at $${fillPrice.toFixed(2)} (${dte} DTE)`, positionId: filledPosition.id };
@@ -2208,8 +2266,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
   public async manageSwingExits(signal: Record<string, any>): Promise<void> {
     const { rows } = await (this.fastify as any).pg.query(
       `SELECT p.* FROM positions p
-       WHERE p.paper_account_id=$1 AND p.paper_strategy=$2 AND p.status='OPEN'`,
-      [ACCOUNT_ID, PAPER_STRATEGIES.SWING]
+       WHERE p.paper_account_id=$1 AND p.paper_strategy = ANY($2::text[]) AND p.status='OPEN'`,
+      [ACCOUNT_ID, [...PAPER_SWING_VARIANT_NAMES]]
     );
     const spot = Number(signal?.spot);
     const underlying = Number.isFinite(spot) && spot > 0 ? spot : null;
@@ -2228,14 +2286,15 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       } catch (error: any) {
         this.fastify.log.warn(`[PaperTrading] Swing exit quote failed for position ${position.id}: ${error.message || String(error)}`);
       }
+      const params = variantParamsForPosition(position);
       if (!(bid > 0)) {
-        if ((dte != null && dte <= SWING_EXIT_POLICY.exitBeforeExpiryDte) || holdDays >= SWING_MAX_HOLD_DAYS) {
+        if ((dte != null && dte <= params.exitBeforeExpiryDte) || holdDays >= params.maxHoldMinutes / 1440) {
           this.fastify.log.warn(`[PaperTrading] Swing position ${position.id} is due to exit but has no usable bid — retrying on the next snapshot`);
         }
         continue;
       }
       const exitPosition = { ...position, underlying_price: underlying ?? position.underlying_price };
-      const decision = PaperTradingService.swingExitDecision(position, bid, underlying, dte, holdDays);
+      const decision = PaperTradingService.swingExitDecision(position, bid, underlying, dte, holdDays, params);
       if (decision.peak !== Number(position.trailing_high_price || 0) || decision.armNow) {
         const analysis = this.paperAnalysis(position.analysis_data);
         if (decision.armNow) analysis.swingTrailArmedAt = new Date().toISOString();
@@ -2263,9 +2322,12 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     bid: number,
     underlying: number | null,
     dte: number | null,
-    holdDays: number
+    holdDays: number,
+    params: FrozenVariantParams = variantParamsForPosition(position)
   ): { intent: string | null; peak: number; armNow: boolean; metadata: Record<string, any> } {
     const entry = Number(position.entry_price || 0);
+    const trailMult = 1 - params.trailPct / 100;
+    const maxHoldDays = params.maxHoldMinutes / 1440;
     const peak = Math.max(Number(position.trailing_high_price || 0), entry, bid);
     const isCall = String(position.option_type || '').toUpperCase() === 'CALL';
     const crossed = (level: any, towardProfit: boolean) => {
@@ -2273,25 +2335,25 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       if (underlying == null || !(value > 0)) return false;
       return (isCall === towardProfit) ? underlying >= value : underlying <= value;
     };
-    if (dte != null && dte <= SWING_EXIT_POLICY.exitBeforeExpiryDte) return { intent: 'SWING_EXPIRY_EXIT', peak, armNow: false, metadata: { dte } };
-    if (holdDays >= SWING_MAX_HOLD_DAYS) return { intent: 'SWING_MAX_HOLD', peak, armNow: false, metadata: { holdDays: Number(holdDays.toFixed(2)) } };
+    if (dte != null && dte <= params.exitBeforeExpiryDte) return { intent: 'SWING_EXPIRY_EXIT', peak, armNow: false, metadata: { dte, variant: params.name } };
+    if (params.maxHoldMinutes > 0 && holdDays >= maxHoldDays) return { intent: 'SWING_MAX_HOLD', peak, armNow: false, metadata: { holdDays: Number(holdDays.toFixed(2)), variant: params.name } };
     if (crossed(position.suggested_stop_loss, false)) {
       return { intent: 'SWING_INVALIDATION', peak, armNow: false, metadata: { underlying, invalidation: Number(position.suggested_stop_loss) } };
     }
     const analysis = typeof position.analysis_data === 'string'
       ? (() => { try { return JSON.parse(position.analysis_data) || {}; } catch { return {}; } })()
       : (position.analysis_data || {});
-    const lockFloor = StopLossEngine.profitLockFloor(entry, peak);
+    const lockFloor = params.profitLock ? StopLossEngine.profitLockFloor(entry, peak) : 0;
     const alreadyArmed = Boolean(analysis.swingTrailArmedAt);
     const armed = alreadyArmed || lockFloor > 0 || crossed(position.suggested_take_profit_1, true);
     if (armed) {
       const floor = lockFloor > 0 ? lockFloor : entry;
-      const stopPrice = Math.max(peak * SWING_TRAIL_MULT, floor);
+      const stopPrice = Math.max(peak * trailMult, floor);
       return {
         intent: bid <= stopPrice ? 'SWING_TRAILING_STOP' : null,
         peak,
         armNow: !alreadyArmed,
-        metadata: { peak: Number(peak.toFixed(2)), stopPct: SWING_EXIT_POLICY.trailPct, floor: Number(floor.toFixed(2)), profitLock: lockFloor > 0 ? Number(lockFloor.toFixed(2)) : null }
+        metadata: { peak: Number(peak.toFixed(2)), stopPct: params.trailPct, variant: params.name, floor: Number(floor.toFixed(2)), profitLock: lockFloor > 0 ? Number(lockFloor.toFixed(2)) : null }
       };
     }
     const premiumStop = Number(position.stop_loss_trigger || 0);

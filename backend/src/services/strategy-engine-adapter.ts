@@ -15,6 +15,7 @@ import { TradeRedisService } from './trade-redis-service';
 import { publishRealtime } from '../lib/realtime';
 import { redis } from '../lib/redis';
 import { SWING_EXIT_POLICY } from '../config/swing-exit-policy';
+import { PAPER_SWING_VARIANTS } from '../config/paper-variants';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
 
@@ -1433,19 +1434,18 @@ export class StrategyEngineAdapter {
       return;
     }
     if (!this.autonomousEntryWindow().open) return;
-    const swingActive = await paperTrading.isSwingAutomationActive().catch(() => false);
-    if (!swingActive) return;
-    const openCount = await paperTrading.openSwingPositionCount().catch(() => 1);
-    if (openCount > 0) return;
+
+    // Every variant lane gets the same setup. Which lanes can take it right now?
+    // (automation ACTIVE and its one slot free). Nothing to do -> no AI spend.
+    const laneStates = await Promise.all(PAPER_SWING_VARIANTS.map(async (variant) => ({
+      variant,
+      active: await paperTrading.isSwingAutomationActive((this.fastify as any).pg, variant.name).catch(() => false),
+      open: await paperTrading.openSwingPositionCount(variant.name).catch(() => 1)
+    })));
+    const eligible = laneStates.filter((state) => state.active && state.open === 0).map((state) => state.variant);
+    if (eligible.length === 0) return;
+
     const settings = await getGlobalSettings((this.fastify as any).pg);
-    const fingerprint = this.planFingerprint(signal);
-    const gateMode = LiveAiGateService.mode(settings);
-    if (fingerprint) {
-      const recheck = await this.getAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => null);
-      const recheckAt = recheck?.recheck_at ? new Date(recheck.recheck_at).getTime() : 0;
-      if (recheckAt > Date.now()) return;
-      await this.deleteAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => undefined);
-    }
     // Fail closed on an unevaluable kill switch, mirroring the live path.
     const halt = await KillSwitchService.evaluate((this.fastify as any).pg, 'paper').catch((err: any) => ({
       halted: true,
@@ -1455,30 +1455,57 @@ export class StrategyEngineAdapter {
       this.fastify.log.info(`[StrategyEngineAdapter] Paper swing entry halted: ${halt.reason || 'kill switch engaged'}`);
       return;
     }
-    const verdict = await this.liveAiGate.decide({ userId: PAPER_SWING_RECHECK_USER_ID, signalId, signal, settings });
-    if (verdict.blocks) {
+
+    // One AI verdict per setup, fanned out to every AI-gated lane; AI-off
+    // lanes never wait on it (and never spend the budget).
+    const fingerprint = this.planFingerprint(signal);
+    const gateMode = LiveAiGateService.mode(settings);
+    const needsAi = eligible.some((variant) => variant.aiGate !== 'off');
+    let verdict: any = null;
+    let aiHeld = false;
+    if (needsAi) {
       if (fingerprint) {
-        await this.upsertAiRecheck({
-          userId: PAPER_SWING_RECHECK_USER_ID,
-          fingerprint,
-          gateMode,
-          signalId,
-          lane: this.strategyLane(signal),
-          recheckAt: new Date(Date.now() + this.aiRecheckCooldownMs(settings)),
-          lastVerdict: verdict.decision,
-          lastRationale: String(verdict.rationale || '').slice(0, 500),
-        }).catch((err: any) => this.fastify.log.warn(
-          `[StrategyEngineAdapter] Failed to persist paper swing AI recheck: ${err.message || String(err)}`
-        ));
+        const recheck = await this.getAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => null);
+        const recheckAt = recheck?.recheck_at ? new Date(recheck.recheck_at).getTime() : 0;
+        if (recheckAt > Date.now()) aiHeld = true;
+        else await this.deleteAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => undefined);
       }
-      this.fastify.log.info(`[StrategyEngineAdapter] Paper swing AI gate red — holding for re-review: ${verdict.rationale}`);
-      return;
+      if (!aiHeld) {
+        verdict = await this.liveAiGate.decide({ userId: PAPER_SWING_RECHECK_USER_ID, signalId, signal, settings });
+        if (verdict.blocks) {
+          aiHeld = true;
+          if (fingerprint) {
+            await this.upsertAiRecheck({
+              userId: PAPER_SWING_RECHECK_USER_ID,
+              fingerprint,
+              gateMode,
+              signalId,
+              lane: this.strategyLane(signal),
+              recheckAt: new Date(Date.now() + this.aiRecheckCooldownMs(settings)),
+              lastVerdict: verdict.decision,
+              lastRationale: String(verdict.rationale || '').slice(0, 500),
+            }).catch((err: any) => this.fastify.log.warn(
+              `[StrategyEngineAdapter] Failed to persist paper swing AI recheck: ${err.message || String(err)}`
+            ));
+          }
+          this.fastify.log.info(`[StrategyEngineAdapter] Paper swing AI gate red — AI-gated lanes hold for re-review: ${verdict.rationale}`);
+        } else if (fingerprint) {
+          await this.deleteAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => undefined);
+        }
+      }
     }
-    if (fingerprint) {
-      await this.deleteAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => undefined);
+
+    const offVerdict = { decision: 'TRADE', riskTier: 'STANDARD', exitProfile: 'BALANCED_T2', rationale: 'AI gate off for this variant lane.', riskFlags: [], source: 'OFF', blocks: false, latencyMs: 0, aiRequested: false };
+    for (const variant of eligible) {
+      const laneVerdict = variant.aiGate === 'off' ? offVerdict : verdict;
+      if (!laneVerdict || laneVerdict.blocks) continue;
+      try {
+        const outcome = await paperTrading.createSwingEntry(signal, setupId, laneVerdict, variant);
+        this.fastify.log.info(`[StrategyEngineAdapter] Paper ${variant.name} entry ${outcome.entered ? 'FILLED' : 'skipped'}: ${outcome.reason}`);
+      } catch (err: any) {
+        this.fastify.log.warn(`[StrategyEngineAdapter] Paper ${variant.name} entry failed: ${err?.message || String(err)}`);
+      }
     }
-    const outcome = await paperTrading.createSwingEntry(signal, setupId, verdict);
-    this.fastify.log.info(`[StrategyEngineAdapter] Paper swing entry ${outcome.entered ? 'FILLED' : 'skipped'}: ${outcome.reason}`);
   }
 
   private async restoreSetupIdentity(): Promise<void> {

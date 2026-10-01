@@ -33,6 +33,10 @@ async function runTests() {
       postHandlers[path] = handler;
     },
     paperTrading: {
+      setAutomationStatus: async (status: string, lane?: string) => {
+        if (lane === 'NOPE') { const error: any = new Error('Paper automation control for lane NOPE is unavailable'); error.statusCode = 404; throw error; }
+        return { strategy_name: lane || 'DAY_TRADING', automation_status: status };
+      },
       closeOpenPosition: async (positionId: number, userId: number | null, force: boolean) => {
         closeRequest = { positionId, userId, force };
         if (failUnexpectedly) {
@@ -97,6 +101,25 @@ async function runTests() {
   assert(failedResult.diagnostic.stage === 'INSERT_EXIT_ORDER', 'an unexpected close failure must disclose its safe transaction stage');
   assert(failedResult.diagnostic.databaseCode === '23503', 'an unexpected close failure must disclose its PostgreSQL error class');
   assert(failedResult.diagnostic.constraint === 'paper_orders_decision_id_fkey', 'an unexpected close failure must disclose its constraint without exposing SQL');
+  // Per-lane automation toggle.
+  const laneHandler = postHandlers['/lanes/:lane/:action'];
+  assert(typeof laneHandler === 'function', 'The per-lane toggle route is registered');
+  const paused = replyMock();
+  const pausedResult = await laneHandler({ user: { role: 'ADMIN', id: 1 }, params: { lane: 'SWING_NOAI', action: 'pause' } }, paused);
+  assert(pausedResult.strategy_name === 'SWING_NOAI' && pausedResult.automation_status === 'PAUSED', 'Pausing a variant lane targets that lane');
+  const resumed = replyMock();
+  const resumedResult = await laneHandler({ user: { role: 'ADMIN', id: 1 }, params: { lane: 'SWING', action: 'resume' } }, resumed);
+  assert(resumedResult.automation_status === 'ACTIVE', 'Resuming sets ACTIVE');
+  const badAction = replyMock();
+  await laneHandler({ user: { role: 'ADMIN', id: 1 }, params: { lane: 'SWING', action: 'stop' } }, badAction);
+  assert(badAction.statusCode === 400, 'Unknown actions are rejected');
+  const unknownLane = replyMock();
+  await laneHandler({ user: { role: 'ADMIN', id: 1 }, params: { lane: 'NOPE', action: 'pause' } }, unknownLane);
+  assert(unknownLane.statusCode === 404, 'An unknown lane is a 404, not a 500');
+  const nonAdmin = replyMock();
+  await laneHandler({ user: { role: 'USER', id: 2 }, params: { lane: 'SWING', action: 'pause' } }, nonAdmin);
+  assert(nonAdmin.statusCode === 403, 'Non-admins cannot toggle lanes');
+
   console.log('All paper account route tests passed!');
 }
 

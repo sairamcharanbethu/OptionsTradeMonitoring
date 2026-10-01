@@ -35,6 +35,7 @@ import { snaptradeRoutes } from './routes/snaptrade';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { normalizeAdapterHealth } from './lib/adapter-health';
 import type { ReadinessSnapshot } from './lib/trading-readiness';
+import { PAPER_SWING_VARIANTS } from './config/paper-variants';
 import { getIbkrGatewayConfig } from './lib/ibkr-config';
 
 function loadEnvFile(filePath: string) {
@@ -458,7 +459,13 @@ const ensureSchema = async (instance: any) => {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
-    await instance.pg.query(`INSERT INTO paper_strategy_controls (strategy_name) VALUES ('DAY_TRADING'), ('WALL_REACTION'), ('SWING') ON CONFLICT (strategy_name) DO NOTHING;`);
+    // Day-trading + wall lanes plus every swing variant lane (config/paper-variants.ts).
+    // New lanes default to ACTIVE so a variant starts collecting evidence on deploy.
+    const paperLaneNames = ['DAY_TRADING', 'WALL_REACTION', ...PAPER_SWING_VARIANTS.map((variant) => variant.name)];
+    await instance.pg.query(
+      `INSERT INTO paper_strategy_controls (strategy_name) VALUES ${paperLaneNames.map((_, i) => `($${i + 1})`).join(', ')} ON CONFLICT (strategy_name) DO NOTHING;`,
+      paperLaneNames
+    );
     await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS paper_trade_decisions (
         id BIGSERIAL PRIMARY KEY,
