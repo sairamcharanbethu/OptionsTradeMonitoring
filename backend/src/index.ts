@@ -626,6 +626,8 @@ const ensureSchema = async (instance: any) => {
       { name: 'profit_trim_trade_id', type: 'VARCHAR(255)' },
       { name: 'profit_trimmed_at', type: 'TIMESTAMPTZ' },
       { name: 'exit_retry_count', type: 'INTEGER DEFAULT 0' },
+      { name: 'entry_cancel_attempts', type: 'INTEGER DEFAULT 0' },
+      { name: 'entry_cancel_requested_at', type: 'TIMESTAMPTZ' },
       { name: 'last_broker_sync_at', type: 'TIMESTAMPTZ' },
       { name: 'last_broker_order_status', type: 'VARCHAR(50)' },
       { name: 'max_favorable_price', type: 'DECIMAL(10, 4)' },
@@ -1184,7 +1186,7 @@ const start = async () => {
         snaptradePendingOrderSyncHealth.lastError = null;
         snaptradePendingOrderSyncHealth.status = 'UP';
         if (result.checked > 0 || watchdogResult.checked > 0) {
-          fastify.log.info(`[BrokerReconciliation] checked=${result.checked} opened=${result.opened} closed=${result.closed} pending=${result.stillPending} unmatched=${result.unmatched} watchdogEntryStale=${watchdogResult.entryStale} watchdogExitStale=${watchdogResult.exitStale}`);
+          fastify.log.info(`[BrokerReconciliation] checked=${result.checked} opened=${result.opened} closed=${result.closed} pending=${result.stillPending} unmatched=${result.unmatched} watchdogEntryStale=${watchdogResult.entryStale} watchdogCancelRequested=${watchdogResult.entryCancelRequested} watchdogCancelExhausted=${watchdogResult.entryCancelExhausted} watchdogAbandoned=${watchdogResult.entryAbandoned} watchdogExitStale=${watchdogResult.exitStale}`);
         }
       } catch (err: any) {
         snaptradePendingOrderSyncHealth.lastError = err.message;
