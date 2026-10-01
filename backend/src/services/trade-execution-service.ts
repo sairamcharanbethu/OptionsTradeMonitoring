@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { SWING_EXIT_POLICY, resolvePremiumStopPct } from '../config/swing-exit-policy';
 import { toExpirationDateKey } from '../lib/market-calendar';
 import { redis } from '../lib/redis';
 import { isAmbiguousSnapTradeOrderError, isBrokerSyncInProgressError, SnaptradeService } from './snaptrade-service';
@@ -118,7 +119,7 @@ export class TradeExecutionService {
       take_profit_pct: '',
       stop_loss_engine_enabled: 'true',
       synthetic_trailing_stop_enabled: 'false',
-      synthetic_trailing_stop_pct: '15',
+      synthetic_trailing_stop_pct: String(SWING_EXIT_POLICY.trailPct),
       live_trading_acknowledged: 'false',
       max_daily_loss_dollars: '200',
       max_consecutive_losses: '3',
@@ -1409,12 +1410,9 @@ export class TradeExecutionService {
       : input.targetUnderlying;
     const finalUnderlyingTarget = input.targetUnderlying;
     const entryPrice = Math.max(Number(execution.entryPrice || input.mark || 1), 0.01);
-    // The strategy's own premium stop (paper_policy.premium_stop_pct) wins; 20% otherwise.
-    const configuredStrategyStopPct = Number(strategySnapshot?.paper_policy?.premium_stop_pct);
-    const strategyPremiumStopConfigured = Number.isFinite(configuredStrategyStopPct)
-      && configuredStrategyStopPct > 0
-      && configuredStrategyStopPct < 100;
-    const premiumStopPct = strategyPremiumStopConfigured ? configuredStrategyStopPct : 20;
+    // The strategy's own premium stop (paper_policy.premium_stop_pct) wins; the shared policy default otherwise.
+    const premiumStopPct = resolvePremiumStopPct(strategySnapshot);
+    const strategyPremiumStopConfigured = Number(strategySnapshot?.paper_policy?.premium_stop_pct) === premiumStopPct;
     const premiumStopLoss = Number((entryPrice * (1 - premiumStopPct / 100)).toFixed(2));
     const configuredTakeProfitPct = this.parseOptionalPct(execution.takeProfitPct, 500);
     const syntheticTrailingPct = !execution.isSimulated && execution.syntheticTrailingEnabled

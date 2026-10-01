@@ -5,6 +5,7 @@ import { getGlobalSettings } from '../lib/settings-utils';
 import { KillSwitchService } from './kill-switch-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { StopLossEngine } from './stop-loss-engine';
+import { SWING_EXIT_POLICY, SWING_MAX_HOLD_DAYS, SWING_TRAIL_MULT, resolvePremiumStopPct } from '../config/swing-exit-policy';
 import { redis as defaultRedis } from '../lib/redis';
 import { getNewYorkMarketState, getUSMarketCloseMinutes } from '../lib/market-calendar';
 import { PAPER_STRATEGIES, SHARED_PAPER_ACCOUNT_ID } from './paper-account-constants';
@@ -686,10 +687,7 @@ export class PaperTradingService {
   }
 
   public static premiumStopPct(signal: Record<string, any>): number {
-    const configured = Number(signal.paper_policy?.premium_stop_pct);
-    return Number.isFinite(configured) && configured > 0 && configured < 100
-      ? configured
-      : 20;
+    return resolvePremiumStopPct(signal);
   }
 
   // Budget gate for the AI risk review. Adjudications (replies that parsed into
@@ -2033,8 +2031,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
 
   /** Live premium stop for strategy entries: paper_policy.premium_stop_pct, else 20%. */
   public static swingPremiumStop(fillPrice: number, signal: Record<string, any>): number {
-    const configured = Number(signal?.paper_policy?.premium_stop_pct);
-    const pct = Number.isFinite(configured) && configured > 0 && configured < 100 ? configured : 20;
+    const pct = resolvePremiumStopPct(signal);
     return Number((fillPrice * (1 - pct / 100)).toFixed(2));
   }
 
@@ -2047,7 +2044,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const today = Date.parse(`${ET_DATE.format(date)}T12:00:00Z`);
     const weekday = (days: number) => new Date(today + days * 86400000).getUTCDay();
     const isWeekend = (days: number) => weekday(days) === 0 || weekday(days) === 6;
-    if (!isWeekend(9) || !isWeekend(10)) return 10;
+    if (!isWeekend(SWING_EXIT_POLICY.minDte) || !isWeekend(SWING_EXIT_POLICY.maxDte)) return SWING_EXIT_POLICY.maxDte;
     let max = 10;
     while (isWeekend(max)) max += 1;
     return max;
@@ -2134,7 +2131,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            policy_version, trailing_stop_pct,
            ai_requested, ai_reasons, prompt_tokens, completion_tokens, total_tokens,
            rationale, risk_flags, evidence, strategy_name
-         ) VALUES ($1,$2,$3,'TRADE',$4,'SWING_HOLD','AI',$5,$5,0,$6,$7,$8,$9,15,
+         ) VALUES ($1,$2,$3,'TRADE',$4,'SWING_HOLD','AI',$5,$5,0,$6,$7,$8,$9,${SWING_EXIT_POLICY.trailPct},
            TRUE,'[]',0,0,0,$10,'[]',$11,$12)
          ON CONFLICT (account_id, setup_id, strategy_name) DO NOTHING RETURNING *`,
         [ACCOUNT_ID, setupId, signalRow.rows[0]?.id || null, aiVerdict.riskTier, 1, fillPrice,
@@ -2158,14 +2155,14 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
            suggested_take_profit_1, suggested_take_profit_2, signal_id, strategy_setup_id,
            strategy_engine_version, strategy_lifecycle_status, strategy_snapshot, strategy_managed,
            paper_account_id, paper_decision_id, paper_strategy, analysis_data, notes
-           ) VALUES (NULL,'SPY',$1,$2,$3,$4,1,$5,$4,$4,15,'OPEN',TRUE,$6,'system_paper','FILLED',1,
+           ) VALUES (NULL,'SPY',$1,$2,$3,$4,1,$5,$4,$4,${SWING_EXIT_POLICY.trailPct},'OPEN',TRUE,$6,'system_paper','FILLED',1,
                    'BUY_TO_OPEN','SELL_TO_CLOSE',$7,$8,$9,$10,$11,'signal-only-v2','ACTIVE',$12,TRUE,$6,$13,$14,$15,$16)
          RETURNING *`,
         [side, Number(option.strike), expiry, fillPrice, PaperTradingService.swingPremiumStop(fillPrice, signal),
           ACCOUNT_ID, setup.invalidation || null, targets[0] || null, targets[1] || targets[0] || null,
           decisionRow.signal_id, setupId, JSON.stringify(signal), decisionRow.id,
           PAPER_STRATEGIES.SWING,
-          JSON.stringify({ exitProfile: 'SWING_HOLD', trailingHighPremium: fillPrice, trailingStopPct: 15, swingDte: dte }),
+          JSON.stringify({ exitProfile: 'SWING_HOLD', trailingHighPremium: fillPrice, trailingStopPct: SWING_EXIT_POLICY.trailPct, swingDte: dte }),
           `[System paper swing entry from setup ${setupId}]`]
       );
       const filledPosition = positionResult.rows[0];
@@ -2219,11 +2216,11 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     for (const position of rows) {
       const expiry = this.normalizeExpiry(position.expiration_date);
       const dte = PaperTradingService.swingDte(expiry);
-      const entryDate = ET_DATE.format(new Date(position.created_at || Date.now()));
-      const todayStr = ET_DATE.format(new Date());
-      const holdDays = Math.round(
-        (Date.parse(`${todayStr}T12:00:00`) - Date.parse(`${entryDate}T12:00:00`)) / 86400000
-      );
+      // Fractional days held, measured from the entry timestamp like the live
+      // poller's minute-based time stop (the old ET-calendar-day rounding let
+      // paper and live disagree by up to a day on when the 7-day hold ends).
+      const enteredMs = new Date(position.created_at || Date.now()).getTime();
+      const holdDays = Number.isFinite(enteredMs) ? Math.max(0, (Date.now() - enteredMs) / 86400000) : 0;
       let bid = 0;
       try {
         const quote = await (this.fastify as any).ibkrMarketData?.getOptionQuoteForOsi(null, this.osiTicker(position));
@@ -2232,7 +2229,7 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
         this.fastify.log.warn(`[PaperTrading] Swing exit quote failed for position ${position.id}: ${error.message || String(error)}`);
       }
       if (!(bid > 0)) {
-        if ((dte != null && dte <= 2) || holdDays >= 7) {
+        if ((dte != null && dte <= SWING_EXIT_POLICY.exitBeforeExpiryDte) || holdDays >= SWING_MAX_HOLD_DAYS) {
           this.fastify.log.warn(`[PaperTrading] Swing position ${position.id} is due to exit but has no usable bid — retrying on the next snapshot`);
         }
         continue;
@@ -2276,8 +2273,8 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
       if (underlying == null || !(value > 0)) return false;
       return (isCall === towardProfit) ? underlying >= value : underlying <= value;
     };
-    if (dte != null && dte <= 2) return { intent: 'SWING_EXPIRY_EXIT', peak, armNow: false, metadata: { dte } };
-    if (holdDays >= 7) return { intent: 'SWING_MAX_HOLD', peak, armNow: false, metadata: { holdDays } };
+    if (dte != null && dte <= SWING_EXIT_POLICY.exitBeforeExpiryDte) return { intent: 'SWING_EXPIRY_EXIT', peak, armNow: false, metadata: { dte } };
+    if (holdDays >= SWING_MAX_HOLD_DAYS) return { intent: 'SWING_MAX_HOLD', peak, armNow: false, metadata: { holdDays: Number(holdDays.toFixed(2)) } };
     if (crossed(position.suggested_stop_loss, false)) {
       return { intent: 'SWING_INVALIDATION', peak, armNow: false, metadata: { underlying, invalidation: Number(position.suggested_stop_loss) } };
     }
@@ -2289,12 +2286,12 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     const armed = alreadyArmed || lockFloor > 0 || crossed(position.suggested_take_profit_1, true);
     if (armed) {
       const floor = lockFloor > 0 ? lockFloor : entry;
-      const stopPrice = Math.max(peak * 0.85, floor);
+      const stopPrice = Math.max(peak * SWING_TRAIL_MULT, floor);
       return {
         intent: bid <= stopPrice ? 'SWING_TRAILING_STOP' : null,
         peak,
         armNow: !alreadyArmed,
-        metadata: { peak: Number(peak.toFixed(2)), stopPct: 15, floor: Number(floor.toFixed(2)), profitLock: lockFloor > 0 ? Number(lockFloor.toFixed(2)) : null }
+        metadata: { peak: Number(peak.toFixed(2)), stopPct: SWING_EXIT_POLICY.trailPct, floor: Number(floor.toFixed(2)), profitLock: lockFloor > 0 ? Number(lockFloor.toFixed(2)) : null }
       };
     }
     const premiumStop = Number(position.stop_loss_trigger || 0);

@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { SWING_EXIT_POLICY } from '../config/swing-exit-policy';
 import axios from 'axios';
 import YahooFinance from 'yahoo-finance2';
 import { AIService } from './ai-service';
@@ -31,7 +32,7 @@ export class SignalExecutionService {
     const dbSettings = await getSettingsWithGlobalFallback(this.fastify.pg, userId);
     const defaults = {
       day_trading_enabled: 'true',
-      strategy_max_total_debit_dollars: '500',
+      strategy_max_total_debit_dollars: String(SWING_EXIT_POLICY.maxTotalDebitDollars),
       strategy_preferred_contracts: '1',
       strategy_max_contracts: '1',
       discord_webhook_url: '',
@@ -55,7 +56,7 @@ export class SignalExecutionService {
       take_profit_pct: '',
       stop_loss_engine_enabled: 'true',
       synthetic_trailing_stop_enabled: 'false',
-      synthetic_trailing_stop_pct: '15',
+      synthetic_trailing_stop_pct: String(SWING_EXIT_POLICY.trailPct),
       live_trading_acknowledged: 'false'
     };
     return { ...defaults, ...dbSettings };

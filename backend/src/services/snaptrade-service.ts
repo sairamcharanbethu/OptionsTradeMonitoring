@@ -8,6 +8,7 @@ import { DiscordAlertService } from './discord-alert-service';
 import { TradeLifecycleService } from './trade-lifecycle-service';
 import { MarketDataWriteBufferService } from './market-data-write-buffer-service';
 import { roundProtectiveStop } from './stop-loss-engine';
+import { SWING_EXIT_POLICY } from '../config/swing-exit-policy';
 import { getSettingsWithGlobalFallback, invalidateSettingsCache } from '../lib/settings-utils';
 
 const SNAPTRADE_API_TIMEOUT_MS = Number(process.env.SNAPTRADE_API_TIMEOUT_MS || 15000);
@@ -1724,7 +1725,7 @@ export class SnaptradeService {
 
         const optionSymbol = this.constructOSITicker(input.symbol, input.strike, input.optionType, input.expiration);
         const entryPrice = Math.max(Number(input.mark || limitPrice || 1), 0.01);
-        const configuredSyntheticPct = Number(settings.synthetic_trailing_stop_pct || 15);
+        const configuredSyntheticPct = Number(settings.synthetic_trailing_stop_pct || SWING_EXIT_POLICY.trailPct);
         const syntheticTrailingPct = settings.synthetic_trailing_stop_enabled === 'true'
             && Number.isFinite(configuredSyntheticPct)
             && configuredSyntheticPct >= 1

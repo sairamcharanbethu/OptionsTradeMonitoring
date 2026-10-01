@@ -1,3 +1,5 @@
+import { SWING_EXIT_POLICY } from '../config/swing-exit-policy';
+
 export interface PositionEvaluationResult {
   triggered: boolean;
   triggerType?: 'STOP_LOSS' | 'TAKE_PROFIT';
@@ -20,9 +22,9 @@ export class StopLossEngine {
    * intentionally clear of typical intraday premium noise; both rungs are
    * one-line tunables if live results say otherwise.
    */
-  public static readonly PROFIT_LOCK_TRIGGER_MULT = 1.2;
-  public static readonly PROFIT_LOCK_RUNG2_MULT = 1.5;
-  public static readonly PROFIT_LOCK_RUNG2_FLOOR_MULT = 1.25;
+  public static readonly PROFIT_LOCK_TRIGGER_MULT = SWING_EXIT_POLICY.profitLock.triggerMult;
+  public static readonly PROFIT_LOCK_RUNG2_MULT = SWING_EXIT_POLICY.profitLock.rung2Mult;
+  public static readonly PROFIT_LOCK_RUNG2_FLOOR_MULT = SWING_EXIT_POLICY.profitLock.rung2FloorMult;
 
   public static profitLockFloor(entryPrice: number, premiumHigh: number): number {
     const entry = Number(entryPrice);

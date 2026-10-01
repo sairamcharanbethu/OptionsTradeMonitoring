@@ -3,6 +3,7 @@ import { publishRealtime } from '../lib/realtime';
 import { TradeRedisService } from './trade-redis-service';
 import { FastifyInstance } from 'fastify';
 import { StopLossEngine } from './stop-loss-engine';
+import { SWING_EXIT_POLICY } from '../config/swing-exit-policy';
 import { redis } from '../lib/redis';
 import { AIService } from './ai-service';
 import { isAmbiguousSnapTradeOrderError, SnaptradeService } from './snaptrade-service';
@@ -59,10 +60,13 @@ export class MarketPoller {
 
   private readonly LOCK_KEY = 'MARKET_POLLER_LEADER';
   /** Time stop for strategy positions on multi-day contracts; cached so the exit loop never queries settings per tick. */
-  private multiDayMaxHoldMinutes = 45;
+  private multiDayMaxHoldMinutes: number = SWING_EXIT_POLICY.maxHoldMinutes;
 
   public updateMultiDayMaxHoldMinutes(minutes: number) {
-    if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 390) {
+    // Same range as validateMultiDayMaxHoldMinutesSetting (0..14 days). The old
+    // `<= 390` intraday cap silently dropped the 10080-minute swing default
+    // whenever the setting was changed from the UI.
+    if (Number.isInteger(minutes) && minutes >= 0 && minutes <= 20160) {
       this.multiDayMaxHoldMinutes = minutes;
       this.fastify.log.info(`[MarketPoller] Multi-day max hold updated to ${minutes} minutes.`);
     }
@@ -393,7 +397,7 @@ export class MarketPoller {
    * `multiDayMaxHoldMinutes` (setting strategy_multi_day_max_hold_minutes,
    * default 10080 = 7 days; 0 disables).
    */
-  private getThetaStopAssessment(position: any, now: Date = new Date(), startedAtOverride?: string | null, multiDayMaxHoldMinutes: number = 45): {
+  private getThetaStopAssessment(position: any, now: Date = new Date(), startedAtOverride?: string | null, multiDayMaxHoldMinutes: number = SWING_EXIT_POLICY.maxHoldMinutes): {
     triggered: boolean;
     maxHoldMinutes: number;
     heldMinutes: number;
@@ -493,7 +497,7 @@ export class MarketPoller {
     const expiration = this.normalizeExpirationDate(position.expiration_date);
     if (!expiration) return null;
     const dte = this.contractDteDays(expiration, now);
-    if (dte === null || dte > 2) return null;
+    if (dte === null || dte > SWING_EXIT_POLICY.exitBeforeExpiryDte) return null;
     return { triggered: true, dte };
   }
 

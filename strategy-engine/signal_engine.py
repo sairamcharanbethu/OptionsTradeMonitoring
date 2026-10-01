@@ -16,6 +16,8 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from swing_exit_policy import T1_LOCK_ARM_PCT, T1_LOCK_FLOOR_PCT
+
 try:
     # Wall-reaction strategy (validated, merged into Day Trading as a native
     # candidate). Guarded so signal_engine still imports where the module is not
@@ -3771,8 +3773,8 @@ def build_signal(
     same_side_reentry_cooldown_seconds: float = CONTINUATION_COOLDOWN_SECONDS,
     max_tracking_gap_seconds: float = MAX_ACTIVE_TRACKING_GAP_SECONDS,
     t1_move_invalidation_to_trigger: bool = True,
-    t1_premium_lock_arm_pct: float = 20.0,
-    t1_premium_lock_floor_pct: float = 10.0,
+    t1_premium_lock_arm_pct: float = T1_LOCK_ARM_PCT,
+    t1_premium_lock_floor_pct: float = T1_LOCK_FLOOR_PCT,
     option_max_total_debit_dollars: float = 0,
     option_preferred_contracts: int = 1,
     option_limit_price_offset: float = 0,

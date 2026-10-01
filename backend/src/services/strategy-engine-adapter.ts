@@ -14,6 +14,7 @@ import { KillSwitchService } from './kill-switch-service';
 import { TradeRedisService } from './trade-redis-service';
 import { publishRealtime } from '../lib/realtime';
 import { redis } from '../lib/redis';
+import { SWING_EXIT_POLICY } from '../config/swing-exit-policy';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
 
@@ -1363,7 +1364,7 @@ export class StrategyEngineAdapter {
         if (verdict.decision === 'TRADE' && verdict.mode === 'gate') {
           // Green light on a swing entry always rides with a trailing stop.
           gateSettings.synthetic_trailing_stop_enabled = 'true';
-          if (!gateSettings.synthetic_trailing_stop_pct) gateSettings.synthetic_trailing_stop_pct = '15';
+          if (!gateSettings.synthetic_trailing_stop_pct) gateSettings.synthetic_trailing_stop_pct = String(SWING_EXIT_POLICY.trailPct);
         }
         let result: any;
         try {
@@ -1538,7 +1539,7 @@ export class StrategyEngineAdapter {
     const policy = {
       strategy_max_total_debit_dollars: this.numberInRange(
         settings.strategy_max_total_debit_dollars || process.env.STRATEGY_MAX_TOTAL_DEBIT_DOLLARS,
-        500,
+        SWING_EXIT_POLICY.maxTotalDebitDollars,
         1,
         100000
       ),

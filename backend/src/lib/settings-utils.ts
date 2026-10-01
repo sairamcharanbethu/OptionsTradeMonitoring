@@ -1,3 +1,4 @@
+import { SWING_EXIT_POLICY } from '../config/swing-exit-policy';
 import { redis } from './redis';
 import { parseCustomEconomicEvents, parseEtClockMinute } from './economic-calendar';
 import { revealSettingSecrets } from './secret-box';
@@ -239,11 +240,11 @@ export function validateMultiDayMaxHoldMinutesSetting(value: unknown): string | 
   return null;
 }
 
-export function resolveOptionExpiryDte(settings: Record<string, string> | undefined, fallback = 9): number {
+export function resolveOptionExpiryDte(settings: Record<string, string> | undefined, fallback: number = SWING_EXIT_POLICY.minDte): number {
   return validateOptionExpiryDteSetting(settings?.strategy_option_expiry_dte) === null ? Number(settings!.strategy_option_expiry_dte) : fallback;
 }
 
-export function resolveOptionExpiryMaxDte(settings: Record<string, string> | undefined, fallback = 10): number {
+export function resolveOptionExpiryMaxDte(settings: Record<string, string> | undefined, fallback: number = SWING_EXIT_POLICY.maxDte): number {
   const minDte = resolveOptionExpiryDte(settings);
   const maxDte = validateOptionExpiryMaxDteSetting(settings?.strategy_option_expiry_max_dte) === null
     ? Number(settings!.strategy_option_expiry_max_dte)
@@ -252,7 +253,7 @@ export function resolveOptionExpiryMaxDte(settings: Record<string, string> | und
   return Math.max(maxDte, minDte);
 }
 
-export function resolveMultiDayMaxHoldMinutes(settings: Record<string, string> | undefined, fallback = 10080): number {
+export function resolveMultiDayMaxHoldMinutes(settings: Record<string, string> | undefined, fallback: number = SWING_EXIT_POLICY.maxHoldMinutes): number {
   return validateMultiDayMaxHoldMinutesSetting(settings?.strategy_multi_day_max_hold_minutes) === null ? Number(settings!.strategy_multi_day_max_hold_minutes) : fallback;
 }
 

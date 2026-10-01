@@ -13,6 +13,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from market_calendar import is_trading_day, previous_trading_day
+from swing_exit_policy import SWING_MAX_DTE, SWING_MIN_DTE, T1_LOCK_ARM_PCT, T1_LOCK_FLOOR_PCT
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -69,7 +70,7 @@ ET = ZoneInfo("America/New_York")
 # Same-day (0DTE) contracts are not traded. The primary chain is always at
 # least MIN_OPTION_EXPIRY_DTE calendar days out (setting strategy_option_expiry_dte, default 3).
 MIN_OPTION_EXPIRY_DTE = 1
-DEFAULT_OPTION_EXPIRY_DTE = 9
+DEFAULT_OPTION_EXPIRY_DTE = SWING_MIN_DTE
 # One engine lane. The ORB_INDEX / VWAP_TREND family lanes were removed on
 # 2026-09-06 (ORB negative in every replay sample; VWAP no measured edge). The
 # lane-keyed JSON contract is kept so the backend adapter is unchanged.
@@ -1738,7 +1739,7 @@ def main() -> None:
     parser.add_argument(
         "--option-expiry-max-dte",
         type=int,
-        default=10,
+        default=SWING_MAX_DTE,
         help=(
             "Maximum calendar days-to-expiry for the PRIMARY option chain. "
             "Together with --option-expiry-dte this defines the swing window "
@@ -1887,13 +1888,13 @@ def main() -> None:
     parser.add_argument(
         "--t1-premium-lock-arm-pct",
         type=float,
-        default=20,
+        default=T1_LOCK_ARM_PCT,
         help="After T1, arm the premium profit lock at this return.",
     )
     parser.add_argument(
         "--t1-premium-lock-floor-pct",
         type=float,
-        default=10,
+        default=T1_LOCK_FLOOR_PCT,
         help="After the lock arms, close paper tracking at this return floor.",
     )
     parser.add_argument(

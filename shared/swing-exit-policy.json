@@ -1,0 +1,20 @@
+{
+  "$comment": "Single source of truth for the 9-10 DTE SPY swing exit rules. Mirrored by backend/src/config/swing-exit-policy.ts and strategy-engine/swing_exit_policy.py; parity tests on both sides fail if they drift. Change values here first.",
+  "version": 1,
+  "minDte": 9,
+  "maxDte": 10,
+  "exitBeforeExpiryDte": 2,
+  "maxHoldMinutes": 10080,
+  "premiumStopPct": 20,
+  "trailPct": 15,
+  "profitLock": {
+    "triggerMult": 1.2,
+    "rung2Mult": 1.5,
+    "rung2FloorMult": 1.25
+  },
+  "t1PremiumLock": {
+    "armPct": 20,
+    "floorPct": 10
+  },
+  "maxTotalDebitDollars": 500
+}

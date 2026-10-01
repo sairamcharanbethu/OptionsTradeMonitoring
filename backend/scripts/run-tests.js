@@ -12,6 +12,7 @@ const path = require('path');
 // Order matters only for readability; each file is an independent process.
 // TS_NODE_FILES=true entries need the ambient type declarations in src/.
 const TESTS = [
+  'src/config/swing-exit-policy.test.ts',
   'src/lib/trading-events.test.ts',
   'src/lib/security-config.test.ts',
   'src/lib/secret-box.test.ts',
