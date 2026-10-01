@@ -806,6 +806,53 @@ class SwingWindowRefreshTests(unittest.TestCase):
         prefetcher.ib.reqMktData.side_effect = lambda contract, *args: SimpleNamespace(contract=contract)
         return prefetcher
 
+    def test_option_dict_carries_iv_and_greeks_for_the_chain_journal(self):
+        greeks = SimpleNamespace(delta=0.52, gamma=0.03, theta=-0.11, vega=0.42, impliedVol=0.1834, undPrice=640.25)
+        ticker = SimpleNamespace(
+            contract=SimpleNamespace(localSymbol="SPY   261010C00640000", right="C", strike=640.0, lastTradeDateOrContractMonth="20261010"),
+            bid=5.1, ask=5.3, last=5.2, volume=120.0, modelGreeks=greeks, bidGreeks=None, askGreeks=None, lastGreeks=None,
+            time=datetime(2026, 10, 1, 14, 0, tzinfo=timezone.utc), callOpenInterest=1500.0,
+        )
+        snapshot = trade_prefetch_service._option_dict(ticker, now=datetime(2026, 10, 1, 14, 0, 5, tzinfo=timezone.utc).timestamp())
+        self.assertEqual(snapshot["iv"], 0.1834)
+        self.assertEqual(snapshot["last"], 5.2)
+        self.assertEqual(snapshot["theta"], -0.11)
+        self.assertEqual(snapshot["vega"], 0.42)
+        self.assertEqual(snapshot["underlying"], 640.25)
+        self.assertEqual(snapshot["delta"], 0.52)
+        self.assertEqual(snapshot["mid"], 5.2)
+
+    def test_option_chain_journal_is_throttled_and_session_gated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            prefetcher = self._prefetcher(output_dir, ["20261010"])
+            prefetcher.args.chain_journal_interval = 60
+            prefetcher.last_chain_journal_at = 0.0
+            in_session = datetime(2026, 10, 1, 10, 0, tzinfo=self.ET).timestamp()
+            options = {
+                "expiry": "20261010", "expiry_mode": "MULTI_DAY_9DTE", "min_dte": 9, "max_dte": 10,
+                "contracts": [{"local_symbol": "SPY 261010C00640000", "right": "C", "strike": 640.0, "expiry": "20261010",
+                               "bid": 5.1, "ask": 5.3, "last": 5.2, "mid": 5.2, "iv": 0.18, "delta": 0.52, "gamma": 0.03,
+                               "theta": -0.11, "vega": 0.42, "open_interest": 1500.0, "volume": 120.0,
+                               "quote_time": in_session, "quote_age_seconds": 0.5, "liquidity": "ok", "spread_pct": 3.8}],
+            }
+            self.assertTrue(prefetcher._journal_option_chain(options, 640.2, in_session))
+            self.assertFalse(prefetcher._journal_option_chain(options, 640.3, in_session), "second write inside the interval is throttled")
+            prefetcher.last_chain_journal_at = 0.0
+            after_hours = datetime(2026, 10, 1, 17, 0, tzinfo=self.ET).timestamp()
+            self.assertFalse(prefetcher._journal_option_chain(options, 640.4, after_hours), "no chain journal outside the regular session")
+            self.assertFalse(prefetcher._journal_option_chain({"contracts": []}, 640.4, in_session), "nothing to write without contracts")
+            lines = (output_dir / "history" / "options-2026-10-01.jsonl").read_text().strip().splitlines()
+            self.assertEqual(len(lines), 1)
+            record = json.loads(lines[0])
+            self.assertEqual(record["spot"], 640.2)
+            self.assertEqual(record["expiry"], "20261010")
+            self.assertEqual(record["contracts"][0]["iv"], 0.18)
+            self.assertNotIn("liquidity", record["contracts"][0], "journal keeps pricing fields only")
+            prefetcher.args.chain_journal_interval = 0
+            prefetcher.last_chain_journal_at = 0.0
+            self.assertFalse(prefetcher._journal_option_chain(options, 640.2, in_session), "interval 0 disables the journal")
+
     def test_empty_window_keeps_open_position_contract_and_cancels_the_rest(self):
         thursday = datetime(2026, 10, 1, 10, 0, tzinfo=self.ET).timestamp()
         active = {

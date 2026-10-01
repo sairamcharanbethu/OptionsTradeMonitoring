@@ -200,6 +200,13 @@ def _option_dict(ticker: Ticker, *, now: float | None = None) -> dict[str, Any]:
         "liquidity": liquidity,
         "quote_time": quote_time,
         "quote_age_seconds": round(max(0.0, quote_age), 2) if quote_age is not None else None,
+        # Fields below exist for the per-minute chain journal (future backtests
+        # on real 9-10 DTE premiums); the live gates above do not read them.
+        "last": _value(getattr(ticker, "last", None)),
+        "iv": round(float(greeks.impliedVol), 4) if greeks and _valid(getattr(greeks, "impliedVol", None)) else None,
+        "theta": round(float(greeks.theta), 5) if greeks and _valid(getattr(greeks, "theta", None)) else None,
+        "vega": round(float(greeks.vega), 5) if greeks and _valid(getattr(greeks, "vega", None)) else None,
+        "underlying": round(float(greeks.undPrice), 3) if greeks and _valid(getattr(greeks, "undPrice", None)) else None,
     }
 
 
@@ -704,6 +711,7 @@ class TradePrefetcher:
         self.local_gex: dict[str, Any] | None = None
         self.last_local_gex_at = 0.0
         self.last_journal_at = 0.0
+        self.last_chain_journal_at = 0.0
         self.runtime_ibkr_config: dict[str, Any] = {}
         self.redis_publisher: Any = None
         self.redis_retry_at = 0.0
@@ -1397,6 +1405,7 @@ class TradePrefetcher:
         )
         _atomic_json(self.args.output_dir / "market.json", market)
         _atomic_json(self.args.output_dir / "options.json", options)
+        self._journal_option_chain(options, spy_spot, generated_at, signal.get("session_policy"))
         _atomic_json(self.args.output_dir / "indicators.json", {"generated_at": generated_at, "symbols": indicators})
         _atomic_json(
             self.args.output_dir / "strategy-signals.json",
@@ -1616,6 +1625,54 @@ class TradePrefetcher:
         self.last_journal_ats = journal_ats
         self.last_journal_fingerprint = fingerprint
         self.last_journal_at = now
+
+    def _journal_option_chain(
+        self,
+        options: dict[str, Any],
+        spot: Any,
+        generated_at: float,
+        session_policy: dict[str, Any] | None = None,
+    ) -> bool:
+        """Append the near-ATM 9-10 DTE chain once per ``--chain-journal-interval``.
+
+        Why: no real swing-window option premiums exist for backtesting (the
+        swing backtest models them with Black-Scholes). The engine already
+        subscribes to exactly this chain every second, so persisting it once a
+        minute during the regular session (~26-42 contracts x 390 minutes a day)
+        gives future backtests real bids/asks/IV for free. Written to
+        ``history/options-YYYY-MM-DD.jsonl`` next to the signal journal.
+        """
+        interval = float(getattr(self.args, "chain_journal_interval", 60) or 0)
+        if interval <= 0:
+            return False
+        contracts = options.get("contracts") or []
+        if not contracts:
+            return False
+        now = time.time()
+        if now - getattr(self, "last_chain_journal_at", 0.0) < interval:
+            return False
+        if not _regular_session_open(generated_at, session_policy):
+            return False
+        journal_dir = self.args.output_dir / "history"
+        journal_dir.mkdir(parents=True, exist_ok=True)
+        day = datetime.fromtimestamp(generated_at, ET).strftime("%Y-%m-%d")
+        keep = ("local_symbol", "right", "strike", "expiry", "bid", "ask", "last", "mid",
+                "iv", "delta", "gamma", "theta", "vega", "open_interest", "volume",
+                "quote_time", "quote_age_seconds")
+        record = {
+            "journaled_at": now,
+            "generated_at": generated_at,
+            "spot": spot,
+            "expiry": options.get("expiry"),
+            "expiry_mode": options.get("expiry_mode"),
+            "min_dte": options.get("min_dte"),
+            "max_dte": options.get("max_dte"),
+            "contracts": [{key: contract.get(key) for key in keep} for contract in contracts],
+        }
+        with (journal_dir / f"options-{day}.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, separators=(",", ":")) + "\n")
+        self.last_chain_journal_at = now
+        return True
 
     def _log_if_changed(self, signal: dict[str, Any]) -> None:
         fingerprint = self._signal_fingerprint(signal)
@@ -1971,6 +2028,16 @@ def main() -> None:
         type=float,
         default=60,
         help="Persist a replayable signal snapshot at least this often, and immediately on changes.",
+    )
+    parser.add_argument(
+        "--chain-journal-interval",
+        type=float,
+        default=60,
+        help=(
+            "Append the subscribed 9-10 DTE option chain (bid/ask/last/IV/greeks) to "
+            "history/options-YYYY-MM-DD.jsonl this often during the regular session, "
+            "so future backtests can use real premiums. 0 disables."
+        ),
     )
     parser.add_argument("--output-dir", type=Path, default=Path("gex-data/trade"))
     parser.add_argument(
