@@ -34,6 +34,7 @@ import { adminRoutes } from './routes/admin';
 import { snaptradeRoutes } from './routes/snaptrade';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { normalizeAdapterHealth } from './lib/adapter-health';
+import type { ReadinessSnapshot } from './lib/trading-readiness';
 import { getIbkrGatewayConfig } from './lib/ibkr-config';
 
 function loadEnvFile(filePath: string) {
@@ -922,16 +923,50 @@ const ensureSchema = async (instance: any) => {
   }
 };
 
-// Last-resort process guards. Without these, an unhandled async error — most
-// notably a pooled Postgres client erroring when the DB restarts — terminates
-// the process; on a trading backend that drops in-flight coordination and
-// existing-position management. Log and stay alive; the container restart
-// policy remains the backstop for a truly wedged process.
+// Crash policy (2026-10-01): an uncaught exception leaves the process in an
+// unknown state, and a half-dead backend holding a position is the worst
+// outcome — exits are idempotent via the DB claims, and Docker restarts the
+// container in seconds. So: log, best-effort alert, exit(1) after a short
+// flush. Unhandled rejections are usually a single failed await inside a
+// background loop; keep running but count them, and exit on a burst. The
+// pg pool's idle-client errors (the original reason for keep-alive) are
+// swallowed explicitly on the pool itself, not via these hooks.
+let unhandledRejectionsInWindow = 0;
+let unhandledRejectionWindowStartedAt = Date.now();
+const UNHANDLED_REJECTION_BURST = Number(process.env.UNHANDLED_REJECTION_BURST || 10);
+const crashAlert = async (title: string, message: string) => {
+  const webhook = String(process.env.DISCORD_ALERT_WEBHOOK_URL || '').trim();
+  if (!webhook) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1500);
+  try {
+    await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'SS Trading Alerts', embeds: [{ title, description: message.slice(0, 3500), color: 0xef4444, footer: { text: 'Severity: CRITICAL' }, timestamp: new Date().toISOString() }] }),
+      signal: controller.signal
+    });
+  } catch { /* best effort */ } finally {
+    clearTimeout(timeout);
+  }
+};
 process.on('unhandledRejection', (reason: any) => {
-  console.error('[System] Unhandled promise rejection (kept alive):', reason);
+  const now = Date.now();
+  if (now - unhandledRejectionWindowStartedAt > 60_000) {
+    unhandledRejectionWindowStartedAt = now;
+    unhandledRejectionsInWindow = 0;
+  }
+  unhandledRejectionsInWindow += 1;
+  console.error(`[System] Unhandled promise rejection (${unhandledRejectionsInWindow}/${UNHANDLED_REJECTION_BURST} this minute, kept alive):`, reason);
+  if (unhandledRejectionsInWindow >= UNHANDLED_REJECTION_BURST) {
+    console.error('[System] Unhandled rejection burst — exiting so the container restarts.');
+    void crashAlert('Backend exiting: unhandled rejection burst', String(reason?.stack || reason)).finally(() => process.exit(1));
+  }
 });
 process.on('uncaughtException', (err: any) => {
-  console.error('[System] Uncaught exception (kept alive):', err?.stack || err);
+  console.error('[System] Uncaught exception — exiting so the container restarts:', err?.stack || err);
+  setTimeout(() => process.exit(1), 2000).unref();
+  void crashAlert('Backend exiting: uncaught exception', String(err?.stack || err)).finally(() => process.exit(1));
 });
 
 const start = async () => {
@@ -1223,6 +1258,72 @@ const start = async () => {
       intervalMs: Number(process.env.SYSTEM_HEALTH_INTERVAL_MS || 30_000)
     });
     fastify.decorate('systemHealth', systemHealth);
+
+    // Trading-aware readiness + process watchdog. `/ready` (Docker) stays
+    // DB-only; `/ready/trading` reports this. The watchdog exits the process
+    // only on an INTERNAL wedge (blocked event loop, poller/sync not running
+    // while the DB is fine) so Docker restarts it — never on external outages.
+    const { evaluateReadiness } = await import('./lib/trading-readiness');
+    const { ProcessWatchdog } = await import('./lib/process-watchdog');
+    const processStartedAt = Date.now();
+    let lastKnownOpenLivePositions = 0;
+    const collectReadinessSnapshot = async (): Promise<ReadinessSnapshot> => {
+      const probe = await withTimeout(
+        fastify.pg.query(`SELECT COUNT(*)::int AS count FROM positions WHERE status = 'OPEN' AND execution_broker = 'wealthsimple_snaptrade' AND COALESCE(is_simulated, FALSE) = FALSE`)
+          .then((r: any) => ({ ok: true, count: Number(r.rows?.[0]?.count || 0) }))
+          .catch(() => ({ ok: false, count: lastKnownOpenLivePositions })),
+        3000,
+        () => ({ ok: false, count: lastKnownOpenLivePositions })
+      );
+      if (probe.ok) lastKnownOpenLivePositions = probe.count;
+      const pollerHealth = poller.getHealth();
+      const now = new Date();
+      return {
+        dbOk: probe.ok,
+        redisReady: redis.isReady(),
+        marketOpen: poller.isMarketOpen(now),
+        openLivePositions: probe.count,
+        liveEntriesReady: strategyEngine.isLiveEntriesReady?.() ?? false,
+        poller: { pollingEnabled: pollerHealth.pollingEnabled, intervalSeconds: pollerHealth.intervalSeconds, lastPollCompletedAt: pollerHealth.lastPollCompletedAt, lastPollStartedAt: pollerHealth.lastPollStartedAt },
+        exitMonitorStatus: liveExitMonitor.getHealth().status,
+        ibkrStreamConnected: ibkrMarketDataStreamer.getHealth().connected,
+        pendingSync: { intervalSeconds: snaptradePendingOrderSyncHealth.intervalSeconds, lastRunAt: snaptradePendingOrderSyncHealth.lastRunAt, running: snaptradePendingOrderSyncHealth.running },
+        eventLoopLagMs: null,
+        processUptimeMs: Date.now() - processStartedAt
+      };
+    };
+    const processWatchdog = new ProcessWatchdog({
+      collect: collectReadinessSnapshot,
+      log: fastify.log as any,
+      countSelfExit: async () => {
+        try {
+          const raw = await redis.get('ops:self_exits:backend');
+          return raw === null ? 0 : Number(raw);
+        } catch {
+          return null;
+        }
+      },
+      onBeforeExit: async (reason) => {
+        await redis.incr('ops:self_exits:backend', 30 * 60).catch(() => null);
+        const { DiscordAlertService } = await import('./services/discord-alert-service');
+        await new DiscordAlertService(fastify).send({
+          userId: 0,
+          title: 'Backend restarting itself (internal wedge)',
+          message: `${reason}. Docker will restart the container; positions and claims are in Postgres.`,
+          severity: 'critical',
+          category: 'process-watchdog',
+          dedupeKey: 'process-watchdog-exit',
+          dedupeSeconds: 120
+        }).catch(() => false);
+      }
+    });
+    fastify.decorate('processWatchdog', processWatchdog);
+
+    fastify.get('/ready/trading', async () => {
+      const snapshot = await collectReadinessSnapshot();
+      snapshot.eventLoopLagMs = processWatchdog.state().lastLagMs;
+      return { ...evaluateReadiness(snapshot), watchdog: processWatchdog.state() };
+    });
     const { TradeRedisService } = await import('./services/trade-redis-service');
     const { TradeExecutionService } = await import('./services/trade-execution-service');
     // Set at the end of startBackgroundServices; the pending-order sync flips
@@ -1532,6 +1633,7 @@ const start = async () => {
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
         brokerReconciler: normalizeAdapterHealth('brokerReconciler', brokerReconciler.getHealth(), generatedAt),
         system: systemHealth.summary(),
+        processWatchdog: processWatchdog.state(),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),
         postgres: postgresHealth,
         generatedAt
@@ -1796,6 +1898,7 @@ const start = async () => {
         await redis.incr('ops:restarts:backend', 3600).catch(() => null);
         await systemHealth.start();
       });
+      await startStep('processWatchdog', () => processWatchdog.start());
 
       await startStep('markLiveEntriesReady', async () => {
         liveEntriesReadyRequested = true;

@@ -1100,6 +1100,10 @@ export class StrategyEngineAdapter {
       && settings.shadow_trading_enabled !== 'true';
   }
 
+  public isLiveEntriesReady(): boolean {
+    return this.liveEntriesReady;
+  }
+
   public markLiveEntriesReady(): void {
     if (!this.liveEntriesReady) {
       this.liveEntriesReady = true;
