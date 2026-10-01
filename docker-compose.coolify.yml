@@ -69,10 +69,19 @@
 #     Point DNS at the host before saving, or the ACME challenge fails.
 # =============================================================================
 
+# Container log rotation: a week of unattended print()/pino output must not
+# fill the Coolify host's disk. 5 x 20 MB per service.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:15-alpine
     restart: always
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -95,12 +104,39 @@ services:
       timeout: 5s
       retries: 5
 
+  # Nightly pg_dump to S3-compatible storage (Cloudflare R2 / Backblaze B2 /
+  # OCI). Opt-in via COMPOSE_PROFILES=backup in the Coolify env so a stack
+  # without bucket credentials does not crash-loop. See ops/db/RESTORE.md.
+  db-backup:
+    image: eeshugerman/postgres-backup-s3:15
+    restart: always
+    profiles: ["backup"]
+    logging: *default-logging
+    environment:
+      SCHEDULE: ${BACKUP_SCHEDULE:-0 2 * * *}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      PASSPHRASE: ${BACKUP_PASSPHRASE:-}
+      POSTGRES_HOST: db
+      POSTGRES_DATABASE: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      S3_REGION: ${BACKUP_S3_REGION:-auto}
+      S3_ENDPOINT: ${BACKUP_S3_ENDPOINT}
+      S3_BUCKET: ${BACKUP_S3_BUCKET}
+      S3_PREFIX: ${BACKUP_S3_PREFIX:-strikepilot/db}
+      S3_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID}
+      S3_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+
   trade-staging-backend:
     image: ghcr.io/sairamcharanbethu/optionstrademonitoring-backend:${IMAGE_TAG:-latest}
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: always
+    logging: *default-logging
     # No host `ports:` — the frontend's nginx proxies /api to
     # trade-staging-backend:3001 over the internal network.
     extra_hosts:
@@ -144,6 +180,27 @@ services:
       STRATEGY_REDIS_WATCHDOG_INTERVAL_MS: ${STRATEGY_REDIS_WATCHDOG_INTERVAL_MS:-30000}
       STRIKEPILOT_CALENDAR_CONTACT: ${STRIKEPILOT_CALENDAR_CONTACT:-}
       VIX_TERM_STRUCTURE_MIN_RATIO: ${VIX_TERM_STRUCTURE_MIN_RATIO:-1.05}
+      # --- unattended-operation safety knobs (2026-10) ---------------------
+      # Discord webhook used when a user has none configured AND when Postgres
+      # is down (settings unreadable). Set it: it is the last alert channel.
+      DISCORD_ALERT_WEBHOOK_URL: ${DISCORD_ALERT_WEBHOOK_URL:-}
+      # Comma-separated user ids to page for system-health alerts (default: ADMIN users).
+      OPS_ALERT_USER_IDS: ${OPS_ALERT_USER_IDS:-}
+      # healthchecks.io-style ping URL; pinged every 30s, /fail while CRITICAL.
+      # Unset = no dead-man's switch (an info check reminds you at boot).
+      HEARTBEAT_URL: ${HEARTBEAT_URL:-}
+      # Nightly IB Gateway restart window (ET); disconnect alerts are muted inside it.
+      IBKR_RESTART_WINDOW_ET: ${IBKR_RESTART_WINDOW_ET:-23:30-00:15}
+      # Unfilled protected-limit entries are cancelled at the broker after this
+      # many seconds (0 = flag only); re-requested every 60s, max 3 attempts.
+      ENTRY_UNFILLED_CANCEL_SECONDS: ${ENTRY_UNFILLED_CANCEL_SECONDS:-120}
+      ENTRY_UNRESOLVED_RELEASE_SECONDS: ${ENTRY_UNRESOLVED_RELEASE_SECONDS:-900}
+      # Exit retry budget (expiry / flatten exits are exempt and retry until flat).
+      MAX_EXIT_RETRIES: ${MAX_EXIT_RETRIES:-2}
+      # Process watchdog: internal wedge must persist this long before self-exit.
+      WATCHDOG_GRACE_MS: ${WATCHDOG_GRACE_MS:-300000}
+      BACKGROUND_START_DELAY_MS: ${BACKGROUND_START_DELAY_MS:-3000}
+      SYSTEM_HEALTH_INTERVAL_MS: ${SYSTEM_HEALTH_INTERVAL_MS:-30000}
     volumes:
       - strategy-data:/strategy-data
     depends_on:
@@ -153,13 +210,14 @@ services:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
-      interval: 30s
+      interval: 15s
       timeout: 5s
       retries: 5
 
   trade-staging-redis:
     image: redis:alpine
     restart: always
+    logging: *default-logging
     # No host `ports:` — reached internally as trade-staging-redis:6379.
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -173,6 +231,7 @@ services:
       context: ./strategy-engine
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     # No IBKR here — this service pulls the external zeroGEX API. It needs its
     # credentials in /data/trade/zerogex.env (mounted via the strategy-data vol).
     volumes:
@@ -204,8 +263,16 @@ services:
       - "45"
       - --auth-error-interval
       - "10"
+      # After this many consecutive generic (non-auth) errors the process exits
+      # so `restart: unless-stopped` recreates it — Docker never restarts an
+      # UNHEALTHY container, only an exited one. auth_error never exits (a
+      # restart cannot fix a bad key; the backend's health evaluator pages).
+      - --max-consecutive-errors
+      - "20"
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') != 'error' and time.time()-float(h['updated_at']) < 45\""]
+      # `status == 'ok'` only: the service also writes `auth_error`, which the
+      # old `!= 'error'` check happily reported as healthy for weeks.
+      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') == 'ok' and time.time()-float(h['updated_at']) < 45\""]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -217,6 +284,7 @@ services:
       context: ./strategy-engine
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     extra_hosts:
       # Reaches the IB Gateway container's published host port (4001 live) via the
       # docker bridge. 127.0.0.1 from inside a container is the container itself,
@@ -225,6 +293,10 @@ services:
     environment:
       REDIS_URL: redis://trade-staging-redis:6379
       STRATEGY_REDIS_CHANNEL: ${STRATEGY_REDIS_CHANNEL:-strategy:state-changed}
+      # Fail LOUD if the Rust indicator kernel is missing instead of silently
+      # falling back to the 3-4x slower Python path (`auto` did that). The
+      # Dockerfile builds the wheel; health.json reports `kernel`.
+      SE_KERNEL: ${SE_KERNEL:-rust}
     volumes:
       - strategy-data:/data
     command:
@@ -271,8 +343,10 @@ services:
       - "0.15"
       - --option-max-spread-pct
       - "5"
+      # Fallback only — the backend's policy.json (DB settings, 9-10 DTE swing)
+      # overrides this at runtime. Default matches the live profile.
       - --option-expiry-dte
-      - ${STRATEGY_OPTION_EXPIRY_DTE:-3}
+      - ${STRATEGY_OPTION_EXPIRY_DTE:-9}
       - --wall-option-expiry-dte
       - ${STRATEGY_WALL_OPTION_EXPIRY_DTE:-0}
       - --paper-exit-target
@@ -317,6 +391,7 @@ services:
         VITE_APP_BUILD_SHA: ${VITE_APP_BUILD_SHA:-}
         VITE_ENABLE_DEV_TRADING_TESTS: ${VITE_ENABLE_DEV_TRADING_TESTS:-false}
     restart: always
+    logging: *default-logging
     # The container port Coolify/Traefik routes the domain at. No host `ports:`
     # on purpose: a published host port bypasses domain-based proxy routing.
     #

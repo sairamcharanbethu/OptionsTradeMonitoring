@@ -7,6 +7,7 @@ from zerogex_prefetch_service import (
     _health_payload,
     _merge_cached_context,
     _polling_status,
+    _consecutive_error_exit_due,
 )
 
 
@@ -152,6 +153,15 @@ class ZeroGEXPrefetchServiceTest(unittest.TestCase):
         again = _health_payload("error", symbol="SPY", mode="primary", error="boom")
         self.assertEqual(again["started_at"], health["started_at"])
         self.assertEqual(again["status"], "error")
+
+
+class ConsecutiveErrorExitTests(unittest.TestCase):
+    def test_exit_due_only_at_limit_and_never_when_disabled(self):
+        self.assertFalse(_consecutive_error_exit_due(19, 20))
+        self.assertTrue(_consecutive_error_exit_due(20, 20))
+        self.assertTrue(_consecutive_error_exit_due(25, 20))
+        self.assertFalse(_consecutive_error_exit_due(1000, 0))
+        self.assertFalse(_consecutive_error_exit_due(0, 20))
 
 
 if __name__ == "__main__":

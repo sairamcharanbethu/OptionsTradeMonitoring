@@ -88,6 +88,15 @@ def _lane_freshness(lane: str, freshness: dict[str, Any]) -> dict[str, Any]:
 _PROCESS_STARTED_AT = time.time()
 
 
+def _consecutive_error_exit_due(consecutive_errors: int, limit: int) -> bool:
+    """True when the poller should exit so the container supervisor restarts it.
+
+    Only generic (non-auth) errors count: a bad API key is not fixed by a
+    restart, and a restart loop on it would just spam. ``limit <= 0`` disables.
+    """
+    return limit > 0 and consecutive_errors >= limit
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -284,6 +293,16 @@ def main() -> None:
     )
     parser.add_argument("--error-interval", type=float, default=30)
     parser.add_argument("--auth-error-interval", type=float, default=300)
+    parser.add_argument(
+        "--max-consecutive-errors",
+        type=int,
+        default=20,
+        help=(
+            "Exit (code 1) after this many consecutive generic errors so the "
+            "container restart policy recreates the process; auth errors never "
+            "count. 0 disables."
+        ),
+    )
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
     parser.add_argument(
         "--output-file", type=Path, default=Path("gex-data/trade/zerogex.json")
@@ -313,6 +332,7 @@ def main() -> None:
 
     last_good: dict[str, Any] | None = None
     lane_errors: dict[str, dict[str, str]] = {"core": {}, "deep": {}, "slow": {}}
+    consecutive_errors = 0
     lane_state: dict[str, dict[str, Any]] = {
         "core": {
             "future": None,
@@ -389,6 +409,7 @@ def main() -> None:
                 }
                 snapshot["mode"] = args.mode
                 last_good = snapshot
+                consecutive_errors = 0
 
                 for lane, state in lane_state.items():
                     last_started_mono = state.get("last_started_mono")
@@ -477,6 +498,14 @@ def main() -> None:
                     ),
                 )
                 print(f"ZEROGEX {args.mode.upper()} ERROR: {safe_error}", flush=True)
+                consecutive_errors += 1
+                if _consecutive_error_exit_due(consecutive_errors, args.max_consecutive_errors):
+                    print(
+                        f"ZEROGEX {args.mode.upper()} EXITING after "
+                        f"{consecutive_errors} consecutive errors so the container restarts",
+                        flush=True,
+                    )
+                    raise SystemExit(1)
 
             elapsed = time.time() - started
             time.sleep(max(0.1, next_interval - elapsed))

@@ -131,7 +131,7 @@ services:
     networks:
       - default
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') != 'error' and time.time()-float(h['updated_at']) < 45\""]
+      test: ["CMD-SHELL", "python3 -c \"import json,time; h=json.load(open('/data/trade/zerogex-health.json')); assert h.get('status') == 'ok' and time.time()-float(h['updated_at']) < 45\""]
       interval: 10s
       timeout: 5s
       retries: 12

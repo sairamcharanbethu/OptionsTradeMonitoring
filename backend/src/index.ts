@@ -1844,6 +1844,24 @@ const start = async () => {
 
     const startBackgroundServices = async () => {
       fastify.log.info('[System] Starting background services...');
+      // Effective safety knobs, logged once so a misconfigured deploy is
+      // visible in the first screen of logs instead of discovered in a trade.
+      const envOr = (name: string, fallback: string) => (process.env[name] && String(process.env[name]).trim()) || `${fallback} (default)`;
+      fastify.log.info(
+        '[System] Safety config: ' + [
+          `ENTRY_UNFILLED_CANCEL_SECONDS=${envOr('ENTRY_UNFILLED_CANCEL_SECONDS', '120')}`,
+          `ENTRY_UNRESOLVED_RELEASE_SECONDS=${envOr('ENTRY_UNRESOLVED_RELEASE_SECONDS', '900')}`,
+          `MAX_EXIT_RETRIES=${envOr('MAX_EXIT_RETRIES', '2')}`,
+          `WATCHDOG_GRACE_MS=${envOr('WATCHDOG_GRACE_MS', '300000')}`,
+          `BACKGROUND_START_DELAY_MS=${envOr('BACKGROUND_START_DELAY_MS', '3000')}`,
+          `SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS=${envOr('SNAPTRADE_PENDING_SYNC_INTERVAL_SECONDS', '15')}`,
+          `SYSTEM_HEALTH_INTERVAL_MS=${envOr('SYSTEM_HEALTH_INTERVAL_MS', '30000')}`,
+          `IBKR_RESTART_WINDOW_ET=${envOr('IBKR_RESTART_WINDOW_ET', 'unset')}`,
+          `HEARTBEAT_URL=${process.env.HEARTBEAT_URL ? 'set' : 'UNSET — dead backend cannot page'}`,
+          `DISCORD_ALERT_WEBHOOK_URL=${process.env.DISCORD_ALERT_WEBHOOK_URL ? 'set' : 'UNSET — alerts depend on per-user settings'}`,
+          `OPS_ALERT_USER_IDS=${envOr('OPS_ALERT_USER_IDS', 'ADMIN users')}`
+        ].join(' ')
+      );
       await startStep('poller', () => poller.start());
       await startStep('zerogexArchive', () => zerogexArchive.start());
 
