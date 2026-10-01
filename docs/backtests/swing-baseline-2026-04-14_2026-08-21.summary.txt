@@ -1,0 +1,28 @@
+  skipped: only 0 session bars
+  skipped: only 0 session bars
+  skipped: only 0 session bars
+
+swing (modeled premium): TRADES: 78 (78 priced)
+win rate 20/78 (26%)   total P&L $-324.34/contract   PF 0.83   expectancy $-4.16/trade (gross of commission)
+  CONTINUATION            65 trades  15 wins  $  -417.07
+  GEX_WALL_BREAK_FAIL     13 trades   5 wins  $    92.73
+    exit TARGET_2                  19  19 green  $  1379.17  avg $  72.59
+    exit GAP_STOP                   1   1 green  $   151.06  avg $ 151.06
+    exit T1_TRAIL_STOP              2   0 green  $   -14.33  avg $  -7.17
+    exit TRAIL_STOP                14   0 green  $   -38.16  avg $  -2.73
+    exit PREMIUM_STOP               3   0 green  $  -261.43  avg $ -87.14
+    exit STOP                      39   0 green  $ -1540.65  avg $ -39.50
+underlying (exact, delta-one): 30/78 green, mean -0.13 pts/trade ± 0.13 SE, PF 0.74
+hold: median 0.2h, max 22.6h; sessions held median 1
+IV sources by session: {'realized_vol_20d': 1, 'prior_close_atm_iv': 90}
+engine minutes blocked by the $500 debit cap: 0
+top blockers:
+  x6338: SPY 5m structure and VWAP are not aligned
+  x667: continuation cooldown/reset active; same-side re-entry blocked
+  x499: trigger move is already extended beyond 0.75R; wait for a new setup
+  x483: SPY 15m EMA structure is not bearish; put continuation blocked
+  x345: SPY 15m EMA structure is not bullish; call continuation blocked
+  x108: CONTINUATION blocked in positive gamma: dealer hedging dampens moves, 
+  x57: continuation confidence 67 is below 70
+  x37: prior puts signal invalidated
+wrote 78 trades to /Users/saibethu/.claude/jobs/2febe85d/tmp/swing-trades-baseline.jsonl

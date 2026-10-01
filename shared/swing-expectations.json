@@ -1,0 +1,28 @@
+{
+  "$comment": "Swing backtest benchmark used by the weekly parity report. Produced by `python3 uw_swing_backtest.py --start 2026-04-14 --end 2026-08-21` on 2026-10-01 over the frozen Unusual Whales cache with MODELLED Black-Scholes premiums (no real 9-10 DTE option prices exist). A reference, not a target. Mirrored by backend/src/config/swing-expectations.ts; parity test enforces it.",
+  "generatedAt": "2026-10-01",
+  "source": "uw_swing_backtest.py",
+  "window": { "start": "2026-04-14", "end": "2026-08-21", "sessions": 91 },
+  "premiumModel": "black-scholes, prior-close ATM IV per session, ask-buy/bid-sell modelled spread",
+  "trades": 78,
+  "wins": 20,
+  "winRate": 0.2564,
+  "totalPnl": -324.34,
+  "avgPnlPerTrade": -4.16,
+  "profitFactor": 0.83,
+  "medianHoldHours": 0.2,
+  "maxHoldHours": 22.6,
+  "byStrategy": {
+    "CONTINUATION": { "trades": 65, "wins": 15, "totalPnl": -417.07 },
+    "GEX_WALL_BREAK_FAIL": { "trades": 13, "wins": 5, "totalPnl": 92.73 }
+  },
+  "exitMix": {
+    "TARGET_2": 19,
+    "GAP_STOP": 1,
+    "T1_TRAIL_STOP": 2,
+    "TRAIL_STOP": 14,
+    "PREMIUM_STOP": 3,
+    "STOP": 39
+  },
+  "underlyingDeltaOne": { "greenRate": 0.3846, "meanPointsPerTrade": -0.13, "sePoints": 0.13, "profitFactor": 0.74 }
+}

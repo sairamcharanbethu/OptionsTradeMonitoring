@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, RefreshCw, WalletCards } from 'lucide-react';
-import { api, PaperAccountSummary, PaperLaneStat } from '@/lib/api';
+import { api, PaperAccountSummary, PaperLaneStat, WeeklyParityReport } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,6 +27,52 @@ function StrategyBadge({ strategy }: { strategy: unknown }) {
       ? 'border-emerald-500/40 text-emerald-600 dark:text-emerald-300'
       : 'border-violet-500/40 text-violet-600 dark:text-violet-300';
   return <Badge variant="outline" className={tone}>{strategyLabel(strategy)}</Badge>;
+}
+
+function ParityCard({ report, onRun, running, canManage }: { report: WeeklyParityReport | null; onRun: () => void; running: boolean; canManage: boolean }) {
+  const b = report?.benchmark;
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="text-base">Weekly parity report</CardTitle>
+          {canManage && <Button size="sm" variant="outline" className="h-7 text-2xs" disabled={running} onClick={onRun}>{running ? 'Running…' : 'Run now'}</Button>}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Posted every Friday 16:45 ET. Each lane against the backtest benchmark and the kill rules in docs/kill-criteria.md.
+          {b && <> Benchmark: {b.trades} trades, win {(b.winRate * 100).toFixed(0)}%, PF {b.profitFactor}, {b.avgPnlPerTrade >= 0 ? '+' : ''}${b.avgPnlPerTrade}/trade ({b.window.start} → {b.window.end}, modelled premiums).</>}
+        </p>
+      </CardHeader>
+      <CardContent>
+        {!report ? <p className="text-sm text-muted-foreground">No report yet. The first one posts on Friday, or run it now.</p> : (
+          <div className="space-y-3">
+            <div className="text-xs text-muted-foreground">Week ending {report.weekEnding} · generated {new Date(report.generatedAt).toLocaleString()}</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead><tr className="text-left text-muted-foreground"><th className="py-1 pr-3 font-medium">Lane</th><th className="py-1 pr-3 font-medium">Week</th><th className="py-1 pr-3 font-medium">All closed</th><th className="py-1 pr-3 font-medium">Win %</th><th className="py-1 pr-3 font-medium">PF</th><th className="py-1 pr-3 font-medium">Rolling-30 PF</th><th className="py-1 pr-3 font-medium">Win-rate z</th><th className="py-1 pr-3 font-medium">DD</th><th className="py-1 pr-3 font-medium">Stage</th><th className="py-1 font-medium">Breaches</th></tr></thead>
+                <tbody>
+                  {[...report.lanes, ...(report.liveLane ? [{ ...report.liveLane, label: 'LIVE' }] : [])].map((lane) => (
+                    <tr key={lane.lane} className="border-t border-border/50">
+                      <td className="py-1.5 pr-3 font-medium">{lane.label || lane.lane}</td>
+                      <td className={`py-1.5 pr-3 tabular-nums ${lane.week.realizedPnl >= 0 ? 'text-pnl-up' : 'text-pnl-down'}`}>{lane.week.closed} · {lane.week.realizedPnl >= 0 ? '+' : ''}{money.format(lane.week.realizedPnl)}</td>
+                      <td className="py-1.5 pr-3 tabular-nums">{lane.cumulative.closed}</td>
+                      <td className="py-1.5 pr-3 tabular-nums">{lane.cumulative.winRate === null ? '—' : `${lane.cumulative.winRate}%`}</td>
+                      <td className="py-1.5 pr-3 tabular-nums">{lane.cumulative.profitFactor ?? '—'}</td>
+                      <td className="py-1.5 pr-3 tabular-nums">{lane.rolling30.profitFactor ?? '—'}</td>
+                      <td className="py-1.5 pr-3 tabular-nums">{lane.benchmark.winRateZ ?? '—'}</td>
+                      <td className="py-1.5 pr-3 tabular-nums">{money.format(lane.drawdown.fromPeak)}</td>
+                      <td className="py-1.5 pr-3"><Badge variant="secondary">{lane.milestone.toLowerCase()}</Badge></td>
+                      <td className="py-1.5">{lane.breaches.length ? lane.breaches.map((rule) => <Badge key={rule} variant="outline" className="mr-1 border-amber-500/40 text-amber-600 dark:text-amber-300">{rule.replace(/_/g, ' ').toLowerCase()}</Badge>) : <span className="text-muted-foreground">none</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 function LaneTable({ lanes, canManage, onToggle, busy }: { lanes: PaperLaneStat[]; canManage: boolean; onToggle: (lane: string, active: boolean) => void; busy: string | null }) {
@@ -70,6 +116,8 @@ export default function PaperAccountsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyLane, setBusyLane] = useState<string | null>(null);
+  const [parity, setParity] = useState<WeeklyParityReport | null>(null);
+  const [parityRunning, setParityRunning] = useState(false);
 
   const load = useCallback(async (initial = false) => {
     if (initial) setLoading(true);
@@ -88,6 +136,21 @@ export default function PaperAccountsPage() {
     const timer = window.setInterval(() => void load(), 5_000);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  useEffect(() => {
+    api.getPaperParityReports(1).then((result) => setParity(result.items[0]?.report || null)).catch(() => setParity(null));
+  }, []);
+
+  const runParity = useCallback(async () => {
+    setParityRunning(true);
+    try {
+      setParity(await api.runPaperParityReport());
+    } catch (cause: any) {
+      setError(cause.message || 'Failed to run the parity report');
+    } finally {
+      setParityRunning(false);
+    }
+  }, []);
 
   const matches = useCallback((record: Record<string, any>) => filter === 'ALL' || record.strategy_name === filter || record.paper_strategy === filter, [filter]);
   const positions = useMemo(() => (summary?.openPositions || []).filter(matches), [summary, matches]);
@@ -134,6 +197,8 @@ export default function PaperAccountsPage() {
       </section>
 
       {summary?.lanes && <LaneTable lanes={summary.lanes} canManage={Boolean((summary as any).canManage)} onToggle={(lane, active) => void toggleLane(lane, active)} busy={busyLane} />}
+
+      <ParityCard report={parity} onRun={() => void runParity()} running={parityRunning} canManage={Boolean((summary as any)?.canManage)} />
 
       <Card>
         <CardHeader><CardTitle className="text-base">Open positions</CardTitle></CardHeader>

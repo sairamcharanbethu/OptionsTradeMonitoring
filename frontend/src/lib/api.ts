@@ -245,6 +245,28 @@ export interface AdapterHealth {
   source: string;
 }
 
+export interface WeeklyParityLane {
+  lane: string;
+  label?: string;
+  automationStatus?: string;
+  week: { closed: number; wins: number; realizedPnl: number; profitFactor: number | null };
+  cumulative: { closed: number; wins: number; winRate: number | null; realizedPnl: number; profitFactor: number | null; expectancy: number | null; openTrades: number };
+  rolling30: { closed: number; wins: number; profitFactor: number | null; avgPnl: number | null; stopShare: number | null };
+  drawdown: { fromPeak: number; peak: number; maxDrawdown?: number };
+  benchmark: { winRateZ: number | null; avgPnlDelta: number | null };
+  milestone: 'NOISE' | 'PRELIMINARY' | 'DECISION';
+  breaches: string[];
+}
+
+export interface WeeklyParityReport {
+  weekEnding: string;
+  generatedAt: string;
+  benchmark: { trades: number; winRate: number; avgPnlPerTrade: number; profitFactor: number; window: { start: string; end: string } };
+  lanes: WeeklyParityLane[];
+  liveLane: WeeklyParityLane | null;
+  breaches: Array<{ lane: string; rule: string; value: string }>;
+}
+
 export interface PaperLaneStat {
   lane: string;
   label: string;
@@ -1607,6 +1629,21 @@ export const api = {
   async getPerformanceMetrics(scope: 'paper' | 'live' = 'live', days = 30): Promise<PerformanceMetrics> {
     const res = await authFetch(`${API_BASE}/metrics/performance?scope=${scope}&days=${days}`);
     if (!res.ok) throw new Error('Failed to fetch performance metrics');
+    return res.json();
+  },
+
+  async getPaperParityReports(limit = 6): Promise<{ items: Array<{ id: number; week_ending: string; generated_at: string; discord_sent_at: string | null; report: WeeklyParityReport }> }> {
+    const res = await authFetch(`${API_BASE}/paper-account/parity-reports?limit=${limit}`);
+    if (!res.ok) throw new Error('Failed to fetch parity reports');
+    return res.json();
+  },
+
+  async runPaperParityReport(): Promise<WeeklyParityReport> {
+    const res = await authFetch(`${API_BASE}/paper-account/parity-reports/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ post: false }) });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to run the parity report');
+    }
     return res.json();
   },
 

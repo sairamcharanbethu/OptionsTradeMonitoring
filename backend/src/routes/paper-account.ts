@@ -37,6 +37,18 @@ export async function paperAccountRoutes(fastify: FastifyInstance) {
     return (fastify as any).paperTrading.setAutomationStatus('ACTIVE');
   });
 
+  // Weekly paper-vs-benchmark parity reports (newest first); POST regenerates this week's on demand (admin).
+  fastify.get('/parity-reports', async (request) => {
+    const limit = Math.min(52, Math.max(1, Number((request.query as any)?.limit || 12)));
+    return { items: await (fastify as any).weeklyParity.list(limit) };
+  });
+  fastify.post('/parity-reports/run', async (request, reply) => {
+    if (String((request as any).user?.role || '').toUpperCase() !== 'ADMIN') {
+      return reply.code(403).send({ error: 'Admin access required' });
+    }
+    return (fastify as any).weeklyParity.generate({ post: (request.body as any)?.post === true });
+  });
+
   // Per-lane automation toggle (swing variant lanes and DAY_TRADING alike).
   fastify.post('/lanes/:lane/:action', async (request, reply) => {
     if (String((request as any).user?.role || '').toUpperCase() !== 'ADMIN') {

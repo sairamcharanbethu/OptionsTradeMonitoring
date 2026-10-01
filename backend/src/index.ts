@@ -550,6 +550,15 @@ const ensureSchema = async (instance: any) => {
         ON paper_equity_snapshots (account_id, captured_at DESC);
     `);
     await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS weekly_parity_reports (
+        id BIGSERIAL PRIMARY KEY,
+        week_ending DATE NOT NULL UNIQUE,
+        report JSONB NOT NULL,
+        generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        discord_sent_at TIMESTAMPTZ
+      );
+    `);
+    await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS paper_monthly_reports (
         id BIGSERIAL PRIMARY KEY,
         account_id VARCHAR(50) NOT NULL REFERENCES paper_accounts(id),
@@ -1161,6 +1170,9 @@ const start = async () => {
     fastify.decorate('poller', poller);
     await ZeroGexArchiveService.ensureSchema((fastify as any).pg);
     const zerogexArchive = new ZeroGexArchiveService(fastify);
+    const { WeeklyParityReportService } = await import('./services/weekly-parity-report-service');
+    const weeklyParity = new WeeklyParityReportService(fastify);
+    fastify.decorate('weeklyParity', weeklyParity);
     fastify.decorate('zerogexArchive', zerogexArchive);
 
     // Execution shim + status probes (the legacy scanner itself is retired).
@@ -1871,6 +1883,7 @@ const start = async () => {
       );
       await startStep('poller', () => poller.start());
       await startStep('zerogexArchive', () => zerogexArchive.start());
+      await startStep('weeklyParity', () => weeklyParity.start());
 
       await startStep('timers', () => {
         backgroundTimers.push(setInterval(() => {

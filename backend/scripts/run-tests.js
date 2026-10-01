@@ -47,6 +47,7 @@ const TESTS = [
   'src/services/broker-position-reconciler.test.ts',
   'src/services/system-health-evaluator.test.ts',
   'src/services/discord-alert-service.test.ts',
+  'src/services/weekly-parity-report-service.test.ts',
   'src/routes/settings.test.ts',
   'src/routes/paper-account.test.ts',
   { file: 'src/routes/manual-entry.test.ts', env: { TS_NODE_FILES: 'true' } },
