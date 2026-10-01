@@ -658,7 +658,48 @@ export default function SystemHealthPage() {
         <MetricCard label="Option Capture" value={services?.optionHistoryCapture?.status || 'N/A'} detail={`${services?.optionHistoryCapture?.persistedQuotes ?? 0} persisted quotes`} icon={Database} />
         <MetricCard label="Active Stream" value={activeProvider?.connected ? 'Connected' : 'Disconnected'} detail={`${activeProvider?.activeSubscriptions ?? 0} subscriptions`} icon={Router} />
         <MetricCard label="Broker Sync" value={services?.snaptradePendingOrders?.status || 'N/A'} detail={`Checked ${services?.snaptradePendingOrders?.lastResult?.checked ?? 0} pending orders`} icon={Zap} />
+        <MetricCard
+          label="System Checks"
+          value={services?.system?.overall || 'N/A'}
+          detail={services?.system
+            ? `${services.system.checks.filter((c) => c.state === 'firing').length} firing · heartbeat ${services.system.heartbeat.configured ? (services.system.heartbeat.lastPingOk === false ? 'ping failed' : services.system.heartbeat.mode || 'pending') : 'not configured'}`
+            : 'Evaluator not reporting'}
+          icon={Siren}
+        />
       </div>
+
+      {services?.system && (
+        <div className="mb-4">
+          <Section title="System Checks (alerts while flat)" icon={Siren}>
+            <div className="divide-y divide-border">
+              {services.system.checks
+                .slice()
+                .sort((a, b) => {
+                  const rank = (c: typeof a) => (c.state === 'firing' ? 0 : c.state === 'suspect' ? 1 : 2);
+                  return rank(a) - rank(b);
+                })
+                .map((check) => {
+                  const tone = check.state === 'firing'
+                    ? (check.severity === 'critical' ? 'critical' : check.severity === 'warning' ? 'warning' : 'info')
+                    : check.state === 'suspect' ? 'warning' : 'ok';
+                  return (
+                    <div key={check.id} className="flex flex-col gap-1 px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Badge variant="outline" className={`text-2xs uppercase ${severityTone(tone as HealthSeverity)}`}>{check.state}</Badge>
+                        <span className="truncate text-sm">{check.title}</span>
+                        <span className="text-2xs text-muted-foreground">{check.severity}</span>
+                      </div>
+                      <div className="text-xs text-muted-foreground sm:text-right">
+                        {check.message || 'Healthy'}
+                        {check.firedAt ? ` · firing since ${formatRelativeTime(check.firedAt)}` : check.since ? ` · suspect since ${formatRelativeTime(check.since)}` : ''}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </Section>
+        </div>
+      )}
 
       <div className="mb-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <Section title="Root Cause Suspects" icon={ServerCrash}>

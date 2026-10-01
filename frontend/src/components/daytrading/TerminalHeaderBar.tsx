@@ -108,7 +108,7 @@ export default function TerminalHeaderBar(props: Props) {
           tradeUsage={tradeUsage}
           settings={settings}
           healthy={services ? systemReady : null}
-          healthLabel={strategyHealth?.status ? `Strategy engine ${strategyHealth.status}` : undefined}
+          healthLabel={services?.system?.overall && services.system.overall !== 'OK' ? `System ${services.system.overall}: ${services.system.checks.filter((c) => c.state === 'firing').map((c) => c.title).join(', ') || 'see System Health'}` : strategyHealth?.status ? `Strategy engine ${strategyHealth.status}` : undefined}
         />
 
         <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2 text-2xs sm:hidden">

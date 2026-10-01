@@ -625,6 +625,8 @@ def _con_id(contract: Any) -> int | None:
 class TradePrefetcher:
     def __init__(self, args: argparse.Namespace):
         self.args = args
+        # Process start epoch for restart-loop detection by the backend.
+        self.started_at = time.time()
         IB = _ib_module().IB
 
         self.ib = IB()
@@ -1367,6 +1369,7 @@ class TradePrefetcher:
             {
                 "updated_at": generated_at,
                 "kernel": kernel_backend(),
+                "started_at": self.started_at,
                 "status": (
                     "closed"
                     if not regular_session_open
@@ -1630,6 +1633,8 @@ class TradePrefetcher:
                         {
                             "updated_at": time.time(),
                             "kernel": kernel_backend(),
+                            "started_at": self.started_at,
+                "started_at": self.started_at,
                             "status": "error",
                             "connected": self.ib.isConnected(),
                             "readonly": True,

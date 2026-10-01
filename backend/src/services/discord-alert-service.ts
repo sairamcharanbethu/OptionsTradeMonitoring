@@ -34,11 +34,20 @@ export class DiscordAlertService {
   constructor(private fastify: FastifyInstance) {}
 
   private async resolveWebhook(userId: number): Promise<string | null> {
-    const settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
+    const envWebhook = String(process.env.DISCORD_ALERT_WEBHOOK_URL || '').trim() || null;
+    let settings: Record<string, string> = {};
+    try {
+      settings = await getSettingsWithGlobalFallback((this.fastify as any).pg, userId);
+    } catch (err: any) {
+      // The alert path must survive a Postgres outage — that outage is often
+      // the thing being reported. Fall through to the env webhook.
+      this.fastify.log.warn(`[DiscordAlertService] Settings unavailable (${err?.message || String(err)}); using DISCORD_ALERT_WEBHOOK_URL${envWebhook ? '' : ' (not set)'}.`);
+      return envWebhook;
+    }
 
     const userWebhook = String(settings.discord_webhook_url || '').trim();
     if (settings.discord_alerts_enabled === 'true' && userWebhook) return userWebhook;
-    return String(process.env.DISCORD_ALERT_WEBHOOK_URL || '').trim() || null;
+    return envWebhook;
   }
 
   async send(input: DiscordAlertInput): Promise<boolean> {

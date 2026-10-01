@@ -216,6 +216,25 @@ export interface TradeRuntimeResponse<T> {
   data: T;
 }
 
+export interface SystemHealthCheck {
+  id: string;
+  title: string;
+  severity: 'critical' | 'warning' | 'info';
+  state: 'ok' | 'suspect' | 'firing';
+  since: string | null;
+  firedAt: string | null;
+  message: string | null;
+  stage: number;
+}
+
+export interface SystemHealthSummary {
+  overall: 'OK' | 'DEGRADED' | 'CRITICAL';
+  evaluatedAt: string | null;
+  checks: SystemHealthCheck[];
+  heartbeat: { configured: boolean; lastPingAt: string | null; lastPingOk: boolean | null; mode: 'ok' | 'fail' | null };
+  restartWindow: string | null;
+}
+
 export interface AdapterHealth {
   status: string;
   latencyMs: number | null;
@@ -1494,6 +1513,8 @@ export const api = {
       generatedAt?: string | null;
     };
     postgres?: AdapterHealth;
+    brokerReconciler?: AdapterHealth & Record<string, any>;
+    system?: SystemHealthSummary;
     generatedAt: string;
   }> {
     const res = await authFetch(`${API_BASE}/services/health`);

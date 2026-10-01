@@ -146,6 +146,12 @@ class ZeroGEXPrefetchServiceTest(unittest.TestCase):
         self.assertEqual(health["polling"]["gex_summary_interval_seconds"], 5)
         self.assertTrue(health["polling"]["core_in_flight"])
         self.assertFalse(health["polling"]["deep_in_flight"])
+        # started_at is the process start epoch: stable across payloads so the
+        # backend can count distinct values as restarts.
+        self.assertIsInstance(health["started_at"], float)
+        again = _health_payload("error", symbol="SPY", mode="primary", error="boom")
+        self.assertEqual(again["started_at"], health["started_at"])
+        self.assertEqual(again["status"], "error")
 
 
 if __name__ == "__main__":

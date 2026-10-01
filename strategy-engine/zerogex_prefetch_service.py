@@ -83,6 +83,11 @@ def _lane_freshness(lane: str, freshness: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Process start epoch, written into every health payload so a supervisor can
+# count restarts (distinct values within an hour) without Docker access.
+_PROCESS_STARTED_AT = time.time()
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -111,6 +116,7 @@ def _health_payload(
     forced_flow = (snapshot or {}).get("forced_flow") or {}
     return {
         "updated_at": time.time(),
+        "started_at": _PROCESS_STARTED_AT,
         "status": status,
         "source": "zerogex",
         "mode": mode,

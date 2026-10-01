@@ -1165,6 +1165,64 @@ const start = async () => {
     const { BrokerPositionReconciler } = await import('./services/broker-position-reconciler');
     const brokerReconciler = new BrokerPositionReconciler(fastify);
     fastify.decorate('brokerReconciler', brokerReconciler);
+
+    // System health evaluator: pages while FLAT (stale engine, IBKR down,
+    // ZeroGEX auth, Redis/Postgres down, stalled poller), with hold times,
+    // staged re-notification and recovery notices; pings the external
+    // heartbeat every tick. Reads the same sources as /api/services/health.
+    const { SystemHealthEvaluator } = await import('./services/system-health-evaluator');
+    const strategyDataDir = process.env.STRATEGY_DATA_DIR || '/strategy-data/trade';
+    const readJsonFile = async (filePath: string): Promise<any | null> => {
+      try {
+        return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
+      } catch {
+        return null;
+      }
+    };
+    const collectSystemHealthSnapshot = async () => {
+      const strategyState = strategyEngine.getCurrentState();
+      const engineHealth = strategyState.health as any;
+      const streamHealth = ibkrMarketDataStreamer.getHealth();
+      const zerogexHealth = await readJsonFile(path.join(strategyDataDir, 'zerogex-health.json'));
+      const pollerHealth = poller.getHealth();
+      const postgres = await withTimeout(
+        fastify.pg.query('SELECT 1').then(() => ({ ok: true, error: null as string | null })).catch((err: any) => ({ ok: false, error: err?.message || String(err) })),
+        3000,
+        () => ({ ok: false, error: 'SELECT 1 timed out after 3000ms' })
+      );
+      let backendRestartsLastHour: number | null = null;
+      try {
+        const raw = await redis.get('ops:restarts:backend');
+        backendRestartsLastHour = raw === null ? null : Number(raw);
+      } catch { /* fail-open */ }
+      return {
+        engine: engineHealth ? {
+          updatedAtEpoch: Number(engineHealth.updated_at) || null,
+          status: engineHealth.status ?? null,
+          connected: typeof engineHealth.connected === 'boolean' ? engineHealth.connected : null,
+          kernel: engineHealth.kernel ?? null,
+          startedAt: Number(engineHealth.started_at) || null,
+          error: engineHealth.error ?? engineHealth.last_error ?? strategyState.error ?? null
+        } : null,
+        ibkrStream: { status: streamHealth.status, connected: streamHealth.connected, lastError: streamHealth.lastError || null },
+        zerogex: zerogexHealth ? {
+          status: zerogexHealth.status ?? null,
+          updatedAtEpoch: Number(zerogexHealth.updated_at) || null,
+          error: zerogexHealth.error ?? null,
+          startedAt: Number(zerogexHealth.started_at) || null
+        } : null,
+        redisReady: redis.isReady(),
+        poller: { status: pollerHealth.status, lastPollCompletedAt: pollerHealth.lastPollCompletedAt, intervalSeconds: pollerHealth.intervalSeconds, pollingEnabled: pollerHealth.pollingEnabled },
+        postgres,
+        backendRestartsLastHour,
+        heartbeatConfigured: Boolean(String(process.env.HEARTBEAT_URL || '').trim())
+      };
+    };
+    const systemHealth = new SystemHealthEvaluator(fastify, {
+      collect: collectSystemHealthSnapshot,
+      intervalMs: Number(process.env.SYSTEM_HEALTH_INTERVAL_MS || 30_000)
+    });
+    fastify.decorate('systemHealth', systemHealth);
     const { TradeRedisService } = await import('./services/trade-redis-service');
     const { TradeExecutionService } = await import('./services/trade-execution-service');
     // Set at the end of startBackgroundServices; the pending-order sync flips
@@ -1473,6 +1531,7 @@ const start = async () => {
         paperTrading: normalizeAdapterHealth('paperTrading', paperTrading.getHealth(), generatedAt),
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
         brokerReconciler: normalizeAdapterHealth('brokerReconciler', brokerReconciler.getHealth(), generatedAt),
+        system: systemHealth.summary(),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),
         postgres: postgresHealth,
         generatedAt
@@ -1732,6 +1791,12 @@ const start = async () => {
       // are running may the adapter submit autonomous live entries — and even
       // then only after the first pending-order sync and the first broker
       // position reconcile have succeeded (see runSnaptradePendingOrderSync).
+      await startStep('systemHealth', async () => {
+        // Count this boot for restart-loop detection, then start evaluating.
+        await redis.incr('ops:restarts:backend', 3600).catch(() => null);
+        await systemHealth.start();
+      });
+
       await startStep('markLiveEntriesReady', async () => {
         liveEntriesReadyRequested = true;
         if (snaptradePendingOrderSyncHealth.firstSuccessAt && brokerReconciler.hasRunOnce()) {

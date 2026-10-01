@@ -742,7 +742,7 @@ export function useDayTradingTerminal() {
 
     const strategyHealth = services?.strategyEngine;
     const ibkrHealth = services?.marketData?.ibkr || services?.streams?.ibkr;
-    const systemReady = strategyHealth?.status === 'UP' && ibkrHealth?.connected === true;
+    const systemReady = strategyHealth?.status === 'UP' && ibkrHealth?.connected === true && services?.system?.overall !== 'CRITICAL';
     const diagnostics = [
       {
         label: 'Strategy engine',

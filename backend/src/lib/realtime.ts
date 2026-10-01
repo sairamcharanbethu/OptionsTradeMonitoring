@@ -25,7 +25,7 @@
 import { randomUUID } from 'crypto';
 import { redis } from './redis';
 
-export type RealtimeMessageType = 'STRATEGY_STATE' | 'POSITION_UPDATE' | 'TRADE_EVENT' | 'KILL_SWITCH';
+export type RealtimeMessageType = 'STRATEGY_STATE' | 'POSITION_UPDATE' | 'TRADE_EVENT' | 'KILL_SWITCH' | 'SYSTEM_HEALTH';
 
 export const REALTIME_CHANNEL = 'realtime:events';
 
