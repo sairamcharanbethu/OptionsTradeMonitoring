@@ -37,6 +37,31 @@ export class SnapTradeOrderSubmissionError extends Error {
     }
 }
 
+export type BrokerOptionHolding = {
+    accountId: string;
+    ticker: string;
+    optionType: 'CALL' | 'PUT';
+    strike: number;
+    expiration: string | null;
+    underlying: string | null;
+    units: number;
+    price: number | null;
+    averagePurchasePrice: number | null;
+    raw: any;
+};
+
+export type BrokerOrderSummary = {
+    ids: string[];
+    ticker: string;
+    action: string;
+    status: string;
+    filled: boolean;
+    filledQuantity: number;
+    fillPrice: number | null;
+    placedAt: string | null;
+    executedAt: string | null;
+};
+
 export class BrokerSyncInProgressError extends Error {
     readonly code = 'BROKER_SYNC_IN_PROGRESS';
 
@@ -1785,6 +1810,90 @@ export class SnaptradeService {
      * as a *request*: reconciliation of the outcome stays with the pending
      * order sync, which already classifies terminal statuses.
      */
+    /**
+     * Every account id that may hold this user's live option positions: the
+     * configured trading account plus every synced SnapTrade account.
+     */
+    async resolveTradingAccountIds(userId: number): Promise<string[]> {
+        const accountIds = new Set<string>();
+        const { rows: selectedRows } = await this.fastify.pg.query(
+            `SELECT value FROM settings
+             WHERE user_id = $1
+               AND key = 'snaptrade_trading_account_id'
+               AND value IS NOT NULL
+               AND value != ''`,
+            [userId]
+        );
+        for (const row of selectedRows) accountIds.add(String(row.value));
+        const { rows: accountRows } = await this.fastify.pg.query(
+            'SELECT id FROM snaptrade_accounts WHERE user_id = $1',
+            [userId]
+        );
+        for (const row of accountRows) accountIds.add(String(row.id));
+        return [...accountIds];
+    }
+
+    /**
+     * Option legs held at the broker for one account, normalised for the
+     * position reconciler. SnapTrade's equity positions endpoint does not
+     * return options; this is the dedicated options endpoint.
+     */
+    async listOptionHoldings(userId: number, accountId: string): Promise<BrokerOptionHolding[]> {
+        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        const response = await snaptrade.options.listOptionHoldings({
+            userId: userIdStr,
+            userSecret,
+            accountId: this.toSnaptradeAccountId(accountId)
+        }, this.snaptradeRequestOptions());
+        const holdings: BrokerOptionHolding[] = [];
+        for (const pos of (Array.isArray(response.data) ? response.data : [])) {
+            const optionSymbol = (pos as any)?.symbol?.option_symbol || (pos as any)?.option_symbol || null;
+            const ticker = this.canonicalOccTicker(optionSymbol?.ticker || (pos as any)?.symbol?.symbol?.symbol || '');
+            if (!ticker) continue;
+            holdings.push({
+                accountId,
+                ticker,
+                optionType: String(optionSymbol?.option_type || '').toUpperCase() === 'PUT' ? 'PUT' : 'CALL',
+                strike: Number(optionSymbol?.strike_price || 0),
+                expiration: String(optionSymbol?.expiration_date || '').split('T')[0] || null,
+                underlying: String(optionSymbol?.underlying_symbol?.symbol || '').toUpperCase() || null,
+                units: Number((pos as any)?.units || 0),
+                price: Number((pos as any)?.price || 0) || null,
+                averagePurchasePrice: Number((pos as any)?.average_purchase_price || 0) || null,
+                raw: pos
+            });
+        }
+        return holdings;
+    }
+
+    /** Recent orders for one account, reduced to what reconciliation needs. */
+    async listRecentOrderSummaries(userId: number, accountId: string): Promise<BrokerOrderSummary[]> {
+        const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
+        const response = await snaptrade.accountInformation.getUserAccountRecentOrders({
+            userId: userIdStr,
+            userSecret,
+            accountId: this.toSnaptradeAccountId(accountId),
+            onlyExecuted: false
+        }, this.snaptradeRequestOptions());
+        return this.extractRecentOrders(response.data).map((order) => this.summarizeOrder(order));
+    }
+
+    summarizeOrder(order: any): BrokerOrderSummary {
+        const placedAt = new Date(order?.time_placed || order?.time_updated || '').getTime();
+        const executedAt = new Date(order?.time_executed || order?.executed_at || order?.filled_at || '').getTime();
+        return {
+            ids: this.collectOrderIds(order),
+            ticker: this.canonicalOccTicker(order?.option_symbol?.ticker || order?.universal_symbol?.symbol || ''),
+            action: this.normalizeOrderAction(order?.action),
+            status: this.normalizeOrderStatus(order?.status),
+            filled: this.hasFillEvidence(order),
+            filledQuantity: this.getActualFilledQuantity(order),
+            fillPrice: this.getOrderFillPrice(order, 0) || null,
+            placedAt: Number.isFinite(placedAt) ? new Date(placedAt).toISOString() : null,
+            executedAt: Number.isFinite(executedAt) ? new Date(executedAt).toISOString() : null
+        };
+    }
+
     async cancelOptionOrder(userId: number, accountId: string, brokerageOrderId: string) {
         const { snaptrade, userIdStr, userSecret } = await this.getSnaptradeClient(userId);
         const snaptradeAccountId = this.toSnaptradeAccountId(accountId);

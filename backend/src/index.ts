@@ -279,6 +279,31 @@ const ensureSchema = async (instance: any) => {
       ON strategy_ai_rechecks (recheck_at);
     `);
 
+    // Broker-vs-DB position reconciliation ledger: one row per observed
+    // mismatch (two-strike rule lives in strikes/first_seen_at); resolved_at
+    // is set when the mismatch clears or the reconciler acts. Unresolved
+    // broker-side rows block new autonomous entries for the user.
+    await instance.pg.query(`
+      CREATE TABLE IF NOT EXISTS broker_position_reconciliations (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        osi_ticker VARCHAR(40) NOT NULL,
+        position_id INTEGER,
+        mismatch_class VARCHAR(40) NOT NULL,
+        first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        strikes INTEGER NOT NULL DEFAULT 1,
+        resolved_at TIMESTAMPTZ,
+        action VARCHAR(60),
+        details JSONB
+      );
+    `);
+    await instance.pg.query(`
+      CREATE INDEX IF NOT EXISTS idx_broker_position_reconciliations_open
+      ON broker_position_reconciliations (user_id, osi_ticker, mismatch_class)
+      WHERE resolved_at IS NULL;
+    `);
+
     await instance.pg.query(`
       CREATE TABLE IF NOT EXISTS strategy_signal_events (
         id BIGSERIAL PRIMARY KEY,
@@ -1137,6 +1162,9 @@ const start = async () => {
     const snaptradeOrderSync = new SnaptradeService(fastify);
     const { OrderWatchdogService } = await import('./services/order-watchdog-service');
     const orderWatchdog = new OrderWatchdogService(fastify);
+    const { BrokerPositionReconciler } = await import('./services/broker-position-reconciler');
+    const brokerReconciler = new BrokerPositionReconciler(fastify);
+    fastify.decorate('brokerReconciler', brokerReconciler);
     const { TradeRedisService } = await import('./services/trade-redis-service');
     const snaptradePendingOrderSyncHealth = {
       status: 'IDLE',
@@ -1185,6 +1213,13 @@ const start = async () => {
         snaptradePendingOrderSyncHealth.lastWatchdogResult = watchdogResult;
         snaptradePendingOrderSyncHealth.lastError = null;
         snaptradePendingOrderSyncHealth.status = 'UP';
+        // First broker-vs-DB position reconcile runs right after the first
+        // successful pending-order sync (so order state is settled); later
+        // runs are driven by the reconciler's own schedule.
+        if (!brokerReconciler.hasRunOnce()) {
+          brokerReconciler.runAll().catch((err: any) =>
+            fastify.log.warn(`[BrokerReconciler] initial run failed: ${err?.message || String(err)}`));
+        }
         if (result.checked > 0 || watchdogResult.checked > 0) {
           fastify.log.info(`[BrokerReconciliation] checked=${result.checked} opened=${result.opened} closed=${result.closed} pending=${result.stillPending} unmatched=${result.unmatched} watchdogEntryStale=${watchdogResult.entryStale} watchdogCancelRequested=${watchdogResult.entryCancelRequested} watchdogCancelExhausted=${watchdogResult.entryCancelExhausted} watchdogAbandoned=${watchdogResult.entryAbandoned} watchdogExitStale=${watchdogResult.exitStale}`);
         }
@@ -1421,6 +1456,7 @@ const start = async () => {
         }, generatedAt),
         paperTrading: normalizeAdapterHealth('paperTrading', paperTrading.getHealth(), generatedAt),
         snaptradePendingOrders: normalizeAdapterHealth('snaptradePendingOrders', snaptradePendingOrderSyncHealth, generatedAt),
+        brokerReconciler: normalizeAdapterHealth('brokerReconciler', brokerReconciler.getHealth(), generatedAt),
         tradeRedis: normalizeAdapterHealth('tradeRedis', tradeRedisHealth, generatedAt),
         postgres: postgresHealth,
         generatedAt
@@ -1640,6 +1676,11 @@ const start = async () => {
             fastify.log.warn(`[BrokerSync] queued sync loop error: ${err?.message || String(err)}`));
         }, 3000));
         backgroundTimers.push(setInterval(runSnaptradePendingOrderSync, Math.max(15, snaptradePendingOrderSyncHealth.intervalSeconds) * 1000));
+        // Broker position reconciler: every 5 min in-session, once ~30 min after the close.
+        backgroundTimers.push(setInterval(() => {
+          brokerReconciler.tick().catch((err: any) =>
+            fastify.log.warn(`[BrokerReconciler] tick error: ${err?.message || String(err)}`));
+        }, 60_000));
 
         // The database is remote and the pool closes idle clients after 30s, so
         // any request arriving on a cold pool pays TLS + handshake — measured at

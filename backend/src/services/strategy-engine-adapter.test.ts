@@ -681,6 +681,18 @@ async function testSwingEntryGuards() {
     adapter.noteEntryBlockState(false, null);
   }
 
+  // Broker reconciliation gate: an unresolved broker-side mismatch, a stale
+  // reconciler, or a reconciler that throws all hold the entry.
+  (adapter as any).fastify.brokerReconciler = { entryBlockReason: () => 'unresolved broker mismatch: BROKER_OPEN_DB_FLAT SPY251010C00640000' };
+  await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 70);
+  assert(entries.length === 0 && aiCalls === 0, 'An unresolved broker mismatch must block before the AI call');
+  assert(String(adapter.lastAutonomousEntryResult).includes('unresolved broker mismatch'), 'The reconciliation block reason is surfaced');
+  (adapter as any).fastify.brokerReconciler = { entryBlockReason: () => { throw new Error('redis down'); } };
+  await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 70);
+  assert(entries.length === 0, 'A failing reconciliation check fails closed');
+  (adapter as any).fastify.brokerReconciler = { entryBlockReason: () => null };
+  adapter.noteEntryBlockState(false, null);
+
   slotRow = { id: 555 };
   await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 71);
   assert(entries.length === 0 && aiCalls === 0, 'An occupied swing slot must block entry before the AI call');

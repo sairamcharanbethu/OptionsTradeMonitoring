@@ -233,6 +233,22 @@ export class StrategyEngineAdapter {
     }
   }
 
+  /**
+   * Reason the broker position reconciler wants entries held for this user,
+   * or null. A missing reconciler (unit tests, partial boot) does not block;
+   * a reconciler that throws does — unknown exposure is a reason to wait.
+   */
+  protected brokerReconcileBlockReason(userId: number): string | null {
+    const reconciler = (this.fastify as any).brokerReconciler;
+    if (!reconciler || typeof reconciler.entryBlockReason !== 'function') return null;
+    try {
+      const reason = reconciler.entryBlockReason(userId);
+      return reason ? String(reason) : null;
+    } catch (err: any) {
+      return `broker reconciliation check failed: ${err?.message || String(err)}`;
+    }
+  }
+
   /** Seam for tests; regular-session check used by the persistent-block alert. */
   protected isSessionOpen(now: Date): boolean {
     return getNewYorkMarketState(now).isOpen;
@@ -1228,6 +1244,14 @@ export class StrategyEngineAdapter {
         );
         if (openPositions?.length) {
           return { userId, result: `swing slot occupied by position ${openPositions[0].id} — one open position at a time` };
+        }
+        // Broker-vs-DB reconciliation gate: an unexplained position at the
+        // broker, or a reconciler that has not run this session, means we do
+        // not actually know our exposure. Fail closed.
+        const reconcileBlock = this.brokerReconcileBlockReason(userId);
+        if (reconcileBlock) {
+          this.noteEntryBlockState(true, reconcileBlock, userId);
+          return { userId, result: `blocked: ${reconcileBlock}` };
         }
         const fingerprint = this.planFingerprint(signal);
         const gateMode = LiveAiGateService.mode(settings);
