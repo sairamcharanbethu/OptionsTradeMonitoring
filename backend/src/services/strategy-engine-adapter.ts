@@ -58,6 +58,9 @@ export class StrategyEngineAdapter {
   private lastAutonomousEntryAt: string | null = null;
   private lastAutonomousEntryResult: string | null = null;
   private lastEntryBlock: { halted: boolean; reason: string | null } | null = null;
+  private entryBlockSince: number | null = null;
+  private entryBlockAlerted = false;
+  private static readonly ENTRY_BLOCK_ALERT_AFTER_MS = 30 * 60 * 1000;
   // AI re-review: a SKIP verdict means "not now", not "never". The setup stays
   // under watch and the gate is asked again once the cooldown elapses, so a
   // red setup can turn green without the operator re-arming anything.
@@ -192,8 +195,47 @@ export class StrategyEngineAdapter {
     };
   }
 
-  public noteEntryBlockState(halted: boolean, reason?: string | null): void {
-    this.lastEntryBlock = { halted, reason: reason || null };
+  /**
+   * Records why autonomous entries are (not) blocked for the UI, and pages the
+   * operator once when a block has persisted for more than 30 minutes of an
+   * open session — a silently blocked day looks identical to clean abstention.
+   */
+  public noteEntryBlockState(halted: boolean, reason?: string | null, userId?: number): void {
+    const now = Date.now();
+    if (!halted) {
+      this.lastEntryBlock = { halted: false, reason: null };
+      this.entryBlockSince = null;
+      this.entryBlockAlerted = false;
+      return;
+    }
+    if (!this.lastEntryBlock?.halted || this.entryBlockSince === null) {
+      this.entryBlockSince = now;
+      this.entryBlockAlerted = false;
+    }
+    this.lastEntryBlock = { halted: true, reason: reason || null };
+    const blockedForMs = now - (this.entryBlockSince ?? now);
+    if (
+      !this.entryBlockAlerted
+      && blockedForMs >= StrategyEngineAdapter.ENTRY_BLOCK_ALERT_AFTER_MS
+      && this.isSessionOpen(new Date(now))
+    ) {
+      this.entryBlockAlerted = true;
+      const minutes = Math.round(blockedForMs / 60000);
+      void new DiscordAlertService(this.fastify).send({
+        userId: userId ?? 0,
+        title: 'Autonomous entries blocked for 30+ minutes',
+        message: `Live entries have been blocked for ${minutes} min during the session. Reason: ${reason || 'unknown'}.`,
+        severity: 'warning',
+        category: 'entry-block-persistent',
+        dedupeKey: 'entry-block-persistent',
+        dedupeSeconds: 6 * 60 * 60
+      }).catch(() => false);
+    }
+  }
+
+  /** Seam for tests; regular-session check used by the persistent-block alert. */
+  protected isSessionOpen(now: Date): boolean {
+    return getNewYorkMarketState(now).isOpen;
   }
 
   public getVetoedSetupIds(): string[] {
@@ -1203,9 +1245,29 @@ export class StrategyEngineAdapter {
         }
         // Proactive daily-loss / kill-switch check BEFORE the AI call: a halted
         // day must not burn AI budget or reach the order path.
-        const halt = await KillSwitchService.evaluate((this.fastify as any).pg, 'live', userId).catch(() => null);
+        // Fail CLOSED: if the daily-loss evaluation itself cannot run (DB
+        // hiccup, Redis cache error) we do not know whether the day is halted,
+        // and an unknown halt state must never reach the order path.
+        const halt = await KillSwitchService.evaluate((this.fastify as any).pg, 'live', userId).catch((err: any) => ({
+          halted: true,
+          reason: `kill-switch evaluation failed: ${err?.message || String(err)}`,
+          evaluationFailed: true
+        } as any));
         if (halt?.halted) {
-          this.noteEntryBlockState(true, halt.reason || 'Kill switch halted new entries');
+          this.noteEntryBlockState(true, halt.reason || 'Kill switch halted new entries', userId);
+          if ((halt as any).evaluationFailed) {
+            this.fastify.log.error(`[StrategyEngineAdapter] ${halt.reason} — live entry for user ${userId} blocked (fail-closed)`);
+            void new DiscordAlertService(this.fastify).send({
+              userId,
+              title: 'Kill switch unavailable — live entries blocked',
+              message: `${halt.reason}. Autonomous live entries stay blocked until the daily-loss check can be evaluated again.`,
+              severity: 'critical',
+              category: 'kill-switch-unavailable',
+              signalId,
+              dedupeKey: `kill-switch-unavailable:${userId}`,
+              dedupeSeconds: 15 * 60
+            }).catch(() => false);
+          }
           return { userId, result: `halted before AI gate: ${halt.reason || 'kill switch engaged'}` };
         }
         const verdict = await this.liveAiGate.decide({ userId, signalId, signal, settings });
@@ -1328,7 +1390,11 @@ export class StrategyEngineAdapter {
       if (recheckAt > Date.now()) return;
       await this.deleteAiRecheck(PAPER_SWING_RECHECK_USER_ID, fingerprint, gateMode).catch(() => undefined);
     }
-    const halt = await KillSwitchService.evaluate((this.fastify as any).pg, 'paper').catch(() => null);
+    // Fail closed on an unevaluable kill switch, mirroring the live path.
+    const halt = await KillSwitchService.evaluate((this.fastify as any).pg, 'paper').catch((err: any) => ({
+      halted: true,
+      reason: `kill-switch evaluation failed: ${err?.message || String(err)}`
+    } as any));
     if (halt?.halted) {
       this.fastify.log.info(`[StrategyEngineAdapter] Paper swing entry halted: ${halt.reason || 'kill switch engaged'}`);
       return;

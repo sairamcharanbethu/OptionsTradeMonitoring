@@ -1,4 +1,5 @@
 import { StrategyEngineAdapter } from './strategy-engine-adapter';
+import { KillSwitchService } from './kill-switch-service';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -638,6 +639,47 @@ async function testSwingEntryGuards() {
   await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 70);
   assert(entries.length === 0, 'An unreadable kill switch must fail closed');
   disarm = 'false';
+
+  // The daily-loss evaluation itself failing (DB/Redis error) must also fail
+  // closed: no entry, no AI spend, and the reason surfaced.
+  const originalEvaluate = KillSwitchService.evaluate;
+  (KillSwitchService as any).evaluate = async () => { throw new Error('pg pool exhausted'); };
+  try {
+    await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 70);
+  } finally {
+    (KillSwitchService as any).evaluate = originalEvaluate;
+  }
+  assert(entries.length === 0 && aiCalls === 0, 'A failing kill-switch evaluation must block before the AI call');
+  assert(String(adapter.lastAutonomousEntryResult).includes('kill-switch evaluation failed'),
+    `The evaluation failure must be surfaced as the block reason (got: ${adapter.lastAutonomousEntryResult})`);
+  assert(adapter.getCurrentState().entryBlocked === true, 'The UI block state must reflect the fail-closed halt');
+
+  // A block that persists 30+ minutes into an open session pages once.
+  const blockAlerts = [] as Array<Record<string, any>>;
+  const alertCount = () => blockAlerts.length as number;
+  const RealDiscord = require('./discord-alert-service').DiscordAlertService;
+  const originalSend = RealDiscord.prototype.send;
+  RealDiscord.prototype.send = async (input: any) => { blockAlerts.push(input); return true; };
+  try {
+    adapter.isSessionOpen = () => true;
+    adapter.noteEntryBlockState(true, 'kill switch');
+    assert(alertCount() === 0, 'A fresh block must not page');
+    adapter.entryBlockSince = Date.now() - 31 * 60 * 1000;
+    adapter.noteEntryBlockState(true, 'kill switch');
+    adapter.noteEntryBlockState(true, 'kill switch');
+    assert(alertCount() === 1 && blockAlerts[0].category === 'entry-block-persistent',
+      `A 30+ minute block must page exactly once (got ${alertCount()})`);
+    adapter.noteEntryBlockState(false, null);
+    adapter.noteEntryBlockState(true, 'kill switch');
+    assert(alertCount() === 1, 'Clearing the block resets the timer so a new block starts fresh');
+    adapter.isSessionOpen = () => false;
+    adapter.entryBlockSince = Date.now() - 31 * 60 * 1000;
+    adapter.noteEntryBlockState(true, 'kill switch');
+    assert(alertCount() === 1, 'A long block outside the session does not page');
+  } finally {
+    RealDiscord.prototype.send = originalSend;
+    adapter.noteEntryBlockState(false, null);
+  }
 
   slotRow = { id: 555 };
   await adapter.maybeExecuteAutonomousLiveEntries(adapter.currentSignal, 71);

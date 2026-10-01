@@ -82,6 +82,22 @@ async function runTests() {
   const bv = await budget.decide({ userId: 7, signalId: 8, signal, settings: {} });
   assert(bv.source === 'BUDGET' && bv.aiRequested === false && bv.decision === 'SKIP' && bv.blocks === true, 'Budget exhaustion skips the call and blocks by default');
 
+  // Budget count unavailable (DB error): fail closed even when the operator
+  // opted into trade_cautious — an unknown spend is not zero spend.
+  const budgetBroken = createFastify();
+  const budgetBrokenEvents = budgetBroken.events;
+  budgetBroken.pg.query = async (sql: string, params: any[]) => {
+    if (sql.includes('COUNT(*)')) throw new Error('connection terminated');
+    if (sql.includes('INSERT INTO trade_events')) budgetBrokenEvents.push(params);
+    return { rows: [] };
+  };
+  const budgetBrokenGate = new LiveAiGateService(budgetBroken, async () => { throw new Error('must not be called'); });
+  const bbv = await budgetBrokenGate.decide({ userId: 7, signalId: 88, signal, settings: { autonomous_live_ai_fallback: 'trade_cautious' } });
+  assert(bbv.source === 'BUDGET' && bbv.decision === 'SKIP' && bbv.blocks === true && bbv.aiRequested === false,
+    'An uncountable budget skips the call and blocks (fail-closed)');
+  assert(bbv.riskFlags.includes('AI budget count unavailable'), 'The verdict names the real cause');
+  assert(budgetBrokenEvents.length === 1 && budgetBrokenEvents[0][3] === 'AI_LIVE_GATE', 'The fail-closed verdict is still recorded');
+
   // A run of FALLBACK verdicts means the provider itself is down.
   const failRow = { metadata: { ai_requested: 'true', source: 'FALLBACK' } };
   const okRow = { metadata: { ai_requested: 'true', source: 'AI' } };

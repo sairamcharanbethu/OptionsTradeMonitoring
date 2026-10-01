@@ -232,8 +232,16 @@ Respond only JSON: {"decision":"TRADE|SKIP","risk_tier":"CAUTIOUS|STANDARD|FULL"
     let verdict: LiveAiVerdict;
     let usage: any = null;
     const budget = LiveAiGateService.dailyBudget(input.settings);
-    const used = await this.callsToday(input.userId, now).catch(() => 0);
-    if (used >= budget) {
+    // Fail CLOSED when the budget cannot be counted: an unknown spend must
+    // not be treated as zero, or a DB hiccup turns into unlimited AI calls
+    // and an unadjudicated entry. The verdict is still recorded below.
+    const used = await this.callsToday(input.userId, now).catch(() => null);
+    if (used === null) {
+      verdict = {
+        ...this.fallbackVerdict(mode, 'skip', 'BUDGET', 'AI budget count unavailable; entry skipped (fail-closed).', 0, false),
+        riskFlags: ['AI budget count unavailable']
+      };
+    } else if (used >= budget) {
       verdict = this.fallbackVerdict(mode, fallback, 'BUDGET', `Daily live AI budget of ${budget} calls reached.`, 0, false);
     } else {
       try {

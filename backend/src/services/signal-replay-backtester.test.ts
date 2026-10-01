@@ -321,8 +321,12 @@ async function testStructureGateUsesLivePythonEngineGate() {
   const nearFlip = createSignal({ current_price: 770.14, strategy_name: 'GEX_WALL_BREAK_FAIL',
     volatility: { atr_5m: 1.0 },
     gex: { flip: 770.37, regime: 'Negative', gamma_regime: 'Trend' } });
-  // Momentum setup in a Positive/Range pin, far from flip (trades #793/#794).
-  // Momentum (non-continuation) in a Positive/Range pin -> the pin gate.
+  // A retired strategy name (MTF_TREND_BREAK left the live set 2026-09-13;
+  // signal_engine.MOMENTUM_STRATEGIES is {"CONTINUATION"}) in a Positive/Range
+  // pin is NOT gated: the pin gate only applies to the momentum family, and
+  // CONTINUATION in positive gamma hits its own gate first. The
+  // momentum_in_positive_range mapping itself is covered by
+  // testEngineGateCategoryMapping through the runner seam.
   const pinMomentum = createSignal({ current_price: 771.24, strategy_name: 'MTF_TREND_BREAK',
     volatility: { atr_5m: 1.0 },
     gex: { flip: 760.0, regime: 'Positive', gamma_regime: 'Range' } });
@@ -349,8 +353,8 @@ async function testStructureGateUsesLivePythonEngineGate() {
   const gate = (s: any): string | null => backtester.getScenarioSkipReason('structure_gated', s);
   assert(gate(nearFlip) === 'flip_no_mans_land',
     'A directional entry hugging the gamma flip must be gated by the engine');
-  assert(gate(pinMomentum) === 'momentum_in_positive_range',
-    'A momentum setup in a Positive/Range pin must be gated by the engine');
+  assert(gate(pinMomentum) === null,
+    'A retired (non-momentum-family) strategy in a Positive/Range pin is not gated by the live engine');
   assert(gate(positiveContinuation) === 'continuation_positive_gamma',
     'CONTINUATION in positive gamma must be gated by the engine regardless of the pin flag');
   assert(gate(pinFade) === null,
@@ -369,6 +373,46 @@ async function testStructureGateUsesLivePythonEngineGate() {
   assert(offlineStatus.available === false, 'A failed harness must report unavailable');
   assert(offline.getScenarioSkipReason('structure_gated', freshSignal) === 'engine_gate_unavailable',
     'Signals without an engine verdict must be skipped as engine_gate_unavailable, never re-judged in TS');
+}
+
+// The compact skip-reason categories are derived from the engine's blocker
+// text. Drive the mapping through the runner seam with harness-shaped lines so
+// each category stays covered even when the live gate set no longer reaches it.
+async function testEngineGateCategoryMapping() {
+  const backtester = createBacktester();
+  const signals = [
+    createSignal({ strategy_name: 'CONTINUATION' }),
+    createSignal({ strategy_name: 'CONTINUATION' }),
+    createSignal({ strategy_name: 'CONTINUATION' }),
+    createSignal({ strategy_name: 'CONTINUATION' }),
+    createSignal({ strategy_name: 'CONTINUATION' }),
+    createSignal({ strategy_name: 'CONTINUATION' }),
+    createSignal({ strategy_name: 'CONTINUATION' })
+  ];
+  const blockers = [
+    'CONTINUATION blocked: spot inside the gamma flip no-man\'s-land',
+    'CONTINUATION blocked in positive gamma: dealer hedging dampens moves',
+    'CONTINUATION momentum setup blocked in Positive/Range pin regime',
+    'incomplete signal: strategy missing',
+    'signal activation window expired',
+    'CONTINUATION blocked in a dead tape: ATR(5m) $0.40 < $0.80',
+    null
+  ];
+  backtester.engineGateRunner = async (lines: string[]) => lines.map((line) => {
+    const parsed = JSON.parse(line);
+    const blocker = blockers[parsed.id];
+    return JSON.stringify({ id: parsed.id, entry_allowed: blocker === null, gates: blocker === null ? [] : [blocker] });
+  });
+  const status = await backtester.evaluateEngineGates(signals);
+  assert(status.available === true && status.evaluated === signals.length, 'Fake harness lines must all be consumed');
+  const gate = (s: any): string | null => backtester.getScenarioSkipReason('structure_gated', s);
+  assert(gate(signals[0]) === 'flip_no_mans_land', 'flip blocker maps to flip_no_mans_land');
+  assert(gate(signals[1]) === 'continuation_positive_gamma', 'positive gamma blocker maps to continuation_positive_gamma');
+  assert(gate(signals[2]) === 'momentum_in_positive_range', 'Positive/Range pin blocker maps to momentum_in_positive_range');
+  assert(gate(signals[3]) === 'engine_incomplete_signal', 'incomplete signal maps to engine_incomplete_signal');
+  assert(gate(signals[4]) === 'engine_activation_window_expired', 'activation window maps to engine_activation_window_expired');
+  assert(gate(signals[5]) === 'engine_gate', 'any other blocker maps to the generic engine_gate');
+  assert(gate(signals[6]) === null, 'an allowed entry has no skip reason');
 }
 
 async function testVixContangoScenarioRequiresStoredTermStructure() {
@@ -1069,6 +1113,7 @@ async function runTests() {
   await testNaiveIbkrBarsParseAsEasternTime();
   await testEasternDateHelperHandlesStandardTime();
   await testStructureGateUsesLivePythonEngineGate();
+  await testEngineGateCategoryMapping();
   console.log('All SignalReplayBacktester tests passed!');
 }
 
