@@ -163,10 +163,22 @@ export class TradeLifecycleService {
       return { allowed: false, reason: 'No previous broker exit order id is attached to this position' };
     }
     const retryCount = Number(position.exit_retry_count || 0);
-    if (retryCount >= this.MAX_EXIT_RETRIES) {
+    if (retryCount >= this.MAX_EXIT_RETRIES && !this.isMandatoryExitReason(position.exit_reason)) {
       return { allowed: false, reason: `Exit retry limit reached (${retryCount}/${this.MAX_EXIT_RETRIES})` };
     }
     return { allowed: true };
+  }
+
+  /**
+   * Exits that must complete regardless of how many broker attempts it takes:
+   * holding into expiry (or past the day-trade flatten) is strictly worse than
+   * another retry, so these bypass MAX_EXIT_RETRIES. Callers escalate the
+   * order type and page the operator past the normal budget instead.
+   */
+  static readonly MANDATORY_EXIT_REASONS = ['EXPIRY_EXIT', 'MANDATORY_DAY_TRADE_FLATTEN'];
+
+  static isMandatoryExitReason(reason?: string | null): boolean {
+    return this.MANDATORY_EXIT_REASONS.includes(String(reason || '').toUpperCase());
   }
 
   static canAutoRetryExit(position: any): ExitRetryDecision {

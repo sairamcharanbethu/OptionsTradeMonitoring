@@ -1340,7 +1340,7 @@ export class SnaptradeService {
                         // cancel request itself fails, does the position fall
                         // back to EXIT_STALE manual review.
                         const exitRetryCount = Number(position.exit_retry_count || 0);
-                        if (position.broker_exit_order_id && exitRetryCount < TradeLifecycleService.MAX_EXIT_RETRIES) {
+                        if (position.broker_exit_order_id && (exitRetryCount < TradeLifecycleService.MAX_EXIT_RETRIES || TradeLifecycleService.isMandatoryExitReason(position.exit_reason))) {
                             try {
                                 const cancelRecord = await snaptrade.trading.cancelUserAccountOrder({
                                     userId: userIdStr,

@@ -683,6 +683,117 @@ async function testExpiryExitAssessment() {
   assert(noExpiry === null, 'A position with an unparseable expiry must not trigger the exit-before-expiry rule');
 }
 
+async function testExpiryExitOrderLadder() {
+  const poller = createPoller();
+  const midSession = new Date('2026-08-03T14:00:00.000Z'); // Mon 10:00 ET
+  const fresh = { bid: 1.2, ask: 1.26, source: 'ibkr', quoteAgeMs: 500 };
+  const pos = (retries: number, extra: any = {}) => ({ id: 1, exit_retry_count: retries, current_price: 1.23, ...extra });
+
+  const first = poller.getExpiryExitOrderPreference(pos(0), fresh, 2, midSession);
+  assert(first?.orderType === 'LIMIT' && first.limitPrice === '1.20' && first.mode === 'LIMIT_AT_BID',
+    `First expiry attempt with a fresh tight quote is a limit at the bid, got ${JSON.stringify(first)}`);
+  const second = poller.getExpiryExitOrderPreference(pos(1), fresh, 2, midSession);
+  assert(second?.orderType === 'LIMIT' && second.limitPrice === '1.18' && second.mode === 'LIMIT_BELOW_BID',
+    `Second attempt steps 2% under the bid, got ${JSON.stringify(second)}`);
+  const third = poller.getExpiryExitOrderPreference(pos(2), fresh, 2, midSession);
+  assert(third?.orderType === 'MARKET' && third.mode === 'MARKET_RETRY_EXHAUSTED', 'Third attempt goes MARKET');
+
+  const stale = poller.getExpiryExitOrderPreference(pos(0), { ...fresh, quoteAgeMs: 60_000 }, 2, midSession);
+  assert(stale?.orderType === 'MARKET' && stale.mode === 'MARKET_NO_FRESH_QUOTE', 'A stale quote is not safe for a limit');
+  const noQuote = poller.getExpiryExitOrderPreference(pos(0), undefined, 2, midSession);
+  assert(noQuote?.orderType === 'MARKET' && noQuote.mode === 'MARKET_NO_FRESH_QUOTE', 'No quote means MARKET');
+  const wide = poller.getExpiryExitOrderPreference(pos(0), { bid: 1.0, ask: 1.4, source: 'ibkr', quoteAgeMs: 500 }, 2, midSession);
+  assert(wide?.orderType === 'MARKET' && wide.mode === 'MARKET_NO_FRESH_QUOTE', 'A >20% spread falls back to MARKET');
+  const noBid = poller.getExpiryExitOrderPreference(pos(0), { bid: 0, ask: 1.4, source: 'ibkr', quoteAgeMs: 500 }, 2, midSession);
+  assert(noBid?.orderType === 'MARKET', 'A no-bid quote falls back to MARKET');
+
+  const opening = poller.getExpiryExitOrderPreference(pos(0), fresh, 2, new Date('2026-08-03T13:32:00.000Z'));
+  assert(opening === null, 'The first five minutes of the session defer the expiry exit');
+  const lastHour = poller.getExpiryExitOrderPreference(pos(0), fresh, 2, new Date('2026-08-03T19:30:00.000Z'));
+  assert(lastHour?.orderType === 'MARKET' && lastHour.mode === 'MARKET_LAST_HOUR', 'The last hour of the session goes MARKET');
+  const finalDay = poller.getExpiryExitOrderPreference(pos(0), fresh, 1, midSession);
+  assert(finalDay?.orderType === 'MARKET' && finalDay.mode === 'MARKET_FINAL_DAY', 'At 1 DTE the exit is MARKET regardless of quote');
+}
+
+async function testExpiryPollSubmitsLadderOrderAndTagsExpiryReason() {
+  const submitted: any[] = [];
+  const queries: any[] = [];
+  const position = {
+    id: 91, user_id: 7, symbol: 'SPY', status: 'OPEN', is_simulated: false, strategy_managed: true,
+    execution_broker: 'wealthsimple_snaptrade', execution_status: 'FILLED', expiration_date: '2099-08-05',
+    option_type: 'CALL', strike_price: 640, quantity: 1, entry_price: 1, current_price: 1.1, exit_retry_count: 0, notes: ''
+  };
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async (sql: string, params?: any[]) => {
+      queries.push({ sql, params });
+      if (sql.includes('FROM positions')) return { rows: [{ ...position }] };
+      // Persist the owed-exit note like Postgres would, so the dedupe is exercised.
+      if (sql.includes('UPDATE positions') && String(params?.[0] || '').includes('expiry exit owed')) position.notes += String(params?.[0]);
+      return { rows: [], rowCount: 1 };
+    } }
+  } as any;
+  const poller = new MarketPoller(fastify, { isReady: () => false }) as any;
+  poller.getMandatoryFlattenAssessment = () => null;
+  poller.isMarketOpen = () => true;
+  poller.getNewYorkTimeParts = () => ({ hour: 10, minute: 0, minutes: 600 });
+  poller.getExpiryExitAssessment = (pos: any) => (pos.id === 91 ? { triggered: true, dte: 2 } : null);
+  poller.getOptionPremium = async () => ({ price: 1.22, quote: { bid: 1.2, ask: 1.24, source: 'ibkr', quoteAgeMs: 200 } });
+  poller.submitSnapTradeExit = async (pos: any, orderType: string, limitPrice: string, trigger: string) => { submitted.push({ id: pos.id, orderType, limitPrice, trigger }); return true; };
+  poller.notifyN8n = async () => {};
+  poller.checkStrategyPositionWatchdog = async () => {};
+  poller.syncPrice = async () => null;
+
+  await poller.poll();
+  assert(submitted.length === 1, `The expiry exit must be submitted once, got ${submitted.length}`);
+  assert(submitted[0].orderType === 'LIMIT' && submitted[0].limitPrice === '1.20' && submitted[0].trigger === 'EXPIRY',
+    `The poll-path expiry exit uses the ladder and the EXPIRY trigger, got ${JSON.stringify(submitted[0])}`);
+  const health = poller.getHealth();
+  assert(health.status === 'UP' && health.lastPollCompletedAt && health.lastPollDurationMs >= 0, 'poll() stamps completion for the liveness check');
+
+  // Outside the session the owed exit is recorded once, never submitted.
+  submitted.length = 0;
+  queries.length = 0;
+  poller.isMarketOpen = () => false;
+  await poller.poll();
+  assert(submitted.length === 0, 'No expiry exit is submitted while the market is closed');
+  const owedNote = queries.filter(q => q.sql.includes('UPDATE positions') && String(q.params?.[0] || '').includes('expiry exit owed'));
+  assert(owedNote.length === 1, 'An owed expiry exit is noted on the position');
+  assert(queries.some(q => q.sql.includes('INSERT INTO trade_events') && q.params?.[3] === 'EXPIRY_EXIT_OWED'), 'An EXPIRY_EXIT_OWED event is recorded');
+  queries.length = 0;
+  await poller.poll();
+  assert(!queries.some(q => q.sql.includes('UPDATE positions') && String(q.params?.[0] || '').includes('expiry exit owed')), 'The owed note is written only once');
+}
+
+async function testStartRunsImmediateCatchUpPoll() {
+  const polls: string[] = [];
+  const fastify = {
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+    pg: { query: async () => ({ rows: [{ key: 'market_poll_interval', value: '60' }] }) }
+  } as any;
+  const poller = new MarketPoller(fastify, { isReady: () => true, setNX: async () => true }) as any;
+  poller.poll = async () => { polls.push('poll'); };
+  poller.startBriefingJob = () => {};
+  poller.marketDataBuffer = { startEodFlushJob: () => {} };
+  await poller.start();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(polls.length === 1, `start() must run one catch-up poll immediately, got ${polls.length}`);
+  if (poller.timerId) clearTimeout(poller.timerId);
+  const health = poller.getHealth();
+  assert(health.intervalSeconds === 60 && health.pollingEnabled === true, 'Health reports the configured interval');
+}
+
+async function testExpiryExitReasonMapping() {
+  const poller = createPoller();
+  const claims: any[] = [];
+  poller.fastify.pg.query = async (sql: string, params: any[]) => {
+    if (sql.includes('UPDATE positions') && sql.includes('RETURNING id')) { claims.push(params); return { rowCount: 0, rows: [] }; }
+    return { rows: [], rowCount: 0 };
+  };
+  await poller.submitSnapTradeExit({ id: 5, user_id: 1, account_id: 'a', quantity: 1, option_type: 'CALL' }, 'LIMIT', '1.20', 'EXPIRY');
+  assert(claims.length === 1 && claims[0][1] === 'EXPIRY_EXIT' && claims[0][2] === 'LIMIT', `EXPIRY trigger must claim with exit_reason EXPIRY_EXIT, got ${JSON.stringify(claims[0])}`);
+}
+
 async function testStrategyWatchdogOnlyFlagsSyncForWorkingOrders() {
   const poller = createPoller();
   const now = new Date('2026-09-30T15:00:00.000Z');
@@ -720,6 +831,10 @@ async function runTests() {
   await testSyntheticTrailRejectsStaleHardStopQuote();
   await testMandatoryFlattenSubmitsOneMarketExit();
   await testExpiryExitAssessment();
+  await testExpiryExitOrderLadder();
+  await testExpiryPollSubmitsLadderOrderAndTagsExpiryReason();
+  await testStartRunsImmediateCatchUpPoll();
+  await testExpiryExitReasonMapping();
   await testSimulatedExitPersistsFinalCheckpoint();
   await testExpiredPositionWithRejectedExitIsReconciled();
   await testStrategyWatchdogOnlyFlagsSyncForWorkingOrders();

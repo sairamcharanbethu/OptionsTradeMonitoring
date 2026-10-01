@@ -106,6 +106,16 @@ async function testExitSubmissionFailureSeparatesRetryableAndAmbiguousOutcomes()
     'A definite failed submission must be retryable without a broker order id');
   assert(!TradeLifecycleService.canRetryExit({ status: 'OPEN', execution_status: 'EXIT_RECONCILE_REQUIRED', exit_retry_count: 0 }).allowed,
     'An ambiguous submission must never be retried without broker reconciliation');
+  // Mandatory exits (expiry, day-trade flatten) are exempt from the retry budget.
+  const exhausted = { status: 'OPEN', execution_status: 'EXIT_RETRYABLE', exit_retry_count: TradeLifecycleService.MAX_EXIT_RETRIES };
+  assert(!TradeLifecycleService.canRetryExit({ ...exhausted, exit_reason: 'AUTO_EXIT' }).allowed,
+    'An ordinary exit stops retrying at the budget');
+  assert(TradeLifecycleService.canRetryExit({ ...exhausted, exit_reason: 'EXPIRY_EXIT' }).allowed,
+    'An expiry exit keeps retrying past the budget');
+  assert(TradeLifecycleService.canRetryExit({ ...exhausted, exit_reason: 'MANDATORY_DAY_TRADE_FLATTEN', exit_retry_count: 10 }).allowed,
+    'A mandatory flatten keeps retrying past the budget');
+  assert(TradeLifecycleService.isMandatoryExitReason('expiry_exit') && !TradeLifecycleService.isMandatoryExitReason('SYNTHETIC_TRAILING_STOP'),
+    'Mandatory exit reasons are matched case-insensitively');
 }
 
 async function testAutonomousExitRetryRequiresFreshTerminalBrokerEvidence() {

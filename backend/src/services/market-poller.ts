@@ -23,7 +23,23 @@ type ExitQuoteContext = {
   source?: string;
 };
 
-export type ExitTriggerType = 'STOP_LOSS' | 'TRAILING_STOP' | 'TAKE_PROFIT' | 'THETA_STOP' | 'END_OF_DAY' | 'MANUAL_FLATTEN_ALL';
+export type ExitTriggerType = 'STOP_LOSS' | 'TRAILING_STOP' | 'TAKE_PROFIT' | 'THETA_STOP' | 'END_OF_DAY' | 'MANUAL_FLATTEN_ALL' | 'EXPIRY';
+
+export type ExpiryExitOrderPreference = {
+  orderType: 'LIMIT' | 'MARKET';
+  limitPrice?: string;
+  mode: 'LIMIT_AT_BID' | 'LIMIT_BELOW_BID' | 'MARKET_NO_FRESH_QUOTE' | 'MARKET_RETRY_EXHAUSTED' | 'MARKET_LAST_HOUR' | 'MARKET_FINAL_DAY';
+};
+
+export type MarketPollerHealth = {
+  status: 'UP' | 'DISABLED' | 'STALE' | 'STARTING';
+  pollingEnabled: boolean;
+  intervalSeconds: number;
+  lastPollStartedAt: string | null;
+  lastPollCompletedAt: string | null;
+  lastPollDurationMs: number | null;
+  lastPollError: string | null;
+};
 
 export class MarketPoller {
   private fastify: FastifyInstance;
@@ -71,6 +87,11 @@ export class MarketPoller {
     this.startBriefingJob();
     this.marketDataBuffer.startEodFlushJob();
 
+    // Catch-up pass right away: after a restart the first scheduled poll is a
+    // full interval out, and a position that crossed its 2-DTE exit (or
+    // expired) while we were down must not wait another minute for the
+    // safety-net sweep. Same lock discipline as the timer path.
+    void this.runLockedPoll('startup');
   }
 
   private scheduleNextPoll() {
@@ -82,36 +103,71 @@ export class MarketPoller {
           // Skip polling but keep the timer alive so we can resume
           return;
         }
-
-        // Distributed Lock Check
-        // Attempt to acquire lock for slightly longer than the interval
-        const lockDuration = this.currentIntervalSeconds + 5;
-        let acquired = false;
-        if (typeof this.redisClient?.isReady !== 'function' || this.redisClient.isReady()) {
-          acquired = await this.redisClient.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
-          this.redisLockDegradedSince = null;
-        } else {
-          // Redis down: setNX would return false forever and stop/TP/theta/flatten
-          // evaluation would silently halt while entries stay gated closed. Exit
-          // submission is already idempotent via the DB claim in submitSnapTradeExit, so
-          // run unlocked and alert instead of failing open on exits.
-          acquired = true;
-          const now = Date.now();
-          if (!this.redisLockDegradedSince || now - this.redisLockDegradedSince > 5 * 60 * 1000) {
-            this.redisLockDegradedSince = now;
-            this.fastify.log.error('[MarketPoller] Redis unavailable: running exit poll WITHOUT the leader lock so open positions keep being monitored.');
-          }
-        }
-
-        if (acquired) {
-          await this.poll();
-        }
+        await this.runLockedPoll('timer');
       } catch (err) {
         this.fastify.log.error(`[MarketPoller] Error during poll execution: ${err}`);
       } finally {
         this.scheduleNextPoll();
       }
     }, this.currentIntervalSeconds * 1000);
+  }
+
+  /** Acquire the leader lock (or run unlocked when Redis is down) and poll once. */
+  private async runLockedPoll(origin: 'timer' | 'startup'): Promise<boolean> {
+    try {
+      if (!this.pollingEnabled) return false;
+      // Distributed Lock Check
+      // Attempt to acquire lock for slightly longer than the interval
+      const lockDuration = this.currentIntervalSeconds + 5;
+      let acquired = false;
+      if (typeof this.redisClient?.isReady !== 'function' || this.redisClient.isReady()) {
+        acquired = await this.redisClient.setNX(this.LOCK_KEY, 'LOCKED', Math.floor(lockDuration));
+        this.redisLockDegradedSince = null;
+      } else {
+        // Redis down: setNX would return false forever and stop/TP/theta/flatten
+        // evaluation would silently halt while entries stay gated closed. Exit
+        // submission is already idempotent via the DB claim in submitSnapTradeExit, so
+        // run unlocked and alert instead of failing open on exits.
+        acquired = true;
+        const now = Date.now();
+        if (!this.redisLockDegradedSince || now - this.redisLockDegradedSince > 5 * 60 * 1000) {
+          this.redisLockDegradedSince = now;
+          this.fastify.log.error('[MarketPoller] Redis unavailable: running exit poll WITHOUT the leader lock so open positions keep being monitored.');
+        }
+      }
+      if (!acquired) return false;
+      if (origin === 'startup') this.fastify.log.info('[MarketPoller] Startup catch-up poll running.');
+      await this.poll();
+      return true;
+    } catch (err: any) {
+      if (origin === 'startup') {
+        this.fastify.log.error(`[MarketPoller] Startup catch-up poll failed: ${err?.message || String(err)}`);
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  private lastPollStartedAt: string | null = null;
+  private lastPollCompletedAt: string | null = null;
+  private lastPollDurationMs: number | null = null;
+  private lastPollError: string | null = null;
+
+  /** Liveness of the safety-net sweep, consumed by readiness/health surfaces. */
+  public getHealth(now: Date = new Date()): MarketPollerHealth {
+    let status: MarketPollerHealth['status'] = 'UP';
+    if (!this.pollingEnabled) status = 'DISABLED';
+    else if (!this.lastPollCompletedAt) status = 'STARTING';
+    else if (now.getTime() - new Date(this.lastPollCompletedAt).getTime() > this.currentIntervalSeconds * 3 * 1000) status = 'STALE';
+    return {
+      status,
+      pollingEnabled: this.pollingEnabled,
+      intervalSeconds: this.currentIntervalSeconds,
+      lastPollStartedAt: this.lastPollStartedAt,
+      lastPollCompletedAt: this.lastPollCompletedAt,
+      lastPollDurationMs: this.lastPollDurationMs,
+      lastPollError: this.lastPollError
+    };
   }
 
   public updateInterval(seconds: number) {
@@ -441,6 +497,83 @@ export class MarketPoller {
     return { triggered: true, dte };
   }
 
+  /**
+   * Order ladder for the exit-before-expiry rule. A raw MARKET into a 9:30
+   * spread gives back real money on a swing contract, so the first attempts
+   * are marketable limits at the bid; MARKET is reserved for when a limit is
+   * not safe (no fresh quote, wide spread), has already failed twice, or time
+   * is short (last hour, final day). Returns null to defer during the first
+   * five minutes of the session while the opening spread settles.
+   */
+  public getExpiryExitOrderPreference(position: any, quote: ExitQuoteContext | undefined, dte: number, now: Date = new Date()): ExpiryExitOrderPreference | null {
+    const parts = this.getNewYorkTimeParts(now);
+    const closeMinutes = getUSMarketCloseMinutes(now);
+    if (parts.minutes < 9 * 60 + 35) return null;
+    if (dte <= 1) return { orderType: 'MARKET', mode: 'MARKET_FINAL_DAY' };
+    if (parts.minutes >= closeMinutes - 60) return { orderType: 'MARKET', mode: 'MARKET_LAST_HOUR' };
+    const attempt = Number(position.exit_retry_count || 0) + 1;
+    if (attempt >= 3) return { orderType: 'MARKET', mode: 'MARKET_RETRY_EXHAUSTED' };
+    const normalized = this.normalizeQuoteContext(Number(position.current_price || 0), quote);
+    const bid = Number(normalized.bid || 0);
+    const usable = this.isFreshSyntheticTrailQuote(normalized) && bid > 0 && !this.isWideExitSpread(normalized);
+    if (!usable) return { orderType: 'MARKET', mode: 'MARKET_NO_FRESH_QUOTE' };
+    if (attempt === 1) return { orderType: 'LIMIT', limitPrice: bid.toFixed(2), mode: 'LIMIT_AT_BID' };
+    return { orderType: 'LIMIT', limitPrice: Math.max(bid * 0.98, 0.01).toFixed(2), mode: 'LIMIT_BELOW_BID' };
+  }
+
+  /** Fetch a fresh quote for the poll-path expiry exit and pick the order. */
+  private async resolveExpiryExitOrder(position: any, dte: number, now: Date): Promise<ExpiryExitOrderPreference | null> {
+    let quote: ExitQuoteContext | undefined;
+    try {
+      const data = await this.getOptionPremium(
+        position.user_id,
+        position.symbol,
+        Number(position.strike_price),
+        position.option_type,
+        position.expiration_date,
+        true
+      );
+      quote = data?.quote;
+      if (data?.price) position.current_price = data.price;
+    } catch (err: any) {
+      this.fastify.log.warn(`[MarketPoller] Expiry exit quote unavailable for position ${position.id}: ${err?.message || String(err)}`);
+    }
+    const preference = this.getExpiryExitOrderPreference(position, quote, dte, now);
+    if (!preference) {
+      this.fastify.log.info(`[MarketPoller] Expiry exit for position ${position.id} deferred until 09:35 ET (opening spread).`);
+      return null;
+    }
+    this.fastify.log.info(`[MarketPoller] Expiry exit for position ${position.id}: ${preference.orderType}${preference.limitPrice ? ` @ ${preference.limitPrice}` : ''} (${preference.mode}, attempt ${Number(position.exit_retry_count || 0) + 1}).`);
+    return preference;
+  }
+
+  private static readonly EXPIRY_EXIT_OWED_NOTE = '[expiry exit owed at next open]';
+
+  /** Mark (once) that a position crossed its expiry-exit threshold while the market was closed. */
+  private async noteExpiryExitOwed(position: any, dte: number): Promise<void> {
+    if (position.is_simulated) return;
+    if (String(position.notes || '').includes(MarketPoller.EXPIRY_EXIT_OWED_NOTE)) return;
+    const updated = await (this.fastify as any).pg.query(
+      `UPDATE positions
+       SET notes = COALESCE(notes, '') || $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+         AND status = 'OPEN'
+         AND COALESCE(notes, '') NOT LIKE $3`,
+      [` ${MarketPoller.EXPIRY_EXIT_OWED_NOTE} (${dte} DTE)`, position.id, `%${MarketPoller.EXPIRY_EXIT_OWED_NOTE}%`]
+    );
+    if ((updated.rowCount ?? 0) === 0) return;
+    position.notes = `${position.notes || ''} ${MarketPoller.EXPIRY_EXIT_OWED_NOTE}`;
+    await TradeRedisService.recordEvent((this.fastify as any).pg, {
+      userId: Number(position.user_id),
+      positionId: position.id,
+      eventType: 'EXPIRY_EXIT_OWED',
+      message: `Position reached ${dte} DTE outside the session; exit-before-expiry will be submitted at the next open.`,
+      metadata: { dte, source: 'market-poller' }
+    }).catch(() => undefined);
+    this.fastify.log.warn(`[MarketPoller] Position ${position.id} (${position.symbol}) is at ${dte} DTE with the market closed; expiry exit owed at next open.`);
+  }
+
   private getMandatoryFlattenAssessment(position: any, now: Date = new Date()): {
     triggered: boolean;
     flattenMinutes: number;
@@ -622,12 +755,17 @@ export class MarketPoller {
       ]
     );
     if ((released.rowCount ?? 0) === 0) return;
-    this.fastify.log.warn(`[MarketPoller] Released ${currentExecutionStatus} claim on position ${position.id}; exit monitoring re-armed (retry ${retryCount + 1}/${TradeLifecycleService.MAX_EXIT_RETRIES}).`);
+    // Mandatory exits (expiry / day-trade flatten) are exempt from the retry
+    // budget and keep retrying until flat; past the normal budget every
+    // further attempt pages critically so a broker that keeps killing our
+    // orders is never silent.
+    const beyondBudget = retryCount + 1 > TradeLifecycleService.MAX_EXIT_RETRIES;
+    this.fastify.log.warn(`[MarketPoller] Released ${currentExecutionStatus} claim on position ${position.id}; exit monitoring re-armed (retry ${retryCount + 1}/${TradeLifecycleService.MAX_EXIT_RETRIES}${beyondBudget ? ', mandatory exit beyond budget' : ''}).`);
     await new DiscordAlertService(this.fastify).send({
       userId: Number(position.user_id),
-      title: 'Exit order auto-retry armed',
-      message: `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)}: broker confirmed the previous exit order is dead (${position.last_broker_order_status}). Exit monitoring re-armed automatically (retry ${retryCount + 1}/${TradeLifecycleService.MAX_EXIT_RETRIES}).`,
-      severity: 'warning',
+      title: beyondBudget ? 'Mandatory exit still failing — retrying' : 'Exit order auto-retry armed',
+      message: `Position #${position.id} ${position.symbol} ${position.option_type} ${Number(position.strike_price)}: broker confirmed the previous exit order is dead (${position.last_broker_order_status}). Exit monitoring re-armed automatically (retry ${retryCount + 1}/${TradeLifecycleService.MAX_EXIT_RETRIES}${beyondBudget ? `, ${position.exit_reason} is exempt from the budget` : ''}).`,
+      severity: beyondBudget ? 'critical' : 'warning',
       category: 'exit-auto-retry',
       tradeId: position.id,
       dedupeKey: `exit-auto-retry:${position.id}:${retryCount + 1}`,
@@ -663,6 +801,8 @@ export class MarketPoller {
           ? 'MANDATORY_DAY_TRADE_FLATTEN'
         : exitTriggerType === 'MANUAL_FLATTEN_ALL'
           ? 'MANUAL_FLATTEN_ALL'
+        : exitTriggerType === 'EXPIRY'
+          ? 'EXPIRY_EXIT'
         : 'AUTO_EXIT';
     const claimNote = partialTrim
       ? ` [Profit trim claim created before SnapTrade ${orderType} ${exitAction} for ${exitQuantity}/${position.quantity} contracts]`
@@ -945,6 +1085,24 @@ export class MarketPoller {
   }
 
   public async poll(force: boolean = false) {
+    const startedAt = new Date();
+    this.lastPollStartedAt = startedAt.toISOString();
+    try {
+      await this.pollOnce(force);
+      this.lastPollError = null;
+    } catch (err: any) {
+      this.lastPollError = err?.message || String(err);
+      throw err;
+    } finally {
+      // Completion is stamped even on error: the sweep ran, which is what the
+      // liveness check cares about. Errors are surfaced via lastPollError.
+      const completed = new Date();
+      this.lastPollCompletedAt = completed.toISOString();
+      this.lastPollDurationMs = completed.getTime() - startedAt.getTime();
+    }
+  }
+
+  private async pollOnce(force: boolean) {
     this.fastify.log.info(`[MarketPoller] Polling job started at ${new Date().toISOString()}...`);
 
     const { rows } = await (this.fastify as any).pg.query(
@@ -963,6 +1121,8 @@ export class MarketPoller {
     for (const pos of positions) {
         let shouldForceClose = false;
         let reason = '';
+        let forceCloseTrigger: ExitTriggerType = 'END_OF_DAY';
+        let expiryDte: number | null = null;
 
         if (this.hasUnresolvedExit(pos)) {
             continue;
@@ -977,22 +1137,43 @@ export class MarketPoller {
           const hour = Math.floor(mandatoryFlatten.flattenMinutes / 60);
           const minute = String(mandatoryFlatten.flattenMinutes % 60).padStart(2, '0');
           reason = `day-trade mandatory flatten (${hour}:${minute} ET)`;
+          forceCloseTrigger = 'END_OF_DAY';
         }
 
         // Exit-before-expiry for swing positions: never hold into expiry week.
         const expiryExit = this.getExpiryExitAssessment(pos, now);
-        if (expiryExit?.triggered && this.isMarketOpen(now)) {
-          shouldForceClose = true;
-          reason = `exit-before-expiry (${expiryExit.dte} DTE remaining)`;
+        if (expiryExit?.triggered) {
+          if (this.isMarketOpen(now)) {
+            shouldForceClose = true;
+            reason = `exit-before-expiry (${expiryExit.dte} DTE remaining)`;
+            forceCloseTrigger = 'EXPIRY';
+            expiryDte = expiryExit.dte;
+          } else {
+            // Reached ≤2 DTE outside the session (restart after hours, weekend
+            // roll): record that an exit is owed at the next open so the UI and
+            // the operator see it, then let the first in-hours poll act.
+            await this.noteExpiryExitOwed(pos, expiryExit.dte).catch((err: any) =>
+              this.fastify.log.warn(`[MarketPoller] Could not record owed expiry exit for position ${pos.id}: ${err?.message || String(err)}`));
+          }
         }
 
         if (shouldForceClose) {
             this.fastify.log.info(`[MarketPoller] Force closing position ${pos.id} (${pos.symbol}) due to ${reason}.`);
             let currentPrice = Number(pos.current_price || pos.entry_price);
-            
+
             if (!pos.is_simulated) {
                 const exitAction = TradeLifecycleService.getExitAction(pos);
-                const submitted = await this.submitSnapTradeExit(pos, 'MARKET');
+                let orderType: 'LIMIT' | 'MARKET' = 'MARKET';
+                let limitPrice: string | undefined;
+                let orderNote = 'Market';
+                if (forceCloseTrigger === 'EXPIRY') {
+                  const preference = await this.resolveExpiryExitOrder(pos, expiryDte ?? 0, now);
+                  if (!preference) continue; // deferred (opening spread); next poll retries
+                  orderType = preference.orderType;
+                  limitPrice = preference.limitPrice;
+                  orderNote = preference.orderType === 'LIMIT' ? `Limit @ ${preference.limitPrice} (${preference.mode})` : `Market (${preference.mode})`;
+                }
+                const submitted = await this.submitSnapTradeExit(pos, orderType, limitPrice, forceCloseTrigger);
                 if (!submitted) continue;
                 await this.notifyN8n(
                     pos,
@@ -1001,7 +1182,7 @@ export class MarketPoller {
                     0,
                     'FORCE_CLOSE',
                     `Exit order submitted due to ${reason}`,
-                    `**[FORCE CLOSE SUBMITTED]** ${reason}. Market ${exitAction} was submitted; waiting for broker fill confirmation. Last app price: $${currentPrice}.`
+                    `**[FORCE CLOSE SUBMITTED]** ${reason}. ${orderNote} ${exitAction} was submitted; waiting for broker fill confirmation. Last app price: $${currentPrice}.`
                 );
                 pos.execution_status = 'PENDING_EXIT';
                 continue;

@@ -1677,7 +1677,7 @@ const start = async () => {
       fastify.log.info('[System] Background services started.');
     };
 
-    const backgroundStartDelayMs = Number(process.env.BACKGROUND_START_DELAY_MS || 15000);
+    const backgroundStartDelayMs = Number(process.env.BACKGROUND_START_DELAY_MS || 3000);
     fastify.log.info(`[System] Background services scheduled in ${backgroundStartDelayMs}ms`);
     setTimeout(() => {
       startBackgroundServices().catch((err: any) => {
