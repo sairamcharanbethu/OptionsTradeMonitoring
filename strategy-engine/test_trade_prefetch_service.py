@@ -756,6 +756,38 @@ class SwingWindowRefreshTests(unittest.TestCase):
             ("20261009", "MULTI_DAY_9DTE"),
         )
 
+    def test_holiday_window_shifts_to_prior_trading_day_or_rolls(self):
+        # Good Friday 2027 is Mar 26. From Wed Mar 17 the 9-10 DTE window is
+        # [Fri Mar 26 (holiday), Sat Mar 27]: no trading day at all.
+        wednesday = datetime(2027, 3, 17, 10, 0, tzinfo=self.ET).timestamp()
+        self.assertEqual(trade_prefetch_service._swing_window_roll_reason(9, 10, wednesday), "HOLIDAY")
+        self.assertEqual(trade_prefetch_service._swing_window_max_dte(9, 10, wednesday), 12)  # Mon Mar 29
+        # The OCC lists that week's expiry on Thu Mar 25 (8 DTE): accept it.
+        self.assertEqual(
+            _preferred_option_expiry(["20270325", "20270329"], wednesday, min_dte=9, max_dte=10, strict=True),
+            ("20270325", "MULTI_DAY_9DTE_HOLIDAY_SHIFT"),
+        )
+        # Without the shifted listing, roll to the next trading day instead.
+        self.assertEqual(
+            _preferred_option_expiry(["20270329"], wednesday, min_dte=9, max_dte=10, strict=True),
+            ("20270329", "MULTI_DAY_9DTE_HOLIDAY_ROLL"),
+        )
+        # Nothing listed in either place still blocks entry.
+        self.assertEqual(
+            _preferred_option_expiry(["20270319"], wednesday, min_dte=9, max_dte=10, strict=True),
+            (None, "NO_EXPIRY_IN_WINDOW"),
+        )
+
+    def test_thanksgiving_week_keeps_friday_expiry(self):
+        # Tue Nov 17 2026: window [Thu Nov 26 (Thanksgiving), Fri Nov 27 (half day)].
+        tuesday = datetime(2026, 11, 17, 10, 0, tzinfo=self.ET).timestamp()
+        self.assertIsNone(trade_prefetch_service._swing_window_roll_reason(9, 10, tuesday))
+        self.assertEqual(trade_prefetch_service._swing_window_max_dte(9, 10, tuesday), 10)
+        self.assertEqual(
+            _preferred_option_expiry(["20261125", "20261127"], tuesday, min_dte=9, max_dte=10, strict=True),
+            ("20261127", "MULTI_DAY_9DTE"),
+        )
+
     def _prefetcher(self, output_dir, expirations):
         prefetcher = trade_prefetch_service.TradePrefetcher.__new__(trade_prefetch_service.TradePrefetcher)
         prefetcher.stocks = {"SPY": SimpleNamespace(conId=756733, secType="STK")}

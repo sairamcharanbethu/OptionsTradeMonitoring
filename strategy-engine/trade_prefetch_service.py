@@ -12,6 +12,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
+from market_calendar import is_trading_day, previous_trading_day
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -473,11 +474,17 @@ def _preferred_option_expiry(
     if multi_day:
         return multi_day, f"MULTI_DAY_{int(min_dte)}DTE"
     if strict:
+        # A holiday inside the window moves that week's expiry to the prior
+        # trading day (possibly min_dte - 1): take it before rolling out.
+        shifted = _holiday_shifted_expiry(expirations, min_dte, max_dte, now)
+        if shifted:
+            return shifted, f"MULTI_DAY_{int(min_dte)}DTE_HOLIDAY_SHIFT"
         rolled_max = _swing_window_max_dte(min_dte, max_dte, now)
         if rolled_max != max_dte:
             rolled = _wall_option_expiry(expirations, now, min_dte=min_dte, max_dte=rolled_max)
             if rolled:
-                return rolled, f"MULTI_DAY_{int(min_dte)}DTE_WEEKEND_ROLL"
+                reason = _swing_window_roll_reason(min_dte, max_dte, now) or "WEEKEND"
+                return rolled, f"MULTI_DAY_{int(min_dte)}DTE_{reason}_ROLL"
         return None, "NO_EXPIRY_IN_WINDOW"
     stamp = datetime.fromtimestamp(time.time() if now is None else now, ET)
     today = stamp.strftime("%Y%m%d")
@@ -495,21 +502,63 @@ def _swing_window_max_dte(
 ) -> int | None:
     """Effective upper DTE bound for the strict primary window.
 
-    When every calendar day in ``[min_dte, max_dte]`` is a Saturday or Sunday
-    (the 9-10 DTE window on a Thursday), no SPY expiry can be listed in it, so
-    the bound rolls forward to the next weekday. Otherwise ``max_dte`` is
-    returned unchanged. Exchange holidays are not rolled over.
+    When no calendar day in ``[min_dte, max_dte]`` is a trading day — the
+    9-10 DTE window on a Thursday lands on Sat/Sun, and a holiday can do the
+    same (Good Friday + Saturday) — no SPY expiry can be listed in it, so the
+    bound rolls forward to the next trading day. Otherwise ``max_dte`` is
+    returned unchanged. Use ``_swing_window_roll_reason`` for the label.
     """
     if max_dte is None or int(max_dte) < int(min_dte):
         return max_dte
     today = datetime.fromtimestamp(time.time() if now is None else now, ET).date()
     window = [today + timedelta(days=day) for day in range(int(min_dte), int(max_dte) + 1)]
-    if any(day.weekday() < 5 for day in window):
+    if any(is_trading_day(day) for day in window):
         return int(max_dte)
     rolled = int(max_dte)
-    while (today + timedelta(days=rolled)).weekday() >= 5:
+    while not is_trading_day(today + timedelta(days=rolled)):
         rolled += 1
     return rolled
+
+
+def _swing_window_roll_reason(
+    min_dte: int, max_dte: int | None, now: float | None = None
+) -> str | None:
+    """``"HOLIDAY"`` when an exchange holiday emptied the window, ``"WEEKEND"``
+    when only Sat/Sun did, ``None`` when the window has a trading day."""
+    if max_dte is None or int(max_dte) < int(min_dte):
+        return None
+    today = datetime.fromtimestamp(time.time() if now is None else now, ET).date()
+    window = [today + timedelta(days=day) for day in range(int(min_dte), int(max_dte) + 1)]
+    if any(is_trading_day(day) for day in window):
+        return None
+    return "HOLIDAY" if any(day.weekday() < 5 for day in window) else "WEEKEND"
+
+
+def _holiday_shifted_expiry(
+    expirations: list[str], min_dte: int, max_dte: int | None, now: float | None = None
+) -> str | None:
+    """Expiry listed on the trading day BEFORE a holiday inside the window.
+
+    When a weekly expiry date falls on an exchange holiday the OCC lists it on
+    the prior trading day (Good Friday -> Thursday), which can sit just below
+    ``min_dte``. Accept that contract (never same-day) rather than blocking
+    entry or rolling further out.
+    """
+    if max_dte is None or int(max_dte) < int(min_dte):
+        return None
+    today = datetime.fromtimestamp(time.time() if now is None else now, ET).date()
+    listed = {str(value) for value in expirations}
+    for day in range(int(min_dte), int(max_dte) + 1):
+        candidate_day = today + timedelta(days=day)
+        if candidate_day.weekday() >= 5 or is_trading_day(candidate_day):
+            continue  # weekends never list expiries; trading days are handled normally
+        shifted = previous_trading_day(candidate_day)
+        if (shifted - today).days < MIN_OPTION_EXPIRY_DTE:
+            continue
+        key = shifted.strftime("%Y%m%d")
+        if key in listed:
+            return key
+    return None
 
 
 def _wall_option_expiry(
