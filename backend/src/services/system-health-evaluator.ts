@@ -70,6 +70,7 @@ type EvalContext = {
   preOpen: boolean;
   weekend: boolean;
   inRestartWindow: boolean;
+  sundayReminderWindow: boolean;
 };
 
 type CheckRuntime = {
@@ -247,6 +248,13 @@ export class SystemHealthEvaluator {
       {
         id: 'heartbeat_unconfigured', title: 'External heartbeat not configured', severity: 'info', holdSeconds: 0,
         failing: (s) => (s.heartbeatConfigured ? null : 'HEARTBEAT_URL is not set; a dead backend cannot page anyone')
+      },
+      {
+        // IBKR forces a weekly full re-login (IB Key 2FA tap) on Sunday; the
+        // IBC auto-restart cannot do it. Remind at 16:00 ET so Monday's open
+        // is not the moment it is discovered. Info-level: recovers silently.
+        id: 'ib_weekly_reauth_due', title: 'IB Gateway weekly re-auth due (Sunday)', severity: 'info', holdSeconds: 0,
+        failing: (_s, c) => (c.sundayReminderWindow ? 'Sunday 16:00 ET: complete the IB Gateway weekly re-login (IB Key) before Monday open' : null)
       }
     ];
   }
@@ -303,7 +311,8 @@ export class SystemHealthEvaluator {
       marketOpen: market.isOpen,
       preOpen: !market.isWeekend && !market.isHoliday && market.minutes >= 9 * 60 && market.minutes < 9 * 60 + 30,
       weekend: market.isWeekend,
-      inRestartWindow: minutesInWindow(market.minutes, this.restartWindow)
+      inRestartWindow: minutesInWindow(market.minutes, this.restartWindow),
+      sundayReminderWindow: this.newYorkWeekday(now) === 0 && market.minutes >= 16 * 60 && market.minutes < 16 * 60 + 30
     };
     this.lastSnapshot = snapshot;
     this.lastEvaluatedAt = now.toISOString();
@@ -374,7 +383,7 @@ export class SystemHealthEvaluator {
     rt.state = 'ok'; rt.sinceMs = null; rt.firedAtMs = null; rt.lastNotifiedStage = -1; rt.lastNotifiedAtMs = null; rt.okStreak = 0;
     const lastMessage = rt.message;
     rt.message = null;
-    if (!silent) transitions.push({ id: check.id, kind: 'recovered', severity: 'info', title, message: lastMessage || 'condition cleared', stage: -1 });
+    if (!silent && check.severity !== 'info') transitions.push({ id: check.id, kind: 'recovered', severity: 'info', title, message: lastMessage || 'condition cleared', stage: -1 });
   }
 
   /** 0 at fire; 1 after 15m; 2 after 60m; then one more every 4h. */
@@ -500,6 +509,12 @@ export class SystemHealthEvaluator {
       }
       this.fastify.log.info(`[SystemHealth] Restored ${Object.keys(firing).length} firing check(s) from Redis; no re-page.`);
     } catch { /* ignore */ }
+  }
+
+  /** 0 = Sunday … 6 = Saturday, in New York local time. */
+  private newYorkWeekday(date: Date): number {
+    const label = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(date);
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(label);
   }
 
   // ------------------------------------------------------------ heartbeat

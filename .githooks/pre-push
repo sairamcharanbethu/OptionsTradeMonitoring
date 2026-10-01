@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Pre-push deploy gate. Coolify auto-deploys every push to `staging`, so the
+# tests have to run BEFORE the push — there is no CI in between by design.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Bypass (logged loudly):  SKIP_PREPUSH=1 git push
+#
+# Only pushes that update the staging branch are gated; feature branches push
+# freely. Gates, in order (cheapest first):
+#   1. scripts/check-tree.sh      — large files, base64 blobs, whitespace
+#   2. frontend tsc --noEmit      — type errors
+#   3. strategy-engine unittest   — Python suite
+#   4. backend build + npm test   — TypeScript build and the full suite
+#   5. warn (not block) when the US market is open: a deploy restarts the
+#      backend and blinds the exit monitor for ~30s.
+set -uo pipefail
+
+remote="$1"
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+gate_staging=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/staging|refs/heads/main) gate_staging=1 ;;
+  esac
+done
+if [ "$gate_staging" -eq 0 ]; then
+  exit 0
+fi
+
+if [ "${SKIP_PREPUSH:-}" = "1" ]; then
+  echo "pre-push: !!! SKIP_PREPUSH=1 — pushing to a deploying branch WITHOUT running the gates !!!" >&2
+  echo "pre-push: $(date -u +%FT%TZ) skipped by $(git config user.name || echo unknown)" >> "$repo_root/.git/prepush-skips.log"
+  exit 0
+fi
+
+started=$(date +%s)
+step() { echo; echo "pre-push ▶ $*"; }
+fail() { echo; echo "pre-push ✖ $*" >&2; echo "pre-push: push to $remote blocked after $(( $(date +%s) - started ))s. Fix it, or SKIP_PREPUSH=1 to bypass (logged)." >&2; exit 1; }
+
+step "tree sanity (scripts/check-tree.sh)"
+bash scripts/check-tree.sh || fail "tree sanity failed"
+
+step "frontend type check"
+( cd frontend && npx tsc --noEmit -p . ) || fail "frontend tsc failed"
+
+step "strategy-engine tests"
+( cd strategy-engine && python3 -m unittest discover -p 'test_*.py' 2>&1 | tail -3 ) || fail "strategy-engine tests failed"
+# unittest's exit code is lost through the pipe above; re-run the status check.
+( cd strategy-engine && python3 -m unittest discover -p 'test_*.py' >/dev/null 2>&1 ) || fail "strategy-engine tests failed"
+
+step "backend build + tests"
+( cd backend && npm run build >/dev/null ) || fail "backend build failed"
+( cd backend && npm test ) || fail "backend tests failed"
+
+# Market-hours warning (ET). A deploy restarts the backend mid-session.
+et_hour_min=$(TZ=America/New_York date +%H%M)
+et_dow=$(TZ=America/New_York date +%u)
+if [ "$et_dow" -le 5 ] && [ "$et_hour_min" -ge 0930 ] && [ "$et_hour_min" -lt 1600 ]; then
+  echo
+  echo "pre-push ⚠ US market is OPEN (ET $et_hour_min). This push will auto-deploy and restart the backend;" >&2
+  echo "           the exit monitor goes blind for ~30s. Continuing in 5s — Ctrl-C to abort." >&2
+  sleep 5
+fi
+
+echo
+echo "pre-push ✔ all gates passed in $(( $(date +%s) - started ))s; pushing to $remote"
+exit 0

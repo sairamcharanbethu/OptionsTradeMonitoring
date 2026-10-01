@@ -75,6 +75,15 @@ Strong success criteria reduce unnecessary changes, overcomplication, and late c
 
 Run the narrowest relevant verification for the files changed. If a command cannot be run, report why.
 
+## Deploy Gate (pre-push hook)
+
+Coolify auto-deploys every push to `staging`, with no CI in between, so the gate runs locally before the push.
+
+- Enable once per clone: `git config core.hooksPath .githooks`
+- `.githooks/pre-push` runs, for pushes to `staging`/`main`: `scripts/check-tree.sh` (files > 1 MB, base64-blob source files, whitespace errors), frontend `tsc --noEmit`, the strategy-engine unittest suite, then `npm run build && npm test` in `backend/`. It warns (does not block) when the US market is open, because a deploy restarts the backend.
+- Bypass only deliberately: `SKIP_PREPUSH=1 git push` (appends to `.git/prepush-skips.log`).
+- Coolify side: set the resource's **watch paths** to `backend/**`, `strategy-engine/**`, `frontend/**`, `db/**`, `docker-compose.coolify.yml` so docs-only commits do not restart the stack.
+
 ## Debugging Notes
 
 - For stale latest-signal/order state, distinguish stale clients from duplicate socket bugs with backend `legacy` and `activeForClient` logging before changing websocket behavior.

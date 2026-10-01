@@ -1,0 +1,9 @@
+[Unit]
+Description=IB Gateway supervisor (probe, bounded restart, host heartbeat)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/ibgw-supervise
+ExecStart=/usr/local/bin/ibgw-supervise.sh

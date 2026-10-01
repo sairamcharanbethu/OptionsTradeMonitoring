@@ -190,6 +190,22 @@ async function testHeartbeatPingsOkOrFail() {
   assert(h.notifications.some((n) => n.id === 'postgres_down' && n.kind === 'fired'), 'tick() dispatches notifications');
 }
 
+// Sunday 16:00-16:30 ET posts the weekly IB re-auth reminder once and clears silently.
+async function testSundayReauthReminder() {
+  const h = createEvaluator();
+  const sunday = new Date('2026-10-04T20:05:00.000Z'); // Sun 16:05 ET
+  const fired = h.evaluator.evaluate(healthySnapshot(sunday.getTime()), h.at(sunday.getTime()));
+  assert(fired.some((t) => t.id === 'ib_weekly_reauth_due' && t.severity === 'info'), `Sunday 16:05 ET fires the re-auth reminder (${JSON.stringify(fired.map((t) => t.id))})`);
+  const later = sunday.getTime() + 40 * 60_000; // 16:45 ET, outside the window
+  h.evaluator.evaluate(healthySnapshot(later), h.at(later));
+  const cleared = h.evaluator.evaluate(healthySnapshot(later + 30_000), h.at(later + 30_000));
+  assert(!cleared.some((t) => t.id === 'ib_weekly_reauth_due'), 'Info checks recover silently (no RECOVERED notice)');
+  assert(h.evaluator.summary().checks.find((c) => c.id === 'ib_weekly_reauth_due')?.state === 'ok', 'The reminder is back to ok after the window');
+  const monday = new Date('2026-10-05T20:05:00.000Z').getTime();
+  const weekday = h.evaluator.evaluate(healthySnapshot(monday), h.at(monday));
+  assert(!weekday.some((t) => t.id === 'ib_weekly_reauth_due'), 'Monday 16:05 ET does not remind');
+}
+
 async function testCollectFailureIsSwallowed() {
   const fastify = { log: { info: () => {}, warn: () => {}, error: () => {} }, pg: { query: async () => ({ rows: [] }) } } as any;
   const evaluator = new SystemHealthEvaluator(fastify, { collect: async () => { throw new Error('boom'); }, heartbeatUrl: null, notify: async () => {} });
@@ -207,6 +223,7 @@ async function runTests() {
   await testEngineRestartLoopDetection();
   await testHeartbeatPingsOkOrFail();
   await testCollectFailureIsSwallowed();
+  await testSundayReauthReminder();
   console.log('All SystemHealthEvaluator tests passed!');
 }
 
