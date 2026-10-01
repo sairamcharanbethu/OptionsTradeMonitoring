@@ -900,6 +900,11 @@ export class TradeExecutionService {
     return false;
   }
 
+  // Deliberately in-memory (reviewed 2026-10-01): a restart drops these
+  // timers, but the adapter re-reads the live snapshot on boot and re-drives
+  // the entry gate, which is the retry. Persisting them would add a stale-lock
+  // failure mode for no durability gain; the DB claim + swing-slot unique index
+  // already prevent a double entry across the restart.
   private scheduleDeferredSignalRetry(input: ExecuteSignalInput, settings: ExecutionSettings) {
     const key = `${input.userId}:${input.signalId}`;
     const existing = TradeExecutionService.deferredSignalRetries.get(key);
@@ -1519,6 +1524,38 @@ export class TradeExecutionService {
     } catch (err: any) {
       this.fastify.log.warn(`[TradeExecutionService] Failed to record trade event ${event.eventType}: ${err.message}`);
     }
+  }
+
+  /**
+   * A claim left in SUBMITTING means the process died between placing the
+   * order and persisting the position (or the broker call hung past every
+   * timeout). The order may or may not exist at the broker, so the claim is
+   * moved to ENTRY_RECONCILE_REQUIRED (which keeps the signal from being
+   * re-claimed and re-entered) and a broker sync is queued for the user; the
+   * position reconciler adopts any resulting fill. Runs at startup and on
+   * every pending-order sync pass.
+   */
+  static async sweepStaleSubmittingClaims(pg: any, log?: { warn: (msg: string) => void; info?: (msg: string) => void }, maxAgeMs = 5 * 60 * 1000): Promise<number> {
+    const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
+    const result = await pg.query(
+      `UPDATE signal_user_executions
+       SET status = 'EXECUTED',
+           execution_status = 'ENTRY_RECONCILE_REQUIRED',
+           execution_error = $2,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE execution_status = 'SUBMITTING'
+         AND updated_at < $1
+       RETURNING user_id, signal_id`,
+      [cutoff, `Submission claim stale for more than ${Math.round(maxAgeMs / 60000)} min (process interrupted mid-submit); broker reconciliation required before another entry.`]
+    );
+    const rows: any[] = result?.rows || [];
+    if (rows.length === 0) return 0;
+    const users = [...new Set(rows.map((row) => Number(row.user_id)).filter((id) => Number.isFinite(id) && id > 0))];
+    for (const userId of users) {
+      await TradeRedisService.requestBrokerSync(userId).catch(() => false);
+    }
+    log?.warn?.(`[TradeExecution] Swept ${rows.length} stale SUBMITTING claim(s) to ENTRY_RECONCILE_REQUIRED for user(s) ${users.join(', ')}; broker sync queued.`);
+    return rows.length;
   }
 
   private async claimSignalSubmission(userId: number, signalId: number, quantity: number): Promise<boolean> {

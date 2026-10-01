@@ -1166,9 +1166,14 @@ const start = async () => {
     const brokerReconciler = new BrokerPositionReconciler(fastify);
     fastify.decorate('brokerReconciler', brokerReconciler);
     const { TradeRedisService } = await import('./services/trade-redis-service');
+    const { TradeExecutionService } = await import('./services/trade-execution-service');
+    // Set at the end of startBackgroundServices; the pending-order sync flips
+    // the adapter to ready once the first sync + first reconcile have succeeded.
+    let liveEntriesReadyRequested = false;
     const snaptradePendingOrderSyncHealth = {
       status: 'IDLE',
       running: false,
+      firstSuccessAt: null as string | null,
       lastRunAt: null as string | null,
       lastResult: null as any,
       lastWatchdogResult: null as any,
@@ -1207,18 +1212,29 @@ const start = async () => {
       snaptradePendingOrderSyncHealth.status = 'RUNNING';
       snaptradePendingOrderSyncHealth.lastRunAt = new Date().toISOString();
       try {
+        // Claims stranded in SUBMITTING by a crash mid-submit are parked for
+        // reconciliation before the sync looks at broker order state.
+        await TradeExecutionService.sweepStaleSubmittingClaims(fastify.pg, fastify.log).catch((err: any) =>
+          fastify.log.warn(`[TradeExecution] stale claim sweep failed: ${err?.message || String(err)}`));
         const result = await snaptradeOrderSync.syncAllPendingBrokerOrders();
         const watchdogResult = await orderWatchdog.run();
         snaptradePendingOrderSyncHealth.lastResult = result;
         snaptradePendingOrderSyncHealth.lastWatchdogResult = watchdogResult;
         snaptradePendingOrderSyncHealth.lastError = null;
         snaptradePendingOrderSyncHealth.status = 'UP';
+        snaptradePendingOrderSyncHealth.firstSuccessAt = snaptradePendingOrderSyncHealth.firstSuccessAt || new Date().toISOString();
         // First broker-vs-DB position reconcile runs right after the first
         // successful pending-order sync (so order state is settled); later
-        // runs are driven by the reconciler's own schedule.
+        // runs are driven by the reconciler's own schedule. It is awaited here
+        // because autonomous entries stay closed until it has succeeded once.
         if (!brokerReconciler.hasRunOnce()) {
-          brokerReconciler.runAll().catch((err: any) =>
-            fastify.log.warn(`[BrokerReconciler] initial run failed: ${err?.message || String(err)}`));
+          await brokerReconciler.runAll().catch((err: any) =>
+            fastify.log.warn(`[BrokerReconciler] initial run failed (entries stay blocked; retried on schedule): ${err?.message || String(err)}`));
+        }
+        // Live entries open only once order state AND broker positions have
+        // been reconciled at least once this process lifetime.
+        if (liveEntriesReadyRequested && brokerReconciler.hasRunOnce()) {
+          strategyEngine.markLiveEntriesReady?.();
         }
         if (result.checked > 0 || watchdogResult.checked > 0) {
           fastify.log.info(`[BrokerReconciliation] checked=${result.checked} opened=${result.opened} closed=${result.closed} pending=${result.stillPending} unmatched=${result.unmatched} watchdogEntryStale=${watchdogResult.entryStale} watchdogCancelRequested=${watchdogResult.entryCancelRequested} watchdogCancelExhausted=${watchdogResult.entryCancelExhausted} watchdogAbandoned=${watchdogResult.entryAbandoned} watchdogExitStale=${watchdogResult.exitStale}`);
@@ -1713,8 +1729,17 @@ const start = async () => {
       }
 
       // Only now that the poller, exit monitor, watchdog, and broker sync loops
-      // are running may the adapter submit autonomous live entries.
-      await startStep('markLiveEntriesReady', () => strategyEngine.markLiveEntriesReady?.());
+      // are running may the adapter submit autonomous live entries — and even
+      // then only after the first pending-order sync and the first broker
+      // position reconcile have succeeded (see runSnaptradePendingOrderSync).
+      await startStep('markLiveEntriesReady', async () => {
+        liveEntriesReadyRequested = true;
+        if (snaptradePendingOrderSyncHealth.firstSuccessAt && brokerReconciler.hasRunOnce()) {
+          strategyEngine.markLiveEntriesReady?.();
+        } else {
+          fastify.log.info('[System] Live entries stay blocked until the first broker order sync + position reconcile succeed.');
+        }
+      });
       fastify.log.info('[System] Background services started.');
     };
 

@@ -974,6 +974,36 @@ async function testSupersededRejectedExitRetriesOnlyAfterBrokerConfirmation() {
   assert(summary.closed === 1 && summary.blocked === false && summary.deferred === false, 'Opposite entry cleanup should finish only after broker-confirmed closure');
 }
 
+// A claim stranded in SUBMITTING (process died between the broker call and
+// the position insert) must be parked for reconciliation and a broker sync
+// queued — never left claimable or silently dropped.
+async function testStaleSubmittingClaimSweep() {
+  const queries: Array<{ sql: string; params?: any[] }> = [];
+  const pg = {
+    query: async (sql: string, params?: any[]) => {
+      queries.push({ sql, params });
+      if (sql.includes("execution_status = 'SUBMITTING'")) return { rows: [{ user_id: 7, signal_id: 42 }, { user_id: 7, signal_id: 43 }, { user_id: 9, signal_id: 50 }], rowCount: 3 };
+      return { rows: [], rowCount: 0 };
+    }
+  };
+  const synced: number[] = [];
+  const originalRequest = TradeRedisService.requestBrokerSync;
+  (TradeRedisService as any).requestBrokerSync = async (userId: number) => { synced.push(userId); return true; };
+  try {
+    const swept = await TradeExecutionService.sweepStaleSubmittingClaims(pg, { warn: () => {} });
+    assert(swept === 3, `All stale claims are swept (got ${swept})`);
+    const update = queries[0];
+    assert(update.sql.includes("SET status = 'EXECUTED'") && update.sql.includes("execution_status = 'ENTRY_RECONCILE_REQUIRED'"),
+      'Stale claims become EXECUTED/ENTRY_RECONCILE_REQUIRED so the signal cannot be re-claimed');
+    assert(update.sql.includes('updated_at < $1') && typeof update.params?.[0] === 'string', 'Only claims older than the cutoff are touched');
+    assert(synced.length === 2 && synced.includes(7) && synced.includes(9), `One broker sync is queued per affected user (got ${JSON.stringify(synced)})`);
+  } finally {
+    (TradeRedisService as any).requestBrokerSync = originalRequest;
+  }
+  const quiet = { query: async () => ({ rows: [], rowCount: 0 }) };
+  assert(await TradeExecutionService.sweepStaleSubmittingClaims(quiet, { warn: () => { throw new Error('must not log when nothing swept'); } }) === 0, 'No rows means no sync and no log');
+}
+
 async function testSupersededPendingExitDefersOppositeEntryUntilClosed() {
   const position = {
     id: 733,
@@ -1303,6 +1333,7 @@ async function runTests() {
   await testGenuineBrokerSyncFailureStillRequiresReview();
   await testSupersededRejectedExitRetriesOnlyAfterBrokerConfirmation();
   await testSupersededPendingExitDefersOppositeEntryUntilClosed();
+  await testStaleSubmittingClaimSweep();
   await testSupersededRejectedExitWithoutBrokerEvidenceStaysBlocked();
   await testOppositeStrategyLaneDoesNotSupersedeConcurrentPosition();
   await testDeferredSupersededExitQueuesSignalWithoutFailureState();

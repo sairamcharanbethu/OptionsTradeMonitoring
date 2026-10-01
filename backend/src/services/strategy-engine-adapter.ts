@@ -13,6 +13,7 @@ import { LiveAiGateService } from './live-ai-gate-service';
 import { KillSwitchService } from './kill-switch-service';
 import { TradeRedisService } from './trade-redis-service';
 import { publishRealtime } from '../lib/realtime';
+import { redis } from '../lib/redis';
 
 export type StrategyEngineMode = 'legacy' | 'shadow' | 'primary';
 
@@ -93,6 +94,7 @@ export class StrategyEngineAdapter {
   }
 
   public async start(): Promise<void> {
+    void this.hydrateLastEntryResult();
     await this.restoreSetupIdentity();
     // A boot-time DB blip here must not skip timer setup below — the policyTimer
     // retries publishPolicy/publishOpenPositions every 5s regardless.
@@ -193,6 +195,30 @@ export class StrategyEngineAdapter {
       entryBlocked: this.lastEntryBlock ? this.lastEntryBlock.halted : null,
       entryBlockedReason: this.lastEntryBlock?.reason || null
     };
+  }
+
+  private static readonly LAST_ENTRY_RESULT_KEY = 'strategy:last_entry_result';
+
+  /** Mirror the last autonomous entry outcome to Redis so the UI survives a restart. */
+  private mirrorLastEntryResult(): void {
+    void redis.set(
+      StrategyEngineAdapter.LAST_ENTRY_RESULT_KEY,
+      JSON.stringify({ at: this.lastAutonomousEntryAt, result: this.lastAutonomousEntryResult }),
+      7 * 24 * 3600
+    ).catch(() => undefined);
+  }
+
+  /** Restore the mirrored outcome at boot (best effort; Redis is fail-open). */
+  private async hydrateLastEntryResult(): Promise<void> {
+    try {
+      const raw = await redis.get(StrategyEngineAdapter.LAST_ENTRY_RESULT_KEY);
+      if (!raw || this.lastAutonomousEntryResult) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.result === 'string') {
+        this.lastAutonomousEntryResult = `${parsed.result} (before restart)`;
+        if (parsed.at) this.lastAutonomousEntryAt = parsed.at;
+      }
+    } catch { /* ignore */ }
   }
 
   /**
@@ -1373,6 +1399,7 @@ export class StrategyEngineAdapter {
     if (completed.length > 0) {
       this.lastAutonomousEntryAt = attemptedAt;
       this.lastAutonomousEntryResult = completed.map(outcome => `User ${outcome.userId}: ${outcome.result}`).join('; ');
+      this.mirrorLastEntryResult();
     }
   }
 
